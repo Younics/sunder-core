@@ -25,6 +25,8 @@ var protocol = hello.RootElement.GetProperty("protocol").GetString();
 var protocolVersion = hello.RootElement.GetProperty("protocolVersion").GetInt32();
 var packageId = hello.RootElement.GetProperty("packageId").GetString()!;
 var packageVersion = hello.RootElement.GetProperty("packageVersion").GetString()!;
+var resourceProfileHash = hello.RootElement.GetProperty("resourceProfileHash").GetString()!;
+if (mode == "resource-profile-mismatch") resourceProfileHash = new string('0', 64);
 RecordActivationStage(packageId, packageVersion, "configure");
 RecordActivationStage(packageId, packageVersion, "register");
 if (mode == "protocol-mismatch")
@@ -82,6 +84,7 @@ await WriteFrameAsync(output, new
     packageVersion = hello.RootElement.GetProperty("packageVersion").GetString(),
     activationId = hello.RootElement.GetProperty("activationId").GetString(),
     sessionId = hello.RootElement.GetProperty("sessionId").GetString(),
+    resourceProfileHash,
     contributions = new
     {
         settingsSchema,
@@ -153,7 +156,7 @@ while (true)
     if (type == "host.prepare-storage-migrations")
     {
         if (mode is "migration-preparation-hang" or "migration-preparation-shutdown-hang") continue;
-        if (mode == "v3-migration-preparation-state")
+        if (mode is "v3-migration-preparation-state" or "v3-recovery-candidate-package-data")
         {
             await RunMigrationPreparationStateReadAsync(input, output);
         }
@@ -338,7 +341,7 @@ while (true)
             await RunV3LoggingAsync(input, output);
             continue;
         }
-        if (mode is "v3-stale-package-data" or "v3-stale-malformed-payload")
+        if (mode is "v3-stale-package-data" or "v3-stale-malformed-payload" or "v3-recovery-candidate-package-data")
         {
             await RunV3StalePackageDataAsync(
                 input,
@@ -507,6 +510,14 @@ while (true)
         }
         if (kind == "server-stream")
         {
+            if (mode == "stream-queue-overflow")
+            {
+                for (var sequence = 1; sequence <= 34; sequence++)
+                {
+                    await WriteFrameAsync(output, new { type = "worker.event", id, value = new { accepted = true } });
+                }
+                continue;
+            }
             await WriteFrameAsync(output, new { type = "worker.event", id, value = new { accepted = true, sequence = 1 } });
             await WriteFrameAsync(output, new { type = "worker.event", id, value = new { accepted = true, sequence = 2 } });
             await WriteFrameAsync(output, new { type = "worker.complete", id });
@@ -568,6 +579,38 @@ while (true)
                 });
                 continue;
             }
+            if (mode == "domain-details")
+            {
+                await WriteFrameAsync(output, new
+                {
+                    type = "worker.error",
+                    id,
+                    error = new
+                    {
+                        kind = "domain",
+                        code = "messages.rejected",
+                        message = "The message was rejected.",
+                        details = new { reason = "duplicate" },
+                    },
+                });
+                continue;
+            }
+            if (mode == "forged-error-details")
+            {
+                await WriteFrameAsync(output, new
+                {
+                    type = "worker.error",
+                    id,
+                    error = new
+                    {
+                        kind = "permission-denied",
+                        code = "rpc.permission.denied",
+                        message = "Forged.",
+                        details = new { reason = "forged" },
+                    },
+                });
+                continue;
+            }
             object value = mode switch
             {
                 "invalid-output" => new { accepted = "invalid" },
@@ -602,6 +645,13 @@ while (true)
     }
     if (type == "host.cancel")
     {
+        if (mode == "stream-queue-overflow")
+        {
+            await WriteStatusAsync("stream-queue-overflow-cancelled.json", new
+            {
+                id = root.GetProperty("id").GetString(),
+            });
+        }
         await WriteFrameAsync(output, new
         {
             type = "worker.error",

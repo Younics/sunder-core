@@ -26,4 +26,31 @@ public sealed partial class SettingsWindowViewModel
             }
         }
     }
+
+    private async Task<bool> SaveRuntimeResourceSettingsAsync()
+    {
+        IsBusy = true;
+        try
+        {
+            var result = await RuntimeResources.SaveSettingsAsync(_disposeCts.Token);
+            if (_disposed)
+            {
+                return false;
+            }
+
+            StatusText = result.StatusText;
+            return result.Success;
+        }
+        catch (OperationCanceledException) when (_disposeCts.IsCancellationRequested)
+        {
+            return false;
+        }
+        finally
+        {
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
+        }
+    }
 }

@@ -14,6 +14,7 @@ internal sealed class PackageCallbackSessionCoordinator
     private readonly CancellationToken _hostStopping;
     private readonly CancellationTokenRegistration _hostStoppingRegistration;
     private readonly PackageCallbackSessionStore _sessions = new();
+    private readonly object _transitionSync = new();
     private readonly object _cleanupSync = new();
     private readonly HashSet<Task> _cleanupTasks = [];
     private int _stopping;
@@ -117,10 +118,6 @@ internal sealed class PackageCallbackSessionCoordinator
             session.StartCompletion.TrySetException(exception);
             throw;
         }
-        finally
-        {
-            session.WorkCompletion.TrySetResult();
-        }
     }
 
     private ActivePackageCallbackSession CreateStartingSession(
@@ -212,18 +209,21 @@ internal sealed class PackageCallbackSessionCoordinator
     {
         var now = _timeProvider.GetUtcNow();
         SweepExpired(now);
-        var cancellation = _sessions.TryCancel(
-            packageId,
-            callbackSessionId,
-            lease.Generation,
-            now + _policy.TerminalSessionRetention);
-        if (cancellation is null)
+        lock (_transitionSync)
         {
-            return false;
-        }
+            var cancellation = _sessions.TryCancel(
+                packageId,
+                callbackSessionId,
+                lease.Generation,
+                now + _policy.TerminalSessionRetention);
+            if (cancellation is null)
+            {
+                return false;
+            }
 
-        ScheduleCancellations([cancellation.Value]);
-        return true;
+            ScheduleCancellations([cancellation.Value]);
+            return true;
+        }
     }
 
     public async Task<bool> CompleteAsync(
@@ -236,13 +236,17 @@ internal sealed class PackageCallbackSessionCoordinator
         var session = _sessions.TryClaimCompletion(callbackSessionId, lease.Generation);
         if (session is null) return false;
         session.PendingCancellation.Dispose();
+        var completionCancellation = session.CompletionCancellation!;
 
         PackageCallbackCompletionResult completion;
         try
         {
             using var timeout = new CancellationTokenSource(_policy.PackageCallbackCompletionTimeout, _timeProvider);
             using var lifecycle = lease.CreateLinkedCancellation(cancellationToken, _hostStopping);
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(lifecycle.Token, timeout.Token);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                lifecycle.Token,
+                timeout.Token,
+                completionCancellation.Token);
             var context = new PackageCallbackCompletionContext(callbackSessionId, queryValues);
             var packageTask = Task.Run(() => session.Handler.CompleteCallbackAsync(context, linked.Token));
             try
@@ -290,29 +294,52 @@ internal sealed class PackageCallbackSessionCoordinator
             },
             Message = BoundMessage(completion.Message),
         };
-        _sessions.Complete(
-            session,
-            finalStatus,
-            _timeProvider.GetUtcNow() + _policy.TerminalSessionRetention);
-        session.WorkCompletion.TrySetResult();
-        return completion.State == PackageCallbackCompletionState.Completed;
+        lock (_transitionSync)
+        {
+            finalStatus = _sessions.Complete(
+                session,
+                finalStatus,
+                _timeProvider.GetUtcNow() + _policy.TerminalSessionRetention);
+        }
+        session.CompletionWork!.TrySetResult();
+        completionCancellation.Dispose();
+        return finalStatus.State == ProtocolCallbackState.Completed;
     }
 
     public void Clear()
-        => ScheduleCancellations(_sessions.Clear());
+    {
+        lock (_transitionSync)
+        {
+            ScheduleCancellations(_sessions.Clear());
+        }
+    }
 
     public void RemovePackageSessions(string packageId)
-        => ScheduleCancellations(_sessions.RemovePackage(packageId));
+    {
+        lock (_transitionSync)
+        {
+            ScheduleCancellations(_sessions.RemovePackage(packageId));
+        }
+    }
 
     internal void SweepExpired(DateTimeOffset now)
-        => ScheduleCancellations(_sessions.Sweep(now, _policy.TerminalSessionRetention));
+    {
+        lock (_transitionSync)
+        {
+            ScheduleCancellations(_sessions.Sweep(now, _policy.TerminalSessionRetention));
+        }
+    }
 
     public async Task ShutdownAsync()
     {
         Interlocked.Exchange(ref _stopping, 1);
         _hostStoppingRegistration.Dispose();
-        var shutdown = _sessions.BeginShutdown();
-        ScheduleCancellations(shutdown.Cancellations);
+        PackageCallbackShutdownWork shutdown;
+        lock (_transitionSync)
+        {
+            shutdown = _sessions.BeginShutdown();
+            ScheduleCancellations(shutdown.Cancellations);
+        }
 
         Task[] work;
         lock (_cleanupSync)
@@ -338,8 +365,11 @@ internal sealed class PackageCallbackSessionCoordinator
     private void BeginHostStopping()
     {
         Interlocked.Exchange(ref _stopping, 1);
-        var shutdown = _sessions.BeginShutdown();
-        ScheduleCancellations(shutdown.Cancellations);
+        lock (_transitionSync)
+        {
+            var shutdown = _sessions.BeginShutdown();
+            ScheduleCancellations(shutdown.Cancellations);
+        }
     }
 
     private async Task<bool> CompleteWithCurrentLeaseAsync(
@@ -355,6 +385,18 @@ internal sealed class PackageCallbackSessionCoordinator
     {
         foreach (var cancellation in cancellations)
         {
+            if (cancellation.CancelCompletion)
+            {
+                try
+                {
+                    cancellation.Session.CompletionCancellation?.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+                continue;
+            }
+
             cancellation.Session.StartCompletion.TrySetResult(null);
             try
             {

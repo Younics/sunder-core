@@ -76,6 +76,17 @@ public sealed class ShellStartupCoordinatorTests
         Assert.Equal(1, client.CallCount);
     }
 
+    [Theory]
+    [InlineData(0, "Loading active packages...")]
+    [InlineData(1, "Loading 1 dev package. This may take several minutes...")]
+    [InlineData(3, "Loading 3 dev packages. This may take several minutes...")]
+    public void CreateRuntimePackageLoadingStatus_IncludesDevPackageCountAndWaitNotice(
+        int devPackageCount,
+        string expected)
+        => Assert.Equal(
+            expected,
+            ShellStartupCoordinator.CreateRuntimePackageLoadingStatus(devPackageCount));
+
     [Fact]
     public async Task LoadRuntimePackagesForStartupAsync_WhenDevAcquisitionFails_ReleasesAndRefreshesSnapshot()
     {

@@ -244,6 +244,7 @@ async function run(file: string, argumentsList: readonly string[], cwd: string):
 async function assertExampleRpcV2Descriptor(root: string): Promise<void> {
   const descriptor = JSON.parse(await readFile(resolve(root, "contracts", "example.rpc.json"), "utf8")) as ExampleRpcDescriptor;
   assert.equal(descriptor.descriptorVersion, 2);
+  assert.equal(descriptor.schemaProfile, "sunder.rpc.values.v1");
   assert.equal(descriptor.contractId, "example.messages");
   assert.equal(descriptor.version, "2.0.0");
   assert.deepEqual(descriptor.errors, {});
@@ -330,6 +331,7 @@ interface ExampleRpcMethod {
 
 interface ExampleRpcDescriptor {
   readonly descriptorVersion: number;
+  readonly schemaProfile: string;
   readonly contractId: string;
   readonly version: string;
   readonly errors: Readonly<Record<string, unknown>>;

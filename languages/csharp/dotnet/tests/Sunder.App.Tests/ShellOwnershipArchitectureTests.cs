@@ -17,6 +17,7 @@ public sealed class ShellOwnershipArchitectureTests
         Assert.Contains(sessionFields, field => field.FieldType == typeof(MainWindowViewModel));
         Assert.Contains(sessionFields, field => field.FieldType == typeof(WindowLauncher));
         Assert.Contains(sessionFields, field => field.FieldType == typeof(RuntimeEventSubscriptionService));
+        Assert.Contains(sessionFields, field => field.FieldType == typeof(AppPackageUiRecoveryCoordinator));
         Assert.Contains(sessionFields, field => field.FieldType == typeof(PackageViewHostService));
         Assert.Contains(sessionFields, field => field.FieldType == typeof(ServiceProvider));
         Assert.Contains(sessionFields, field => field.FieldType == typeof(OwnedTaskObserver));

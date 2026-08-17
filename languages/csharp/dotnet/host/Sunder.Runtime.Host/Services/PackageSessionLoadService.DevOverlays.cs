@@ -110,7 +110,7 @@ internal sealed partial class PackageSessionLoadService
         _logger.LogInformation(
             "Prepared {DevPackageCount} dev package(s) and {InstalledPackageCount} installed package(s) in {ElapsedMilliseconds} ms",
             devPackageIds.Count,
-            packages.Count - devPackageIds.Count,
+            packages.Count(package => !devPackageIds.Contains(package.PackageId)),
             Stopwatch.GetElapsedTime(started).TotalMilliseconds);
 
         if (preparedCandidates.Count == 0 && sessionPackages.Count == 0)

@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using System.Threading.Channels;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.Sdk.Worker.Internal;
@@ -31,6 +30,8 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
     }
 
     internal WorkerEnvironment Environment => _environment;
+
+    public SunderRpcResourceProfile? ResourceProfile { get; internal set; }
 
     internal ValueTask ReportGenerationFaultAsync(
         string code,
@@ -215,9 +216,10 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                                 writer.WriteString("id", id);
                                 WriteScopeId(writer, scopeId);
                                 writer.WriteNumber("afterRevision", afterRevision);
-                               writer.WriteNumber("afterSequence", afterSequence);
+                                writer.WriteNumber("afterSequence", afterSequence);
                                writer.WriteEndObject();
-                           }),
+                            }),
+                           OutboundStreamIdentity.Watch,
                            cancellationToken).ConfigureAwait(false))
         {
             yield return ParseHostValue(value, WorkerWire.ReadCatalogEvent);
@@ -315,6 +317,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                 WriteDeadline(writer, options);
                 writer.WriteEndObject();
             }),
+            OutboundStreamIdentity.Subscribe(serviceId, methodId),
             cancellationToken);
     }
 
@@ -740,9 +743,17 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                     {
                         throw new WorkerProtocolException("Host sent an event for a unary worker call.");
                     }
-                    if (!call.Cancelled && !call.Events.Writer.TryWrite(value))
+                    if (!call.Cancelled)
                     {
-                        throw new WorkerProtocolException("Worker stream event queue exceeded its bound.");
+                        var queuedValue = WorkerJson.CloneValueForQueue(value, _limits, out var bytes);
+                        if (call.Events.TryWrite(queuedValue, bytes) is { } rejection)
+                        {
+                            call.Cancelled = true;
+                            var exhausted = StreamQueueResourceExhausted(call, rejection);
+                            call.UnaryCompletion.TrySetException(exhausted);
+                            call.Events.Fail(exhausted);
+                            _ = SendCancellationAsync(call);
+                        }
                     }
                     return;
                 case "host.result":
@@ -803,7 +814,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                 call.UnaryCompletion.TrySetResult(value);
                 break;
             case "host.complete":
-                call.Events.Writer.TryComplete();
+                call.Events.Complete();
                 break;
             default:
                 call.ReleaseTerminalResource();
@@ -814,7 +825,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                 else
                 {
                     call.UnaryCompletion.TrySetException(error!);
-                    call.Events.Writer.TryComplete(error);
+                    call.Events.Fail(error!);
                 }
                 break;
         }
@@ -884,7 +895,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
             call.ReleaseTerminalResource();
             call.TerminalCompletion.TrySetResult();
             call.UnaryCompletion.TrySetException(exception);
-            call.Events.Writer.TryComplete(exception);
+            call.Events.Fail(exception);
         }
     }
 
@@ -914,7 +925,8 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                 logging,
                 awaitHostTerminalAfterCancellation,
                 started,
-                migrationPreparationRead);
+                migrationPreparationRead,
+                streamIdentity: null);
         }
         catch
         {
@@ -934,6 +946,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
 
     private async IAsyncEnumerable<JsonElement> StreamCallAsync(
         Func<string, byte[]> createBody,
+        OutboundStreamIdentity streamIdentity,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var call = StartCall(
@@ -947,11 +960,12 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
             logging: false,
             awaitHostTerminalAfterCancellation: false,
             started: null,
-            migrationPreparationRead: false);
+            migrationPreparationRead: false,
+            streamIdentity: streamIdentity);
         try
         {
             await call.RequestWrite.WaitAsync(cancellationToken).ConfigureAwait(false);
-            await foreach (var value in call.Events.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            await foreach (var value in call.Events.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
                 yield return value;
             }
@@ -975,7 +989,8 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         bool logging,
         bool awaitHostTerminalAfterCancellation,
         Action? started,
-        bool migrationPreparationRead)
+        bool migrationPreparationRead,
+        OutboundStreamIdentity? streamIdentity)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var sequence = Interlocked.Increment(ref _nextId);
@@ -997,7 +1012,9 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
             resultConsumer,
             logging,
             awaitHostTerminalAfterCancellation,
+            streamIdentity,
             _limits.MaximumStreamQueueMessages,
+            _limits.MaximumStreamQueueBytes,
             cancellationToken);
         lock (_runtime.Gate)
         {
@@ -1040,8 +1057,25 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
             }
 
             _calls.Add(id, call);
-            started?.Invoke();
-            call.RequestWrite = _output.WriteAsync(body).AsTask();
+            try
+            {
+                call.RequestWrite = _output.WriteAsync(body).AsTask();
+                started?.Invoke();
+            }
+            catch (WorkerTransportResourceException)
+            {
+                _calls.Remove(id);
+                call.Terminal = true;
+                call.TerminalCompletion.TrySetResult();
+                throw RequestResourceExhausted("rpc.worker.write-queue-limit", "The worker protocol write queue is full.");
+            }
+            catch
+            {
+                _calls.Remove(id);
+                call.Terminal = true;
+                call.TerminalCompletion.TrySetResult();
+                throw;
+            }
             if (cancellationToken.CanBeCanceled)
             {
                 call.CancellationRegistration = cancellationToken.UnsafeRegister(
@@ -1068,6 +1102,15 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         }
         catch (Exception exception)
         {
+            lock (_runtime.Gate)
+            {
+                if (_calls.Remove(call.Id)) call.Terminal = true;
+            }
+            call.CancellationRegistration.Dispose();
+            call.ReleaseTerminalResource();
+            call.TerminalCompletion.TrySetResult();
+            call.UnaryCompletion.TrySetException(exception);
+            call.Events.Fail(exception);
             _runtime.Fail(exception is WorkerProtocolException
                 ? exception
                 : new WorkerProtocolException("Worker RPC request write failed.", exception));
@@ -1137,7 +1180,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
             if (!call.HasTerminalResourceRelease && !call.AwaitHostTerminalAfterCancellation)
             {
                 call.UnaryCompletion.TrySetCanceled(cancellationToken);
-                call.Events.Writer.TryComplete(new OperationCanceledException(cancellationToken));
+                call.Events.Fail(new OperationCanceledException(cancellationToken));
             }
         }
         _ = SendCancellationAsync(call);
@@ -1178,12 +1221,11 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         {
             return WorkerJson.Serialize(_limits, write);
         }
-        catch (WorkerProtocolException)
+        catch (WorkerTransportResourceException)
         {
-            throw SunderRpcException.Infrastructure(
-                SunderRpcErrorKind.ResourceExhausted,
-                "rpc.worker.frame-limit",
-                "The worker RPC request could not be encoded within protocol limits.");
+            throw RequestResourceExhausted(
+                "rpc.worker.request-limit",
+                "The worker RPC request exceeds the negotiated transport limits.");
         }
     }
 
@@ -1281,6 +1323,55 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         }
     }
 
+    private static SunderRpcException RequestResourceExhausted(string code, string message)
+        => new(new SunderRpcError(
+            SunderRpcErrorKind.ResourceExhausted,
+            code,
+            message,
+            SunderRpcDispatchState.NotDispatched,
+            SunderRpcRetrySafety.Safe));
+
+    private static SunderRpcException StreamQueueResourceExhausted(
+        OutboundCall call,
+        WorkerJsonEventQueueRejection rejection)
+    {
+        var identity = call.StreamIdentity ?? OutboundStreamIdentity.Stream;
+        var message = FormattableString.Invariant(
+            $"The worker RPC stream queue exceeded its count or byte bound. Local diagnostic: limit={FormatQueueLimit(rejection.Limit)}; queuedMessages={rejection.QueuedMessages}/{rejection.MaximumMessages}; queuedBytes={rejection.QueuedBytes}/{rejection.MaximumBytes}; incomingBytes={rejection.IncomingBytes}; operation={identity.Operation}");
+        if (identity.ServiceId is not null) message += $"; service={identity.ServiceId}";
+        if (identity.MethodId is not null) message += $"; method={identity.MethodId}";
+        message += ".";
+        if (message.Length > 512) message = message[..512];
+        return new SunderRpcException(new SunderRpcError(
+            SunderRpcErrorKind.ResourceExhausted,
+            "rpc.worker.stream-queue-limit",
+            message,
+            SunderRpcDispatchState.PossiblyDispatched,
+            SunderRpcRetrySafety.Unsafe));
+    }
+
+    private static string FormatQueueLimit(WorkerJsonEventQueueLimit limit)
+        => limit switch
+        {
+            WorkerJsonEventQueueLimit.Count => "count",
+            WorkerJsonEventQueueLimit.Bytes => "bytes",
+            WorkerJsonEventQueueLimit.Count | WorkerJsonEventQueueLimit.Bytes => "count+bytes",
+            _ => "unknown",
+        };
+
+    private static string SanitizeStreamIdentity(string value)
+    {
+        var characters = new char[Math.Min(value.Length, 64)];
+        for (var index = 0; index < characters.Length; index++)
+        {
+            var character = value[index];
+            characters[index] = char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_'
+                ? character
+                : '_';
+        }
+        return new string(characters);
+    }
+
     private enum OutboundCallKind
     {
         Unary,
@@ -1296,7 +1387,9 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         Func<JsonElement, ValueTask>? resultConsumer,
         bool logging,
         bool awaitHostTerminalAfterCancellation,
+        OutboundStreamIdentity? streamIdentity,
         int streamCapacity,
+        long streamQueueBytes,
         CancellationToken cancellationToken)
     {
         private Action? _terminalResourceRelease = terminalResourceRelease;
@@ -1308,6 +1401,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         public Func<JsonElement, ValueTask>? ResultConsumer { get; } = resultConsumer;
         public bool Logging { get; } = logging;
         public bool AwaitHostTerminalAfterCancellation { get; } = awaitHostTerminalAfterCancellation;
+        public OutboundStreamIdentity? StreamIdentity { get; } = streamIdentity;
         public bool HasTerminalResourceRelease => Volatile.Read(ref _terminalResourceRelease) is not null;
         public CancellationToken CancellationToken { get; } = cancellationToken;
         public Task RequestWrite { get; set; } = Task.CompletedTask;
@@ -1316,14 +1410,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource TerminalCompletion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Channel<JsonElement> Events { get; } = Channel.CreateBounded<JsonElement>(
-            new BoundedChannelOptions(streamCapacity)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = true,
-                SingleWriter = true,
-                AllowSynchronousContinuations = false,
-            });
+        public WorkerJsonEventQueue Events { get; } = new(streamCapacity, streamQueueBytes);
         public bool Cancelled { get; set; }
         public bool Terminal { get; set; }
 
@@ -1333,8 +1420,23 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         public void CompleteCancellation()
         {
             UnaryCompletion.TrySetCanceled(CancellationToken);
-            Events.Writer.TryComplete(new OperationCanceledException(CancellationToken));
+            Events.Fail(new OperationCanceledException(CancellationToken));
         }
+    }
+
+    private readonly record struct OutboundStreamIdentity(
+        string Operation,
+        string? ServiceId,
+        string? MethodId)
+    {
+        public static OutboundStreamIdentity Stream { get; } = new("stream", null, null);
+        public static OutboundStreamIdentity Watch { get; } = new("watch", null, null);
+
+        public static OutboundStreamIdentity Subscribe(string serviceId, string methodId)
+            => new(
+                "subscribe",
+                SanitizeStreamIdentity(serviceId),
+                SanitizeStreamIdentity(methodId));
     }
 }
 

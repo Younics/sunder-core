@@ -312,6 +312,172 @@
                   </Border>
                 </StackPanel>
 
+                <StackPanel Spacing="16"
+                            IsVisible="{Binding ShowAdvancedSettings}">
+                  <Border Classes="card-surface">
+                    <StackPanel Spacing="14">
+                      <Grid ColumnDefinitions="*,Auto"
+                            ColumnSpacing="16">
+                        <StackPanel Spacing="4">
+                          <TextBlock Classes="section-title" Text="Runtime Resource Policy" />
+                          <TextBlock Classes="caption"
+                                     Text="Choose the resource profile the Supervisor applies whenever it starts a Runtime worker."
+                                     TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Button Grid.Column="1"
+                                Classes="secondary-action"
+                                Content="Reset to Defaults"
+                                Command="{Binding RuntimeResources.ResetToDefaultsCommand}" />
+                      </Grid>
+
+                      <controls:SunderComboBox ItemsSource="{Binding RuntimeResources.PresetOptions}"
+                                               SelectedItem="{Binding RuntimeResources.SelectedPresetOption}"
+                                               HorizontalAlignment="Stretch">
+                        <controls:SunderComboBox.ItemTemplate>
+                          <DataTemplate x:DataType="vm:SettingsRuntimeResourcePresetOption">
+                            <StackPanel Spacing="2">
+                              <TextBlock Text="{Binding Label}" />
+                              <TextBlock Classes="caption" Text="{Binding Description}" />
+                            </StackPanel>
+                          </DataTemplate>
+                        </controls:SunderComboBox.ItemTemplate>
+                      </controls:SunderComboBox>
+                      <TextBlock Classes="caption"
+                                 Text="{Binding RuntimeResources.SelectedPresetOption.Description}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+
+                  <Border Classes="card-surface">
+                    <Expander Header="Custom limits"
+                              IsExpanded="{Binding RuntimeResources.IsCustom, Mode=OneWay}"
+                              IsEnabled="{Binding RuntimeResources.IsCustom}">
+                      <StackPanel Margin="0,14,0,0" Spacing="14">
+                        <TextBlock Classes="caption"
+                                   Text="Values outside these ranges are rejected, never clamped."
+                                   TextWrapping="Wrap" />
+
+                        <Grid ColumnDefinitions="*,150"
+                              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                              ColumnSpacing="18"
+                              RowSpacing="14">
+                          <StackPanel Grid.Row="0" Spacing="3">
+                            <TextBlock Classes="section-title" Text="RPC value limit" />
+                            <TextBlock Classes="caption" Text="1-32 MiB per encoded RPC value" />
+                          </StackPanel>
+                          <Grid Grid.Row="0" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <TextBox Text="{Binding RuntimeResources.CustomRpcValueMiBText}" />
+                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="MiB" />
+                          </Grid>
+
+                          <StackPanel Grid.Row="1" Spacing="3">
+                            <TextBlock Classes="section-title" Text="Value depth" />
+                            <TextBlock Classes="caption" Text="16-64 nested levels" />
+                          </StackPanel>
+                          <Grid Grid.Row="1" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <TextBox Text="{Binding RuntimeResources.CustomValueDepthText}" />
+                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="levels" />
+                          </Grid>
+
+                          <StackPanel Grid.Row="2" Spacing="3">
+                            <TextBlock Classes="section-title" Text="Value nodes" />
+                            <TextBlock Classes="caption" Text="16,384-4,194,304 nodes" />
+                          </StackPanel>
+                          <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <TextBox Text="{Binding RuntimeResources.CustomValueNodesText}" />
+                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="nodes" />
+                          </Grid>
+
+                          <StackPanel Grid.Row="3" Spacing="3">
+                            <TextBlock Classes="section-title" Text="Object members" />
+                            <TextBlock Classes="caption" Text="256-65,536 members per object" />
+                          </StackPanel>
+                          <Grid Grid.Row="3" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <TextBox Text="{Binding RuntimeResources.CustomObjectMembersText}" />
+                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="members" />
+                          </Grid>
+
+                          <StackPanel Grid.Row="4" Spacing="3">
+                            <TextBlock Classes="section-title" Text="Inline decoded data" />
+                            <TextBlock Classes="caption" Text="16-4,096 KiB (4 MiB maximum)" />
+                          </StackPanel>
+                          <Grid Grid.Row="4" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <TextBox Text="{Binding RuntimeResources.CustomInlineDecodedKiBText}" />
+                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="KiB" />
+                          </Grid>
+
+                          <StackPanel Grid.Row="5" Spacing="3">
+                            <TextBlock Classes="section-title" Text="Content reference" />
+                            <TextBlock Classes="caption" Text="1-256 MiB per referenced content item" />
+                          </StackPanel>
+                          <Grid Grid.Row="5" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <TextBox Text="{Binding RuntimeResources.CustomContentReferenceMiBText}" />
+                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="MiB" />
+                          </Grid>
+                        </Grid>
+
+                        <Border Classes="settings-note-card"
+                                IsVisible="{Binding RuntimeResources.HasValidationError}"
+                                BorderBrush="{DynamicResource Sunder.Brush.Warning}">
+                          <TextBlock Foreground="{DynamicResource Sunder.Brush.Warning}"
+                                     Text="{Binding RuntimeResources.ValidationMessage}"
+                                     TextWrapping="Wrap" />
+                        </Border>
+                      </StackPanel>
+                    </Expander>
+                  </Border>
+
+                  <Border Classes="card-surface">
+                    <StackPanel Spacing="14">
+                      <TextBlock Classes="section-title" Text="Desired and Current Effective Policy" />
+                      <Grid ColumnDefinitions="150,*"
+                            RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                            ColumnSpacing="16"
+                            RowSpacing="9">
+                        <TextBlock Grid.Row="0" Classes="section-title" Text="Desired preset" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" Classes="muted"
+                                   Text="{Binding RuntimeResources.DesiredPresetText}" />
+                        <TextBlock Grid.Row="1" Classes="section-title" Text="Desired effective" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="muted"
+                                   Text="{Binding RuntimeResources.DesiredEffectiveText}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="2" Classes="section-title" Text="Desired hash" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Classes="caption"
+                                   Text="{Binding RuntimeResources.DesiredProfileHash}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="3" Classes="section-title" Text="Current effective" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Classes="muted"
+                                   Text="{Binding RuntimeResources.CurrentEffectiveText}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="4" Classes="section-title" Text="Current hash" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" Classes="caption"
+                                   Text="{Binding RuntimeResources.CurrentProfileHash}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="5" Classes="section-title" Text="Current status" />
+                        <TextBlock Grid.Row="5" Grid.Column="1" Classes="caption"
+                                   Text="{Binding RuntimeResources.CurrentStatusText}"
+                                   TextWrapping="Wrap" />
+                      </Grid>
+                    </StackPanel>
+                  </Border>
+
+                  <Border Padding="14"
+                          CornerRadius="10"
+                          Background="{DynamicResource Sunder.Brush.Accent.Overlay}"
+                          BorderBrush="{DynamicResource Sunder.Brush.Accent}"
+                          BorderThickness="1"
+                          IsVisible="{Binding RuntimeResources.ShowPendingNotice}">
+                    <StackPanel Spacing="4">
+                      <TextBlock Classes="section-title"
+                                 Foreground="{DynamicResource Sunder.Brush.Accent}"
+                                 Text="Pending until Runtime restarts" />
+                      <TextBlock Classes="muted"
+                                 Text="{Binding RuntimeResources.PendingDetailText}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+
                 <ItemsControl ItemsSource="{Binding PackageSettings.SelectedPackageSections}"
                                IsVisible="{Binding ShowGenericPackageSettings}">
                   <ItemsControl.ItemTemplate>

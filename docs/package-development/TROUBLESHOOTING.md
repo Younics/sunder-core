@@ -67,9 +67,17 @@ Confirm the installed package id and version satisfy `[assembly: SunderPackageDe
 - Check the App session log for a client-local package presentation fault.
 - Remember that `showInHotbarByDefault` applies only before user customization; use shell navigation to open a known registered view.
 
-### View Is Disabled After Opening
+### View Is Quarantined After Opening
 
-Unhandled construction, XAML, warmup, navigation, or rendering failures disable that package for the current App generation. Fix the first App-session exception and rebuild. Do not look for a Runtime package fault unless the failing action crossed into Runtime.
+Sunder automatically quarantines a view after an attributable recoverable construction, XAML, warmup, navigation, attachment, or rendering failure. Sibling views remain active when the host knows the exact failed view. A package-attributed dispatcher failure without a safe view identity quarantines only that package's App UI activation; installed state and its Runtime role are unchanged. The host shows an error notification with a correlation reference, writes exception details to the App session log, and makes one fresh App activation attempt after cleanup and the exact Runtime package content are authoritative. If cleanup is uncertain, recovery times out, or the replacement faults, the fallback remains and App does not retry that content again during the process session. Fix the first correlated exception and rebuild.
+
+An App package runs in-process, so a UI-thread deadlock, infinite loop, native crash, `StackOverflowException`, severe memory exhaustion, or `FailFast` can still terminate or freeze the App. Those failures require a direct code fix or a future out-of-process UI target.
+
+### Runtime Package Is Restarting
+
+An exact Worker V3 activation fault disables that activation, retires its endpoints, and schedules a bounded package-only restart. Runtime waits 250 ms, 500 ms, 1 second, 2 seconds, and 4 seconds across failures in a rolling one-minute window; the sixth failure suspends recovery. Healthy package workers and endpoint identities remain in place, but calls from the retired session generation terminate and stream clients must reconnect. Old endpoints stay stale, so clients must rediscover the recovered provider rather than retrying an old endpoint. Runtime and App publish restart, success, and suspension notifications automatically.
+
+If worker cleanup, authority drain, or storage rollback cannot be proven safe, Runtime does not overlap another worker with the quarantined activation. A storage-integrity rollback failure fences Runtime lifecycle operations and requests a supervised Runtime restart.
 
 ### Theme Resource Is Missing
 
@@ -106,6 +114,10 @@ Confirm the provider id and contract version match the manifest, the Worker regi
 ### Request, Response, Or Event Is Rejected
 
 Validate the value against the bundled RPC V2 descriptor, including closed record members, required/null presence, bounded strings/collections/numbers, and safe integers. Page collections and use Host-mediated content references for large bytes. Every response/event must match its schema, and every server stream must terminate normally or with an authenticated error.
+
+### Stream Ends With `rpc.worker.stream-queue-limit`
+
+The stream producer outran that call's nonblocking consumer queue. The bounded message suffix identifies whether the count limit, encoded-byte limit, or both rejected the incoming event and includes only sanitized local operation/provider/service/method identity. Runtime cancels the exact stream with `ResourceExhausted`, `PossiblyDispatched`, and `Unsafe`; sibling calls remain active, and no request data or error `Details` are added. Drain events promptly, reduce or page event payloads, and reconnect only when the contract defines safe resume/replay semantics. Do not blindly retry the stream.
 
 ### Callback Does Not Complete
 

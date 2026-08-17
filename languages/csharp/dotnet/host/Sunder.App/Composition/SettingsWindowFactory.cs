@@ -11,7 +11,9 @@ public sealed class SettingsWindowFactory(
     SunderUpdateService updateService,
     BackgroundProcessQueueService backgroundProcessQueue,
     ShellStateService shellStateService,
-    ShellState shellState)
+    ShellState shellState,
+    AppRuntimeResourcePolicySettingsService runtimeResourcePolicySettingsService,
+    IRuntimeResourcePolicyStatusSource runtimeResourcePolicyStatusSource)
 {
     public SettingsWindow Create(
         PackageViewHostService packageViewHostService,
@@ -26,6 +28,8 @@ public sealed class SettingsWindowFactory(
                 backgroundProcessQueue,
                 shellState.BackgroundProcessPopoverWidth,
                 shellState.BackgroundProcessPopoverHeight,
-                persistBackgroundProcessPopoverSize),
+                persistBackgroundProcessPopoverSize,
+                runtimeResourcePolicySettingsService,
+                runtimeResourcePolicyStatusSource),
         };
 }

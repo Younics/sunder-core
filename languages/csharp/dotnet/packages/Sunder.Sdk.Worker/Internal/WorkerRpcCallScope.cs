@@ -55,6 +55,8 @@ internal sealed class WorkerRpcCallScope : ISunderRpcCallScope, IWorkerContentHa
 
     public DateTimeOffset DeadlineUtc { get; }
 
+    public SunderRpcResourceProfile? ResourceProfile => _client.ResourceProfile;
+
     public async ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
         SunderRpcEndpointReference endpoint,
         CancellationToken cancellationToken = default)

@@ -31,7 +31,7 @@ public sealed class StackContributorRpcDescriptorTests
                 .ToLowerInvariant());
         Assert.Equal(
             "The contributor does not implement the requested optional Stack operation.",
-            descriptor.Errors["stack.method.unsupported"]);
+            descriptor.Errors["stack.method.unsupported"].Description);
         var service = Assert.Single(descriptor.Services);
         Assert.Equal(SunderStackContributorRpc.ServiceId, service.ServiceId);
         Assert.Equal(

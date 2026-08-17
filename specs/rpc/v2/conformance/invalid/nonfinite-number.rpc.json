@@ -1,6 +1,7 @@
 {
   "descriptorVersion": 2,
-  "contractId": "example.rpc.v2.noncanonicalnumber",
+  "schemaProfile": "sunder.rpc.values.v1",
+  "contractId": "example.rpc.v2.nonfinitenumber",
   "version": "2.0.0",
   "errors": {},
   "services": {
@@ -19,8 +20,9 @@
   "$defs": {
     "Value": {
       "type": "number",
-      "minimum": 0.0,
-      "maximum": 1
+      "format": "float64",
+      "minimum": 0,
+      "maximum": 1e400
     }
   }
 }

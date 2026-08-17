@@ -23,10 +23,10 @@ public static class SunderStackContributorRpc
     public const string ContractVersion = "2.0.0";
 
     /// <summary>The canonical Stack contributor descriptor SHA-256.</summary>
-    public const string DescriptorSha256 = "177323e0de4f5ede5852565defc8ea9f92abf4bf952d61446d139c7a3c1c16a8";
+    public const string DescriptorSha256 = "45a44571c87d4ce9a400e1ace862c3678fa8fcb60b6fc7e0d91ebb54ba36c8b8";
 
     /// <summary>The domain-separated Stack contributor V2 ABI SHA-256.</summary>
-    public const string AbiSha256 = "2468e4b2dea06c0f2c82ceb6972bbeb775a7b032b05f02aa33cd1b51709ef3e0";
+    public const string AbiSha256 = "9a9687eb234e901e59ebb00c9e5eaccb405b292b3d340021b8e929907b36437a";
 
     /// <summary>The Stack contributor service id.</summary>
     public const string ServiceId = "stack-contributor";

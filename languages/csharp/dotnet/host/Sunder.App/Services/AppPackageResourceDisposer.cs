@@ -16,29 +16,33 @@ internal static class AppPackageResourceDisposer
         }
     }
 
-    public static async Task TryDisposeOwnedInstanceAsync(object ownedInstance, string message)
+    public static async Task<bool> TryDisposeOwnedInstanceAsync(object ownedInstance, string message)
     {
         try
         {
             await DisposeOwnedInstanceAsync(ownedInstance);
+            return true;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             AppSessionLog.WriteError(message, ex);
+            return false;
         }
     }
 
-    public static void TryUnloadLoadContext(AppPackageLoadContext loadContext, string? packageId)
+    public static bool TryUnloadLoadContext(AppPackageLoadContext loadContext, string? packageId)
     {
         try
         {
             loadContext.Unload();
+            return true;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             AppSessionLog.WriteError(packageId is null
                 ? "Failed to unload an app-side package load context."
                 : $"Failed to unload app-side package load context for '{packageId}'.", ex);
+            return false;
         }
     }
 }

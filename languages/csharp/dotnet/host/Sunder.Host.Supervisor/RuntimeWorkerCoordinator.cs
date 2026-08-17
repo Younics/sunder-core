@@ -34,6 +34,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
     private readonly TimeSpan _startupTimeout;
     private readonly Func<bool> _isRuntimeLeaseAvailable;
     private readonly Func<int, TimeSpan> _getRecoveryDelay;
+    private readonly RuntimeResourcePolicyLaunchResolver _resourcePolicyLaunchResolver;
     private readonly Queue<DateTimeOffset> _recentCrashes = new();
     private Process? _process;
     private bool _lifecycleOwnsProcessExit;
@@ -65,7 +66,9 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         HostLifecycleStore lifecycleStore,
         Func<bool>? isRuntimeLeaseAvailable = null,
         Func<int, TimeSpan>? getRecoveryDelay = null,
-        string? runtimeStateRoot = null)
+        string? runtimeStateRoot = null,
+        string? runtimeResourcePolicyFilePath = null,
+        Action<string>? reportResourcePolicyDiagnostic = null)
     {
         _runtimeHostPath = string.IsNullOrWhiteSpace(runtimeHostPath) ? null : Path.GetFullPath(runtimeHostPath);
         _connectionInfoPath = Path.GetFullPath(connectionInfoPath);
@@ -75,6 +78,9 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         _isRuntimeLeaseAvailable = isRuntimeLeaseAvailable ?? (() => RuntimeLocalState.IsLeaseAvailable(_runtimeStateRoot));
         _getRecoveryDelay = getRecoveryDelay
             ?? (failureCount => TimeSpan.FromMilliseconds(250 * (1 << Math.Min(failureCount - 1, 4))));
+        _resourcePolicyLaunchResolver = new RuntimeResourcePolicyLaunchResolver(
+            runtimeResourcePolicyFilePath,
+            reportResourcePolicyDiagnostic);
         _lifecycleStore = lifecycleStore;
         _persistentState = lifecycleStore.LoadOrCreate();
         _desiredState = _persistentState.DesiredState;
@@ -809,6 +815,26 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             throw new FileNotFoundException("Sunder.Runtime.Host is not installed in this Host distribution.");
         }
 
+        var startInfo = CreateWorkerStartInfo(
+            workerToken,
+            endpoint,
+            lifetimePipe.GetClientHandleAsString(),
+            startupDiagnosticPipe.GetClientHandleAsString());
+        return Process.Start(startInfo)
+               ?? throw new InvalidOperationException("Failed to start Sunder.Runtime.Host.");
+    }
+
+    internal ProcessStartInfo CreateWorkerStartInfo(
+        string workerToken,
+        RuntimeIpcEndpoint endpoint,
+        string supervisorLifetimePipeHandle,
+        string startupDiagnosticPipeHandle)
+    {
+        if (_runtimeHostPath is null)
+        {
+            throw new FileNotFoundException("Sunder.Runtime.Host is not installed in this Host distribution.");
+        }
+
         var isDotnetAssembly = string.Equals(Path.GetExtension(_runtimeHostPath), ".dll", StringComparison.OrdinalIgnoreCase);
         var startInfo = new ProcessStartInfo(isDotnetAssembly ? "dotnet" : _runtimeHostPath)
         {
@@ -820,15 +846,17 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         {
             startInfo.ArgumentList.Add(_runtimeHostPath);
         }
+        RuntimeResourcePolicyEnvironment.RemovePolicyVariables(startInfo.Environment);
         startInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"] = _connectionInfoPath;
         startInfo.Environment["SUNDER_RUNTIME_BEARER_TOKEN"] = workerToken;
-        startInfo.Environment["SUNDER_RUNTIME_SUPERVISOR_PIPE"] = lifetimePipe.GetClientHandleAsString();
+        startInfo.Environment["SUNDER_RUNTIME_SUPERVISOR_PIPE"] = supervisorLifetimePipeHandle;
         startInfo.Environment[StartupDiagnosticPipeEnvironmentVariable] =
-            startupDiagnosticPipe.GetClientHandleAsString();
+            startupDiagnosticPipeHandle;
         startInfo.Environment[RuntimeLocalState.StateRootEnvironmentVariable] = _runtimeStateRoot;
         startInfo.Environment[RuntimeIpcEndpoint.EnvironmentVariable] = endpoint.ToEnvironmentValue();
-        return Process.Start(startInfo)
-               ?? throw new InvalidOperationException("Failed to start Sunder.Runtime.Host.");
+        startInfo.Environment[RuntimeResourcePolicyEnvironment.LaunchPayloadVariable] =
+            _resourcePolicyLaunchResolver.ResolveLaunchPayload();
+        return startInfo;
     }
 
     private async Task<(RuntimeConnectionInfo Connection, RuntimeHandshakeResponse Handshake)> WaitForReadyWorkerAsync(

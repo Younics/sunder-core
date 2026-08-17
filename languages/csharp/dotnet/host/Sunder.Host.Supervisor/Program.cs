@@ -9,6 +9,8 @@ using Sunder.Runtime.Contracts;
 using Sunder.Runtime.LocalState;
 
 var options = HostStartupOptions.Parse(args);
+Environment.SetEnvironmentVariable(RuntimeResourcePolicyEnvironment.PolicyFilePathVariable, null);
+Environment.SetEnvironmentVariable(RuntimeResourcePolicyEnvironment.LaunchPayloadVariable, null);
 HostDeploymentIdentityVerifier.Validate(AppContext.BaseDirectory, options.DeploymentIdentity);
 var builder = WebApplication.CreateBuilder(args);
 if (builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any())
@@ -54,7 +56,11 @@ builder.Services.AddSingleton(provider => new RuntimeWorkerCoordinator(
     workerConnectionPath,
     options.WorkerStartupTimeout,
     provider.GetRequiredService<HostLifecycleStore>(),
-    runtimeStateRoot: runtimeStateRoot));
+    runtimeStateRoot: runtimeStateRoot,
+    runtimeResourcePolicyFilePath: options.RuntimeResourcePolicyFilePath,
+    reportResourcePolicyDiagnostic: message =>
+        provider.GetRequiredService<ILogger<RuntimeWorkerCoordinator>>()
+            .LogWarning("{RuntimeResourcePolicyDiagnostic}", message)));
 builder.Services.AddSingleton<IRuntimeWorkerConnectionSource>(provider =>
     provider.GetRequiredService<RuntimeWorkerCoordinator>());
 builder.Services.AddSingleton<RuntimeGateway>();

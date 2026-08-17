@@ -23,15 +23,7 @@ internal sealed class InitialShellRenderWaiter(
         var readiness = await uiDispatcher
             .InvokeAsync(
                 () =>
-                    new ControlReadiness(
-                        mainWindow
-                            .ViewModel?.GetActiveHostedViewControls()
-                            .SelectMany(item => GetHostedControls(item.View))
-                            .Prepend(mainWindow)
-                            .Distinct()
-                            .ToArray()
-                            ?? [mainWindow]
-                    ),
+                    new ControlReadiness(() => GetReadyControls(mainWindow)),
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -83,9 +75,21 @@ internal sealed class InitialShellRenderWaiter(
         yield return control;
         if (control is HostedPackageViewBoundary boundary)
         {
-            yield return boundary.HostedView;
+            if (boundary.HostedView is { } hostedView)
+            {
+                yield return hostedView;
+            }
         }
     }
+
+    private static IReadOnlyList<Control> GetReadyControls(MainWindow mainWindow)
+        => mainWindow
+            .ViewModel?.GetActiveHostedViewControls()
+            .SelectMany(item => GetHostedControls(item.View))
+            .Prepend(mainWindow)
+            .Distinct()
+            .ToArray()
+            ?? [mainWindow];
 
     private async Task WaitForAnimationFrameAsync(
         MainWindow mainWindow,
@@ -171,31 +175,31 @@ internal sealed class InitialShellRenderWaiter(
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1);
     }
 
-    private sealed class ControlReadiness : IDisposable
+    internal sealed class ControlReadiness : IDisposable
     {
-        private readonly IReadOnlyList<Control> _controls;
+        private readonly Func<IReadOnlyList<Control>> _getControls;
+        private readonly HashSet<Control> _controls = new(ReferenceEqualityComparer.Instance);
         private readonly EventHandler<RoutedEventArgs> _loadedHandler;
         private readonly EventHandler _layoutUpdatedHandler;
         private bool _disposed;
 
-        public ControlReadiness(IReadOnlyList<Control> controls)
+        public ControlReadiness(Func<IReadOnlyList<Control>> getControls)
         {
-            _controls = controls;
-            _loadedHandler = (_, _) => CheckReady();
-            _layoutUpdatedHandler = (_, _) => CheckReady();
-            foreach (var control in controls)
-            {
-                control.Loaded += _loadedHandler;
-                control.LayoutUpdated += _layoutUpdatedHandler;
-            }
+            _getControls = getControls;
+            _loadedHandler = (_, _) => RefreshAndCheckReady();
+            _layoutUpdatedHandler = (_, _) => RefreshAndCheckReady();
 
-            CheckReady();
+            RefreshAndCheckReady();
         }
 
-        public TaskCompletionSource CompletionSource { get; } =
+        private TaskCompletionSource CompletionSource { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task Completion => CompletionSource.Task;
+
+        internal bool IsTracking(Control control) => _controls.Contains(control);
+
+        internal void Refresh() => RefreshAndCheckReady();
 
         public void Dispose()
         {
@@ -205,17 +209,41 @@ internal sealed class InitialShellRenderWaiter(
             }
 
             _disposed = true;
-            foreach (var control in _controls)
+            foreach (var control in _controls.ToArray())
             {
                 control.Loaded -= _loadedHandler;
                 control.LayoutUpdated -= _layoutUpdatedHandler;
             }
+            _controls.Clear();
         }
 
-        private void CheckReady()
+        private void RefreshAndCheckReady()
         {
+            if (_disposed || CompletionSource.Task.IsCompleted)
+            {
+                return;
+            }
+
+            var currentControls = new HashSet<Control>(
+                _getControls(),
+                ReferenceEqualityComparer.Instance);
+            foreach (var control in _controls.Where(control => !currentControls.Contains(control)).ToArray())
+            {
+                control.Loaded -= _loadedHandler;
+                control.LayoutUpdated -= _layoutUpdatedHandler;
+                _controls.Remove(control);
+            }
+            foreach (var control in currentControls)
+            {
+                if (_controls.Add(control))
+                {
+                    control.Loaded += _loadedHandler;
+                    control.LayoutUpdated += _layoutUpdatedHandler;
+                }
+            }
+
             if (
-                _controls.All(control =>
+                currentControls.All(control =>
                     control.IsLoaded
                     && control.IsAttachedToVisualTree()
                     && control.IsMeasureValid

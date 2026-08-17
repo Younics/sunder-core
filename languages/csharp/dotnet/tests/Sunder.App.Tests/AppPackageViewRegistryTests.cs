@@ -144,6 +144,35 @@ public sealed class AppPackageViewRegistryTests
     }
 
     [Fact]
+    public async Task RemoveCachedViewsAsync_WhenParentDetachmentFails_ReportsCleanupAsUnproven()
+    {
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().BuildServiceProvider();
+        registry.RegisterPackageView<TestPackageView>(
+            "test.package",
+            "test.view",
+            serviceProvider);
+        var view = Assert.IsType<TestPackageView>(
+            registry.GetOrCreateView("test.view", _ => false, ReportFailure));
+        var parent = new ContentControl { Content = view };
+        parent.PropertyChanged += static (_, change) =>
+        {
+            if (change.Property == ContentControl.ContentProperty
+                && change.NewValue is null)
+            {
+                throw new InvalidOperationException("parent detach failed");
+            }
+        };
+
+        var cleanupProven = await registry.RemoveCachedViewsAsync(
+            "test.package",
+            CancellationToken.None);
+
+        Assert.False(cleanupProven);
+        GC.KeepAlive(parent);
+    }
+
+    [Fact]
     public void RemoveCachedView_DisposesOnlyRequestedCachedView()
     {
         var registry = new AppPackageViewRegistry();

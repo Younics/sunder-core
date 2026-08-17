@@ -705,6 +705,7 @@ function v1Descriptor(): unknown {
 function v2Descriptor(contractId = "example.rpc.v2", version = "2.0.0"): unknown {
   return {
     descriptorVersion: 2,
+    schemaProfile: "sunder.rpc.values.v1",
     contractId,
     version,
     errors: {},

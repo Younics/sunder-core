@@ -46,68 +46,104 @@ internal sealed class DevPackageOwnerLeaseService
         ValidateToken(request.OwnerToken);
         ValidateMutationId(request.MutationId);
         ValidateRuntimeInstance(request.RuntimeInstanceId);
-        await RequireReadyRuntimeAsync(cancellationToken).ConfigureAwait(false);
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var mutationStarted = Stopwatch.GetTimestamp();
+        var outcome = "Failed";
+        var packageCount = 0;
+        using var mutationScope = _logger.BeginScope(
+            "Dev package owner mutation {MutationId} for {OwnerId} at revision {Revision}",
+            request.MutationId,
+            ownerId,
+            request.Revision);
         try
         {
-            var now = _timeProvider.GetUtcNow();
-            if (_owners.TryGetValue(ownerId, out var existing))
+            await RequireReadyRuntimeAsync(cancellationToken).ConfigureAwait(false);
+            var gateWaitStarted = Stopwatch.GetTimestamp();
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation(
+                "Waited {ElapsedMilliseconds} ms for the dev package owner gate for mutation {MutationId}",
+                Stopwatch.GetElapsedTime(gateWaitStarted).TotalMilliseconds,
+                request.MutationId);
+            try
             {
-                Authenticate(existing, request.OwnerToken);
-                if (existing.ExpiresAtUtc <= now)
+                var now = _timeProvider.GetUtcNow();
+                if (_owners.TryGetValue(ownerId, out var existing))
                 {
-                    await ReleaseCoreAsync(ownerId, cancellationToken).ConfigureAwait(false);
-                    throw new RuntimeAuthenticationException("The dev package owner lease has expired.");
-                }
-                if (request.Revision == existing.Revision
-                    && string.Equals(request.MutationId, existing.MutationId, StringComparison.Ordinal))
-                {
-                    if (!FoldersEqual(existing.Folders, request.Folders))
+                    Authenticate(existing, request.OwnerToken);
+                    if (existing.ExpiresAtUtc <= now)
+                    {
+                        await ReleaseCoreAsync(ownerId, cancellationToken).ConfigureAwait(false);
+                        throw new RuntimeAuthenticationException("The dev package owner lease has expired.");
+                    }
+                    if (request.Revision == existing.Revision
+                        && string.Equals(request.MutationId, existing.MutationId, StringComparison.Ordinal))
+                    {
+                        if (!FoldersEqual(existing.Folders, request.Folders))
+                        {
+                            throw new RuntimeConflictException(
+                                $"Dev package owner mutation '{request.MutationId}' was already used with different folders.");
+                        }
+                        var renewed = Renew(existing, now);
+                        _owners[ownerId] = renewed;
+                        await _watcher.SynchronizeAsync(_sessions.GetDevWatchTargets(), cancellationToken).ConfigureAwait(false);
+                        packageCount = renewed.Packages.Count;
+                        outcome = "Succeeded";
+                        return ToResponse(renewed);
+                    }
+
+                    if (request.Revision != existing.Revision + 1)
                     {
                         throw new RuntimeConflictException(
-                            $"Dev package owner mutation '{request.MutationId}' was already used with different folders.");
+                            $"Dev package owner '{ownerId}' expected revision {existing.Revision + 1}, but received {request.Revision}.");
                     }
-                    var renewed = Renew(existing, now);
-                    _owners[ownerId] = renewed;
-                    await _watcher.SynchronizeAsync(_sessions.GetDevWatchTargets(), cancellationToken).ConfigureAwait(false);
-                    return ToResponse(renewed);
                 }
-
-                if (request.Revision != existing.Revision + 1)
+                else if (request.Revision != 1)
                 {
                     throw new RuntimeConflictException(
-                        $"Dev package owner '{ownerId}' expected revision {existing.Revision + 1}, but received {request.Revision}.");
+                        $"New dev package owner '{ownerId}' must begin at revision 1.");
                 }
-            }
-            else if (request.Revision != 1)
-            {
-                throw new RuntimeConflictException(
-                    $"New dev package owner '{ownerId}' must begin at revision 1.");
-            }
 
-            ValidateProcessIdentity(request.ProcessId, request.ProcessStartedAtUtc);
-            var packages = await _sessions.ReplaceAppDevPackageOwnerAsync(
-                ownerId,
-                request.Folders,
-                cancellationToken).ConfigureAwait(false);
-            var committedAt = _timeProvider.GetUtcNow();
-            var lease = new OwnerLease(
-                ownerId,
-                request.OwnerToken,
-                request.MutationId,
-                request.Revision,
-                committedAt + _policy.DevPackageOwnerLeaseLifetime,
-                request.ProcessId,
-                request.ProcessStartedAtUtc,
-                request.Folders,
-                packages);
-            _owners[ownerId] = lease;
-            await _watcher.SynchronizeAsync(_sessions.GetDevWatchTargets(), cancellationToken).ConfigureAwait(false);
-            return ToResponse(lease);
+                ValidateProcessIdentity(request.ProcessId, request.ProcessStartedAtUtc);
+                var packages = await _sessions.ReplaceAppDevPackageOwnerAsync(
+                    ownerId,
+                    request.Folders,
+                    cancellationToken).ConfigureAwait(false);
+                var committedAt = _timeProvider.GetUtcNow();
+                var lease = new OwnerLease(
+                    ownerId,
+                    request.OwnerToken,
+                    request.MutationId,
+                    request.Revision,
+                    committedAt + _policy.DevPackageOwnerLeaseLifetime,
+                    request.ProcessId,
+                    request.ProcessStartedAtUtc,
+                    request.Folders,
+                    packages);
+                _owners[ownerId] = lease;
+                await _watcher.SynchronizeAsync(_sessions.GetDevWatchTargets(), cancellationToken).ConfigureAwait(false);
+                packageCount = packages.Count;
+                outcome = "Succeeded";
+                return ToResponse(lease);
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            outcome = "Canceled";
+            throw;
         }
         finally
         {
-            _gate.Release();
+            _logger.LogInformation(
+                "Dev package owner mutation {MutationId} for {OwnerId} completed with {MutationOutcome}, {PackageCount} package(s), and generation {SessionGeneration} in {ElapsedMilliseconds} ms",
+                request.MutationId,
+                ownerId,
+                outcome,
+                packageCount,
+                _sessions.Generation,
+                Stopwatch.GetElapsedTime(mutationStarted).TotalMilliseconds);
         }
     }
 

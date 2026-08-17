@@ -114,7 +114,7 @@ Starting more than 32 sessions returns a Runtime conflict. Expired, unloaded, or
 
 ### Host Listener
 
-The listener uses loopback port `1455` with fallback `1457`, at most 16 concurrent requests, a 4,096-byte request-line limit, 64 headers, 8,192 bytes per header line, and 32,768 header bytes total. Callback query data is limited to 32 values, 128 characters per key, 4,096 per value, and 16,384 combined characters.
+The listener uses loopback port `1455` with fallback `1457`, at most 16 concurrent requests, a 4,096-byte request-line limit, 64 headers, 8,192 bytes per header line, and 32,768 header bytes total. Callback query data is limited to 16 values, 64 characters per key, 2,048 per value, and 8,192 combined characters, with the request-line limit applying first.
 
 These are host transport constraints, not permission to place sensitive data in URLs. Prefer short opaque state/code values and exchange them server-side.
 

@@ -103,7 +103,7 @@ internal sealed class AppPackageAvaloniaAssetLoader : IAssetLoader
             {
                 AssetLoader.InvalidateAssemblyCache(assemblyName);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
             {
                 AppSessionLog.WriteError($"Failed to invalidate Avalonia asset cache for package assembly '{assemblyName}'.", ex);
             }

@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "descriptorVersion": 2,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "contractId": "example.rpc.v2.values",
+  "version": "2.0.0",
+  "errors": {
+    "example.invalid": {
+      "description": "The supplied value was invalid.",
+      "detailsSchema": { "$ref": "#/$defs/JSONObject" }
+    }
+  },
+  "services": {
+    "values": {
+      "methods": {
+        "round-trip": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": ["example.invalid"],
+          "requestSchema": { "$ref": "#/$defs/Payload" },
+          "responseSchema": { "$ref": "#/$defs/JSON" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "JSON": {},
+    "JSONObject": {
+      "type": "object",
+      "maxProperties": 32
+    },
+    "Unit": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "Uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "Date": {
+      "type": "string",
+      "format": "date"
+    },
+    "OffsetDateTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "Duration": {
+      "type": "string",
+      "format": "duration"
+    },
+    "Uri": {
+      "type": "string",
+      "format": "uri"
+    },
+    "BigInteger": {
+      "type": "string",
+      "format": "big-integer",
+      "maxDigits": 40,
+      "valueMinimum": "-9999999999999999999999999999999999999999",
+      "valueMaximum": "9999999999999999999999999999999999999999"
+    },
+    "Decimal": {
+      "type": "string",
+      "format": "decimal",
+      "maxPrecision": 20,
+      "maxScale": 8,
+      "valueMinimum": "-1000000000.125",
+      "valueExclusiveMaximum": "1000000000.125"
+    },
+    "Bytes": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "maxDecodedBytes": 4096
+    },
+    "SafeInteger": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "Float32": {
+      "type": "number",
+      "format": "float32",
+      "minimum": -1000.25,
+      "exclusiveMaximum": 1000.25,
+      "enum": [-0, 0.10000000149011612, 3.5]
+    },
+    "Float64": {
+      "type": "number",
+      "format": "float64",
+      "minimum": -1e20,
+      "maximum": 1e20,
+      "const": 0.000001
+    },
+    "Content": {
+      "type": "object",
+      "logicalType": "content-reference"
+    },
+    "Payload": {
+      "type": "object",
+      "properties": {
+        "uuid": { "$ref": "#/$defs/Uuid" },
+        "date": { "$ref": "#/$defs/Date" },
+        "dateTime": { "$ref": "#/$defs/OffsetDateTime" },
+        "duration": { "$ref": "#/$defs/Duration" },
+        "uri": { "$ref": "#/$defs/Uri" },
+        "bigInteger": { "$ref": "#/$defs/BigInteger" },
+        "decimal": { "$ref": "#/$defs/Decimal" },
+        "bytes": { "$ref": "#/$defs/Bytes" },
+        "safeInteger": { "$ref": "#/$defs/SafeInteger" },
+        "float32": { "$ref": "#/$defs/Float32" },
+        "float64": { "$ref": "#/$defs/Float64" },
+        "content": { "$ref": "#/$defs/Content" },
+        "json": { "$ref": "#/$defs/JSON" },
+        "object": { "$ref": "#/$defs/JSONObject" },
+        "unit": { "$ref": "#/$defs/Unit" }
+      },
+      "required": ["uuid", "date", "dateTime", "duration", "uri", "bigInteger", "decimal", "bytes", "safeInteger", "float32", "float64", "content", "json", "object", "unit"],
+      "additionalProperties": false
+    }
+  }
+}

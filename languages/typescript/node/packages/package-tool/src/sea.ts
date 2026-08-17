@@ -13,7 +13,16 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
-import { FrameDecoder, encodeFrame, type JsonValue } from "@sunder/sdk";
+import {
+  FrameDecoder,
+  SUNDER_WORKER_PROTOCOL,
+  SUNDER_WORKER_PROTOCOL_VERSION,
+  SUNDER_WORKER_STANDARD_RESOURCE_PROFILE,
+  computeWorkerResourceProfileHash,
+  encodeFrame,
+  type HostEnvelope,
+  type JsonValue,
+} from "@sunder/sdk";
 import { downloadBoundedFile, fetchBoundedText } from "./download";
 import { currentRid, type SunderRid } from "./model";
 import { hashFile, verifyCachedNode, writeNodeCacheVerification } from "./node-cache";
@@ -148,6 +157,7 @@ export async function smokeSeaTarget(projectPath: string, rid = currentRid()): P
     await access(executablePath);
     const activationId = randomBytes(16).toString("hex");
     const sessionId = randomBytes(16).toString("hex");
+    const resourceProfileHash = computeWorkerResourceProfileHash(SUNDER_WORKER_STANDARD_RESOURCE_PROFILE);
     await rm(smokeRoot, { recursive: true, force: true });
     const temporaryRoot = resolve(smokeRoot, "temporary");
     const workspaceRoot = resolve(smokeRoot, "workspace");
@@ -157,7 +167,7 @@ export async function smokeSeaTarget(projectPath: string, rid = currentRid()): P
       cwd: dirname(executablePath),
       stdio: ["pipe", "pipe", "pipe"],
       env: {
-        SUNDER_WORKER_PROTOCOL: "sunder.worker.v3",
+        SUNDER_WORKER_PROTOCOL,
         SUNDER_PACKAGE_ID: project.config.id,
         SUNDER_PACKAGE_VERSION: project.config.version,
         SUNDER_ACTIVATION_ID: activationId,
@@ -188,22 +198,32 @@ export async function smokeSeaTarget(projectPath: string, rid = currentRid()): P
         abiSha256: contract.abiSha256,
       };
     });
-    child.stdin.write(encodeFrame({
+    const hello: Extract<HostEnvelope, { readonly type: "host.hello" }> = {
       type: "host.hello",
-      protocol: "sunder.worker.v3",
-      protocolVersion: 3,
+      protocol: SUNDER_WORKER_PROTOCOL,
+      protocolVersion: SUNDER_WORKER_PROTOCOL_VERSION,
       challenge: "native-sea-smoke",
       packageId: project.config.id,
       packageVersion: project.config.version,
       activationId,
       sessionId,
       providers,
-    }));
+      resourceProfile: SUNDER_WORKER_STANDARD_RESOURCE_PROFILE,
+      resourceProfileHash,
+    };
+    child.stdin.write(encodeFrame(hello));
     try {
       const ready = await messages.next(15_000);
       const contributions = ready.contributions;
       if (ready.type !== "worker.ready"
+        || ready.protocol !== SUNDER_WORKER_PROTOCOL
+        || ready.protocolVersion !== SUNDER_WORKER_PROTOCOL_VERSION
         || ready.challenge !== "native-sea-smoke"
+        || ready.packageId !== project.config.id
+        || ready.packageVersion !== project.config.version
+        || ready.activationId !== activationId
+        || ready.sessionId !== sessionId
+        || ready.resourceProfileHash !== resourceProfileHash
         || contributions === null
         || typeof contributions !== "object"
          || Array.isArray(contributions)

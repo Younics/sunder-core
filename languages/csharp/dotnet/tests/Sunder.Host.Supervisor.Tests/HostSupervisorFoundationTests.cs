@@ -1,5 +1,6 @@
 using Sunder.Host.Contracts;
 using Sunder.Host.Supervisor;
+using Sunder.Runtime.LocalState;
 using Xunit;
 
 namespace Sunder.Host.Supervisor.Tests;
@@ -19,6 +20,32 @@ public sealed partial class HostSupervisorFoundationTests
             Assert.Null(options.HostStateRoot);
             Assert.Null(options.RuntimeStateRoot);
             Assert.Null(options.DeploymentIdentity);
+            Assert.Null(options.RuntimeResourcePolicyFilePath);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostStartupOptions_ReadsAndNormalizesAppPolicyFilePathFromEnvironmentOnly()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var policyPath = Path.Combine(root, "app", "v1", "runtime-resource-policy.json");
+            var options = HostStartupOptions.Parse(
+                [],
+                variable => string.Equals(
+                    variable,
+                    RuntimeResourcePolicyEnvironment.PolicyFilePathVariable,
+                    StringComparison.Ordinal)
+                    ? policyPath
+                    : null,
+                root);
+
+            Assert.Equal(Path.GetFullPath(policyPath), options.RuntimeResourcePolicyFilePath);
         }
         finally
         {

@@ -13,6 +13,100 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class PackageCallbackSessionCoordinatorTests
 {
     [Fact]
+    public async Task BrowserCallback_AcknowledgesBeforePackageCompletionFinishes()
+    {
+        var handler = new TestCallbackHandler(
+            blockCompletion: true,
+            callbackHandlerId: PackageCallbackHandlerIds.Authentication);
+        var (state, callbacks) = await CreateCoordinatorAsync(handler);
+        await using var server = CreateServer();
+        PackageCallbackSessionResponse started;
+        using (var startLease = state.AcquireLease())
+        {
+            started = (await callbacks.StartAsync(
+                startLease,
+                "test.package",
+                handler.CallbackHandlerId,
+                null,
+                server))!;
+        }
+        using var statusLease = state.AcquireLease();
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+
+        var response = await httpClient.GetStringAsync(
+            new Uri($"{handler.CallbackUri}?state={started.CallbackSessionId}&code=winner"));
+
+        Assert.Contains("Authorization received", response, StringComparison.Ordinal);
+        await handler.CompletionEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            Sunder.Runtime.Contracts.PackageCallbackSessionState.Pending,
+            callbacks.GetStatus(statusLease, "test.package", started.CallbackSessionId)?.State);
+
+        handler.ReleaseCompletion();
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        PackageCallbackSessionResponse? status;
+        do
+        {
+            status = callbacks.GetStatus(statusLease, "test.package", started.CallbackSessionId);
+            if (status?.State == Sunder.Runtime.Contracts.PackageCallbackSessionState.Completed)
+            {
+                break;
+            }
+            await Task.Delay(10);
+        } while (DateTimeOffset.UtcNow < deadline);
+
+        Assert.Equal(Sunder.Runtime.Contracts.PackageCallbackSessionState.Completed, status?.State);
+        Assert.Equal("winner", handler.CompletedCode);
+        await callbacks.ShutdownAsync();
+        statusLease.Dispose();
+        await state.ClearActiveSessionAsync();
+    }
+
+    [Fact]
+    public async Task BrowserCallback_FailedCompletionIsReportedThroughSessionStatus()
+    {
+        var handler = new TestCallbackHandler(
+            throwFromCompletion: true,
+            callbackHandlerId: PackageCallbackHandlerIds.Authentication);
+        var (state, callbacks) = await CreateCoordinatorAsync(handler);
+        await using var server = CreateServer();
+        PackageCallbackSessionResponse started;
+        using (var startLease = state.AcquireLease())
+        {
+            started = (await callbacks.StartAsync(
+                startLease,
+                "test.package",
+                handler.CallbackHandlerId,
+                null,
+                server))!;
+        }
+        var statusLease = state.AcquireLease();
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+
+        using var response = await httpClient.GetAsync(
+            new Uri($"{handler.CallbackUri}?state={started.CallbackSessionId}&code=rejected"));
+
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, response.StatusCode);
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        PackageCallbackSessionResponse? status;
+        do
+        {
+            status = callbacks.GetStatus(statusLease, "test.package", started.CallbackSessionId);
+            if (status?.State == Sunder.Runtime.Contracts.PackageCallbackSessionState.Failed)
+            {
+                break;
+            }
+            await Task.Delay(10);
+        } while (DateTimeOffset.UtcNow < deadline);
+
+        Assert.Equal(Sunder.Runtime.Contracts.PackageCallbackSessionState.Failed, status?.State);
+        Assert.Contains("Completion failed", status?.Message, StringComparison.Ordinal);
+        await callbacks.ShutdownAsync();
+        statusLease.Dispose();
+        await state.ClearActiveSessionAsync();
+    }
+
+    [Fact]
     public async Task CompletingCallback_WinsAgainstExpiryUnloadAndShutdown()
     {
         var handler = new TestCallbackHandler(blockCompletion: true);
@@ -137,6 +231,72 @@ public sealed class PackageCallbackSessionCoordinatorTests
     }
 
     [Fact]
+    public async Task CompletingCallback_IsCancelledBySiblingGenerationAdvanceAndFreshStartSucceeds()
+    {
+        var handler = new TestCallbackHandler(blockCompletion: true);
+        var (state, callbacks) = await CreateCoordinatorAsync(
+            handler,
+            includeFaultSibling: true);
+        await using var server = CreateServer();
+        PackageCallbackSessionResponse started;
+        using (var startLease = state.AcquireLease())
+        {
+            started = (await callbacks.StartAsync(
+                startLease,
+                "test.package",
+                handler.CallbackHandlerId,
+                null,
+                server))!;
+        }
+        var completionLease = state.AcquireLease();
+        var completion = callbacks.CompleteAsync(
+            completionLease,
+            started.CallbackSessionId,
+            new Dictionary<string, string?> { ["code"] = "stale" });
+        await handler.CompletionEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        PackageActivationIdentity faultIdentity;
+        long faultGeneration;
+        using (var faultLease = state.AcquireLease())
+        {
+            var faultPackage = Assert.IsType<ActiveLoadedPackage>(
+                state.GetLoadedPackage(faultLease, "fault.package"));
+            faultIdentity = faultLease.GetPackageActivationIdentity(faultPackage);
+            faultGeneration = faultLease.Generation;
+        }
+
+        Assert.True(state.HandlePackageFault(
+            "fault.package",
+            faultIdentity,
+            faultGeneration,
+            PackageFailureOrigin.RuntimeBackgroundService,
+            new InvalidOperationException("sibling failed"),
+            "run sibling package"));
+
+        Assert.False(await completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(completionLease.GenerationRetirementToken.IsCancellationRequested);
+        Assert.Null(handler.CompletedCode);
+        using (var freshLease = state.AcquireLease())
+        {
+            Assert.Equal(faultGeneration + 1, freshLease.Generation);
+            Assert.Null(callbacks.GetStatus(
+                freshLease,
+                "test.package",
+                started.CallbackSessionId));
+            var fresh = await callbacks.StartAsync(
+                freshLease,
+                "test.package",
+                handler.CallbackHandlerId,
+                null,
+                server);
+            Assert.NotNull(fresh);
+        }
+
+        completionLease.Dispose();
+        await callbacks.ShutdownAsync();
+        await state.ClearActiveSessionAsync();
+    }
+
+    [Fact]
     public async Task CompletingCallback_IsCancelledWhenHostStops()
     {
         using var hostStopping = new CancellationTokenSource();
@@ -232,9 +392,41 @@ public sealed class PackageCallbackSessionCoordinatorTests
         await state.ClearActiveSessionAsync();
     }
 
+    [Fact]
+    public async Task Cancel_CompletingSessionCancelsInFlightHandler()
+    {
+        var handler = new TestCallbackHandler(blockCompletion: true);
+        var (state, callbacks) = await CreateCoordinatorAsync(handler);
+        await using var server = CreateServer();
+        using var lease = state.AcquireLease();
+        var started = (await callbacks.StartAsync(
+            lease,
+            "test.package",
+            handler.CallbackHandlerId,
+            null,
+            server))!;
+        var completion = callbacks.CompleteAsync(
+            lease,
+            started.CallbackSessionId,
+            new Dictionary<string, string?> { ["code"] = "late" });
+        await handler.CompletionEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(callbacks.Cancel(lease, "test.package", started.CallbackSessionId));
+
+        Assert.False(await completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        var status = callbacks.GetStatus(lease, "test.package", started.CallbackSessionId);
+        Assert.Equal(Sunder.Runtime.Contracts.PackageCallbackSessionState.Cancelled, status?.State);
+        Assert.Null(handler.CompletedCode);
+        Assert.Equal(0, handler.CancellationCount);
+        await callbacks.ShutdownAsync();
+        lease.Dispose();
+        await state.ClearActiveSessionAsync();
+    }
+
     private static async Task<(PackageSessionState State, PackageCallbackSessionCoordinator Callbacks)> CreateCoordinatorAsync(
         TestCallbackHandler handler,
-        CancellationToken hostStopping = default)
+        CancellationToken hostStopping = default,
+        bool includeFaultSibling = false)
     {
         PackageCallbackSessionCoordinator? callbacks = null;
         var state = new PackageSessionState(
@@ -244,33 +436,43 @@ public sealed class PackageCallbackSessionCoordinatorTests
         callbacks = new PackageCallbackSessionCoordinator(state, hostStopping: hostStopping);
         var packageId = "test.package";
         var loadedPackage = CreateLoadedPackage(handler);
+        var loadedPackages = new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
+        {
+            [packageId] = loadedPackage,
+        };
+        if (includeFaultSibling)
+        {
+            loadedPackages.Add(
+                "fault.package",
+                CreateLoadedPackage(handler, "fault.package", includeCallbackHandler: false));
+        }
         var session = new ActivePackageSession(
             sessionFolder: null,
-            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
-            {
-                [packageId] = loadedPackage,
-            },
-            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
-            {
-                [packageId] = new SessionPackageDescriptor(
-                    packageId,
-                    loadedPackage.Descriptor.DisplayName,
-                    loadedPackage.Descriptor.Version,
-                    loadedPackage.Descriptor.HostRoles,
-                    loadedPackage.Descriptor.Icon,
+            loadedPackages,
+            loadedPackages.ToDictionary(
+                static pair => pair.Key,
+                static pair => new SessionPackageDescriptor(
+                    pair.Key,
+                    pair.Value.Descriptor.DisplayName,
+                    pair.Value.Descriptor.Version,
+                    pair.Value.Descriptor.HostRoles,
+                    pair.Value.Descriptor.Icon,
                     IsEnabled: true,
                     PackageReadinessState.Ready,
-                    loadedPackage.Descriptor.Views,
+                    pair.Value.Descriptor.Views,
                     FailureOrigin: null,
                     LastError: null,
                     LastFailureAtUtc: null,
                     FailureCount: 0),
-            });
+                StringComparer.OrdinalIgnoreCase));
         await state.PublishSessionAsync(session);
         return (state, callbacks);
     }
 
-    private static ActiveLoadedPackage CreateLoadedPackage(TestCallbackHandler handler)
+    private static ActiveLoadedPackage CreateLoadedPackage(
+        TestCallbackHandler handler,
+        string packageId = "test.package",
+        bool includeCallbackHandler = true)
     {
         var tempDirectory = Path.Combine(
             Path.GetTempPath(),
@@ -278,8 +480,8 @@ public sealed class PackageCallbackSessionCoordinatorTests
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDirectory);
         return new ActiveLoadedPackage(
-            new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, []),
-            new RuntimePackageSource("test.package", PackageSourceKind.Dev, tempDirectory),
+            new ActivePackageDescriptor(packageId, "Test Package", "1.0.0", PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, []),
+            new RuntimePackageSource(packageId, PackageSourceKind.Dev, tempDirectory),
             SettingsSchema: null,
             new JsonPackageKeyValueStore(Path.Combine(tempDirectory, "state.json")),
             new JsonPackageSecretsStore(
@@ -290,10 +492,12 @@ public sealed class PackageCallbackSessionCoordinatorTests
             new LocalPackageFileStore(Path.Combine(tempDirectory, "files")),
             EmptyTestPackageSettings.Instance,
             new TestRuntimePackageWorker(
-                callbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase)
-                {
-                    [handler.CallbackHandlerId] = handler,
-                }));
+                callbackHandlers: includeCallbackHandler
+                    ? new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [handler.CallbackHandlerId] = handler,
+                    }
+                    : null));
     }
 
     private static PackageCallbackServer CreateServer()
@@ -311,7 +515,9 @@ public sealed class PackageCallbackSessionCoordinatorTests
         bool ignoreStartCancellation = false,
         bool returnNullFromStart = false,
         bool throwFromStart = false,
-        bool blockCompletion = false) : IPackageCallbackHandler
+        bool blockCompletion = false,
+        bool throwFromCompletion = false,
+        string callbackHandlerId = "test.callback") : IPackageCallbackHandler
     {
         private readonly TaskCompletionSource _startEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _releaseStart = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -320,7 +526,7 @@ public sealed class PackageCallbackSessionCoordinatorTests
         private readonly TaskCompletionSource _cancellationEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _cancellationCount;
 
-        public string CallbackHandlerId => "test.callback";
+        public string CallbackHandlerId { get; } = callbackHandlerId;
         public Task StartEntered => _startEntered.Task;
         public Task CompletionEntered => _completionEntered.Task;
         public Task CancellationEntered => _cancellationEntered.Task;
@@ -372,6 +578,10 @@ public sealed class PackageCallbackSessionCoordinatorTests
             if (blockCompletion)
             {
                 await _releaseCompletion.Task.WaitAsync(cancellationToken);
+            }
+            if (throwFromCompletion)
+            {
+                throw new InvalidOperationException("Completion failed.");
             }
             CompletedCode = context.QueryValues.TryGetValue("code", out var code) ? code : null;
             return new PackageCallbackCompletionResult(

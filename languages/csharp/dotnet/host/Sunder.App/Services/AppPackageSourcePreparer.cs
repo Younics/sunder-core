@@ -95,7 +95,7 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
                 Directory.Delete(path, recursive: true);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             AppSessionLog.WriteError("Failed to delete an app package session folder.", ex);
         }
@@ -121,7 +121,7 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
                 File.Delete(path);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             AppSessionLog.WriteError("Failed to delete an app package snapshot archive.", ex);
         }

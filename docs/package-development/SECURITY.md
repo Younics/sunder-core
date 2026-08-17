@@ -78,7 +78,7 @@ For outbound HTTP:
 
 Do not render untrusted HTML or execute package/Registry text as markup or script. Encode text, bound images/downloads, and keep user confirmation around destructive operations. Package icon validation allows only bounded recognized raster formats; SVG is not accepted in V1 because Sunder has no complete sanitizer for scripts, external resources, and compressed expansion.
 
-An App package runs in the shell process. A UI exception is contained as a client-local package fault where possible, but malicious or unsafe App code can still affect the process. Keep App dependencies minimal and perform privileged/destructive work through explicit owner RPC methods with validation and confirmation.
+An App package runs in the shell process. Recoverable managed faults escaping through host-observed boundaries are quarantined automatically at view or package-App scope and produce sanitized host notifications. A package-level fault receives at most one fresh App activation attempt for the same content after cleanup is proven; repeated faults fail closed to fallback. Malicious or unsafe App code can still affect the process. Native faults, process-fatal exceptions, memory exhaustion, deadlocks, infinite loops, global state corruption, and package-created unmanaged threads cannot be isolated reliably in-process. Keep App dependencies minimal and perform privileged/destructive work through explicit owner RPC methods with validation and confirmation.
 
 ## Stacks
 

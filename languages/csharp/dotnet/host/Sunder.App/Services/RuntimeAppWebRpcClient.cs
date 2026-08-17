@@ -1,3 +1,4 @@
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Sunder.Runtime.Client;
@@ -37,11 +38,25 @@ internal sealed class RuntimeAppWebRpcClientFactory(
     }
 }
 
-internal sealed class RuntimeAppWebRpcClient(
-    RuntimeManagementClient management,
-    string sessionId) : IAppWebRpcClient, ISunderRpcClient
+internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClient
 {
+    private readonly RuntimeManagementClient management;
+    private readonly string sessionId;
+    private readonly RuntimeClientResourceLimits _resourceLimits;
+    private readonly SunderRpcResourceProfile? _resourceProfile;
     private int _disposed;
+
+    public RuntimeAppWebRpcClient(RuntimeManagementClient management, string sessionId)
+    {
+        this.management = management;
+        this.sessionId = sessionId;
+        _resourceLimits = management.ResourceLimits;
+        _resourceProfile = ToSdk(_resourceLimits.Profile);
+    }
+
+    public RuntimeClientResourceLimits ResourceLimits => _resourceLimits;
+
+    public SunderRpcResourceProfile? ResourceProfile => _resourceProfile;
 
     public async ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(
         SunderRpcCallOptions? options = null,
@@ -361,6 +376,9 @@ internal sealed class RuntimeAppWebRpcClient(
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await management.CloseAppRpcSessionAsync(sessionId, timeout.Token).ConfigureAwait(false);
         }
+        catch (Exception exception) when (IsExpectedRuntimeRestartFailure(exception))
+        {
+        }
         catch (Exception exception)
         {
             AppSessionLog.WriteError("Failed to close a package App RPC caller session.", exception);
@@ -377,6 +395,20 @@ internal sealed class RuntimeAppWebRpcClient(
             snapshot.Sequence,
             snapshot.Providers.Select(ToSdk).ToArray(),
             snapshot.ResetRequired);
+
+    private static SunderRpcResourceProfile? ToSdk(RuntimeClientResourceProfile? profile)
+    {
+        if (profile is null) return null;
+        var policy = profile.EffectivePolicy;
+        return new SunderRpcResourceProfile(
+            profile.EffectiveProfileHash,
+            policy.MaximumRpcValueBytes,
+            policy.MaximumValueDepth,
+            policy.MaximumValueNodes,
+            policy.MaximumObjectMembers,
+            policy.MaximumInlineDecodedBytes,
+            policy.MaximumContentReferenceBytes);
+    }
 
     private static SunderRpcProviderSnapshot ToSdk(RuntimeRpcProviderDescriptor provider)
         => new(
@@ -439,7 +471,7 @@ internal sealed class RuntimeAppWebRpcClient(
             },
             value.Provider is null ? null : ToSdk(value.Provider));
 
-    private static void ThrowIfError(RuntimeRpcErrorDescriptor? error)
+    private void ThrowIfError(RuntimeRpcErrorDescriptor? error)
     {
         if (error is not null)
         {
@@ -447,7 +479,7 @@ internal sealed class RuntimeAppWebRpcClient(
         }
     }
 
-    private static SunderRpcException ToException(RuntimeRpcErrorDescriptor? error)
+    private SunderRpcException ToException(RuntimeRpcErrorDescriptor? error)
         => error is null
             ? Protocol("rpc.transport.empty-error", "The Runtime returned an empty RPC error frame.")
             : new SunderRpcException(new SunderRpcError(
@@ -472,7 +504,8 @@ internal sealed class RuntimeAppWebRpcClient(
                     : SunderRpcDispatchState.PossiblyDispatched,
                 error.RetrySafety == RuntimeRpcRetrySafety.Safe
                     ? SunderRpcRetrySafety.Safe
-                    : SunderRpcRetrySafety.Unsafe));
+                    : SunderRpcRetrySafety.Unsafe,
+                error.Details));
 
     private static SunderRpcException Protocol(string code, string message)
         => new(new SunderRpcError(SunderRpcErrorKind.Protocol, code, message));
@@ -486,6 +519,9 @@ internal sealed class RuntimeAppWebRpcClient(
         return sanitized.Length <= 512 ? sanitized : sanitized[..512];
     }
 
+    internal static bool IsExpectedRuntimeRestartFailure(Exception exception)
+        => exception is RuntimeClientException { StatusCode: HttpStatusCode.ServiceUnavailable };
+
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 }
 
@@ -496,6 +532,8 @@ internal sealed class RuntimeAppWebRpcCallScope(
     private int _disposed;
 
     public DateTimeOffset DeadlineUtc => descriptor.DeadlineUtc;
+
+    public SunderRpcResourceProfile? ResourceProfile => client.ResourceProfile;
 
     public ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
         SunderRpcEndpointReference endpoint,
@@ -624,6 +662,9 @@ internal sealed class RuntimeAppWebRpcCallScope(
         try
         {
             await client.CloseCallScopeAsync(descriptor.CallScopeId).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (RuntimeAppWebRpcClient.IsExpectedRuntimeRestartFailure(exception))
+        {
         }
         catch (Exception exception)
         {

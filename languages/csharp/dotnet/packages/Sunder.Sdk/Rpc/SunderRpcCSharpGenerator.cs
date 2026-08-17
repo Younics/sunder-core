@@ -6,7 +6,11 @@ using Sunder.Sdk.Compatibility;
 namespace Sunder.Sdk.Rpc;
 
 /// <summary>Emits deterministic DTO, caller-scope clients, and provider adapters from an RPC descriptor.</summary>
-/// <remarks>The generator is intentionally dependency-free so build tooling may host it in-process.</remarks>
+/// <remarks>
+/// The generator is intentionally dependency-free so build tooling may host it in-process. Named formatted
+/// scalars and collection aliases deliberately collapse to their ergonomic CLR value types; named string enums,
+/// records, and tagged unions retain generated contract types because their names carry useful domain semantics.
+/// </remarks>
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public static class SunderRpcCSharpGenerator
 {
@@ -48,6 +52,10 @@ public static class SunderRpcCSharpGenerator
         {
             EmitDefinition(output, definition, model);
         }
+        foreach (var error in model.Errors)
+        {
+            EmitError(output, error, model);
+        }
         foreach (var service in model.Services)
         {
             EmitService(output, service, model);
@@ -58,6 +66,16 @@ public static class SunderRpcCSharpGenerator
 
     private static GeneratorModel BuildModel(SunderRpcContractDescriptor descriptor)
     {
+        var isV2 = descriptor.DescriptorVersion == SunderRpcProtocol.DescriptorVersionV2;
+        if (isV2
+            && !string.Equals(
+                descriptor.SchemaProfile,
+                SunderRpcProtocol.ValueSchemaProfile,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"C# generation supports RPC V2 schema profile '{SunderRpcProtocol.ValueSchemaProfile}'.");
+        }
         var topLevelNames = new SymbolAllocator();
         var identityTypeName = topLevelNames.Allocate(ContractIdentityTypeName(descriptor));
         var serviceSymbols = descriptor.Services
@@ -74,15 +92,47 @@ public static class SunderRpcCSharpGenerator
             })
             .ToArray();
         var handlerTypeName = topLevelNames.Allocate(Identifier(descriptor.ContractId) + "RpcHandler");
-        var recordNames = new Dictionary<string, string>(StringComparer.Ordinal);
+        var generatedTypeNames = new Dictionary<string, string>(StringComparer.Ordinal);
         var definitions = new List<DefinitionModel>();
         foreach (var definition in descriptor.Definitions.OrderBy(static item => item.Key, StringComparer.Ordinal))
         {
-            if (!IsRecordSchema(definition.Value)) continue;
+            var kind = GetDefinitionKind(definition.Value, descriptor.Definitions, isV2);
+            if (kind is null) continue;
             var typeName = topLevelNames.Allocate(Identifier(definition.Key));
-            recordNames.Add(definition.Key, typeName);
-            definitions.Add(new DefinitionModel(definition.Key, typeName, definition.Value));
+            generatedTypeNames.Add(definition.Key, typeName);
+            definitions.Add(new DefinitionModel(definition.Key, typeName, definition.Value, kind.Value));
         }
+
+        var inlineTypeNames = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (isV2)
+        {
+            foreach (var definition in descriptor.Definitions.OrderBy(static item => item.Key, StringComparer.Ordinal))
+            {
+                CollectInlineTaggedUnions(
+                    definition.Value,
+                    Identifier(definition.Key),
+                    "",
+                    isRoot: true,
+                    descriptor.Definitions,
+                    inlineTypeNames,
+                    definitions,
+                    topLevelNames);
+            }
+            definitions = BuildUnionAndEnumModels(
+                definitions,
+                descriptor.Definitions,
+                generatedTypeNames,
+                topLevelNames);
+        }
+
+        var errors = isV2
+            ? descriptor.Errors.Values
+                .OrderBy(static declaration => declaration.Code, StringComparer.Ordinal)
+                .Select(declaration => new ErrorModel(
+                    declaration,
+                    topLevelNames.Allocate(Identifier(declaration.Code) + "RpcError")))
+                .ToArray()
+            : [];
 
         var services = new List<ServiceModel>();
         foreach (var service in serviceSymbols)
@@ -101,14 +151,280 @@ public static class SunderRpcCSharpGenerator
         return new GeneratorModel(
             descriptor,
             descriptor.Definitions,
-            recordNames,
+            generatedTypeNames,
+            inlineTypeNames,
             definitions,
+            errors,
             services,
             identityTypeName,
             handlerTypeName)
         {
-            IsV2 = descriptor.DescriptorVersion == SunderRpcProtocol.DescriptorVersionV2,
+            IsV2 = isV2,
         };
+    }
+
+    private static DefinitionKind? GetDefinitionKind(
+        JsonElement schema,
+        IReadOnlyDictionary<string, JsonElement> schemas,
+        bool isV2)
+    {
+        if (IsRecordSchema(schema)) return DefinitionKind.Record;
+        if (!isV2) return null;
+        if (IsStringEnumSchema(schema)) return DefinitionKind.StringEnum;
+        return IsTaggedUnionSchema(schema, schemas) ? DefinitionKind.TaggedUnion : null;
+    }
+
+    private static List<DefinitionModel> BuildUnionAndEnumModels(
+        List<DefinitionModel> definitions,
+        IReadOnlyDictionary<string, JsonElement> schemas,
+        IReadOnlyDictionary<string, string> generatedTypeNames,
+        SymbolAllocator topLevelNames)
+    {
+        for (var index = 0; index < definitions.Count; index++)
+        {
+            if (definitions[index].Kind == DefinitionKind.StringEnum)
+            {
+                definitions[index] = definitions[index] with
+                {
+                    ConverterTypeName = topLevelNames.Allocate(definitions[index].TypeName + "JsonConverter"),
+                };
+            }
+        }
+
+        var variantMemberships = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var definition in definitions.Where(static item => item.Kind == DefinitionKind.TaggedUnion))
+        {
+            foreach (var variant in definition.Schema.GetProperty("oneOf").EnumerateArray())
+            {
+                _ = ResolveSchema(variant, schemas, out var definitionName);
+                if (definitionName is not null)
+                {
+                    variantMemberships[definitionName] = variantMemberships.GetValueOrDefault(definitionName) + 1;
+                }
+            }
+        }
+
+        var recordDerivations = new Dictionary<string, RecordDerivationModel>(StringComparer.Ordinal);
+        for (var index = 0; index < definitions.Count; index++)
+        {
+            var definition = definitions[index];
+            if (definition.Kind != DefinitionKind.TaggedUnion) continue;
+
+            var resolvedVariants = definition.Schema.GetProperty("oneOf").EnumerateArray()
+                .Select(variant =>
+                {
+                    var resolved = ResolveSchema(variant, schemas, out var definitionName);
+                    return new ResolvedUnionVariant(resolved, definitionName);
+                })
+                .ToArray();
+            var discriminator = FindTaggedUnionDiscriminator(resolvedVariants.Select(static item => item.Schema).ToArray());
+            var orderedVariants = resolvedVariants
+                .Select(variant => variant with
+                {
+                    Tag = GetDiscriminatorValue(variant.Schema, discriminator),
+                })
+                .OrderBy(static item => item.Tag, StringComparer.Ordinal)
+                .ToArray();
+            var sharesNamedRecords = orderedVariants.All(variant =>
+                variant.DefinitionName is not null
+                && variantMemberships.GetValueOrDefault(variant.DefinitionName) == 1
+                && generatedTypeNames.ContainsKey(variant.DefinitionName));
+            var variants = new List<UnionVariantModel>(orderedVariants.Length);
+            foreach (var variant in orderedVariants)
+            {
+                string typeName;
+                var isSynthetic = !sharesNamedRecords;
+                if (sharesNamedRecords)
+                {
+                    typeName = generatedTypeNames[variant.DefinitionName!];
+                    recordDerivations.Add(
+                        variant.DefinitionName!,
+                        new RecordDerivationModel(definition.TypeName, discriminator, variant.Tag!));
+                }
+                else
+                {
+                    typeName = topLevelNames.Allocate(definition.TypeName + Identifier(variant.Tag!));
+                }
+                variants.Add(new UnionVariantModel(typeName, variant.Schema, variant.Tag!, isSynthetic));
+            }
+
+            definitions[index] = definition with
+            {
+                ConverterTypeName = topLevelNames.Allocate(definition.TypeName + "JsonConverter"),
+                Union = new TaggedUnionModel(discriminator, variants),
+            };
+        }
+
+        for (var index = 0; index < definitions.Count; index++)
+        {
+            var definition = definitions[index];
+            if (definition.Kind == DefinitionKind.Record
+                && recordDerivations.TryGetValue(definition.Name, out var derivation))
+            {
+                definitions[index] = definition with
+                {
+                    BaseTypeName = derivation.BaseTypeName,
+                    DiscriminatorName = derivation.DiscriminatorName,
+                    DiscriminatorValue = derivation.DiscriminatorValue,
+                };
+            }
+        }
+        return definitions;
+    }
+
+    private static void CollectInlineTaggedUnions(
+        JsonElement schema,
+        string ownerName,
+        string pathName,
+        bool isRoot,
+        IReadOnlyDictionary<string, JsonElement> schemas,
+        Dictionary<string, string> inlineTypeNames,
+        List<DefinitionModel> definitions,
+        SymbolAllocator topLevelNames)
+    {
+        if (schema.TryGetProperty("$ref", out _)) return;
+        if (!isRoot && IsTaggedUnionSchema(schema, schemas))
+        {
+            var key = schema.GetRawText();
+            if (!inlineTypeNames.ContainsKey(key))
+            {
+                var typeName = topLevelNames.Allocate(ownerName + pathName + "Union");
+                inlineTypeNames.Add(key, typeName);
+                definitions.Add(new DefinitionModel("\0" + typeName, typeName, schema, DefinitionKind.TaggedUnion));
+            }
+        }
+        if (schema.TryGetProperty("oneOf", out var oneOf))
+        {
+            var index = 0;
+            foreach (var variant in oneOf.EnumerateArray())
+            {
+                CollectInlineTaggedUnions(
+                    variant,
+                    ownerName,
+                    pathName + "Variant" + (index++).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    isRoot: false,
+                    schemas,
+                    inlineTypeNames,
+                    definitions,
+                    topLevelNames);
+            }
+        }
+        if (schema.TryGetProperty("properties", out var properties)
+            && properties.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in properties.EnumerateObject().OrderBy(static item => item.Name, StringComparer.Ordinal))
+            {
+                CollectInlineTaggedUnions(
+                    property.Value,
+                    ownerName,
+                    pathName + Identifier(property.Name),
+                    isRoot: false,
+                    schemas,
+                    inlineTypeNames,
+                    definitions,
+                    topLevelNames);
+            }
+        }
+        if (schema.TryGetProperty("items", out var items))
+        {
+            CollectInlineTaggedUnions(
+                items,
+                ownerName,
+                pathName + "Item",
+                isRoot: false,
+                schemas,
+                inlineTypeNames,
+                definitions,
+                topLevelNames);
+        }
+        if (schema.TryGetProperty("additionalProperties", out var additionalProperties)
+            && additionalProperties.ValueKind == JsonValueKind.Object)
+        {
+            CollectInlineTaggedUnions(
+                additionalProperties,
+                ownerName,
+                pathName + "Value",
+                isRoot: false,
+                schemas,
+                inlineTypeNames,
+                definitions,
+                topLevelNames);
+        }
+    }
+
+    private static string FindTaggedUnionDiscriminator(IReadOnlyList<JsonElement> variants)
+    {
+        var candidates = GetTagCandidates(variants[0]).ToHashSet(StringComparer.Ordinal);
+        foreach (var variant in variants.Skip(1)) candidates.IntersectWith(GetTagCandidates(variant));
+        var valid = candidates.Where(candidate =>
+        {
+            var tags = new HashSet<string>(StringComparer.Ordinal);
+            return variants.All(variant => TryGetDiscriminatorValue(variant, candidate, out var tag)
+                                           && tags.Add(tag));
+        }).ToArray();
+        return valid.Length == 1
+            ? valid[0]
+            : throw new InvalidOperationException("A validated RPC tagged union has no unique discriminator.");
+    }
+
+    private static IEnumerable<string> GetTagCandidates(JsonElement schema)
+    {
+        var required = schema.GetProperty("required").EnumerateArray()
+            .Select(static item => item.GetString()!)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var property in schema.GetProperty("properties").EnumerateObject())
+        {
+            if (required.Contains(property.Name)
+                && property.Value.TryGetProperty("type", out var type)
+                && type.GetString() == "string"
+                && property.Value.TryGetProperty("const", out var constant)
+                && constant.ValueKind == JsonValueKind.String)
+            {
+                yield return property.Name;
+            }
+        }
+    }
+
+    private static bool TryGetDiscriminatorValue(
+        JsonElement schema,
+        string propertyName,
+        out string value)
+    {
+        if (schema.GetProperty("properties").TryGetProperty(propertyName, out var property)
+            && property.TryGetProperty("const", out var constant)
+            && constant.ValueKind == JsonValueKind.String)
+        {
+            value = constant.GetString()!;
+            return true;
+        }
+        value = string.Empty;
+        return false;
+    }
+
+    private static string GetDiscriminatorValue(JsonElement schema, string propertyName)
+    {
+        _ = TryGetDiscriminatorValue(schema, propertyName, out var value);
+        return value;
+    }
+
+    private static JsonElement ResolveSchema(
+        JsonElement schema,
+        IReadOnlyDictionary<string, JsonElement> schemas,
+        out string? definitionName)
+    {
+        definitionName = null;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        while (schema.TryGetProperty("$ref", out var reference))
+        {
+            SunderRpcDescriptorParser.TryGetReferenceName(reference.GetString(), out var name);
+            if (!visited.Add(name))
+            {
+                throw new InvalidOperationException("A tagged-union variant contains a non-productive reference cycle.");
+            }
+            definitionName = name;
+            schema = schemas[name];
+        }
+        return schema;
     }
 
     private static void EmitIdentity(StringBuilder output, GeneratorModel model)
@@ -117,7 +433,17 @@ public static class SunderRpcCSharpGenerator
         output.Append("public static class ").Append(model.IdentityTypeName).AppendLine().AppendLine("{")
             .Append("    public const int DescriptorVersion = ")
             .Append(descriptor.DescriptorVersion.ToString(System.Globalization.CultureInfo.InvariantCulture))
-            .AppendLine(";")
+            .AppendLine(";");
+        if (descriptor.SchemaProfile is null)
+        {
+            output.AppendLine("    public const string? SchemaProfile = null;");
+        }
+        else
+        {
+            output.Append("    public const string SchemaProfile = \"")
+                .Append(EscapeStringLiteral(descriptor.SchemaProfile)).AppendLine("\";");
+        }
+        output
             .Append("    public const string ContractId = \"")
             .Append(EscapeStringLiteral(descriptor.ContractId)).AppendLine("\";")
             .Append("    public const string ContractVersion = \"")
@@ -141,21 +467,149 @@ public static class SunderRpcCSharpGenerator
         DefinitionModel definition,
         GeneratorModel model)
     {
-        var properties = definition.Schema.GetProperty("properties");
-        var required = definition.Schema.TryGetProperty("required", out var requiredElement)
+        switch (definition.Kind)
+        {
+            case DefinitionKind.Record:
+                EmitRecordDefinition(output, definition, model);
+                break;
+            case DefinitionKind.StringEnum:
+                EmitStringEnumDefinition(output, definition);
+                break;
+            case DefinitionKind.TaggedUnion:
+                EmitTaggedUnionDefinition(output, definition, model);
+                break;
+            default:
+                throw new InvalidOperationException($"Unsupported generated definition kind '{definition.Kind}'.");
+        }
+    }
+
+    private static void EmitError(
+        StringBuilder output,
+        ErrorModel error,
+        GeneratorModel model)
+    {
+        var declaration = error.Declaration;
+        var defaultMessage = DefaultErrorMessage(declaration.Description);
+        output.Append("public static class ").Append(error.TypeName).AppendLine().AppendLine("{")
+            .Append("    public const string Code = \"")
+            .Append(EscapeStringLiteral(declaration.Code)).AppendLine("\";")
+            .AppendLine();
+        if (declaration.DetailsSchema is null)
+        {
+            output.Append("    public static global::Sunder.Sdk.Rpc.SunderRpcException Create(string message = \"")
+                .Append(EscapeStringLiteral(defaultMessage)).AppendLine("\")")
+                .AppendLine("        => new(new global::Sunder.Sdk.Rpc.SunderRpcError(")
+                .AppendLine("            global::Sunder.Sdk.Rpc.SunderRpcErrorKind.Domain,")
+                .AppendLine("            Code,")
+                .AppendLine("            message));")
+                .AppendLine("}")
+                .AppendLine();
+            return;
+        }
+
+        var detailsType = ReferenceType(declaration.DetailsSchema, model);
+        output.AppendLine("    private static readonly global::System.Text.Json.JsonSerializerOptions JsonOptions = new(global::System.Text.Json.JsonSerializerDefaults.Web)")
+            .AppendLine("    {")
+            .AppendLine("        DefaultIgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,")
+            .AppendLine("        PropertyNameCaseInsensitive = false,")
+            .AppendLine("        UnmappedMemberHandling = global::System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,")
+            .AppendLine("        Converters = { new global::Sunder.Sdk.Rpc.SunderRpcV2JsonConverterFactory() },")
+            .AppendLine("    };")
+            .AppendLine()
+            .Append("    public static global::Sunder.Sdk.Rpc.SunderRpcException Create(")
+            .Append(detailsType).Append(" details, string message = \"")
+            .Append(EscapeStringLiteral(defaultMessage)).AppendLine("\")")
+            .AppendLine("        => new(new global::Sunder.Sdk.Rpc.SunderRpcError(")
+            .AppendLine("            global::Sunder.Sdk.Rpc.SunderRpcErrorKind.Domain,")
+            .AppendLine("            Code,")
+            .AppendLine("            message,")
+            .AppendLine("            details: global::System.Text.Json.JsonSerializer.SerializeToElement(details, JsonOptions)));")
+            .AppendLine()
+            .Append("    public static bool TryGetDetails(global::Sunder.Sdk.Rpc.SunderRpcException? exception, out ")
+            .Append(detailsType).AppendLine(" details)")
+            .AppendLine("    {")
+            .AppendLine("        details = default!;")
+            .AppendLine("        if (exception?.Error.Kind != global::Sunder.Sdk.Rpc.SunderRpcErrorKind.Domain")
+            .AppendLine("            || !string.Equals(exception.Error.Code, Code, global::System.StringComparison.Ordinal)")
+            .AppendLine("            || exception.Error.Details is not { } value)")
+            .AppendLine("        {")
+            .AppendLine("            return false;")
+            .AppendLine("        }")
+            .AppendLine("        try")
+            .AppendLine("        {")
+            .Append("            details = global::System.Text.Json.JsonSerializer.Deserialize<")
+            .Append(detailsType).AppendLine(">(value, JsonOptions)!;")
+            .AppendLine("            return true;")
+            .AppendLine("        }")
+            .AppendLine("        catch (global::System.Text.Json.JsonException)")
+            .AppendLine("        {")
+            .AppendLine("            return false;")
+            .AppendLine("        }")
+            .AppendLine("    }")
+            .AppendLine("}")
+            .AppendLine();
+    }
+
+    private static string DefaultErrorMessage(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description)) return "The provider rejected the request.";
+        var message = new string(description
+            .Select(static character => char.IsControl(character) ? ' ' : character)
+            .ToArray()).Trim();
+        if (message.Length == 0) return "The provider rejected the request.";
+        return message.Length <= 512 ? message : message[..512];
+    }
+
+    private static void EmitRecordDefinition(
+        StringBuilder output,
+        DefinitionModel definition,
+        GeneratorModel model)
+        => EmitRecord(
+            output,
+            definition.TypeName,
+            definition.Schema,
+            model,
+            definition.BaseTypeName,
+            definition.DiscriminatorName,
+            definition.DiscriminatorValue);
+
+    private static void EmitRecord(
+        StringBuilder output,
+        string typeName,
+        JsonElement schema,
+        GeneratorModel model,
+        string? baseTypeName,
+        string? discriminatorName,
+        string? discriminatorValue)
+    {
+        var properties = schema.GetProperty("properties");
+        var required = schema.TryGetProperty("required", out var requiredElement)
             ? requiredElement.EnumerateArray().Select(static item => item.GetString()!).ToHashSet(StringComparer.Ordinal)
             : new HashSet<string>(StringComparer.Ordinal);
         var propertyNames = new SymbolAllocator();
-        propertyNames.Reserve(definition.TypeName);
+        propertyNames.Reserve(typeName);
 
-        output.Append("public sealed class ").Append(definition.TypeName).AppendLine().AppendLine("{");
+        output.Append(baseTypeName is null ? "public sealed class " : "public sealed record ")
+            .Append(typeName);
+        if (baseTypeName is not null) output.Append(" : ").Append(baseTypeName);
+        output.AppendLine().AppendLine("{");
         foreach (var property in properties.EnumerateObject().OrderBy(static item => item.Name, StringComparer.Ordinal))
         {
+            output.Append("    [global::System.Text.Json.Serialization.JsonPropertyName(\"")
+                .Append(EscapeStringLiteral(property.Name)).AppendLine("\")]");
+            var propertyName = propertyNames.Allocate(Identifier(property.Name));
+            if (baseTypeName is not null
+                && string.Equals(property.Name, discriminatorName, StringComparison.Ordinal))
+            {
+                output.Append("    public string ").Append(propertyName).Append(" { get; } = \"")
+                    .Append(EscapeStringLiteral(discriminatorValue!)).AppendLine("\";")
+                    .AppendLine();
+                continue;
+            }
+
             var propertyType = GetTypeName(property.Value, model);
             var isRequired = required.Contains(property.Name);
             var allowsNull = SchemaAllowsNull(property.Value, model);
-            output.Append("    [global::System.Text.Json.Serialization.JsonPropertyName(\"")
-                .Append(EscapeStringLiteral(property.Name)).AppendLine("\")]");
             if (!isRequired && model.IsV2 && allowsNull)
             {
                 output.AppendLine("    [global::System.Text.Json.Serialization.JsonIgnore(Condition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]");
@@ -173,11 +627,152 @@ public static class SunderRpcCSharpGenerator
             output.Append("    public ");
             if (isRequired) output.Append("required ");
             output.Append(propertyType).Append(' ')
-                .Append(propertyNames.Allocate(Identifier(property.Name)))
+                .Append(propertyName)
                 .AppendLine(" { get; init; }")
                 .AppendLine();
         }
         output.AppendLine("}").AppendLine();
+    }
+
+    private static void EmitStringEnumDefinition(StringBuilder output, DefinitionModel definition)
+    {
+        var values = definition.Schema.GetProperty("enum").EnumerateArray()
+            .Select(static item => item.GetString()!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var memberNames = new SymbolAllocator();
+        memberNames.Reserve(definition.TypeName);
+        var members = values.Select((value, index) => new EnumMemberModel(
+            value,
+            memberNames.Allocate(Identifier(value)),
+            index)).ToArray();
+
+        output.Append("[global::System.Text.Json.Serialization.JsonConverter(typeof(")
+            .Append(definition.ConverterTypeName).AppendLine("))]")
+            .Append("public enum ").Append(definition.TypeName).AppendLine().AppendLine("{");
+        foreach (var member in members)
+        {
+            output.Append("    [global::System.Text.Json.Serialization.JsonStringEnumMemberName(\"")
+                .Append(EscapeStringLiteral(member.WireValue)).AppendLine("\")]")
+                .Append("    ").Append(member.Name).Append(" = ")
+                .Append(member.Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)).AppendLine(",");
+        }
+        output.AppendLine("}").AppendLine();
+
+        output.Append("internal sealed class ").Append(definition.ConverterTypeName)
+            .Append(" : global::System.Text.Json.Serialization.JsonConverter<")
+            .Append(definition.TypeName).AppendLine(">")
+            .AppendLine("{")
+            .Append("    public override ").Append(definition.TypeName)
+            .AppendLine(" Read(ref global::System.Text.Json.Utf8JsonReader reader, global::System.Type typeToConvert, global::System.Text.Json.JsonSerializerOptions options)")
+            .AppendLine("    {")
+            .AppendLine("        if (reader.TokenType != global::System.Text.Json.JsonTokenType.String)")
+            .AppendLine("        {")
+            .AppendLine("            throw new global::System.Text.Json.JsonException(\"An RPC string enum must be encoded as a string.\");")
+            .AppendLine("        }")
+            .AppendLine("        return reader.GetString() switch")
+            .AppendLine("        {");
+        foreach (var member in members)
+        {
+            output.Append("            \"").Append(EscapeStringLiteral(member.WireValue)).Append("\" => ")
+                .Append(definition.TypeName).Append('.').Append(member.Name).AppendLine(",");
+        }
+        output.AppendLine("            _ => throw new global::System.Text.Json.JsonException(\"The RPC string enum value is not declared.\"),")
+            .AppendLine("        };")
+            .AppendLine("    }")
+            .AppendLine()
+            .Append("    public override void Write(global::System.Text.Json.Utf8JsonWriter writer, ")
+            .Append(definition.TypeName)
+            .AppendLine(" value, global::System.Text.Json.JsonSerializerOptions options)")
+            .AppendLine("    {")
+            .AppendLine("        writer.WriteStringValue(value switch")
+            .AppendLine("        {");
+        foreach (var member in members)
+        {
+            output.Append("            ").Append(definition.TypeName).Append('.').Append(member.Name)
+                .Append(" => \"").Append(EscapeStringLiteral(member.WireValue)).AppendLine("\",");
+        }
+        output.AppendLine("            _ => throw new global::System.Text.Json.JsonException(\"The RPC string enum value is not declared.\"),")
+            .AppendLine("        });")
+            .AppendLine("    }")
+            .AppendLine("}")
+            .AppendLine();
+    }
+
+    private static void EmitTaggedUnionDefinition(
+        StringBuilder output,
+        DefinitionModel definition,
+        GeneratorModel model)
+    {
+        var union = definition.Union
+                    ?? throw new InvalidOperationException("A tagged union definition is missing its generator model.");
+        output.Append("[global::System.Text.Json.Serialization.JsonConverter(typeof(")
+            .Append(definition.ConverterTypeName).AppendLine("))]")
+            .Append("public abstract record ").Append(definition.TypeName).AppendLine()
+            .AppendLine("{")
+            .Append("    private protected ").Append(definition.TypeName).AppendLine("() { }")
+            .AppendLine("}")
+            .AppendLine();
+
+        foreach (var variant in union.Variants.Where(static item => item.IsSynthetic))
+        {
+            EmitRecord(
+                output,
+                variant.TypeName,
+                variant.Schema,
+                model,
+                definition.TypeName,
+                union.DiscriminatorName,
+                variant.Tag);
+        }
+
+        output.Append("internal sealed class ").Append(definition.ConverterTypeName)
+            .Append(" : global::System.Text.Json.Serialization.JsonConverter<")
+            .Append(definition.TypeName).AppendLine(">")
+            .AppendLine("{")
+            .Append("    public override ").Append(definition.TypeName)
+            .AppendLine(" Read(ref global::System.Text.Json.Utf8JsonReader reader, global::System.Type typeToConvert, global::System.Text.Json.JsonSerializerOptions options)")
+            .AppendLine("    {")
+            .AppendLine("        using var document = global::System.Text.Json.JsonDocument.ParseValue(ref reader);")
+            .AppendLine("        var value = document.RootElement;")
+            .AppendLine("        if (value.ValueKind != global::System.Text.Json.JsonValueKind.Object")
+            .Append("            || !value.TryGetProperty(\"").Append(EscapeStringLiteral(union.DiscriminatorName))
+            .AppendLine("\", out var discriminator)")
+            .AppendLine("            || discriminator.ValueKind != global::System.Text.Json.JsonValueKind.String)")
+            .AppendLine("        {")
+            .AppendLine("            throw new global::System.Text.Json.JsonException(\"An RPC tagged union must contain its string discriminator.\");")
+            .AppendLine("        }")
+            .AppendLine("        return discriminator.GetString() switch")
+            .AppendLine("        {");
+        foreach (var variant in union.Variants)
+        {
+            output.Append("            \"").Append(EscapeStringLiteral(variant.Tag)).Append("\" => ")
+                .Append("global::System.Text.Json.JsonSerializer.Deserialize<").Append(variant.TypeName)
+                .AppendLine(">(value.GetRawText(), options)")
+                .AppendLine("                ?? throw new global::System.Text.Json.JsonException(\"The RPC tagged-union variant deserialized to null.\"),");
+        }
+        output.AppendLine("            _ => throw new global::System.Text.Json.JsonException(\"The RPC tagged-union discriminator is not declared.\"),")
+            .AppendLine("        };")
+            .AppendLine("    }")
+            .AppendLine()
+            .Append("    public override void Write(global::System.Text.Json.Utf8JsonWriter writer, ")
+            .Append(definition.TypeName)
+            .AppendLine(" value, global::System.Text.Json.JsonSerializerOptions options)")
+            .AppendLine("    {")
+            .AppendLine("        switch (value)")
+            .AppendLine("        {");
+        foreach (var variant in union.Variants)
+        {
+            output.Append("            case ").Append(variant.TypeName).AppendLine(" variant:")
+                .AppendLine("                global::System.Text.Json.JsonSerializer.Serialize(writer, variant, options);")
+                .AppendLine("                return;");
+        }
+        output.AppendLine("            default:")
+            .AppendLine("                throw new global::System.Text.Json.JsonException(\"The RPC tagged-union runtime type is not declared.\");")
+            .AppendLine("        }")
+            .AppendLine("    }")
+            .AppendLine("}")
+            .AppendLine();
     }
 
     private static void EmitService(
@@ -447,18 +1042,42 @@ public static class SunderRpcCSharpGenerator
         {
             return ReferenceType(reference.GetString()!, model);
         }
+        if (model.IsV2 && schema.TryGetProperty("contentEncoding", out var contentEncoding))
+        {
+            return contentEncoding.GetString() == "base64"
+                ? "byte[]"
+                : throw new InvalidOperationException("A validated RPC byte schema has an unsupported content encoding.");
+        }
+        if (model.IsV2 && schema.TryGetProperty("format", out var format))
+        {
+            return format.GetString() switch
+            {
+                "uuid" => "global::System.Guid",
+                "date" => "global::System.DateOnly",
+                "date-time" => "global::Sunder.Sdk.Rpc.SunderRpcOffsetDateTime",
+                "duration" => "global::Sunder.Sdk.Rpc.SunderRpcDuration",
+                "uri" => "global::Sunder.Sdk.Rpc.SunderRpcUri",
+                "big-integer" => "global::System.Numerics.BigInteger",
+                "decimal" => "global::Sunder.Sdk.Rpc.SunderRpcDecimal",
+                "float32" => "float",
+                "float64" => "double",
+                _ => throw new InvalidOperationException("A validated RPC schema has an unsupported asserted format."),
+            };
+        }
         if (model.IsV2 && schema.TryGetProperty("logicalType", out var logicalType))
         {
             return logicalType.GetString() switch
             {
-                "uuid" => "global::System.Guid",
-                "utc-date-time" => "string",
                 "content-reference" => "global::Sunder.Sdk.Rpc.SunderRpcContentReference",
-                _ => "global::System.Text.Json.JsonElement",
+                _ => throw new InvalidOperationException("A validated RPC schema has an unsupported logical type."),
             };
         }
         if (schema.TryGetProperty("oneOf", out var oneOf))
         {
+            if (model.InlineTypeNames.TryGetValue(schema.GetRawText(), out var inlineTypeName))
+            {
+                return inlineTypeName;
+            }
             var variants = oneOf.EnumerateArray().ToArray();
             if (variants.Length == 2)
             {
@@ -469,6 +1088,12 @@ public static class SunderRpcCSharpGenerator
                     return MakeNullable(GetTypeName(valueSchema, model));
                 }
             }
+            if (!model.IsV2) return "global::System.Text.Json.JsonElement";
+            throw new InvalidOperationException(
+                "Inline tagged unions cannot be represented by a stable generated C# type; place the union in $defs.");
+        }
+        if (model.IsV2 && IsUnconstrainedJsonSchema(schema))
+        {
             return "global::System.Text.Json.JsonElement";
         }
 
@@ -476,13 +1101,16 @@ public static class SunderRpcCSharpGenerator
         {
             "string" => "string",
             "integer" => "long",
-            "number" => model.IsV2 ? "double" : "decimal",
+            "number" when !model.IsV2 => "decimal",
+            "number" => throw new InvalidOperationException(
+                "A bare RPC number reached C# generation; V2 number schemas must assert float32 or float64."),
             "boolean" => "bool",
             "null" => "object?",
             "array" => "global::System.Collections.Generic.IReadOnlyList<" + GetTypeName(schema.GetProperty("items"), model) + ">",
-            "object" when schema.GetProperty("additionalProperties").ValueKind == JsonValueKind.Object
+            "object" when schema.TryGetProperty("additionalProperties", out var additionalProperties)
+                          && additionalProperties.ValueKind == JsonValueKind.Object
                 => "global::System.Collections.Generic.IReadOnlyDictionary<string, "
-                   + GetTypeName(schema.GetProperty("additionalProperties"), model)
+                   + GetTypeName(additionalProperties, model)
                    + ">",
             _ => "global::System.Text.Json.JsonElement",
         };
@@ -491,17 +1119,20 @@ public static class SunderRpcCSharpGenerator
     private static string ReferenceType(string reference, GeneratorModel model)
     {
         var name = reference["#/$defs/".Length..];
+        if (model.GeneratedTypeNames.TryGetValue(name, out var generatedTypeName)) return generatedTypeName;
         var schema = model.Schemas[name];
         var visited = new HashSet<string>(StringComparer.Ordinal);
         while (schema.TryGetProperty("$ref", out var nestedReference))
         {
-            if (!visited.Add(name)) return "global::System.Text.Json.JsonElement";
+            if (!visited.Add(name))
+            {
+                throw new InvalidOperationException("A non-productive RPC definition alias cycle reached C# generation.");
+            }
             name = nestedReference.GetString()!["#/$defs/".Length..];
+            if (model.GeneratedTypeNames.TryGetValue(name, out generatedTypeName)) return generatedTypeName;
             schema = model.Schemas[name];
         }
-        return model.RecordNames.TryGetValue(name, out var recordName)
-            ? recordName
-            : GetTypeName(schema, model);
+        return GetTypeName(schema, model);
     }
 
     private static bool ReferenceAllowsNull(string reference, GeneratorModel model)
@@ -525,6 +1156,10 @@ public static class SunderRpcCSharpGenerator
             var allowsNull = SchemaAllowsNull(model.Schemas[name], model, referenceStack);
             referenceStack.Remove(name);
             return allowsNull;
+        }
+        if (model.IsV2 && IsUnconstrainedJsonSchema(schema))
+        {
+            return true;
         }
         if (schema.TryGetProperty("type", out var type) && type.GetString() == "null")
         {
@@ -552,6 +1187,31 @@ public static class SunderRpcCSharpGenerator
            && type.GetString() == "object"
            && schema.TryGetProperty("properties", out _)
            && schema.GetProperty("additionalProperties").ValueKind == JsonValueKind.False;
+
+    private static bool IsStringEnumSchema(JsonElement schema)
+        => schema.TryGetProperty("type", out var type)
+           && type.GetString() == "string"
+           && schema.TryGetProperty("enum", out var values)
+           && values.ValueKind == JsonValueKind.Array;
+
+    private static bool IsTaggedUnionSchema(
+        JsonElement schema,
+        IReadOnlyDictionary<string, JsonElement> schemas)
+    {
+        if (!schema.TryGetProperty("oneOf", out var oneOf)
+            || oneOf.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+        return oneOf.EnumerateArray().All(variant =>
+        {
+            var resolved = ResolveSchema(variant, schemas, out _);
+            return !resolved.TryGetProperty("type", out var type) || type.GetString() != "null";
+        });
+    }
+
+    private static bool IsUnconstrainedJsonSchema(JsonElement schema)
+        => schema.EnumerateObject().All(static property => property.Name is "title" or "description");
 
     private static string MakeNullable(string typeName)
         => typeName.EndsWith("?", StringComparison.Ordinal) ? typeName : typeName + "?";
@@ -646,9 +1306,53 @@ public static class SunderRpcCSharpGenerator
         }
     }
 
-    private sealed record DefinitionModel(string Name, string TypeName, JsonElement Schema);
+    private enum DefinitionKind
+    {
+        Record,
+        StringEnum,
+        TaggedUnion,
+    }
+
+    private sealed record DefinitionModel(
+        string Name,
+        string TypeName,
+        JsonElement Schema,
+        DefinitionKind Kind)
+    {
+        public string? ConverterTypeName { get; init; }
+        public TaggedUnionModel? Union { get; init; }
+        public string? BaseTypeName { get; init; }
+        public string? DiscriminatorName { get; init; }
+        public string? DiscriminatorValue { get; init; }
+    }
+
+    private sealed record TaggedUnionModel(
+        string DiscriminatorName,
+        IReadOnlyList<UnionVariantModel> Variants);
+
+    private sealed record UnionVariantModel(
+        string TypeName,
+        JsonElement Schema,
+        string Tag,
+        bool IsSynthetic);
+
+    private sealed record ResolvedUnionVariant(JsonElement Schema, string? DefinitionName)
+    {
+        public string? Tag { get; init; }
+    }
+
+    private sealed record RecordDerivationModel(
+        string BaseTypeName,
+        string DiscriminatorName,
+        string DiscriminatorValue);
+
+    private sealed record EnumMemberModel(string WireValue, string Name, int Ordinal);
 
     private sealed record MethodModel(SunderRpcMethodDescriptor Descriptor, string MethodName);
+
+    private sealed record ErrorModel(
+        SunderRpcErrorDeclaration Declaration,
+        string TypeName);
 
     private sealed record ServiceModel(
         SunderRpcServiceDescriptor Descriptor,
@@ -659,8 +1363,10 @@ public static class SunderRpcCSharpGenerator
     private sealed record GeneratorModel(
         SunderRpcContractDescriptor Descriptor,
         IReadOnlyDictionary<string, JsonElement> Schemas,
-        IReadOnlyDictionary<string, string> RecordNames,
+        IReadOnlyDictionary<string, string> GeneratedTypeNames,
+        IReadOnlyDictionary<string, string> InlineTypeNames,
         IReadOnlyList<DefinitionModel> Definitions,
+        IReadOnlyList<ErrorModel> Errors,
         IReadOnlyList<ServiceModel> Services,
         string IdentityTypeName,
         string HandlerTypeName)

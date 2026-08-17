@@ -1,11 +1,14 @@
 using System.Security.Cryptography;
 using Sunder.Package.Format;
+using Sunder.Runtime.Client;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.App.Services;
 
 internal interface IAppWebRpcClient : IAsyncDisposable
 {
+    RuntimeClientResourceLimits ResourceLimits => RuntimeClientResourceLimits.Standard;
+
     ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
         string contractId,
         CancellationToken cancellationToken);

@@ -18,6 +18,7 @@ public sealed class ShellSession : IAsyncDisposable
     private readonly ShellUiWorkScheduler _shellUiWorkScheduler;
     private readonly DeveloperLogService? _developerLog;
     private readonly OwnedTaskObserver _tasks = new(nameof(ShellSession));
+    private readonly AppPackageUiRecoveryCoordinator? _packageUiRecoveryCoordinator;
     private ServiceProvider? _serviceProvider;
     private AppSingleInstanceCoordinator? _singleInstanceCoordinator;
     private AboutSunderWindow? _aboutSunderWindow;
@@ -50,6 +51,12 @@ public sealed class ShellSession : IAsyncDisposable
             initialShellRenderWaiter ?? new InitialShellRenderWaiter(uiDispatcher);
         _shellUiWorkScheduler = new ShellUiWorkScheduler();
         _developerLog = developerLog;
+        _packageUiRecoveryCoordinator = runtimeEventSubscription is null
+            ? null
+            : new AppPackageUiRecoveryCoordinator(
+                packageViewHostService,
+                runtimeEventSubscription,
+                _tasks);
         MainWindow.HidingForClose += MainWindow_OnHidingForClose;
     }
 
@@ -233,6 +240,10 @@ public sealed class ShellSession : IAsyncDisposable
         Volatile.Read(ref _disposed) == 0
         && PackageViewHostService.TryHandleUnhandledException(exception);
 
+    internal bool TryHandleUnobservedTaskException(Exception exception) =>
+        Volatile.Read(ref _disposed) == 0
+        && PackageViewHostService.TryHandleUnobservedTaskException(exception);
+
     internal void ShowSettings() => WindowLauncher.ShowSettings();
 
     internal void ShowStacks() => WindowLauncher.ShowStacks();
@@ -266,6 +277,7 @@ public sealed class ShellSession : IAsyncDisposable
             return;
         }
 
+        _packageUiRecoveryCoordinator?.Dispose();
         var ownedTasks = StartCleanup(_tasks.StopAsync);
         if (
             !await BoundedCleanup

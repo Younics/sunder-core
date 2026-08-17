@@ -120,6 +120,14 @@ RPC V2 validates requests, responses, events, and declared errors against the bu
 
 At the SDK boundary, expect `ArgumentException` for invalid local arguments, `OperationCanceledException` for cancellation, and `SunderRpcException` for declared domain or infrastructure failures. Retry only errors whose kind and method idempotency make retry safe. Host deadlines are upper bounds; callers should pass earlier deadlines through `SunderRpcCallOptions` when appropriate.
 
+## Worker Recovery
+
+Runtime supervises each Worker V3 activation independently. When one activation faults, Runtime retires only that package's RPC authority and waits for its calls, process, and storage transaction to drain before creating a fresh activation. Healthy siblings keep their processes and endpoint identities, but in-flight calls from the retired session generation terminate and callers must reconnect. Calls to the recovered package must discover its replacement endpoints; every endpoint from the failed activation remains stale and is never retargeted.
+
+Recovery is automatic and uses delays of 250 ms, 500 ms, 1 second, 2 seconds, and 4 seconds in a rolling one-minute failure window. A sixth failure suspends recovery. Missing dependencies pause recovery without consuming another attempt. Disable, uninstall, update, session replacement, or Runtime shutdown fences stale recovery work. App notifications for restart, success, and suspension are host-owned; packages should not add their own worker restart loop.
+
+Runtime refuses to overlap a replacement with an activation whose cleanup or package-owned calls have not drained. Storage snapshots cover startup through publication and roll back only after worker and RPC authority are proven inactive. An unrecoverable rollback failure fences Runtime and requests supervised process restart rather than continuing with uncertain storage.
+
 ## Design Guidance
 
 - Model domain commands and queries, not remote SQL or a generic repository.

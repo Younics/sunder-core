@@ -22,6 +22,9 @@ internal sealed class RuntimeRpcCatalog : IDisposable
     private IReadOnlyDictionary<string, RuntimeRpcPackageActivation>? _candidatePackages;
     private IReadOnlyDictionary<string, RuntimeRpcProviderActivation>? _candidateProviders;
     private IReadOnlyDictionary<string, RuntimeRpcProviderActivation>? _candidateEndpoints;
+    private RuntimeRpcPackageActivation? _recoveryCandidatePackage;
+    private IReadOnlyDictionary<string, RuntimeRpcProviderActivation>? _recoveryCandidateProviders;
+    private IReadOnlyDictionary<string, RuntimeRpcProviderActivation>? _recoveryCandidateEndpoints;
     private long _revision;
     private long _activationEpoch;
     private long _sessionGeneration;
@@ -59,6 +62,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
 
         RuntimeRpcPackageActivation[] retired;
         RuntimeRpcPackageActivation[] displacedCandidate = [];
+        RuntimeRpcPackageActivation? displacedRecoveryCandidate = null;
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -67,6 +71,8 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                 return;
             }
             var nextRevision = checked(_revision + 1);
+            displacedRecoveryCandidate = _recoveryCandidatePackage;
+            ClearRecoveryCandidateUnderLock();
             RuntimeRpcSessionActivation next;
             if (ReferenceEquals(_candidateSession, session)
                 && _candidateSessionGeneration == sessionGeneration
@@ -78,6 +84,10 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                     _candidatePackages,
                     _candidateProviders,
                     _candidateEndpoints);
+                foreach (var owner in next.Packages.Values)
+                {
+                    owner.PublishSessionGeneration(sessionGeneration);
+                }
                 foreach (var provider in next.Providers.Values)
                 {
                     provider.UpdateSnapshot(provider.Snapshot with
@@ -138,6 +148,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             }
         }
         foreach (var package in displacedCandidate) _ = package.Retire();
+        if (displacedRecoveryCandidate is not null) _ = displacedRecoveryCandidate.Retire();
     }
 
     public void PrepareCandidateSession(ActivePackageSession session, long sessionGeneration)
@@ -151,6 +162,11 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                 && _candidateSessionGeneration == sessionGeneration)
             {
                 return;
+            }
+            if (_recoveryCandidatePackage is not null)
+            {
+                throw new InvalidOperationException(
+                    "An RPC whole-session candidate cannot overlap an exact package recovery candidate.");
             }
             if (sessionGeneration < _sessionGeneration)
             {
@@ -185,6 +201,74 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         foreach (var package in retired) _ = package.Retire();
     }
 
+    public void PreparePackageRecovery(
+        ActiveLoadedPackage package,
+        long sessionGeneration,
+        long activationGeneration)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        RuntimeRpcPackageActivation? displaced;
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (_candidateSession is not null)
+            {
+                throw new InvalidOperationException(
+                    "An RPC package recovery candidate cannot overlap a whole-session candidate.");
+            }
+            if (_packages.ContainsKey(package.Descriptor.PackageId))
+            {
+                throw new InvalidOperationException(
+                    "An RPC package recovery candidate cannot replace an active package endpoint in place.");
+            }
+            var conflictingProviderId = package.RpcProviders.Keys.FirstOrDefault(_providers.ContainsKey);
+            if (conflictingProviderId is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Recovered RPC provider id '{conflictingProviderId}' conflicts with a healthy active provider.");
+            }
+            displaced = _recoveryCandidatePackage;
+            ClearRecoveryCandidateUnderLock();
+            var candidatePackages = new Dictionary<string, RuntimeRpcPackageActivation>(StringComparer.Ordinal);
+            var candidateProviders = new Dictionary<string, RuntimeRpcProviderActivation>(StringComparer.Ordinal);
+            var candidateEndpoints = new Dictionary<string, RuntimeRpcProviderActivation>(StringComparer.Ordinal);
+            AddPackageActivationUnderLock(
+                package,
+                sessionGeneration,
+                checked(_revision + 1),
+                allowsPrePublicationLease: true,
+                candidatePackages,
+                candidateProviders,
+                candidateEndpoints,
+                activationGeneration);
+            _recoveryCandidatePackage = candidatePackages.Values.Single();
+            _recoveryCandidateProviders = candidateProviders;
+            _recoveryCandidateEndpoints = candidateEndpoints;
+        }
+        if (displaced is not null)
+        {
+            _ = displaced.Retire();
+        }
+    }
+
+    public Task DiscardPackageRecovery(string packageId, Guid activationId)
+    {
+        RuntimeRpcPackageActivation? retired = null;
+        lock (_gate)
+        {
+            if (_disposed
+                || _recoveryCandidatePackage is not { } candidate
+                || !string.Equals(candidate.PackageId, packageId, StringComparison.Ordinal)
+                || candidate.Package.RuntimeActivationId != activationId)
+            {
+                return Task.CompletedTask;
+            }
+            retired = candidate;
+            ClearRecoveryCandidateUnderLock();
+        }
+        return retired.Retire();
+    }
+
     private static ActiveLoadedPackage[] GetValidatedPackages(ActivePackageSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -214,39 +298,60 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         var nextEndpoints = new Dictionary<string, RuntimeRpcProviderActivation>(StringComparer.Ordinal);
         foreach (var package in packages)
         {
-            var owner = new RuntimeRpcPackageActivation(
+            AddPackageActivationUnderLock(
                 package,
                 sessionGeneration,
-                allowsPrePublicationLease);
-            nextPackages.Add(package.Descriptor.PackageId, owner);
-            foreach (var registration in package.RpcProviders.Values.OrderBy(
-                         static registration => registration.ProviderId,
-                         StringComparer.Ordinal))
-            {
-                var endpoint = new SunderRpcEndpointReference("rpc1_" + Guid.NewGuid().ToString("N"));
-                var snapshot = new SunderRpcProviderSnapshot(
-                    package.Descriptor.PackageId,
-                    package.Descriptor.Version,
-                    registration.ProviderId,
-                    registration.ContractId,
-                    registration.ContractVersion,
-                    registration.DescriptorSha256,
-                    registration.Contract?.AbiSha256
-                    ?? registration.Manifest?.AbiSha256
-                    ?? throw new InvalidDataException(
-                        $"RPC provider '{registration.ProviderId}' is missing its V2 ABI identity."),
-                    package.RuntimeActivationId,
-                    checked(++_activationEpoch),
-                    sessionGeneration,
-                    endpoint,
-                    catalogRevision,
-                    SunderRpcProviderState.Active);
-                var provider = new RuntimeRpcProviderActivation(owner, registration, snapshot);
-                nextProviders.Add(registration.ProviderId, provider);
-                nextEndpoints.Add(endpoint.Value, provider);
-            }
+                catalogRevision,
+                allowsPrePublicationLease,
+                nextPackages,
+                nextProviders,
+                nextEndpoints);
         }
         return new RuntimeRpcSessionActivation(nextPackages, nextProviders, nextEndpoints);
+    }
+
+    private void AddPackageActivationUnderLock(
+        ActiveLoadedPackage package,
+        long sessionGeneration,
+        long catalogRevision,
+        bool allowsPrePublicationLease,
+        IDictionary<string, RuntimeRpcPackageActivation> packages,
+        IDictionary<string, RuntimeRpcProviderActivation> providers,
+        IDictionary<string, RuntimeRpcProviderActivation> endpoints,
+        long? activationGeneration = null)
+    {
+        var owner = new RuntimeRpcPackageActivation(
+            package,
+            sessionGeneration,
+            allowsPrePublicationLease,
+            activationGeneration);
+        packages.Add(package.Descriptor.PackageId, owner);
+        foreach (var registration in package.RpcProviders.Values.OrderBy(
+                     static registration => registration.ProviderId,
+                     StringComparer.Ordinal))
+        {
+            var endpoint = new SunderRpcEndpointReference("rpc1_" + Guid.NewGuid().ToString("N"));
+            var snapshot = new SunderRpcProviderSnapshot(
+                package.Descriptor.PackageId,
+                package.Descriptor.Version,
+                registration.ProviderId,
+                registration.ContractId,
+                registration.ContractVersion,
+                registration.DescriptorSha256,
+                registration.Contract?.AbiSha256
+                ?? registration.Manifest?.AbiSha256
+                ?? throw new InvalidDataException(
+                    $"RPC provider '{registration.ProviderId}' is missing its V2 ABI identity."),
+                package.RuntimeActivationId,
+                checked(++_activationEpoch),
+                sessionGeneration,
+                endpoint,
+                catalogRevision,
+                SunderRpcProviderState.Active);
+            var provider = new RuntimeRpcProviderActivation(owner, registration, snapshot);
+            providers.Add(registration.ProviderId, provider);
+            endpoints.Add(endpoint.Value, provider);
+        }
     }
 
     private void ClearCandidateUnderLock()
@@ -256,6 +361,13 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         _candidatePackages = null;
         _candidateProviders = null;
         _candidateEndpoints = null;
+    }
+
+    private void ClearRecoveryCandidateUnderLock()
+    {
+        _recoveryCandidatePackage = null;
+        _recoveryCandidateProviders = null;
+        _recoveryCandidateEndpoints = null;
     }
 
     private bool TryGetCandidateProvidersUnderLock(
@@ -268,6 +380,20 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             && ReferenceEquals(candidate, caller))
         {
             providers = _candidateProviders;
+            return true;
+        }
+        if (_recoveryCandidatePackage is not null
+            && _recoveryCandidateProviders is not null
+            && ReferenceEquals(_recoveryCandidatePackage, caller))
+        {
+            var combined = new Dictionary<string, RuntimeRpcProviderActivation>(
+                _providers,
+                StringComparer.Ordinal);
+            foreach (var pair in _recoveryCandidateProviders)
+            {
+                combined.Add(pair.Key, pair.Value);
+            }
+            providers = combined;
             return true;
         }
         providers = null!;
@@ -286,6 +412,20 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             endpoints = _candidateEndpoints;
             return true;
         }
+        if (_recoveryCandidatePackage is not null
+            && _recoveryCandidateEndpoints is not null
+            && ReferenceEquals(_recoveryCandidatePackage, caller))
+        {
+            var combined = new Dictionary<string, RuntimeRpcProviderActivation>(
+                _endpoints,
+                StringComparer.Ordinal);
+            foreach (var pair in _recoveryCandidateEndpoints)
+            {
+                combined.Add(pair.Key, pair.Value);
+            }
+            endpoints = combined;
+            return true;
+        }
         endpoints = null!;
         return false;
     }
@@ -296,6 +436,120 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         bool faulted,
         string? faultCode = null)
         => TryDeactivatePackage(packageId, activationId, faulted, faultCode, out _);
+
+    public void ReconcileActiveSession(
+        ActivePackageSession session,
+        long sessionGeneration,
+        string? recoveredPackageId = null,
+        Action? commit = null)
+    {
+        var packages = GetValidatedPackages(session);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (sessionGeneration < _sessionGeneration)
+            {
+                return;
+            }
+
+            var expected = packages.ToDictionary(
+                static package => package.Descriptor.PackageId,
+                StringComparer.Ordinal);
+            foreach (var (packageId, active) in _packages)
+            {
+                if (!expected.TryGetValue(packageId, out var package)
+                    || package.RuntimeActivationId != active.Package.RuntimeActivationId)
+                {
+                    throw new InvalidOperationException(
+                        $"RPC package activation '{packageId}' does not match the exact active Runtime package.");
+                }
+            }
+
+            var missing = expected.Keys.Except(_packages.Keys, StringComparer.Ordinal).ToArray();
+            if (recoveredPackageId is null)
+            {
+                if (missing.Length != 0)
+                {
+                    throw new InvalidOperationException(
+                        "RPC catalog reconciliation cannot create endpoints for an unrelated active package.");
+                }
+            }
+            else if (missing.Length != 1
+                     || !string.Equals(missing[0], recoveredPackageId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "RPC package recovery must add exactly the requested recovered package activation.");
+            }
+
+            RuntimeRpcPackageActivation? recoveredOwner = null;
+            IReadOnlyDictionary<string, RuntimeRpcProviderActivation>? recoveredProviders = null;
+            IReadOnlyDictionary<string, RuntimeRpcProviderActivation>? recoveredEndpoints = null;
+            if (recoveredPackageId is not null)
+            {
+                recoveredOwner = _recoveryCandidatePackage;
+                recoveredProviders = _recoveryCandidateProviders;
+                recoveredEndpoints = _recoveryCandidateEndpoints;
+                if (recoveredOwner is null
+                    || recoveredProviders is null
+                    || recoveredEndpoints is null
+                    || !string.Equals(recoveredOwner.PackageId, recoveredPackageId, StringComparison.Ordinal)
+                    || recoveredOwner.Package.RuntimeActivationId
+                    != expected[recoveredPackageId].RuntimeActivationId)
+                {
+                    throw new InvalidOperationException(
+                        "RPC package recovery publication does not match its prepared exact activation.");
+                }
+            }
+
+            var nextRevision = checked(_revision + 1);
+            commit?.Invoke();
+            foreach (var owner in _packages.Values)
+            {
+                owner.AdvanceSessionGeneration(sessionGeneration);
+            }
+            foreach (var provider in _providers.Values.OrderBy(
+                         static provider => provider.Snapshot.ProviderId,
+                         StringComparer.Ordinal))
+            {
+                var snapshot = provider.Snapshot with
+                {
+                    CatalogRevision = nextRevision,
+                    SessionGeneration = sessionGeneration,
+                };
+                provider.UpdateSnapshot(snapshot);
+                Publish(nextRevision, SunderRpcCatalogEventKind.Activated, snapshot);
+            }
+
+            if (recoveredPackageId is not null)
+            {
+                recoveredOwner!.PublishSessionGeneration(sessionGeneration);
+                foreach (var provider in recoveredProviders!.Values)
+                {
+                    provider.UpdateSnapshot(provider.Snapshot with
+                    {
+                        CatalogRevision = nextRevision,
+                        SessionGeneration = sessionGeneration,
+                        State = SunderRpcProviderState.Active,
+                        FaultCode = null,
+                    });
+                }
+                _packages.Add(recoveredPackageId, recoveredOwner);
+                foreach (var pair in recoveredProviders) _providers.Add(pair.Key, pair.Value);
+                foreach (var pair in recoveredEndpoints!) _endpoints.Add(pair.Key, pair.Value);
+                ClearRecoveryCandidateUnderLock();
+                foreach (var provider in recoveredProviders.Values.OrderBy(
+                             static provider => provider.Snapshot.ProviderId,
+                             StringComparer.Ordinal))
+                {
+                    Publish(nextRevision, SunderRpcCatalogEventKind.Added, provider.Snapshot);
+                    Publish(nextRevision, SunderRpcCatalogEventKind.Activated, provider.Snapshot);
+                }
+            }
+
+            _revision = nextRevision;
+            _sessionGeneration = sessionGeneration;
+        }
+    }
 
     internal Task DeactivatePackageWithRetirement(
         string packageId,
@@ -464,8 +718,13 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             ThrowIfDisposed();
             if (TryGetCandidateEndpointsUnderLock(caller, out var candidateEndpoints))
             {
-                stale = false;
-                return candidateEndpoints.TryGetValue(endpoint.Value, out provider);
+                if (candidateEndpoints.TryGetValue(endpoint.Value, out provider))
+                {
+                    stale = false;
+                    return true;
+                }
+                stale = _staleEndpoints.TryGetValue(endpoint.Value, out provider);
+                return false;
             }
             if (_endpoints.TryGetValue(endpoint.Value, out provider))
             {
@@ -501,6 +760,13 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             {
                 return true;
             }
+            if (_recoveryCandidatePackage is { } recoveryCandidate
+                && string.Equals(recoveryCandidate.PackageId, packageId, StringComparison.Ordinal)
+                && recoveryCandidate.Package.RuntimeActivationId == activationId)
+            {
+                package = recoveryCandidate;
+                return true;
+            }
             return _packages.TryGetValue(packageId, out package)
                    && package.Package.RuntimeActivationId == activationId;
         }
@@ -515,6 +781,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             _disposed = true;
             packages = _packages.Values
                 .Concat(_candidatePackages?.Values ?? [])
+                .Concat(_recoveryCandidatePackage is null ? [] : [_recoveryCandidatePackage])
                 .ToArray();
             _packages.Clear();
             _providers.Clear();
@@ -523,6 +790,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             _staleEndpointOrder.Clear();
             _retiredPackageCallbacks.Clear();
             ClearCandidateUnderLock();
+            ClearRecoveryCandidateUnderLock();
             _events.Complete();
         }
         foreach (var package in packages) _ = package.Retire();
@@ -611,19 +879,26 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
     private bool _retired;
     private Task _retirementCallbacks = Task.CompletedTask;
 
+    private long _sessionGeneration;
+    private readonly long _activationGeneration;
+    private int _allowsPrePublicationLease;
+
     public RuntimeRpcPackageActivation(
         ActiveLoadedPackage package,
         long sessionGeneration,
-        bool allowsPrePublicationLease = false)
+        bool allowsPrePublicationLease = false,
+        long? activationGeneration = null)
     {
         Package = package;
-        SessionGeneration = sessionGeneration;
-        AllowsPrePublicationLease = allowsPrePublicationLease;
+        _sessionGeneration = sessionGeneration;
+        _activationGeneration = activationGeneration ?? sessionGeneration;
+        _allowsPrePublicationLease = allowsPrePublicationLease ? 1 : 0;
     }
 
     public ActiveLoadedPackage Package { get; }
-    public long SessionGeneration { get; }
-    public bool AllowsPrePublicationLease { get; }
+    public long SessionGeneration => Interlocked.Read(ref _sessionGeneration);
+    public long ActivationGeneration => _activationGeneration;
+    public bool AllowsPrePublicationLease => Volatile.Read(ref _allowsPrePublicationLease) != 0;
     public string PackageId => Package.Descriptor.PackageId;
     public string PackageVersion => Package.Descriptor.Version;
     public string Role => SunderPackageFormat.RuntimeHostRole;
@@ -636,8 +911,26 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
 
     public bool IsCurrent(PackageSessionLease sessionLease)
         => sessionLease.Generation == SessionGeneration
-           && sessionLease.Session.TryGetLoadedPackage(PackageId, out var package)
-           && package?.RuntimeActivationId == Package.RuntimeActivationId;
+           && (AllowsPrePublicationLease
+               || sessionLease.Session.TryGetLoadedPackage(PackageId, out var package)
+               && package?.RuntimeActivationId == Package.RuntimeActivationId);
+
+    internal void AdvanceSessionGeneration(long sessionGeneration)
+    {
+        var current = SessionGeneration;
+        if (sessionGeneration < current)
+        {
+            throw new InvalidOperationException(
+                "An RPC package activation cannot regress its Runtime session generation.");
+        }
+        Interlocked.Exchange(ref _sessionGeneration, sessionGeneration);
+    }
+
+    internal void PublishSessionGeneration(long sessionGeneration)
+    {
+        AdvanceSessionGeneration(sessionGeneration);
+        Volatile.Write(ref _allowsPrePublicationLease, 0);
+    }
 
     public bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease)
     {
@@ -678,7 +971,10 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
             if (_retired) return _retirementCallbacks;
             _retired = true;
             drained = _activeLeases == 0;
-            _retirementCallbacks = RuntimeCancellation.Signal(_retirement);
+            var callbacks = RuntimeCancellation.Signal(_retirement);
+            _retirementCallbacks = drained
+                ? callbacks
+                : Task.WhenAll(callbacks, _drained.Task);
         }
         if (drained) _drained.TrySetResult();
         return _retirementCallbacks;

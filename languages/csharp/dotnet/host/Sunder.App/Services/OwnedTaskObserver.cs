@@ -6,14 +6,19 @@ public sealed class OwnedTaskObserver : IDisposable
     private readonly object _syncRoot = new();
     private readonly HashSet<Task> _tasks = [];
     private readonly string _ownerName;
+    private readonly Action<Exception> _fatalExceptionHandler;
     private readonly CancellationToken _lifetimeToken;
     private bool _stopped;
     private bool _disposed;
     private Task? _stopTask;
 
-    public OwnedTaskObserver(string ownerName)
+    public OwnedTaskObserver(
+        string ownerName,
+        Action<Exception>? fatalExceptionHandler = null)
     {
         _ownerName = ownerName;
+        _fatalExceptionHandler = fatalExceptionHandler
+            ?? AppPackageFatalCleanupPropagation.PostToDispatcher;
         _lifetimeToken = _lifetime.Token;
     }
 
@@ -135,9 +140,13 @@ public sealed class OwnedTaskObserver : IDisposable
         catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
         {
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             AppSessionLog.WriteError($"{_ownerName} failed while {operation}.", ex);
+        }
+        catch (Exception ex)
+        {
+            PropagateFatalException(ex);
         }
     }
 
@@ -154,9 +163,13 @@ public sealed class OwnedTaskObserver : IDisposable
         catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
         {
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             AppSessionLog.WriteError($"{_ownerName} failed while {operationName}.", ex);
+        }
+        catch (Exception ex)
+        {
+            PropagateFatalException(ex);
         }
     }
 
@@ -172,11 +185,18 @@ public sealed class OwnedTaskObserver : IDisposable
         catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
         {
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             AppSessionLog.WriteError($"{_ownerName} failed while {operation}.", ex);
         }
+        catch (Exception ex)
+        {
+            PropagateFatalException(ex);
+        }
     }
+
+    private void PropagateFatalException(Exception exception)
+        => _fatalExceptionHandler(exception);
 
     private void TryCancelLifetime()
     {

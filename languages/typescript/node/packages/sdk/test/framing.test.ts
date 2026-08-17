@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FrameDecoder, ProtocolError, encodeFrame } from "../src/framing";
+import { FrameDecoder, ProtocolError, TransportResourceError, encodeFrame } from "../src/framing";
 
 test("Content-Length framing round trips across adversarial chunk boundaries", () => {
   const frame = encodeFrame({ type: "worker.result", id: "a", value: { text: "snowman \u2603" } });
@@ -69,5 +69,59 @@ test("framing uses ASCII-only collision folding for nested RPC values", () => {
       asciiCollision,
     ])),
     /duplicate or case-colliding/u,
+  );
+});
+
+test("framing admits the exact value plus metadata envelope and rejects one byte or depth beyond it", () => {
+  const value = { text: "snowman \u2603 \" \\ \u00e9" };
+  const envelope = { type: "worker.result", id: "escape", metadata: "m".repeat(128), value };
+  const text = JSON.stringify(envelope);
+  const valueBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
+  const bodyBytes = Buffer.byteLength(text, "utf8");
+  const reserveBytes = bodyBytes - valueBytes;
+  const limits = {
+    maxFrameBytes: bodyBytes,
+    maxHeaderBytes: 8 * 1024,
+    maxMessageDepth: 11,
+    maxRpcValueBytes: valueBytes,
+    maxValueDepth: 3,
+    maxEnvelopeReserveBytes: reserveBytes,
+  } as const;
+
+  const exact = encodeFrame(envelope, limits);
+  assert.equal(exact.subarray(exact.indexOf("\r\n\r\n", 0, "ascii") + 4).toString("utf8"), text);
+  assert.throws(() => encodeFrame({ ...envelope, metadata: `${envelope.metadata}m` }, limits), TransportResourceError);
+
+  const depthLimits = {
+    ...limits,
+    maxFrameBytes: 1024 + 256,
+    maxRpcValueBytes: 1024,
+    maxEnvelopeReserveBytes: 256,
+  };
+  encodeFrame({ type: "worker.result", value: [[null]] }, depthLimits);
+  assert.throws(() => encodeFrame({ type: "worker.result", value: [[[null]]] }, depthLimits), ProtocolError);
+
+  const errorEnvelope = {
+    type: "worker.error",
+    id: "escape",
+    metadata: "m".repeat(128),
+    error: { kind: "domain", code: "example.rejected", message: "Rejected.", details: value },
+  };
+  const errorText = JSON.stringify(errorEnvelope);
+  const errorReserveBytes = Buffer.byteLength(errorText, "utf8") - valueBytes;
+  const errorLimits = {
+    ...limits,
+    maxFrameBytes: Buffer.byteLength(errorText, "utf8"),
+    maxEnvelopeReserveBytes: errorReserveBytes,
+  };
+  encodeFrame(errorEnvelope, errorLimits);
+  assert.throws(
+    () => encodeFrame({ ...errorEnvelope, metadata: `${errorEnvelope.metadata}m` }, errorLimits),
+    TransportResourceError,
+  );
+  encodeFrame({ type: "host.error", error: { ...errorEnvelope.error, details: [[null]] } }, depthLimits);
+  assert.throws(
+    () => encodeFrame({ type: "host.error", error: { ...errorEnvelope.error, details: [[[null]]] } }, depthLimits),
+    ProtocolError,
   );
 });

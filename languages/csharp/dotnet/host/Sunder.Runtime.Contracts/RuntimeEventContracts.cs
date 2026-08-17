@@ -9,6 +9,9 @@ public enum RuntimeEventKind
     BootstrapStateChanged = 4,
     SnapshotDiagnosticsChanged = 5,
     SnapshotMetadataChanged = 6,
+    PackageRecoveryStarted = 7,
+    PackageRecoverySucceeded = 8,
+    PackageRecoverySuspended = 9,
 }
 
 public enum RuntimeOperationPhase

@@ -59,6 +59,10 @@ internal sealed class RuntimeContentTransferStore : IDisposable
     private readonly ConcurrentDictionary<string, DownloadEntry> _downloads = new(StringComparer.Ordinal);
     private readonly object _rpcContentGate = new();
     private readonly Dictionary<string, RpcContentEntry> _rpcContent = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RpcContentUsage> _rpcContentByPackage = new(StringComparer.Ordinal);
+    private readonly Dictionary<RuntimeRpcContentAuthority, RpcContentUsage> _rpcContentByAuthority = [];
+    private long _rpcContentBytes;
+    private int _rpcContentReferences;
 
     public RuntimeContentTransferStore(
         RuntimePackagePaths paths,
@@ -251,11 +255,6 @@ internal sealed class RuntimeContentTransferStore : IDisposable
             expiresAtUtc,
             repeatability,
             maximumUses);
-        if (new FileInfo(fullPath).Length > _policy.MaxRpcContentBytes)
-        {
-            throw new RuntimeUploadLimitException(
-                $"RPC content exceeds the {_policy.MaxRpcContentBytes} byte limit.");
-        }
         await using var stream = new FileStream(
             fullPath,
             FileMode.Open,
@@ -263,27 +262,48 @@ internal sealed class RuntimeContentTransferStore : IDisposable
             FileShare.Read,
             128 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
-        var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
-        var reference = new SunderRpcContentReference(
-            "rpc-content-" + Guid.NewGuid().ToString("N"),
-            stream.Length,
-            hash,
-            NormalizeContentType(mediaType),
-            NormalizeFileName(fileName, "content.bin"),
-            expiresAtUtc,
-            repeatability);
-        AddRpcContent(
-            reference,
-            fullPath,
+        if (stream.Length > _policy.MaxRpcContentBytes)
+        {
+            throw RpcContentResourceExhausted(
+                "rpc.content.reference-byte-limit",
+                $"RPC content exceeds the {_policy.MaxRpcContentBytes} byte per-reference limit.");
+        }
+
+        RuntimeRpcContentQuotaReservation? reservation = ReserveRpcContent(
             ownerPackageId,
-            audiencePackageId,
-            generation,
-            providerEndpoint,
-            maximumUses,
-            ownsFile: false,
             authority,
-            cancellationToken);
-        return reference;
+            stream.Length);
+        try
+        {
+            var hash = Convert.ToHexString(
+                await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
+            var reference = new SunderRpcContentReference(
+                "rpc-content-" + Guid.NewGuid().ToString("N"),
+                stream.Length,
+                hash,
+                NormalizeContentType(mediaType),
+                NormalizeFileName(fileName, "content.bin"),
+                expiresAtUtc,
+                repeatability);
+            AddRpcContent(
+                reference,
+                fullPath,
+                ownerPackageId,
+                audiencePackageId,
+                generation,
+                providerEndpoint,
+                maximumUses,
+                ownsFile: false,
+                authority,
+                reservation,
+                cancellationToken);
+            reservation = null;
+            return reference;
+        }
+        finally
+        {
+            if (reservation is not null) RollbackRpcContentReservation(reservation);
+        }
     }
 
     public async Task<SunderRpcContentReference> RegisterRpcContentAsync(
@@ -308,8 +328,9 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         }
         if (expectedLength is < 0 || expectedLength > _policy.MaxRpcContentBytes)
         {
-            throw new RuntimeUploadLimitException(
-                $"RPC content exceeds the {_policy.MaxRpcContentBytes} byte limit.");
+            throw RpcContentResourceExhausted(
+                "rpc.content.reference-byte-limit",
+                $"RPC content exceeds the {_policy.MaxRpcContentBytes} byte per-reference limit.");
         }
         ValidateRpcContentRegistration(
             ownerPackageId,
@@ -324,9 +345,14 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         var id = "rpc-content-" + Guid.NewGuid().ToString("N");
         var partialPath = Path.Combine(_paths.TransferRootPath, id + ".partial");
         var finalPath = Path.Combine(_paths.TransferRootPath, id + ".rpccontent");
-        var buffer = ArrayPool<byte>.Shared.Rent(128 * 1024);
+        RuntimeRpcContentQuotaReservation? reservation = ReserveRpcContent(
+            ownerPackageId,
+            authority,
+            expectedLength ?? 0);
+        byte[]? buffer = null;
         try
         {
+            buffer = ArrayPool<byte>.Shared.Rent(128 * 1024);
             long length = 0;
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             await using (var destination = new FileStream(
@@ -345,9 +371,11 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                     length = checked(length + read);
                     if (length > _policy.MaxRpcContentBytes)
                     {
-                        throw new RuntimeUploadLimitException(
-                            $"RPC content exceeds the {_policy.MaxRpcContentBytes} byte limit.");
+                        throw RpcContentResourceExhausted(
+                            "rpc.content.reference-byte-limit",
+                            $"RPC content exceeds the {_policy.MaxRpcContentBytes} byte per-reference limit.");
                     }
+                    EnsureRpcContentReservationBytes(reservation, length);
                     hash.AppendData(buffer, 0, read);
                     await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken)
                         .ConfigureAwait(false);
@@ -360,6 +388,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                 throw new RuntimeValidationException(
                     "RPC content length does not match its declared length.");
             }
+            ResizeRpcContentReservation(reservation, length);
             File.Move(partialPath, finalPath);
             var reference = new SunderRpcContentReference(
                 id,
@@ -379,7 +408,9 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                 maximumUses,
                 ownsFile: true,
                 authority,
+                reservation,
                 cancellationToken);
+            reservation = null;
             return reference;
         }
         catch
@@ -390,7 +421,8 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            if (reservation is not null) RollbackRpcContentReservation(reservation);
+            if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 
@@ -440,6 +472,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                     stream.Dispose();
                     stream = null;
                     _rpcContent.Remove(reference.Id);
+                    ReleaseRpcContentReservation(entry.Reservation);
                     invalidEntry = entry;
                 }
                 else
@@ -447,7 +480,11 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                     stream.Position = 0;
                     var useNumber = ++entry.UseCount;
                     var exhausted = entry.UseCount >= entry.MaximumUses;
-                    if (exhausted) _rpcContent.Remove(reference.Id);
+                    if (exhausted)
+                    {
+                        _rpcContent.Remove(reference.Id);
+                        ReleaseRpcContentReservation(entry.Reservation);
+                    }
                     lease = new RuntimeRpcContentLease(
                         reference,
                         stream,
@@ -465,12 +502,14 @@ internal sealed class RuntimeContentTransferStore : IDisposable
             {
                 stream?.Dispose();
                 _rpcContent.Remove(reference.Id);
+                ReleaseRpcContentReservation(entry.Reservation);
                 invalidEntry = entry;
             }
             catch (UnauthorizedAccessException)
             {
                 stream?.Dispose();
                 _rpcContent.Remove(reference.Id);
+                ReleaseRpcContentReservation(entry.Reservation);
                 invalidEntry = entry;
             }
         }
@@ -564,6 +603,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                 && ReferenceEquals(entry.Authority, authority))
             {
                 _rpcContent.Remove(reference.Id);
+                ReleaseRpcContentReservation(entry.Reservation);
                 removed = entry;
             }
         }
@@ -583,6 +623,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
             foreach (var entry in removed)
             {
                 _rpcContent.Remove(entry.Reference.Id);
+                ReleaseRpcContentReservation(entry.Reservation);
             }
         }
         foreach (var entry in removed)
@@ -607,6 +648,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         {
             rpcContent = _rpcContent.Values.ToArray();
             _rpcContent.Clear();
+            foreach (var entry in rpcContent) ReleaseRpcContentReservation(entry.Reservation);
         }
         foreach (var entry in rpcContent)
         {
@@ -638,6 +680,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                          .ToArray())
             {
                 _rpcContent.Remove(pair.Key);
+                ReleaseRpcContentReservation(pair.Value.Reservation);
                 if (pair.Value.OwnsFile) TryDeleteFile(pair.Value.FilePath);
             }
         }
@@ -653,6 +696,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         int maximumUses,
         bool ownsFile,
         RuntimeRpcContentAuthority? authority,
+        RuntimeRpcContentQuotaReservation reservation,
         CancellationToken cancellationToken)
     {
         lock (_rpcContentGate)
@@ -675,9 +719,201 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                     providerEndpoint,
                     maximumUses,
                     ownsFile,
-                    authority));
+                    authority,
+                    reservation));
         }
     }
+
+    private RuntimeRpcContentQuotaReservation ReserveRpcContent(
+        string ownerPackageId,
+        RuntimeRpcContentAuthority? authority,
+        long bytes)
+    {
+        lock (_rpcContentGate)
+        {
+            if (bytes < 0 || bytes > _policy.MaxRpcContentBytes)
+            {
+                throw RpcContentResourceExhausted(
+                    "rpc.content.reference-byte-limit",
+                    "RPC content exceeds its per-reference byte limit.");
+            }
+            var hasPackageUsage = _rpcContentByPackage.TryGetValue(
+                ownerPackageId,
+                out var packageUsage);
+            packageUsage ??= new RpcContentUsage();
+            RpcContentUsage? authorityUsage = null;
+            var hasAuthorityUsage = authority is not null
+                                    && _rpcContentByAuthority.TryGetValue(authority, out authorityUsage);
+            if (authority is not null) authorityUsage ??= new RpcContentUsage();
+            EnsureReferenceCapacity(packageUsage, authorityUsage);
+            EnsureByteCapacity(packageUsage, authorityUsage, bytes);
+
+            if (!hasPackageUsage) _rpcContentByPackage.Add(ownerPackageId, packageUsage);
+            if (authority is not null && !hasAuthorityUsage)
+            {
+                _rpcContentByAuthority.Add(authority, authorityUsage!);
+            }
+            _rpcContentReferences++;
+            _rpcContentBytes += bytes;
+            packageUsage.References++;
+            packageUsage.Bytes += bytes;
+            if (authorityUsage is not null)
+            {
+                authorityUsage.References++;
+                authorityUsage.Bytes += bytes;
+            }
+            return new RuntimeRpcContentQuotaReservation(
+                ownerPackageId,
+                authority,
+                bytes);
+        }
+    }
+
+    private void EnsureRpcContentReservationBytes(
+        RuntimeRpcContentQuotaReservation reservation,
+        long bytes)
+    {
+        lock (_rpcContentGate)
+        {
+            if (!reservation.IsActive || bytes <= reservation.Bytes) return;
+            ResizeRpcContentReservationCore(reservation, bytes);
+        }
+    }
+
+    private void ResizeRpcContentReservation(
+        RuntimeRpcContentQuotaReservation reservation,
+        long bytes)
+    {
+        lock (_rpcContentGate)
+        {
+            if (!reservation.IsActive)
+            {
+                throw new InvalidOperationException("The RPC content reservation is no longer active.");
+            }
+            ResizeRpcContentReservationCore(reservation, bytes);
+        }
+    }
+
+    private void ResizeRpcContentReservationCore(
+        RuntimeRpcContentQuotaReservation reservation,
+        long bytes)
+    {
+        if (bytes < 0 || bytes > _policy.MaxRpcContentBytes)
+        {
+            throw RpcContentResourceExhausted(
+                "rpc.content.reference-byte-limit",
+                "RPC content exceeds its per-reference byte limit.");
+        }
+        var delta = bytes - reservation.Bytes;
+        if (delta == 0) return;
+        var packageUsage = _rpcContentByPackage[reservation.OwnerPackageId];
+        var authorityUsage = reservation.Authority is null
+            ? null
+            : _rpcContentByAuthority[reservation.Authority];
+        if (delta > 0) EnsureByteCapacity(packageUsage, authorityUsage, delta);
+
+        _rpcContentBytes += delta;
+        packageUsage.Bytes += delta;
+        if (authorityUsage is not null) authorityUsage.Bytes += delta;
+        reservation.Bytes = bytes;
+    }
+
+    private void RollbackRpcContentReservation(RuntimeRpcContentQuotaReservation reservation)
+    {
+        lock (_rpcContentGate)
+        {
+            ReleaseRpcContentReservation(reservation);
+        }
+    }
+
+    private void ReleaseRpcContentReservation(RuntimeRpcContentQuotaReservation reservation)
+    {
+        if (!reservation.IsActive) return;
+        reservation.IsActive = false;
+        _rpcContentReferences--;
+        _rpcContentBytes -= reservation.Bytes;
+        ReleaseUsage(
+            _rpcContentByPackage,
+            reservation.OwnerPackageId,
+            reservation.Bytes);
+        if (reservation.Authority is not null)
+        {
+            ReleaseUsage(
+                _rpcContentByAuthority,
+                reservation.Authority,
+                reservation.Bytes);
+        }
+    }
+
+    private void EnsureReferenceCapacity(
+        RpcContentUsage packageUsage,
+        RpcContentUsage? authorityUsage)
+    {
+        if (_rpcContentReferences >= _policy.MaxRpcContentReferencesPerRuntime)
+        {
+            throw RpcContentResourceExhausted(
+                "rpc.content.runtime-reference-limit",
+                "The Runtime active RPC content-reference limit was reached.");
+        }
+        if (packageUsage.References >= _policy.MaxRpcContentReferencesPerPackage)
+        {
+            throw RpcContentResourceExhausted(
+                "rpc.content.package-reference-limit",
+                "The package active RPC content-reference limit was reached.");
+        }
+        if (authorityUsage?.References >= _policy.MaxRpcContentReferencesPerCall)
+        {
+            throw RpcContentResourceExhausted(
+                "rpc.content.call-reference-limit",
+                "The call active RPC content-reference limit was reached.");
+        }
+    }
+
+    private void EnsureByteCapacity(
+        RpcContentUsage packageUsage,
+        RpcContentUsage? authorityUsage,
+        long additionalBytes)
+    {
+        if (WouldExceed(_rpcContentBytes, additionalBytes, _policy.MaxRpcContentBytesPerRuntime))
+        {
+            throw RpcContentResourceExhausted(
+                "rpc.content.runtime-byte-limit",
+                "The Runtime aggregate RPC content byte limit was reached.");
+        }
+        if (WouldExceed(packageUsage.Bytes, additionalBytes, _policy.MaxRpcContentBytesPerPackage))
+        {
+            throw RpcContentResourceExhausted(
+                "rpc.content.package-byte-limit",
+                "The package aggregate RPC content byte limit was reached.");
+        }
+        if (authorityUsage is not null
+            && WouldExceed(authorityUsage.Bytes, additionalBytes, _policy.MaxRpcContentBytesPerCall))
+        {
+            throw RpcContentResourceExhausted(
+                "rpc.content.call-byte-limit",
+                "The call aggregate RPC content byte limit was reached.");
+        }
+    }
+
+    private static bool WouldExceed(long current, long additional, long limit)
+        => additional > limit || current > limit - additional;
+
+    private static void ReleaseUsage<TKey>(
+        Dictionary<TKey, RpcContentUsage> usage,
+        TKey key,
+        long bytes) where TKey : notnull
+    {
+        var current = usage[key];
+        current.References--;
+        current.Bytes -= bytes;
+        if (current.References == 0) usage.Remove(key);
+    }
+
+    private static SunderRpcException RpcContentResourceExhausted(string code, string message)
+        => SunderRpcException.Infrastructure(
+            SunderRpcErrorKind.ResourceExhausted,
+            code,
+            message);
 
     private void ValidateRpcContentRegistration(
         string ownerPackageId,
@@ -747,7 +983,8 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         RuntimeRpcContentEndpoint providerEndpoint,
         int maximumUses,
         bool ownsFile,
-        RuntimeRpcContentAuthority? authority)
+        RuntimeRpcContentAuthority? authority,
+        RuntimeRpcContentQuotaReservation reservation)
     {
         public SunderRpcContentReference Reference { get; } = reference;
         public string FilePath { get; } = filePath;
@@ -758,6 +995,24 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         public int MaximumUses { get; } = maximumUses;
         public bool OwnsFile { get; } = ownsFile;
         public RuntimeRpcContentAuthority? Authority { get; } = authority;
+        public RuntimeRpcContentQuotaReservation Reservation { get; } = reservation;
         public int UseCount { get; set; }
+    }
+
+    private sealed class RpcContentUsage
+    {
+        public long Bytes { get; set; }
+        public int References { get; set; }
+    }
+
+    private sealed class RuntimeRpcContentQuotaReservation(
+        string ownerPackageId,
+        RuntimeRpcContentAuthority? authority,
+        long bytes)
+    {
+        public string OwnerPackageId { get; } = ownerPackageId;
+        public RuntimeRpcContentAuthority? Authority { get; } = authority;
+        public long Bytes { get; set; } = bytes;
+        public bool IsActive { get; set; } = true;
     }
 }

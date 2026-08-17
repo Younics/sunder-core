@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.LocalState;
 
@@ -233,16 +235,30 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
                 var handshake = await client.GetRuntimeHandshakeAsync(cancellationToken).ConfigureAwait(false);
                 if (handshake.RuntimeInstanceId != lease.RuntimeInstanceId)
                 {
-                    await ReacquireAfterRuntimeReplacementAsync(
+                    await ReacquireAsync(
                         client,
+                        lease,
                         handshake.RuntimeInstanceId,
                         cancellationToken).ConfigureAwait(false);
                     continue;
                 }
-                var renewed = await client.HeartbeatDevPackageOwnerAsync(
-                    OwnerId,
-                    new DevPackageOwnerHeartbeatRequest(lease.RuntimeInstanceId, OwnerToken),
-                    cancellationToken).ConfigureAwait(false);
+                DevPackageOwnerLeaseResponse renewed;
+                try
+                {
+                    renewed = await client.HeartbeatDevPackageOwnerAsync(
+                        OwnerId,
+                        new DevPackageOwnerHeartbeatRequest(lease.RuntimeInstanceId, OwnerToken),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (RuntimeClientException exception) when (exception.StatusCode == HttpStatusCode.Unauthorized)
+                {
+                    await ReacquireAsync(
+                        client,
+                        lease,
+                        lease.RuntimeInstanceId,
+                        cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
                 ValidateResponse(renewed, lease.RuntimeInstanceId, lease.MutationId, lease.Revision);
                 lock (_syncRoot)
                 {
@@ -257,6 +273,9 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
             {
                 return;
             }
+            catch (RuntimeClientException exception) when (exception.StatusCode == HttpStatusCode.ServiceUnavailable)
+            {
+            }
             catch (Exception exception)
             {
                 AppSessionLog.WriteError("The App dev package owner heartbeat failed; the Runtime TTL will fence a lost App session.", exception);
@@ -264,8 +283,9 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
         }
     }
 
-    private async Task ReacquireAfterRuntimeReplacementAsync(
+    private async Task ReacquireAsync(
         IRuntimeDevPackageOwnerClient client,
+        DevPackageOwnerLeaseResponse expectedLease,
         Guid runtimeInstanceId,
         CancellationToken cancellationToken)
     {
@@ -277,7 +297,10 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
             lock (_syncRoot)
             {
                 current = _lease;
-                if (current is null || current.RuntimeInstanceId == runtimeInstanceId)
+                if (current is null
+                    || current.RuntimeInstanceId != expectedLease.RuntimeInstanceId
+                    || current.Revision != expectedLease.Revision
+                    || !string.Equals(current.MutationId, expectedLease.MutationId, StringComparison.Ordinal))
                 {
                     return;
                 }
@@ -285,6 +308,7 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
                     ?? throw new InvalidOperationException("The App dev package owner lease has no desired folder set.");
                 request = _pendingMutation is { } pending
                           && pending.RuntimeInstanceId == runtimeInstanceId
+                          && pending.Revision == 1
                           && FoldersEqual(pending.Folders, desiredFolders)
                     ? pending
                     : new DevPackageOwnerMutationRequest(
@@ -305,8 +329,9 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
             ValidateResponse(replacement, runtimeInstanceId, request.MutationId, request.Revision);
             lock (_syncRoot)
             {
-                if (_lease?.RuntimeInstanceId == current.RuntimeInstanceId
-                    && _lease.Revision == current.Revision)
+                if (_lease?.RuntimeInstanceId == expectedLease.RuntimeInstanceId
+                    && _lease.Revision == expectedLease.Revision
+                    && string.Equals(_lease.MutationId, expectedLease.MutationId, StringComparison.Ordinal))
                 {
                     _lease = replacement;
                     _pendingMutation = null;

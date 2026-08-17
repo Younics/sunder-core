@@ -5,6 +5,8 @@ using System.Text.Json;
 using Avalonia.Controls;
 using Sunder.App.Services;
 using Sunder.Package.Format;
+using Sunder.Runtime.Client;
+using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
@@ -43,9 +45,22 @@ public sealed class AppWebBridgeTests
             await bridge.EstablishAsync(server.BaseUri);
             var bootstrap = Assert.Single(webView.Scripts);
             Assert.Contains(
-                "error: Object.freeze({ kind, code, message, dispatchState, retrySafety })",
+                "if (details !== undefined) error.details = freezeJson(details);",
                 bootstrap,
                 StringComparison.Ordinal);
+            Assert.Contains("detail.kind !== 'domain'", bootstrap, StringComparison.Ordinal);
+            Assert.Contains("const encoder = new TextEncoder();", bootstrap, StringComparison.Ordinal);
+            Assert.Contains("rpcValueBytes: 8388608", bootstrap, StringComparison.Ordinal);
+            Assert.Contains("valueDepth: 64", bootstrap, StringComparison.Ordinal);
+            Assert.Contains("pending.size >= maxPendingRequests", bootstrap, StringComparison.Ordinal);
+            Assert.Contains("state.timer = setTimeout", bootstrap, StringComparison.Ordinal);
+            Assert.Contains("clearTimeout(state.timer)", bootstrap, StringComparison.Ordinal);
+            Assert.Contains("pending.delete(state.requestId)", bootstrap, StringComparison.Ordinal);
+            Assert.Contains("queuedEventBytes + emittedBytes", bootstrap, StringComparison.Ordinal);
+            Assert.Contains("resourceProfile,", bootstrap, StringComparison.Ordinal);
+            Assert.True(
+                bootstrap.IndexOf("encoder.encode(body).byteLength", StringComparison.Ordinal)
+                < bootstrap.IndexOf("pending.set(requestId, state)", StringComparison.Ordinal));
             webView.ClearScripts();
 
             await bridge.HandleMessageAsync(Request(
@@ -103,6 +118,30 @@ public sealed class AppWebBridgeTests
             Assert.Equal("received hello", invocation.GetProperty("value").GetProperty("reply").GetString());
             Assert.Equal(1, rpc.InvokeCalls);
             Assert.Equal(InvocationRpcClient.EndpointReference, rpc.LastEndpointReference);
+
+            rpc.Error = new SunderRpcError(
+                SunderRpcErrorKind.Domain,
+                "example.rejected",
+                "Rejected.",
+                SunderRpcDispatchState.PossiblyDispatched,
+                SunderRpcRetrySafety.Unsafe,
+                JsonSerializer.SerializeToElement(new { reason = "duplicate" }));
+            webView.ClearScripts();
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_error_details",
+                "rpc.invoke",
+                new
+                {
+                    providerHandle,
+                    serviceId = "example",
+                    methodId = "ping",
+                    request = new { message = "hello" },
+                }));
+            var domainError = ReadResponse(Assert.Single(webView.Scripts)).GetProperty("error");
+            Assert.Equal("domain", domainError.GetProperty("kind").GetString());
+            Assert.Equal("duplicate", domainError.GetProperty("details").GetProperty("reason").GetString());
         }
         finally
         {
@@ -224,6 +263,215 @@ public sealed class AppWebBridgeTests
         }
     }
 
+    [Fact]
+    public async Task RecoverableInvalidAndOversizedMessages_ReturnTerminalErrors()
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            var limits = ResourceLimits();
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var webView = new TestWebView();
+            await using var bridge = new AppWebBridge(
+                webView,
+                server,
+                UnavailableAppWebRpcClient.Instance,
+                EmptyCatalog(root),
+                new ExternalBrowserService(),
+                _ => { },
+                limits);
+            var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+            await bridge.EstablishAsync(server.BaseUri);
+            webView.ClearScripts();
+
+            var malformed = $$"""
+                {"requestId":"b_malformed","protocol":"{{AppWebBridge.Protocol}}","broken":
+                """;
+            await bridge.HandleMessageAsync(malformed);
+
+            var malformedError = ReadResponse(Assert.Single(webView.Scripts));
+            Assert.Equal("b_malformed", malformedError.GetProperty("requestId").GetString());
+            Assert.Equal("error", malformedError.GetProperty("type").GetString());
+            webView.ClearScripts();
+
+            var oversized = Request(
+                bridge.SessionNonce,
+                origin,
+                "b_oversized",
+                "rpc.discover",
+                new { contractId = new string('x', limits.MaximumJsonEnvelopeBytes) });
+            await bridge.HandleMessageAsync(oversized);
+
+            var sizeError = ReadResponse(Assert.Single(webView.Scripts));
+            Assert.Equal("b_oversized", sizeError.GetProperty("requestId").GetString());
+            Assert.Equal(
+                "rpc.bridge.request-envelope-limit",
+                sizeError.GetProperty("error").GetProperty("code").GetString());
+            Assert.Equal(0, bridge.PendingRequestCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NativeRequestPreflight_UsesExactEscapedUtf8BytesAndValueDepth()
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            var limits = ResourceLimits();
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var webView = new TestWebView();
+            await using var bridge = new AppWebBridge(
+                webView,
+                server,
+                UnavailableAppWebRpcClient.Instance,
+                EmptyCatalog(root),
+                new ExternalBrowserService(),
+                _ => { },
+                limits);
+            var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+            await bridge.EstablishAsync(server.BaseUri);
+            webView.ClearScripts();
+
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_exact",
+                "rpc.invoke",
+                InvocationPayload(JsonStringWithSize(limits.EffectivePolicy.MaximumRpcValueBytes, escaped: true))));
+            Assert.Equal(
+                "rpc.bridge.provider-handle",
+                ReadResponse(Assert.Single(webView.Scripts)).GetProperty("error").GetProperty("code").GetString());
+            webView.ClearScripts();
+
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_plus_one",
+                "rpc.invoke",
+                InvocationPayload(JsonStringWithSize(limits.EffectivePolicy.MaximumRpcValueBytes + 1, escaped: true))));
+            Assert.Equal(
+                "rpc.bridge.payload-limit",
+                ReadResponse(Assert.Single(webView.Scripts)).GetProperty("error").GetProperty("code").GetString());
+            webView.ClearScripts();
+
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_depth_exact",
+                "rpc.invoke",
+                InvocationPayload(NestedArray(limits.EffectivePolicy.MaximumValueDepth))));
+            Assert.Equal(
+                "rpc.bridge.provider-handle",
+                ReadResponse(Assert.Single(webView.Scripts)).GetProperty("error").GetProperty("code").GetString());
+            webView.ClearScripts();
+
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_depth_plus_one",
+                "rpc.invoke",
+                InvocationPayload(NestedArray(limits.EffectivePolicy.MaximumValueDepth + 1))));
+            Assert.Equal(
+                "rpc.bridge.payload-limit",
+                ReadResponse(Assert.Single(webView.Scripts)).GetProperty("error").GetProperty("code").GetString());
+            Assert.Equal(0, bridge.PendingRequestCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NativeResultPreflight_AllowsExactFinalEnvelopeValueAndRejectsPlusOne()
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            var descriptorBytes = RpcDescriptorBytes("Resource request.", responseMaxLength: 1_000_000);
+            var descriptor = SunderRpcContractDescriptor.Parse(descriptorBytes);
+            var catalog = WriteContractCatalog(root, descriptorBytes, descriptor);
+            var limits = ResourceLimits();
+            var rpc = new ResourceRpcClient(descriptor, limits);
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var webView = new TestWebView();
+            await using var bridge = new AppWebBridge(
+                webView,
+                server,
+                rpc,
+                catalog,
+                new ExternalBrowserService(),
+                _ => { });
+            var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+            await bridge.EstablishAsync(server.BaseUri);
+            webView.ClearScripts();
+
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_discover_limits",
+                "rpc.discover",
+                new { contractId = descriptor.ContractId }));
+            var providerHandle = ReadResponse(Assert.Single(webView.Scripts))
+                .GetProperty("value")
+                .GetProperty("providers")[0]
+                .GetProperty("providerHandle")
+                .GetString();
+            webView.ClearScripts();
+
+            rpc.Response = ReplyObjectWithSize(limits.EffectivePolicy.MaximumRpcValueBytes);
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_result_exact",
+                "rpc.invoke",
+                new
+                {
+                    providerHandle,
+                    serviceId = "example",
+                    methodId = "ping",
+                    request = new { message = "hello" },
+                }));
+            var exact = ReadResponse(Assert.Single(webView.Scripts));
+            Assert.Equal("result", exact.GetProperty("type").GetString());
+            Assert.Equal(
+                limits.EffectivePolicy.MaximumRpcValueBytes,
+                Encoding.UTF8.GetByteCount(exact.GetProperty("value").GetRawText()));
+            webView.ClearScripts();
+
+            rpc.Response = ReplyObjectWithSize(limits.EffectivePolicy.MaximumRpcValueBytes + 1);
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_result_plus_one",
+                "rpc.invoke",
+                new
+                {
+                    providerHandle,
+                    serviceId = "example",
+                    methodId = "ping",
+                    request = new { message = "hello" },
+                }));
+            var rejected = ReadResponse(Assert.Single(webView.Scripts));
+            Assert.Equal("error", rejected.GetProperty("type").GetString());
+            Assert.Equal(
+                "rpc.bridge.payload-limit",
+                rejected.GetProperty("error").GetProperty("code").GetString());
+            Assert.Equal(0, bridge.PendingRequestCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static string Request(
         string nonce,
         string origin,
@@ -287,11 +535,77 @@ public sealed class AppWebBridgeTests
                 [new SunderPackageContentIndexEntry(descriptorPath, contentSha256, descriptorBytes.LongLength)]));
     }
 
-    private static byte[] RpcDescriptorBytes(string requestAnnotation)
+    private static AppWebRpcContractCatalog EmptyCatalog(string root)
+        => AppWebRpcContractCatalog.Load(
+            root,
+            new SunderPackageManifest { ContractBundles = [] },
+            new SunderPackageContentIndex(SunderPackageFormat.CurrentContentIndexVersion, []));
+
+    private static RuntimeClientResourceLimits ResourceLimits()
+    {
+        var policy = new RuntimeResourcePolicy(
+            RuntimeResourcePolicies.Mebibyte,
+            16,
+            RuntimeResourcePolicies.CustomMinimums.MaximumValueNodes,
+            RuntimeResourcePolicies.CustomMinimums.MaximumObjectMembers,
+            RuntimeResourcePolicies.CustomMinimums.MaximumInlineDecodedBytes,
+            RuntimeResourcePolicies.CustomMinimums.MaximumContentReferenceBytes);
+        return RuntimeClientResourceLimits.FromProfile(new RuntimeClientResourceProfile(
+            Guid.NewGuid(),
+            RuntimeResourcePolicyContract.GetEffectiveProfileHash(policy),
+            policy));
+    }
+
+    private static object InvocationPayload(JsonElement request)
+        => new
+        {
+            providerHandle = "p_unknown",
+            serviceId = "example",
+            methodId = "ping",
+            request,
+        };
+
+    private static JsonElement JsonStringWithSize(int byteCount, bool escaped)
+    {
+        var escapedCharacterBytes = JsonSerializer.SerializeToUtf8Bytes("\"").Length - 2;
+        var payloadBytes = byteCount - 2;
+        var escapedCharacters = escaped ? payloadBytes / escapedCharacterBytes : 0;
+        var plainCharacters = payloadBytes - escapedCharacters * escapedCharacterBytes;
+        var value = JsonSerializer.SerializeToElement(
+            new string('"', escapedCharacters) + new string('x', plainCharacters));
+        Assert.Equal(byteCount, Encoding.UTF8.GetByteCount(value.GetRawText()));
+        return value;
+    }
+
+    private static JsonElement ReplyObjectWithSize(int byteCount)
+    {
+        var emptyBytes = JsonSerializer.SerializeToUtf8Bytes(new { reply = string.Empty }).Length;
+        var escapedCharacterBytes = JsonSerializer.SerializeToUtf8Bytes("\"").Length - 2;
+        var payloadBytes = byteCount - emptyBytes;
+        var escapedCharacters = payloadBytes / escapedCharacterBytes;
+        var plainCharacters = payloadBytes - escapedCharacters * escapedCharacterBytes;
+        var value = JsonSerializer.SerializeToElement(new
+        {
+            reply = new string('"', escapedCharacters) + new string('x', plainCharacters),
+        });
+        Assert.Equal(byteCount, Encoding.UTF8.GetByteCount(value.GetRawText()));
+        return value;
+    }
+
+    private static JsonElement NestedArray(int depth)
+    {
+        using var document = JsonDocument.Parse(
+            new string('[', depth - 1) + "0" + new string(']', depth - 1),
+            new JsonDocumentOptions { MaxDepth = 64 });
+        return document.RootElement.Clone();
+    }
+
+    private static byte[] RpcDescriptorBytes(string requestAnnotation, int responseMaxLength = 64)
         => Encoding.UTF8.GetBytes("""
             {
               "$schema": "https://json-schema.org/draft/2020-12/schema",
               "descriptorVersion": 2,
+              "schemaProfile": "sunder.rpc.values.v1",
               "contractId": "example.rpc",
               "version": "1.0.0",
               "errors": {},
@@ -321,14 +635,19 @@ public sealed class AppWebBridgeTests
                 "Response": {
                   "type": "object",
                   "properties": {
-                    "reply": { "type": "string", "minLength": 1, "maxLength": 64 }
+                    "reply": { "type": "string", "minLength": 1, "maxLength": __RESPONSE_MAX_LENGTH__ }
                   },
                   "required": ["reply"],
                   "additionalProperties": false
                 }
               }
             }
-            """.Replace("__REQUEST_ANNOTATION__", requestAnnotation, StringComparison.Ordinal));
+            """
+            .Replace("__REQUEST_ANNOTATION__", requestAnnotation, StringComparison.Ordinal)
+            .Replace(
+                "__RESPONSE_MAX_LENGTH__",
+                responseMaxLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal));
 
     private static SunderPackageTargetManifest Target()
         => new()
@@ -522,6 +841,8 @@ public sealed class AppWebBridgeTests
 
         public string? LastEndpointReference { get; private set; }
 
+        public SunderRpcError? Error { get; set; }
+
         public ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
             string contractId,
             CancellationToken cancellationToken)
@@ -562,11 +883,79 @@ public sealed class AppWebBridgeTests
         {
             LastEndpointReference = endpointReference;
             Interlocked.Increment(ref _invokeCalls);
+            if (Error is not null)
+            {
+                return ValueTask.FromException<JsonElement>(new SunderRpcException(Error));
+            }
             return ValueTask.FromResult(JsonSerializer.SerializeToElement(new
             {
                 reply = $"received {request.GetProperty("message").GetString()}",
             }));
         }
+
+        public async IAsyncEnumerable<JsonElement> SubscribeAsync(
+            string endpointReference,
+            string serviceId,
+            string methodId,
+            JsonElement request,
+            DateTimeOffset? deadlineUtc,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ResourceRpcClient(
+        SunderRpcContractDescriptor providerDescriptor,
+        RuntimeClientResourceLimits resourceLimits) : IAppWebRpcClient
+    {
+        private const string EndpointReference = "rpc1_resource_provider";
+
+        public RuntimeClientResourceLimits ResourceLimits => resourceLimits;
+
+        public JsonElement Response { get; set; } = JsonSerializer.SerializeToElement(new { reply = "ready" });
+
+        public ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
+            string contractId,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(new SunderRpcCatalogSnapshot(
+                1,
+                1,
+                [new SunderRpcProviderSnapshot(
+                    "provider.package",
+                    "1.0.0",
+                    "provider.main",
+                    providerDescriptor.ContractId,
+                    providerDescriptor.Version,
+                    providerDescriptor.Sha256,
+                    providerDescriptor.AbiSha256,
+                    Guid.NewGuid(),
+                    1,
+                    1,
+                    new SunderRpcEndpointReference(EndpointReference),
+                    1,
+                    SunderRpcProviderState.Active)]));
+
+        public async IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(
+            long afterRevision,
+            long afterSequence,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask<JsonElement> InvokeAsync(
+            string endpointReference,
+            string serviceId,
+            string methodId,
+            JsonElement request,
+            DateTimeOffset? deadlineUtc,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(Response);
 
         public async IAsyncEnumerable<JsonElement> SubscribeAsync(
             string endpointReference,

@@ -8,8 +8,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { FrameDecoder, encodeFrame } from "../src/framing";
+import {
+  SUNDER_WORKER_STANDARD_RESOURCE_PROFILE,
+  computeWorkerResourceProfileHash,
+} from "../src/resource-profile";
 import { formatUtcTimestamp } from "../src/timestamp";
-import type { JsonValue } from "../src/types";
+import type { JsonValue, WorkerResourceProfile } from "../src/types";
 import { workerV3ConformanceCorpus } from "./worker-v3-conformance-corpus";
 
 const packageIdentity = {
@@ -25,15 +29,26 @@ const provider = {
   descriptorSha256: "a".repeat(64),
   abiSha256: "b".repeat(64),
 };
+const minimumResourceProfile = {
+  version: 1,
+  rpcValueBytes: 1024 * 1024,
+  valueDepth: 16,
+  valueNodes: 16_384,
+  objectMembers: 256,
+  inlineDecodedBytes: 16 * 1024,
+  contentReferenceBytes: 1024 * 1024,
+} as const;
 
 test("Node worker executes the shared Worker V3 conformance corpus", async () => {
   const corpus = workerV3ConformanceCorpus;
-  assert.equal(corpus.formatVersion, 2);
+  assert.equal(corpus.formatVersion, 3);
   assert.equal(corpus.protocol.identity, "sunder.worker.v3");
   assert.equal(corpus.protocol.version, 3);
   assert.deepEqual(Object.keys(corpus.categories), [
     "shutdown-order",
     "framing",
+    "resource-profile",
+    "transport-bounds",
     "json",
     "safe-integers",
     "data",
@@ -360,6 +375,82 @@ test("worker rejects unknown envelopes and duplicate invocation ids", async () =
   }
 });
 
+test("standard Worker resource profile matches the normative policy and canonical hash", () => {
+  assert.deepEqual(SUNDER_WORKER_STANDARD_RESOURCE_PROFILE, {
+    version: 1,
+    rpcValueBytes: 8 * 1024 * 1024,
+    valueDepth: 64,
+    valueNodes: 524_288,
+    objectMembers: 4_096,
+    inlineDecodedBytes: 512 * 1024,
+    contentReferenceBytes: 64 * 1024 * 1024,
+  });
+  assert.equal(Object.isFrozen(SUNDER_WORKER_STANDARD_RESOURCE_PROFILE), true);
+  assert.equal(
+    computeWorkerResourceProfileHash({
+      contentReferenceBytes: SUNDER_WORKER_STANDARD_RESOURCE_PROFILE.contentReferenceBytes,
+      inlineDecodedBytes: SUNDER_WORKER_STANDARD_RESOURCE_PROFILE.inlineDecodedBytes,
+      objectMembers: SUNDER_WORKER_STANDARD_RESOURCE_PROFILE.objectMembers,
+      valueNodes: SUNDER_WORKER_STANDARD_RESOURCE_PROFILE.valueNodes,
+      valueDepth: SUNDER_WORKER_STANDARD_RESOURCE_PROFILE.valueDepth,
+      rpcValueBytes: SUNDER_WORKER_STANDARD_RESOURCE_PROFILE.rpcValueBytes,
+      version: 1,
+    }),
+    "15bde75ca257659d5742c38f678a445bc4bdfb7e21eff9b81fedc3195e0a3ec9",
+  );
+});
+
+test("worker requires the exact closed effective resource profile hash", async () => {
+  const worker = startWorker();
+  try {
+    sendHello(worker, "challenge", minimumResourceProfile, "0".repeat(64));
+    assert.equal(await exitCode(worker.child), 70);
+    assert.match(worker.stderr(), /resourceProfileHash/u);
+  } finally {
+    worker.child.kill("SIGKILL");
+  }
+});
+
+test("oversized outbound requests are not dispatched or retained", async () => {
+  const worker = startWorker("outbound-oversize");
+  try {
+    await handshake(worker, minimumResourceProfile);
+    await waitForStderr(worker, "OUTBOUND_OVERSIZE_REJECTED");
+    assert.equal(worker.messages.count, 0);
+    assert.equal(worker.child.exitCode, null);
+    send(worker, { type: "host.shutdown", shutdownId: "oversize-request-stop", reason: "test" });
+    assert.equal((await worker.messages.next()).type, "worker.shutdown-ack");
+    assert.equal(await exitCode(worker.child), 0);
+  } finally {
+    worker.child.kill("SIGKILL");
+  }
+});
+
+test("oversized provider results return ResourceExhausted without faulting the worker", async () => {
+  const worker = startWorker();
+  try {
+    await handshake(worker, minimumResourceProfile);
+    send(worker, invocation("oversized-result", "unary", "oversized"));
+    const exhausted = await worker.messages.next();
+    assert.equal(exhausted.type, "worker.error");
+    assert.deepEqual(exhausted.error, {
+      kind: "resource-exhausted",
+      code: "rpc.worker.response-limit",
+      message: "The RPC response exceeds the negotiated worker transport limits.",
+    });
+    assert.equal(worker.child.exitCode, null);
+
+    send(worker, invocation("valid-after-oversize", "unary", "echo"));
+    assert.equal((await worker.messages.next()).type, "worker.result");
+    assert.equal(worker.child.exitCode, null);
+    send(worker, { type: "host.shutdown", shutdownId: "oversize-result-stop", reason: "test" });
+    assert.equal((await worker.messages.next()).type, "worker.shutdown-ack");
+    assert.equal(await exitCode(worker.child), 0);
+  } finally {
+    worker.child.kill("SIGKILL");
+  }
+});
+
 test("worker binds inbound provider snapshots to the exact active registration", async (context) => {
   const mismatches: ReadonlyArray<readonly [string, Readonly<Record<string, JsonValue>>]> = [
     ["package id", { packageId: "other.package" }],
@@ -450,6 +541,71 @@ test("typed RpcClient provider and catalog results fail closed before exposure",
         worker.child.kill("SIGKILL");
       }
     });
+  }
+});
+
+test("worker preserves domain error details and rejects forged infrastructure details", async () => {
+  const providerWorker = startWorker();
+  try {
+    await handshake(providerWorker);
+    send(providerWorker, invocation("domain-details-1", "unary", "domain-details"));
+    const response = await providerWorker.messages.next();
+    assert.equal(response.type, "worker.error");
+    assert.deepEqual(response.error, {
+      kind: "domain",
+      code: "messages.rejected",
+      message: "Rejected.",
+      details: { reason: "duplicate" },
+    });
+    send(providerWorker, { type: "host.shutdown", shutdownId: "provider-stop", reason: "test" });
+    assert.equal((await providerWorker.messages.next()).type, "worker.shutdown-ack");
+  } finally {
+    providerWorker.child.kill("SIGKILL");
+  }
+
+  const callerWorker = startWorker("outbound-domain-details");
+  try {
+    await handshake(callerWorker);
+    const request = await callerWorker.messages.next();
+    assert.equal(request.type, "worker.invoke");
+    send(callerWorker, {
+      type: "host.error",
+      id: request.id!,
+      error: {
+        kind: "domain",
+        code: "messages.rejected",
+        message: "Rejected.",
+        dispatchState: "possibly-dispatched",
+        retrySafety: "unsafe",
+        details: { reason: "duplicate" },
+      },
+    });
+    await waitForStderr(callerWorker, "OUTBOUND_DOMAIN_DETAILS_OK");
+    send(callerWorker, { type: "host.shutdown", shutdownId: "caller-stop", reason: "test" });
+    assert.equal((await callerWorker.messages.next()).type, "worker.shutdown-ack");
+  } finally {
+    callerWorker.child.kill("SIGKILL");
+  }
+
+  const forgedWorker = startWorker("outbound-domain-details");
+  try {
+    await handshake(forgedWorker);
+    const request = await forgedWorker.messages.next();
+    send(forgedWorker, {
+      type: "host.error",
+      id: request.id!,
+      error: {
+        kind: "unavailable",
+        code: "rpc.host.forged",
+        message: "Forged.",
+        dispatchState: "possibly-dispatched",
+        retrySafety: "unsafe",
+        details: { reason: "forged" },
+      },
+    });
+    assert.equal(await exitCode(forgedWorker.child), 70);
+  } finally {
+    forgedWorker.child.kill("SIGKILL");
   }
 });
 
@@ -996,7 +1152,7 @@ test("only declared domain errors cross the provider boundary", async (context) 
     assert.deepEqual(await declared.messages.next(), {
       type: "worker.error",
       id: "declared",
-      error: { kind: "domain", code: "example.rejected", message: "rejected" },
+      error: workerV3ConformanceCorpus.rpc.domainFault.error,
     });
     send(declared, { type: "host.shutdown", shutdownId: "declared-stop", reason: "test" });
     assert.equal((await declared.messages.next()).type, "worker.shutdown-ack");
@@ -1087,7 +1243,7 @@ test("Host is sole deadline authority for inbound and invocation client calls", 
   }
 });
 
-test("worker rejects missing required values and bounded stream queue overflow", async () => {
+test("worker rejects missing required values and isolates bounded stream queue exhaustion", async () => {
   const missing = startWorker();
   try {
     await handshake(missing);
@@ -1100,17 +1256,80 @@ test("worker rejects missing required values and bounded stream queue overflow",
 
   const overflow = startWorker("outbound-stream-overflow");
   try {
-    await handshake(overflow);
+    await handshake(overflow, minimumResourceProfile);
     const request = await overflow.messages.next();
     assert.equal(request.type, "worker.watch");
     if (typeof request.id !== "string") throw new Error("worker.watch id is missing");
     await waitForStderr(overflow, "OUTBOUND_STARTED");
-    for (let sequence = 1; sequence <= 33; sequence++) {
-      send(overflow, { type: "host.event", id: request.id, value: { sequence } });
+    const escaped = "\"".repeat(350_000);
+    for (let sequence = 1; sequence <= 3; sequence++) {
+      send(overflow, { type: "host.event", id: request.id, value: { sequence, escaped } });
     }
-    assert.equal(await exitCode(overflow.child), 70);
+    assert.deepEqual(await overflow.messages.next(), { type: "worker.cancel", id: request.id });
+    assert.equal(overflow.child.exitCode, null);
+    send(overflow, invocation("release-overflow", "unary", "release-overflow"));
+    assert.deepEqual(await overflow.messages.next(), {
+      type: "worker.result",
+      id: "release-overflow",
+      value: { accepted: true },
+    });
+    send(overflow, {
+      type: "host.error",
+      id: request.id,
+      error: {
+        kind: "cancelled",
+        code: "rpc.call.cancelled",
+        message: "The RPC call was cancelled.",
+        dispatchState: "possibly-dispatched",
+        retrySafety: "unsafe",
+      },
+    });
+    await waitForStderr(overflow, "STREAM_QUEUE_EXHAUSTED");
+    send(overflow, { type: "host.shutdown", shutdownId: "overflow-stop", reason: "test" });
+    assert.equal((await overflow.messages.next()).type, "worker.shutdown-ack");
+    assert.equal(await exitCode(overflow.child), 0);
   } finally {
     overflow.child.kill("SIGKILL");
+  }
+
+  const countOverflow = startWorker("outbound-subscribe-count-overflow");
+  try {
+    await handshake(countOverflow, minimumResourceProfile);
+    const request = await countOverflow.messages.next();
+    assert.equal(request.type, "worker.subscribe");
+    assert.equal(request.endpointReference, "rpc1_private-endpoint");
+    assert.equal(request.serviceId, "messages\r\nprivate/path");
+    assert.equal(request.methodId, "watch\tprivate");
+    if (typeof request.id !== "string") throw new Error("worker.subscribe id is missing");
+    await waitForStderr(countOverflow, "OUTBOUND_STARTED");
+    for (let sequence = 1; sequence <= 33; sequence++) {
+      send(countOverflow, { type: "host.event", id: request.id, value: { sequence } });
+    }
+    assert.deepEqual(await countOverflow.messages.next(), { type: "worker.cancel", id: request.id });
+    assert.equal(countOverflow.child.exitCode, null);
+    send(countOverflow, invocation("release-count-overflow", "unary", "release-overflow"));
+    assert.deepEqual(await countOverflow.messages.next(), {
+      type: "worker.result",
+      id: "release-count-overflow",
+      value: { accepted: true },
+    });
+    send(countOverflow, {
+      type: "host.error",
+      id: request.id,
+      error: {
+        kind: "cancelled",
+        code: "rpc.call.cancelled",
+        message: "The RPC call was cancelled.",
+        dispatchState: "possibly-dispatched",
+        retrySafety: "unsafe",
+      },
+    });
+    await waitForStderr(countOverflow, "STREAM_QUEUE_EXHAUSTED");
+    send(countOverflow, { type: "host.shutdown", shutdownId: "count-overflow-stop", reason: "test" });
+    assert.equal((await countOverflow.messages.next()).type, "worker.shutdown-ack");
+    assert.equal(await exitCode(countOverflow.child), 0);
+  } finally {
+    countOverflow.child.kill("SIGKILL");
   }
 });
 
@@ -1220,8 +1439,11 @@ function startWorker(mode?: string): WorkerProcess {
   return { child, messages, stderr: () => stderr, contentRoot, temporaryRoot, workspaceRoot };
 }
 
-async function handshake(worker: WorkerProcess): Promise<void> {
-  await prepareActivation(worker);
+async function handshake(
+  worker: WorkerProcess,
+  profile: WorkerResourceProfile = SUNDER_WORKER_STANDARD_RESOURCE_PROFILE,
+): Promise<void> {
+  await prepareActivation(worker, "challenge", 1, profile);
   send(worker, { type: "host.activate", sessionGeneration: 1 });
   assert.deepEqual(await worker.messages.next(), { type: "worker.activated", sessionGeneration: 1 });
 }
@@ -1230,8 +1452,9 @@ async function prepareActivation(
   worker: WorkerProcess,
   challenge = "challenge",
   sessionGeneration = 1,
+  profile: WorkerResourceProfile = SUNDER_WORKER_STANDARD_RESOURCE_PROFILE,
 ): Promise<void> {
-  await handshakeAndStartCandidate(worker, challenge);
+  await handshakeAndStartCandidate(worker, challenge, profile);
   send(worker, {
     type: "host.commit-generation",
     activationId: packageIdentity.activationId,
@@ -1257,11 +1480,13 @@ async function prepareStorageMigrations(worker: WorkerProcess, sessionGeneration
 async function handshakeAndStartCandidate(
   worker: WorkerProcess,
   challenge = "challenge",
+  profile: WorkerResourceProfile = SUNDER_WORKER_STANDARD_RESOURCE_PROFILE,
 ): Promise<Readonly<Record<string, JsonValue>>> {
-  sendHello(worker, challenge);
+  sendHello(worker, challenge, profile);
   const ready = await worker.messages.next();
   assert.equal(ready.type, "worker.ready");
   assert.equal(ready.challenge, challenge);
+  assert.equal(ready.resourceProfileHash, computeWorkerResourceProfileHash(profile));
   const contributions = object(ready.contributions);
   assert.deepEqual(contributions.rpcProviders, [provider]);
   assert.equal(contributions.migrationPreparationLifecycle, true);
@@ -1270,7 +1495,12 @@ async function handshakeAndStartCandidate(
   return contributions;
 }
 
-function sendHello(worker: WorkerProcess, challenge = "challenge"): void {
+function sendHello(
+  worker: WorkerProcess,
+  challenge = "challenge",
+  profile: WorkerResourceProfile = SUNDER_WORKER_STANDARD_RESOURCE_PROFILE,
+  profileHash = computeWorkerResourceProfileHash(profile),
+): void {
   send(worker, {
     type: "host.hello",
     protocol: "sunder.worker.v3",
@@ -1278,6 +1508,8 @@ function sendHello(worker: WorkerProcess, challenge = "challenge"): void {
     challenge,
     ...packageIdentity,
     providers: [provider],
+    resourceProfile: profile,
+    resourceProfileHash: profileHash,
   });
 }
 

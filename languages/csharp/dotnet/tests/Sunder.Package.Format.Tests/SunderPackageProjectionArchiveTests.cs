@@ -963,6 +963,7 @@ public sealed class SunderPackageProjectionArchiveTests
         => System.Text.Encoding.UTF8.GetBytes($$"""
             {
               "descriptorVersion": 2,
+              "schemaProfile": "sunder.rpc.values.v1",
               "contractId": "{{contractId}}",
               "version": "{{version}}",
               "errors": {},

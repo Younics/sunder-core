@@ -495,9 +495,15 @@ public sealed class RuntimeHostProcessManagerTests
     public async Task EnsureStartedAsync_WhenDevPackagesConfigured_DoesNotPassDevFoldersToRuntime()
     {
         var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var supervisorPath = Path.Combine(
+            rootPath,
+            OperatingSystem.IsWindows() ? "Sunder.Host.Supervisor.exe" : "Sunder.Host.Supervisor");
+        File.Move(runtimeHostPath, supervisorPath);
+        runtimeHostPath = supervisorPath;
         var runtimeUrl = new Uri("http://localhost:54321/");
         var devPackageFolder = Path.Combine(rootPath, "dev package");
         var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
+        var policyPath = Path.Combine(rootPath, "app", "v1", "runtime-resource-policy.json");
         ProcessStartInfo? capturedStartInfo = null;
         var runtimeStarted = false;
         var manager = new RuntimeHostProcessManager(
@@ -506,6 +512,8 @@ public sealed class RuntimeHostProcessManagerTests
             tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
                 runtimeStarted ? CreateHandshake() : null),
             isRuntimeHealthyAsync: (_, _) => Task.FromResult(false),
+            tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
+                runtimeStarted ? CreateHostHandshake("1.0.0") : null),
             hostServiceManager: new StartProcessHostServiceManager(startInfo =>
             {
                 Assert.Null(RuntimeConnectionInfoStore.Load(connectionInfoPath));
@@ -514,7 +522,8 @@ public sealed class RuntimeHostProcessManagerTests
             }),
             delayAsync: (_, _) => Task.CompletedTask,
             connectionInfoPath: connectionInfoPath,
-            isRuntimeLeaseAvailable: () => true);
+            isRuntimeLeaseAvailable: () => true,
+            runtimeResourcePolicyFilePath: policyPath);
 
         try
         {
@@ -525,6 +534,11 @@ public sealed class RuntimeHostProcessManagerTests
             Assert.DoesNotContain(devPackageFolder, capturedStartInfo.ArgumentList);
             Assert.False(capturedStartInfo.Environment.ContainsKey("SUNDER_RUNTIME_BEARER_TOKEN"));
             Assert.Equal(connectionInfoPath, capturedStartInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"]);
+            Assert.Equal(
+                policyPath,
+                capturedStartInfo.Environment[RuntimeResourcePolicyEnvironment.PolicyFilePathVariable]);
+            Assert.False(capturedStartInfo.Environment.ContainsKey(
+                RuntimeResourcePolicyEnvironment.LaunchPayloadVariable));
             Assert.Null(RuntimeConnectionInfoStore.Load(connectionInfoPath));
         }
         finally

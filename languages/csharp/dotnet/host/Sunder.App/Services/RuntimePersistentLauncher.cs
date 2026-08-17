@@ -144,6 +144,7 @@ internal static class RuntimeLauncherProcess
         "SUNDER_HOST_RUNTIME_PATH",
         "SUNDER_HOST_STATE_ROOT",
         "SUNDER_RUNTIME_STATE_ROOT",
+        RuntimeResourcePolicyEnvironment.PolicyFilePathVariable,
         "DOTNET_ROOT",
         "PATH",
         "HTTP_PROXY",

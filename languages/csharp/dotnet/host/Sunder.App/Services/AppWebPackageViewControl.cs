@@ -125,6 +125,8 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable
 
 internal sealed class NonDisposingAppWebRpcClient(IAppWebRpcClient inner) : IAppWebRpcClient
 {
+    public Sunder.Runtime.Client.RuntimeClientResourceLimits ResourceLimits => inner.ResourceLimits;
+
     public ValueTask<Sunder.Sdk.Rpc.SunderRpcCatalogSnapshot> DiscoverAsync(
         string contractId,
         CancellationToken cancellationToken)

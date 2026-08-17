@@ -21,7 +21,7 @@ internal sealed partial class PackageSessionLoadService
         PackageSessionState? packageSessionState = null)
     {
         _logger = logger;
-        _preparer = new PackageSessionPreparer(runtimeIdentifier);
+        _preparer = new PackageSessionPreparer(runtimeIdentifier, logger);
         _activator = new RuntimePackageActivator(
             logger,
             paths ?? new RuntimePackagePaths(),

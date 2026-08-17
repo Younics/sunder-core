@@ -1,11 +1,16 @@
 using Avalonia;
 using Avalonia.Controls;
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.App.Views.Controls;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Avalonia;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
+
+internal readonly record struct AppPackageViewUnregistrationResult(
+    IReadOnlyList<string> RemovedViewIds,
+    bool CleanupProven);
 
 internal sealed class AppPackageViewRegistry
 {
@@ -14,6 +19,7 @@ internal sealed class AppPackageViewRegistry
     private readonly Dictionary<string, AppRegisteredSettingsView> _registeredSettingsViews = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Control> _viewCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Control> _settingsViewCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _quarantinedViewIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PackageSettingsViewDescriptor> _settingsViewPackagesById;
     private readonly Dictionary<string, List<string>> _viewIdsByPackageId = new(StringComparer.OrdinalIgnoreCase);
     private readonly IUiDispatcher _uiDispatcher;
@@ -118,11 +124,28 @@ internal sealed class AppPackageViewRegistry
         string viewId,
         Func<string, bool> isPackageDisabled,
         Action<string, string, Exception> reportFailure)
+        => GetOrCreateView(
+            viewId,
+            isPackageDisabled,
+            (packageId, failedViewId, exception) =>
+            {
+                reportFailure(
+                    packageId,
+                    $"Failed to create package view '{failedViewId}': {exception.Message}",
+                    exception);
+                return true;
+            });
+
+    internal Control? GetOrCreateView(
+        string viewId,
+        Func<string, bool> isPackageDisabled,
+        Func<string, string, Exception, bool> reportFailure)
     {
         AppRegisteredPackageView registration;
         lock (_syncRoot)
         {
-            if (!_registeredViews.TryGetValue(viewId, out var foundRegistration))
+            if (_quarantinedViewIds.Contains(viewId)
+                || !_registeredViews.TryGetValue(viewId, out var foundRegistration))
             {
                 return null;
             }
@@ -136,6 +159,10 @@ internal sealed class AppPackageViewRegistry
 
         lock (_syncRoot)
         {
+            if (_quarantinedViewIds.Contains(viewId))
+            {
+                return null;
+            }
             if (_viewCache.TryGetValue(viewId, out var cachedView))
             {
                 return cachedView;
@@ -149,7 +176,11 @@ internal sealed class AppPackageViewRegistry
         }
         catch (Exception ex)
         {
-            reportFailure(registration.PackageId, $"Failed to create package view '{viewId}': {ex.Message}", ex);
+            if (!AppPackageUiFaultPolicy.IsRecoverable(ex)
+                || !reportFailure(registration.PackageId, viewId, ex))
+            {
+                throw;
+            }
             return null;
         }
 
@@ -157,7 +188,8 @@ internal sealed class AppPackageViewRegistry
         Control? result = null;
         lock (_syncRoot)
         {
-            if (!_registeredViews.TryGetValue(viewId, out var currentRegistration)
+            if (_quarantinedViewIds.Contains(viewId)
+                || !_registeredViews.TryGetValue(viewId, out var currentRegistration)
                 || currentRegistration != registration)
             {
                 unusedControl = control;
@@ -224,11 +256,29 @@ internal sealed class AppPackageViewRegistry
         string packageId,
         Func<string, bool> isPackageDisabled,
         Action<string, string, Exception> reportFailure)
+        => GetOrCreateSettingsView(
+            packageId,
+            isPackageDisabled,
+            (reportedPackageId, _, exception) =>
+            {
+                reportFailure(
+                    reportedPackageId,
+                    $"Failed to create package settings view for '{reportedPackageId}': {exception.Message}",
+                    exception);
+                return true;
+            });
+
+    internal Control? GetOrCreateSettingsView(
+        string packageId,
+        Func<string, bool> isPackageDisabled,
+        Func<string, string, Exception, bool> reportFailure)
     {
+        var viewId = GetSettingsViewId(packageId);
         AppRegisteredSettingsView registration;
         lock (_syncRoot)
         {
-            if (!_registeredSettingsViews.TryGetValue(packageId, out var foundRegistration))
+            if (_quarantinedViewIds.Contains(viewId)
+                || !_registeredSettingsViews.TryGetValue(packageId, out var foundRegistration))
             {
                 return null;
             }
@@ -242,6 +292,10 @@ internal sealed class AppPackageViewRegistry
 
         lock (_syncRoot)
         {
+            if (_quarantinedViewIds.Contains(viewId))
+            {
+                return null;
+            }
             if (_settingsViewCache.TryGetValue(packageId, out var cachedView))
             {
                 return cachedView;
@@ -255,7 +309,11 @@ internal sealed class AppPackageViewRegistry
         }
         catch (Exception ex)
         {
-            reportFailure(registration.PackageId, $"Failed to create package settings view for '{packageId}': {ex.Message}", ex);
+            if (!AppPackageUiFaultPolicy.IsRecoverable(ex)
+                || !reportFailure(registration.PackageId, viewId, ex))
+            {
+                throw;
+            }
             return null;
         }
 
@@ -263,7 +321,8 @@ internal sealed class AppPackageViewRegistry
         Control? result = null;
         lock (_syncRoot)
         {
-            if (!_registeredSettingsViews.TryGetValue(packageId, out var currentRegistration)
+            if (_quarantinedViewIds.Contains(viewId)
+                || !_registeredSettingsViews.TryGetValue(packageId, out var currentRegistration)
                 || currentRegistration != registration)
             {
                 unusedControl = control;
@@ -289,11 +348,31 @@ internal sealed class AppPackageViewRegistry
         bool requireReplacement,
         Func<string, bool> isPackageDisabled,
         Action<string, string, Exception> reportFailure)
+        => GetSettingsViewForNavigation(
+            packageId,
+            requireReplacement,
+            isPackageDisabled,
+            (reportedPackageId, _, exception) =>
+            {
+                reportFailure(
+                    reportedPackageId,
+                    $"Failed to create package settings view for '{reportedPackageId}': {exception.Message}",
+                    exception);
+                return true;
+            });
+
+    internal AppPackageSettingsViewNavigationTarget? GetSettingsViewForNavigation(
+        string packageId,
+        bool requireReplacement,
+        Func<string, bool> isPackageDisabled,
+        Func<string, string, Exception, bool> reportFailure)
     {
+        var viewId = GetSettingsViewId(packageId);
         AppRegisteredSettingsView registration;
         lock (_syncRoot)
         {
-            if (!_registeredSettingsViews.TryGetValue(packageId, out var foundRegistration))
+            if (_quarantinedViewIds.Contains(viewId)
+                || !_registeredSettingsViews.TryGetValue(packageId, out var foundRegistration))
             {
                 return null;
             }
@@ -307,7 +386,8 @@ internal sealed class AppPackageViewRegistry
 
         lock (_syncRoot)
         {
-            if (!_registeredSettingsViews.TryGetValue(packageId, out var currentRegistration)
+            if (_quarantinedViewIds.Contains(viewId)
+                || !_registeredSettingsViews.TryGetValue(packageId, out var currentRegistration)
                 || currentRegistration != registration)
             {
                 return null;
@@ -325,14 +405,19 @@ internal sealed class AppPackageViewRegistry
         }
         catch (Exception ex)
         {
-            reportFailure(registration.PackageId, $"Failed to create package settings view for '{packageId}': {ex.Message}", ex);
+            if (!AppPackageUiFaultPolicy.IsRecoverable(ex)
+                || !reportFailure(registration.PackageId, viewId, ex))
+            {
+                throw;
+            }
             return null;
         }
 
         var isCurrent = false;
         lock (_syncRoot)
         {
-            isCurrent = _registeredSettingsViews.TryGetValue(packageId, out var currentRegistration)
+            isCurrent = !_quarantinedViewIds.Contains(viewId)
+                && _registeredSettingsViews.TryGetValue(packageId, out var currentRegistration)
                 && currentRegistration == registration;
         }
         if (!isCurrent)
@@ -362,6 +447,7 @@ internal sealed class AppPackageViewRegistry
         {
             if (candidate.IsCompleted
                 || candidate.IsPromoted
+                || _quarantinedViewIds.Contains(GetSettingsViewId(candidate.PackageId))
                 || !_registeredSettingsViews.TryGetValue(candidate.PackageId, out var registration)
                 || !Equals(registration, candidate.Registration))
             {
@@ -389,7 +475,60 @@ internal sealed class AppPackageViewRegistry
         DisposeCachedControl(controlToDispose);
     }
 
+    internal bool TryQuarantineView(
+        string packageId,
+        string viewId,
+        out bool newlyQuarantined)
+    {
+        lock (_syncRoot)
+        {
+            var isRegisteredView = _registeredViews.TryGetValue(viewId, out var registeredView)
+                && string.Equals(
+                    registeredView.PackageId,
+                    packageId,
+                    StringComparison.OrdinalIgnoreCase);
+            var isRegisteredSettingsView = string.Equals(
+                    viewId,
+                    GetSettingsViewId(packageId),
+                    StringComparison.OrdinalIgnoreCase)
+                && _registeredSettingsViews.ContainsKey(packageId);
+            if (!isRegisteredView && !isRegisteredSettingsView)
+            {
+                newlyQuarantined = false;
+                return false;
+            }
+
+            newlyQuarantined = _quarantinedViewIds.Add(viewId);
+            return true;
+        }
+    }
+
+    internal bool IsViewQuarantined(string packageId, string viewId)
+    {
+        lock (_syncRoot)
+        {
+            if (!_quarantinedViewIds.Contains(viewId))
+            {
+                return false;
+            }
+
+            return _registeredViews.TryGetValue(viewId, out var registeredView)
+                    && string.Equals(
+                        registeredView.PackageId,
+                        packageId,
+                        StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    viewId,
+                    GetSettingsViewId(packageId),
+                    StringComparison.OrdinalIgnoreCase)
+                    && _registeredSettingsViews.ContainsKey(packageId);
+        }
+    }
+
     public void RemoveCachedViews(string packageId)
+        => RemoveCachedViewsWithOutcome(packageId);
+
+    private bool RemoveCachedViewsWithOutcome(string packageId)
     {
         var controlsToDispose = new List<Control>();
         lock (_syncRoot)
@@ -411,19 +550,20 @@ internal sealed class AppPackageViewRegistry
             }
         }
 
-        DisposeCachedControls(controlsToDispose);
+        return DisposeCachedControls(controlsToDispose);
     }
 
-    public async Task RemoveCachedViewsAsync(string packageId, CancellationToken cancellationToken)
+    public async Task<bool> RemoveCachedViewsAsync(
+        string packageId,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (_uiDispatcher.CheckAccess() || Application.Current is null)
         {
-            RemoveCachedViews(packageId);
-            return;
+            return RemoveCachedViewsWithOutcome(packageId);
         }
 
-        await _uiDispatcher.InvokeAsync(() => RemoveCachedViews(packageId));
+        return await _uiDispatcher.InvokeAsync(() => RemoveCachedViewsWithOutcome(packageId));
     }
 
     public bool RemoveCachedView(string viewId)
@@ -443,7 +583,56 @@ internal sealed class AppPackageViewRegistry
         return true;
     }
 
+    internal bool RemoveCachedView(string packageId, string viewId)
+    {
+        Control? controlToDispose = null;
+        lock (_syncRoot)
+        {
+            if (_registeredViews.TryGetValue(viewId, out var registeredView)
+                && string.Equals(
+                    registeredView.PackageId,
+                    packageId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _viewCache.Remove(viewId, out controlToDispose);
+            }
+            else if (string.Equals(
+                    viewId,
+                    GetSettingsViewId(packageId),
+                    StringComparison.OrdinalIgnoreCase)
+                && _registeredSettingsViews.ContainsKey(packageId))
+            {
+                _settingsViewCache.Remove(packageId, out controlToDispose);
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        DisposeCachedControl(controlToDispose);
+        return controlToDispose is not null;
+    }
+
+    internal async Task<bool> RemoveCachedViewAsync(
+        string packageId,
+        string viewId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_uiDispatcher.CheckAccess() || Application.Current is null)
+        {
+            return RemoveCachedView(packageId, viewId);
+        }
+
+        return await _uiDispatcher.InvokeAsync(() => RemoveCachedView(packageId, viewId));
+    }
+
     public IReadOnlyList<string> UnregisterPackage(string packageId)
+        => UnregisterPackageWithOutcome(packageId).RemovedViewIds;
+
+    private AppPackageViewUnregistrationResult UnregisterPackageWithOutcome(
+        string packageId)
     {
         var controlsToDispose = new List<Control>();
         string[] removedViewIds;
@@ -466,21 +655,33 @@ internal sealed class AppPackageViewRegistry
             }
             _settingsViewPackagesById.Remove(packageId);
             _viewIdsByPackageId.Remove(packageId);
+            foreach (var removedViewId in removedViewIds)
+            {
+                _quarantinedViewIds.Remove(removedViewId);
+            }
+            _quarantinedViewIds.Remove(GetSettingsViewId(packageId));
         }
 
-        DisposeCachedControls(controlsToDispose);
-        return removedViewIds;
+        return new AppPackageViewUnregistrationResult(
+            removedViewIds,
+            DisposeCachedControls(controlsToDispose));
     }
 
     public async Task<IReadOnlyList<string>> UnregisterPackageAsync(string packageId, CancellationToken cancellationToken)
+        => (await UnregisterPackageWithOutcomeAsync(packageId, cancellationToken)
+            .ConfigureAwait(false)).RemovedViewIds;
+
+    internal async Task<AppPackageViewUnregistrationResult> UnregisterPackageWithOutcomeAsync(
+        string packageId,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (_uiDispatcher.CheckAccess() || Application.Current is null)
         {
-            return UnregisterPackage(packageId);
+            return UnregisterPackageWithOutcome(packageId);
         }
 
-        return await _uiDispatcher.InvokeAsync(() => UnregisterPackage(packageId));
+        return await _uiDispatcher.InvokeAsync(() => UnregisterPackageWithOutcome(packageId));
     }
 
     private void TrackPackageViewId(string packageId, string viewId)
@@ -500,21 +701,26 @@ internal sealed class AppPackageViewRegistry
     private static Control CreateControl(IServiceProvider serviceProvider, Type implementationType)
         => (Control)ActivatorUtilities.CreateInstance(serviceProvider, implementationType);
 
-    private static void DisposeCachedControls(IEnumerable<Control> controls)
+    private static string GetSettingsViewId(string packageId) => $"settings:{packageId}";
+
+    private static bool DisposeCachedControls(IEnumerable<Control> controls)
     {
+        var cleanupProven = true;
         foreach (var control in controls)
         {
-            DisposeCachedControl(control);
+            cleanupProven &= DisposeCachedControl(control);
         }
+        return cleanupProven;
     }
 
-    private static void DisposeCachedControl(Control? control)
+    private static bool DisposeCachedControl(Control? control)
     {
         if (control is null)
         {
-            return;
+            return true;
         }
 
+        var cleanupProven = HostedPackageViewBoundary.IsVisualCleanupProven(control);
         try
         {
             switch (control.Parent)
@@ -526,13 +732,38 @@ internal sealed class AppPackageViewRegistry
                     decorator.Child = null;
                     break;
                 case Panel panel:
-                    panel.Children.Remove(control);
+                    cleanupProven &= panel.Children.Remove(control);
+                    break;
+                case not null:
+                    cleanupProven = false;
                     break;
             }
         }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (
+            AppPackageUiFaultPolicy.IsRecoverable(exception))
         {
-            // A generation may be torn down after its UI thread exits; disposal remains best effort.
+            cleanupProven = false;
+            AppSessionLog.WriteError("Failed to detach a cached package view from its parent.", exception);
+        }
+
+        try
+        {
+            if (control.Parent is not null)
+            {
+                cleanupProven = false;
+                AppSessionLog.WriteError(
+                    "A cached package view remained attached after cleanup.",
+                    new InvalidOperationException(
+                        "The package view still had a parent after visual detachment."));
+            }
+        }
+        catch (Exception exception) when (
+            AppPackageUiFaultPolicy.IsRecoverable(exception))
+        {
+            cleanupProven = false;
+            AppSessionLog.WriteError(
+                "Failed to verify cached package view detachment.",
+                exception);
         }
 
         object? dataContext = null;
@@ -540,7 +771,8 @@ internal sealed class AppPackageViewRegistry
         {
             dataContext = control.DataContext;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException exception) when (
+            AppPackageUiFaultPolicy.IsRecoverable(exception))
         {
             // Avalonia controls are thread-affined; cleanup can run after callers leave the owning UI thread.
         }
@@ -551,8 +783,9 @@ internal sealed class AppPackageViewRegistry
             {
                 dataContextDisposable.Dispose();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
             {
+                cleanupProven = false;
                 AppSessionLog.WriteError("Failed to dispose package view data context.", ex);
             }
         }
@@ -563,11 +796,13 @@ internal sealed class AppPackageViewRegistry
             {
                 controlDisposable.Dispose();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
             {
+                cleanupProven = false;
                 AppSessionLog.WriteError("Failed to dispose package view control.", ex);
             }
         }
+        return cleanupProven;
     }
 
     private sealed record AppRegisteredPackageView(

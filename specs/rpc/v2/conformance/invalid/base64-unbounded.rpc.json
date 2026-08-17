@@ -1,0 +1,9 @@
+{
+  "descriptorVersion": 2,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "contractId": "example.rpc.v2.base64unbounded",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {"example":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Value"},"responseSchema":{"$ref":"#/$defs/Value"}}}}},
+  "$defs": {"Value":{"type":"string","contentEncoding":"base64"}}
+}

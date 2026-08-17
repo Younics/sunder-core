@@ -11,8 +11,6 @@ namespace Sunder.Runtime.Client;
 
 public sealed partial class RuntimeManagementClient
 {
-    private static readonly JsonSerializerOptions StreamJsonOptions = new(JsonSerializerDefaults.Web);
-
     public async Task<bool> IsRuntimeHealthyAsync(CancellationToken token = default)
     {
         try
@@ -311,17 +309,23 @@ public sealed partial class RuntimeManagementClient
             token).ConfigureAwait(false);
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
         await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
-        using var reader = new StreamReader(stream, Encoding.UTF8, false, 8192, leaveOpen: false);
+        var limits = _transport.ResourceLimits;
+        var maximumEventBytes = Math.Min(
+            _transport.Policy.MaxStreamEventBytes,
+            limits.MaximumJsonEnvelopeBytes);
+        var reader = new RuntimeBoundedUtf8LineReader(stream);
         var data = new StringBuilder();
-        while (await reader.ReadLineAsync(token).ConfigureAwait(false) is { } line)
+        var dataBytes = 0;
+        while (await reader.ReadLineAsync(maximumEventBytes, token).ConfigureAwait(false) is { } line)
         {
             if (line.Length == 0)
             {
                 if (data.Length > 0)
                 {
-                    yield return JsonSerializer.Deserialize<T>(data.ToString(), StreamJsonOptions)
+                    yield return JsonSerializer.Deserialize<T>(data.ToString(), limits.CreateJsonOptions())
                                  ?? throw new InvalidDataException("Runtime stream returned an empty event.");
                     data.Clear();
+                    dataBytes = 0;
                 }
                 continue;
             }
@@ -331,7 +335,9 @@ public sealed partial class RuntimeManagementClient
             }
 
             var value = line.AsSpan(5).TrimStart();
-            if (data.Length + value.Length > _transport.Policy.MaxStreamEventBytes)
+            var valueBytes = Encoding.UTF8.GetByteCount(value);
+            var separatorBytes = data.Length > 0 ? 1 : 0;
+            if ((long)dataBytes + separatorBytes + valueBytes > maximumEventBytes)
             {
                 throw new InvalidDataException("Runtime stream event exceeded the client parser limit.");
             }
@@ -340,6 +346,7 @@ public sealed partial class RuntimeManagementClient
                 data.Append('\n');
             }
             data.Append(value);
+            dataBytes = checked(dataBytes + separatorBytes + valueBytes);
         }
     }
 

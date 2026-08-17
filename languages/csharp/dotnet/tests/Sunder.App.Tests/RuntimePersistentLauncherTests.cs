@@ -10,6 +10,32 @@ namespace Sunder.App.Tests;
 public sealed class RuntimePersistentLauncherTests
 {
     [Fact]
+    public void ServiceEnvironmentPersistsOnlyThePolicyFilePathNotWorkerPayloadOrOtherSunderValues()
+    {
+        var startInfo = new ProcessStartInfo("sunder-host");
+        startInfo.Environment[RuntimeResourcePolicyEnvironment.PolicyFilePathVariable] = "/app/v1/policy.json";
+        startInfo.Environment[RuntimeResourcePolicyEnvironment.LaunchPayloadVariable] = "stale-payload";
+        startInfo.Environment["SUNDER_REGISTRY_TOKEN"] = "secret";
+
+        var environment = RuntimeLauncherProcess.GetServiceEnvironment(startInfo).ToArray();
+
+        Assert.Contains(environment, pair =>
+            string.Equals(
+                pair.Key,
+                RuntimeResourcePolicyEnvironment.PolicyFilePathVariable,
+                StringComparison.OrdinalIgnoreCase)
+            && pair.Value == "/app/v1/policy.json");
+        Assert.DoesNotContain(environment, pair => string.Equals(
+            pair.Key,
+            RuntimeResourcePolicyEnvironment.LaunchPayloadVariable,
+            StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(environment, pair => string.Equals(
+            pair.Key,
+            "SUNDER_REGISTRY_TOKEN",
+            StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     [SupportedOSPlatform("macos")]
     public async Task MacSessionLauncher_BootstrapsPrivateCurrentSessionAgent()
     {
@@ -42,6 +68,9 @@ public sealed class RuntimePersistentLauncherTests
             Path.Combine(root, "launchd", "dev.sunder.host.plist"),
             userId: 501);
         var startInfo = CreateMacStartInfo(root);
+        var policyPath = Path.Combine(root, "app", "v1", "runtime-resource-policy.json");
+        startInfo.Environment[RuntimeResourcePolicyEnvironment.PolicyFilePathVariable] = policyPath;
+        startInfo.Environment[RuntimeResourcePolicyEnvironment.LaunchPayloadVariable] = "must-not-be-persisted";
         startInfo.Environment["SUNDER_REGISTRY_TOKEN"] = "must-not-be-persisted";
         startInfo.Environment["HTTPS_PROXY"] = "http://proxy.example:8080";
         startInfo.Environment["XDG_DATA_HOME"] = Path.Combine(root, "xdg-data");
@@ -66,6 +95,12 @@ public sealed class RuntimePersistentLauncherTests
             Assert.Contains("HTTPS_PROXY", definition, StringComparison.Ordinal);
             Assert.Contains("http://proxy.example:8080", definition, StringComparison.Ordinal);
             Assert.Contains("XDG_DATA_HOME", definition, StringComparison.Ordinal);
+            Assert.Contains(RuntimeResourcePolicyEnvironment.PolicyFilePathVariable, definition, StringComparison.Ordinal);
+            Assert.Contains(policyPath, definition, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                $"<key>{RuntimeResourcePolicyEnvironment.LaunchPayloadVariable}</key>",
+                definition,
+                StringComparison.Ordinal);
             Assert.DoesNotContain("SUNDER_REGISTRY_TOKEN", definition, StringComparison.Ordinal);
             Assert.DoesNotContain("must-not-be-persisted", definition, StringComparison.Ordinal);
             Assert.Equal("launchd", receipt.Backend);

@@ -44,9 +44,12 @@ internal static class SunderAppComposition
             "sunder.app",
             "Sunder"));
         services.AddSingleton<DeveloperLogService>();
+        services.AddSingleton<RuntimePackageRecoveryNotificationService>();
         services.AddSingleton<RuntimeEventSubscriptionServiceFactory>();
         services.AddSingleton<CliInstallationService>();
         services.AddSingleton<AppUpdateSettingsService>();
+        services.AddSingleton<AppRuntimeResourcePolicySettingsService>();
+        services.AddSingleton<IRuntimeResourcePolicyStatusSource, RuntimeResourcePolicyStatusSource>();
         services.AddSingleton<SunderUpdateService>();
         services.AddSingleton<BackgroundProcessQueueService>();
         services.AddSingleton<IBackgroundProcessQueue>(provider => provider.GetRequiredService<BackgroundProcessQueueService>());

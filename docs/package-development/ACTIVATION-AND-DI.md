@@ -84,6 +84,8 @@ The canonical order is:
 
 Pre-migration work may read only Host-mediated state through its dedicated context; normal package data, mutation, secrets, files, and RPC remain unavailable. Externally visible loops start only from activation and must stop promptly during shutdown. Every callback receives cancellation and is bounded by Host deadlines.
 
+After an active Worker V3 generation faults, Runtime can rebuild only that exact package from its prepared recovery factory. Recovery creates a fresh activation id, preserves healthy sibling workers and endpoints, keeps old endpoints stale, and uses a storage transaction across startup, migration, activation, and publication. Runtime never starts a replacement until the failed activation and its package-owned/RPC leases are proven retired. Recovery uses bounded backoff and is suspended after repeated failures; package authors do not need to implement a restart loop or publish recovery notifications.
+
 ## Generation Leases
 
 RPC invocations, subscriptions, callback/auth work, and Stack contributor calls hold a lease on the active package generation. Their cancellation token links:
@@ -98,7 +100,7 @@ After leases drain, Runtime requests protocol shutdown and supervises process ex
 
 ## App Retirement
 
-App revokes generation capabilities, cancels and drains view operations, unregisters and detaches cached views, stops generation-owned App background work, disposes view data contexts and controls when they implement `IDisposable`, disposes package providers, and then unloads App load contexts. Presentation failures are client-local; App does not report them as Runtime package faults.
+App revokes generation capabilities, cancels and drains view operations, unregisters and detaches cached views, stops generation-owned App background work, disposes view data contexts and controls when they implement `IDisposable`, disposes package providers, and then unloads App load contexts. A known recoverable view fault quarantines only that view. A safely attributed package-level UI fault quarantines the package's App activation, then makes one content-keyed fresh-activation attempt after cleanup and authoritative Runtime presentation are proven. Cleanup uncertainty, timeout, or a repeated fault leaves the package on fallback. Both paths are client-local, generate host-owned sanitized notifications, and do not report a Runtime package fault.
 
 Package services must:
 

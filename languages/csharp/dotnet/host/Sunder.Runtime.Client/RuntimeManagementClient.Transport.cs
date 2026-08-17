@@ -29,6 +29,10 @@ public sealed partial class RuntimeManagementClient
         _responses = transport.Responses;
     }
 
+    public RuntimeClientResourceProfile? CurrentResourceProfile => _transport.CurrentResourceProfile;
+
+    public RuntimeClientResourceLimits ResourceLimits => _transport.ResourceLimits;
+
     public void Dispose()
     {
         if (_ownsTransport)

@@ -67,6 +67,9 @@ public sealed class CrossLanguageWorkerRuntimeHostTests
                 corpus.RootElement.GetProperty("packageData").GetProperty("value").GetString(),
                 summary.RootElement.GetProperty("data").GetString());
             Assert.Equal("example.rejected", summary.RootElement.GetProperty("faultCode").GetString());
+            Assert.True(JsonElement.DeepEquals(
+                corpus.RootElement.GetProperty("rpc").GetProperty("domainFault").GetProperty("error").GetProperty("details"),
+                summary.RootElement.GetProperty("faultDetails")));
             CaptureWorkers(host, workerProcessIds, workerTemporaryPaths);
         }
         finally
@@ -119,6 +122,9 @@ public sealed class CrossLanguageWorkerRuntimeHostTests
                 corpus.RootElement.GetProperty("packageData").GetProperty("value").GetString(),
                 summary.RootElement.GetProperty("data").GetString());
             Assert.Equal("example.rejected", summary.RootElement.GetProperty("faultCode").GetString());
+            Assert.True(JsonElement.DeepEquals(
+                corpus.RootElement.GetProperty("rpc").GetProperty("domainFault").GetProperty("error").GetProperty("details"),
+                summary.RootElement.GetProperty("faultDetails")));
             CaptureWorkers(host, workerProcessIds, workerTemporaryPaths);
             Assert.Equal(2, workerProcessIds.Count);
         }

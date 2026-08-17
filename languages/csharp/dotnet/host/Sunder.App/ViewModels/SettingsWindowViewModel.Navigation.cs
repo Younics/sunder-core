@@ -37,6 +37,10 @@ public sealed partial class SettingsWindowViewModel
         {
             await RefreshCliStatusAsync(showSuccessStatus: false);
         }
+        else if (IsAdvancedSelection)
+        {
+            await RuntimeResources.RefreshCurrentEffectivePolicyAsync(cancellationToken);
+        }
         return true;
     }
 

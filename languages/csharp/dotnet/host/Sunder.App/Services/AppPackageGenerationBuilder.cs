@@ -1,3 +1,5 @@
+using System.Runtime.ExceptionServices;
+using System.Reflection;
 using Sunder.Package.Hosting;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
@@ -14,7 +16,10 @@ internal sealed class AppPackageGenerationBuilder(
     object eventSender,
     AppPackageSnapshotCache snapshotCache,
     Func<string> ensureSessionFolder,
-    Action<Guid, string, string, PackageFailureOrigin, Exception?> disablePackage,
+    Func<Guid, string, string, string?, Exception, bool> quarantineView,
+    Func<Guid, string, Task<AppPackageUiCleanupOutcome>> quarantinePackageBoundariesAsync,
+    Action<Guid, string, string?, Assembly> registerFaultAttribution,
+    Action<AppPackageGeneration, bool> registerPendingCandidate,
     IPackageShellViewService? shellViewService,
     IPackageSettingsNavigationService? settingsNavigationService,
     NotificationCenterService? notificationCenter,
@@ -41,6 +46,7 @@ internal sealed class AppPackageGenerationBuilder(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds,
+        IReadOnlyCollection<string>? forceDisabledPackageIds,
         bool hasCommittedGeneration,
         Action<AppPackageGeneration> discardGeneration,
         CancellationToken cancellationToken)
@@ -58,11 +64,30 @@ internal sealed class AppPackageGenerationBuilder(
         var retryPackageIds = retryDisabledPackageIds is null
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : new HashSet<string>(retryDisabledPackageIds, StringComparer.OrdinalIgnoreCase);
+        var sourcesByPackageId = packageSources
+            .GroupBy(source => source.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         var disabledPackageIds = currentGeneration.State.SnapshotDisabledPackageIds();
         disabledPackageIds.IntersectWith(activePackages.Select(package => package.PackageId));
+        disabledPackageIds.RemoveWhere(packageId =>
+            sourcesByPackageId.TryGetValue(packageId, out var source)
+            && currentGeneration.State.GetPackageContentHash(packageId) is { } currentContentHash
+            && !string.Equals(
+                source.ContentHash,
+                currentContentHash,
+                StringComparison.OrdinalIgnoreCase));
         disabledPackageIds.ExceptWith(retryPackageIds);
+        if (forceDisabledPackageIds is not null)
+        {
+            disabledPackageIds.UnionWith(forceDisabledPackageIds);
+        }
+        disabledPackageIds.IntersectWith(activePackages.Select(package => package.PackageId));
         var viewRegistry = new AppPackageViewRegistry(uiDispatcher: uiDispatcher);
         var state = new AppPackageHostState(disabledPackageIds, [], []);
+        foreach (var source in packageSources)
+        {
+            state.SetPackageContentHash(source.PackageId, source.ContentHash);
+        }
         var candidate = CreateGeneration(
             generationId,
             generationFolder,
@@ -73,9 +98,7 @@ internal sealed class AppPackageGenerationBuilder(
 
         try
         {
-            var sourcesByPackageId = packageSources
-                .GroupBy(source => source.PackageId, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            registerPendingCandidate(candidate, hasCommittedGeneration);
             var activeByPackageId = activePackages.ToDictionary(
                 static package => package.PackageId,
                 StringComparer.OrdinalIgnoreCase);
@@ -102,11 +125,13 @@ internal sealed class AppPackageGenerationBuilder(
                     }
                     catch (RuntimeClientException exception) when (
                         !hasCommittedGeneration
+                        && AppPackageUiFaultPolicy.IsRecoverable(exception)
                         && exception.ErrorCode is "runtime.v1.not-found" or "runtime.v1.stale-generation")
                     {
                         throw new StalePackageUiSnapshotException(source.PackageId, exception);
                     }
-                    catch (Exception exception)
+                    catch (Exception exception) when (
+                        AppPackageUiFaultPolicy.IsRecoverable(exception))
                     {
                         return new AppPackageMaterialization(
                             activeByPackageId[source.PackageId],
@@ -178,7 +203,7 @@ internal sealed class AppPackageGenerationBuilder(
                 {
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
                 {
                     HandlePackageFailure(
                         candidate,
@@ -222,13 +247,16 @@ internal sealed class AppPackageGenerationBuilder(
             generationId,
             viewRegistry,
             state,
-            disablePackage,
+            quarantineView,
+            quarantinePackageBoundariesAsync,
+            registerFaultAttribution,
             sharedAssemblyRegistry,
             shellViewService,
             settingsNavigationService,
             notificationCenter,
             backgroundProcessQueue,
             getRuntimeConnectionInfo,
+            uiDispatcher,
             webRpcClientFactory: getRuntimeConnectionInfo is null
                 ? null
                 : new RuntimeAppWebRpcClientFactory(getRuntimeConnectionInfo));
@@ -249,6 +277,15 @@ internal sealed class AppPackageGenerationBuilder(
         Exception? exception,
         bool hasCommittedGeneration)
     {
+        if (exception is not null && !AppPackageUiFaultPolicy.IsRecoverable(exception))
+        {
+            ExceptionDispatchInfo.Capture(exception).Throw();
+        }
+
+        candidate.Composition.FaultNotifier.QueueActivationFailure(
+            packageId,
+            hasCommittedGeneration,
+            exception);
         if (hasCommittedGeneration)
         {
             throw new InvalidOperationException($"App package candidate failed for '{packageId}': {message}", exception);

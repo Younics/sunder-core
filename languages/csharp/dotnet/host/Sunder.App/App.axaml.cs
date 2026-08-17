@@ -8,6 +8,7 @@ using Sunder.App.Composition;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
+using Sunder.Runtime.Client;
 using Sunder.Sdk.Notifications;
 
 namespace Sunder.App;
@@ -181,7 +182,14 @@ public partial class App : Application
         CancellationToken cancellationToken
     )
     {
-        using var deadline = new StartupAttemptDeadline(cancellationToken);
+        var serviceProvider = _serviceProvider
+            ?? throw new InvalidOperationException("App services are not initialized.");
+        using var deadline = StartupAttemptDeadline.CreateForStartup(
+            cancellationToken,
+            openCoreShell,
+            Program.StartupOptions.DevPackageFolders.Count,
+            serviceProvider.GetRequiredService<RuntimeClientTransport>()
+        );
         try
         {
             await CompleteStartupAsync(
@@ -348,7 +356,13 @@ public partial class App : Application
         };
 
         TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
             AppSessionLog.WriteError("Unobserved task exception.", e.Exception);
+            if (_session?.TryHandleUnobservedTaskException(e.Exception) == true)
+            {
+                e.SetObserved();
+            }
+        };
 
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             AppSessionLog.WriteError(

@@ -4,7 +4,8 @@ import { lstatSync } from "node:fs";
 import { mkdir, open, realpath, stat, unlink, type FileHandle } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
-import { FrameDecoder, ProtocolError, encodeFrame } from "./framing";
+import { FrameDecoder, ProtocolError, TransportResourceError, encodeFrame, encodedJsonByteLength } from "./framing";
+import { computeWorkerResourceProfileHash } from "./resource-profile";
 import { createPackageStorageKey, type PackageStorageKeyMigration, type PackageStorageKeyMigrationAction } from "./storage";
 import { formatUtcTimestamp, parseUtcTimestamp } from "./timestamp";
 import { isPackageId, isSemanticVersion } from "./validation";
@@ -51,6 +52,7 @@ import {
   type WorkerLogging,
   type WorkerMigrationPreparationContext,
   type WorkerOptions,
+  type WorkerResourceProfile,
   type WorkerSecrets,
   type WorkerSettings,
   type WorkerSettingsSchemaWire,
@@ -60,7 +62,7 @@ import {
   type WorkerStorageMigrationRuleWire,
 } from "./types";
 
-const LIMITS: WorkerLimits = SUNDER_WORKER_LIMITS;
+const LIMITS: WorkerLimits = { ...SUNDER_WORKER_LIMITS };
 const SAFE_ERROR_CODE = /^[A-Za-z0-9._-]+$/u;
 const SAFE_ID = /^[A-Za-z0-9_-]+$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
@@ -238,7 +240,20 @@ class WorkerRuntime {
   }
 
   async #handleHello(root: Readonly<Record<string, JsonValue>>): Promise<void> {
-    only(root, "type", "protocol", "protocolVersion", "challenge", "packageId", "packageVersion", "activationId", "sessionId", "providers");
+    only(
+      root,
+      "type",
+      "protocol",
+      "protocolVersion",
+      "challenge",
+      "packageId",
+      "packageVersion",
+      "activationId",
+      "sessionId",
+      "providers",
+      "resourceProfile",
+      "resourceProfileHash",
+    );
     const protocol = stringValue(root, "protocol", 64);
     const version = integerValue(root, "protocolVersion");
     const challenge = stringValue(root, "challenge", 128);
@@ -256,6 +271,11 @@ class WorkerRuntime {
       || protocol !== this.#environment.protocol) {
       throw new ProtocolError("host.hello does not match the sanitized process activation environment.");
     }
+
+    const profileHash = stringValue(root, "resourceProfileHash", 64);
+    const profile = resourceProfile(root.resourceProfile, profileHash);
+    applyResourceProfile(profile);
+    this.#decoder.configure(LIMITS);
 
     const configured = this.#configure(this.#context);
     if (configured === null || typeof configured !== "object" || configured instanceof Promise) {
@@ -291,6 +311,7 @@ class WorkerRuntime {
       packageVersion,
       activationId,
       sessionId,
+      resourceProfileHash: profileHash,
       contributions,
     });
     if (this.#phase !== "waiting-hello") throw new ProtocolError("Worker state changed while completing host.hello.");
@@ -579,6 +600,18 @@ class WorkerRuntime {
 
   async #writeProviderError(invocation: HostInvocation, error: unknown): Promise<void> {
     if (this.#suppressInvocationResponse(invocation)) return;
+    if (error instanceof TransportResourceError) {
+      await this.#writer.write({
+        type: "worker.error",
+        id: invocation.id,
+        error: {
+          kind: "resource-exhausted",
+          code: "rpc.worker.response-limit",
+          message: "The RPC response exceeds the negotiated worker transport limits.",
+        },
+      });
+      return;
+    }
     if (invocation.hostCancelled) {
       await this.#writer.write({
         type: "worker.error",
@@ -593,7 +626,9 @@ class WorkerRuntime {
       await this.#writer.write({
         type: "worker.error",
         id: invocation.id,
-        error: { kind: "domain", code: error.error.code, message },
+        error: error.error.details === undefined
+          ? { kind: "domain", code: error.error.code, message }
+          : { kind: "domain", code: error.error.code, message, details: error.error.details },
       });
       return;
     }
@@ -863,7 +898,25 @@ class WorkerRuntime {
     }
     if (type === "host.event") {
       if (call.kind !== "stream") throw new ProtocolError("Host sent an event for a unary worker call.");
-      if (!call.cancelled) call.queue.push(requiredValue(root, "value"));
+      if (!call.cancelled) {
+        const value = requiredValue(root, "value");
+        const bytes = encodedJsonByteLength(value, LIMITS.maxRpcValueBytes);
+        const rejection = call.queue.push(value, bytes);
+        if (rejection !== null) {
+          call.cancelled = true;
+          call.cleanup();
+          const error = infrastructureError(
+            "resource-exhausted",
+            "rpc.worker.stream-queue-limit",
+            streamQueueLimitMessage(call.streamIdentity, rejection),
+            "possibly-dispatched",
+            "unsafe",
+          );
+          call.reject(error);
+          call.queue.close(error);
+          void this.#writer.write({ type: "worker.cancel", id: call.id }).catch((writeError: unknown) => this.#fail(writeError));
+        }
+      }
       return;
     }
     if (type === "host.result" && call.kind !== "unary") {
@@ -1187,7 +1240,7 @@ class WorkerRuntime {
       ...(scopeId === undefined ? {} : { scopeId }),
       afterRevision,
       afterSequence,
-    }, options, catalogEvent);
+    }, options, catalogEvent, { operation: "watch" });
   }
 
   #invoke<TResponse extends JsonValue>(
@@ -1219,15 +1272,21 @@ class WorkerRuntime {
     options?: RpcCallOptions,
   ): AsyncIterable<TEvent> {
     assertJsonValue(request);
+    const validatedServiceId = boundedString(serviceId, "RPC serviceId", 128);
+    const validatedMethodId = boundedString(methodId, "RPC methodId", 128);
     return this.#streamClientCall<TEvent>({
       type: "worker.subscribe",
       ...(scopeId === undefined ? {} : { scopeId }),
       endpointReference: boundedString(endpointReference, "RPC endpointReference", 256),
-      serviceId: boundedString(serviceId, "RPC serviceId", 128),
-      methodId: boundedString(methodId, "RPC methodId", 128),
+      serviceId: validatedServiceId,
+      methodId: validatedMethodId,
       request,
       deadlineUtc: deadline(options),
-    }, options);
+    }, options, {
+      operation: "subscribe",
+      serviceId: sanitizeDiagnosticIdentity(validatedServiceId),
+      methodId: sanitizeDiagnosticIdentity(validatedMethodId),
+    });
   }
 
   #validatedUnaryClientCall<T>(
@@ -1244,8 +1303,9 @@ class WorkerRuntime {
     envelope: Readonly<Record<string, unknown>>,
     options: RpcCallOptions | undefined,
     parser: (value: JsonValue) => T,
+    streamIdentity: OutboundStreamIdentity,
   ): AsyncIterable<T> {
-    const source = this.#streamClientCall<JsonValue>(envelope, options);
+    const source = this.#streamClientCall<JsonValue>(envelope, options, streamIdentity);
     const runtime = this;
     return {
       async *[Symbol.asyncIterator](): AsyncIterator<T> {
@@ -2026,19 +2086,27 @@ class WorkerRuntime {
   ): Promise<T> {
     const call = this.#newClientCall("unary", options, behavior);
     const request = { ...envelope, id: call.id } as unknown as WorkerEnvelope;
-    behavior.started?.();
-    void this.#writer.write(request).catch((error: unknown) => this.#fail(error));
+    this.#startClientCall(call, request, options, behavior.started);
     return call.promise as Promise<T>;
   }
 
-  #streamClientCall<T>(envelope: Readonly<Record<string, unknown>>, options?: WorkerCallOptions): AsyncIterable<T> {
-    const call = this.#newClientCall("stream", options, {});
+  #streamClientCall<T>(
+    envelope: Readonly<Record<string, unknown>>,
+    options: WorkerCallOptions | undefined,
+    streamIdentity: OutboundStreamIdentity,
+  ): AsyncIterable<T> {
+    const call = this.#newClientCall("stream", options, {}, streamIdentity);
     const request = { ...envelope, id: call.id } as unknown as WorkerEnvelope;
-    void this.#writer.write(request).catch((error: unknown) => this.#fail(error));
+    this.#startClientCall(call, request, options);
     return call.queue.iterate<T>(() => this.#cancelClientCall(call));
   }
 
-  #newClientCall(kind: "unary" | "stream", options: WorkerCallOptions | undefined, behavior: ClientCallBehavior): ClientCall {
+  #newClientCall(
+    kind: "unary" | "stream",
+    options: WorkerCallOptions | undefined,
+    behavior: ClientCallBehavior,
+    streamIdentity?: OutboundStreamIdentity,
+  ): ClientCall {
     const lane = behavior.lane ?? "ordinary";
     if (!this.#laneAvailable(lane, behavior.migrationPreparationRead ?? false)) {
       throw infrastructureError("unavailable", "rpc.worker.not-active", "The process worker activation is not active.");
@@ -2074,7 +2142,8 @@ class WorkerRuntime {
       id,
       kind,
       lane,
-      queue: new AsyncQueue(),
+      streamIdentity,
+      queue: new AsyncQueue(LIMITS.maxStreamQueueMessages, LIMITS.maxStreamQueueBytes),
       promise,
       resolve: resolvePromise,
       reject: rejectPromise,
@@ -2087,11 +2156,47 @@ class WorkerRuntime {
       resolveTerminal,
       cleanup: () => undefined,
     };
+    return call;
+  }
+
+  #startClientCall(
+    call: ClientCall,
+    request: WorkerEnvelope,
+    options: WorkerCallOptions | undefined,
+    started?: () => void,
+  ): void {
+    let write: Promise<void>;
+    try {
+      write = this.#writer.write(request);
+    } catch (error) {
+      if (error instanceof TransportResourceError) {
+        throw infrastructureError(
+          "resource-exhausted",
+          error.message.includes("queue") ? "rpc.worker.write-queue-limit" : "rpc.worker.request-limit",
+          error.message.includes("queue")
+            ? "The worker protocol write queue is full."
+            : "The worker RPC request exceeds the negotiated transport limits.",
+        );
+      }
+      throw error;
+    }
     const onAbort = (): void => this.#cancelClientCall(call);
     options?.signal?.addEventListener("abort", onAbort, { once: true });
     call.cleanup = () => options?.signal?.removeEventListener("abort", onAbort);
-    this.#clientCalls.set(id, call);
-    return call;
+    this.#clientCalls.set(call.id, call);
+    started?.();
+    void write.catch((error: unknown) => {
+      if (this.#clientCalls.get(call.id) === call) {
+        this.#clientCalls.delete(call.id);
+        call.terminal = true;
+        call.cleanup();
+        call.reject(error);
+        call.queue.close(error);
+        call.releaseTerminalResource?.();
+        call.resolveTerminal();
+      }
+      this.#fail(error);
+    });
   }
 
   #cancelClientCall(call: ClientCall): void {
@@ -2163,15 +2268,21 @@ class WorkerRuntime {
 
 class ProtocolWriter {
   #queued = 0;
+  #queuedBytes = 0;
   #tail = Promise.resolve();
 
   public write(envelope: WorkerEnvelope): Promise<void> {
-    if (this.#queued >= LIMITS.maxWriteQueue) throw new ProtocolError("Worker protocol write queue exceeded its bound.");
     const frame = encodeFrame(envelope, LIMITS);
+    if (this.#queued >= LIMITS.maxWriteQueue || frame.byteLength > LIMITS.maxWriteQueueBytes - this.#queuedBytes) {
+      throw new TransportResourceError("Worker protocol write queue exceeded its count or byte bound.");
+    }
     this.#queued += 1;
+    this.#queuedBytes += frame.byteLength;
     const write = this.#tail.then(async () => {
+      this.#queued -= 1;
+      this.#queuedBytes -= frame.byteLength;
       if (!process.stdout.write(frame)) await once(process.stdout, "drain");
-    }).finally(() => { this.#queued -= 1; });
+    });
     this.#tail = write.catch(() => undefined);
     return write;
   }
@@ -2181,29 +2292,63 @@ class ProtocolWriter {
   }
 }
 
+type AsyncQueueLimit = "count" | "bytes" | "count+bytes";
+
+interface AsyncQueueRejection {
+  readonly limit: AsyncQueueLimit;
+  readonly queuedMessages: number;
+  readonly queuedBytes: number;
+  readonly maximumMessages: number;
+  readonly maximumBytes: number;
+  readonly incomingBytes: number;
+}
+
 class AsyncQueue {
-  readonly #values: JsonValue[] = [];
+  readonly #values: Array<Readonly<{ value: JsonValue; bytes: number }>> = [];
   readonly #waiters: Array<{ resolve: (value: IteratorResult<JsonValue>) => void; reject: (error: unknown) => void }> = [];
+  readonly #maximumMessages: number;
+  readonly #maximumBytes: number;
+  #queuedBytes = 0;
   #closed = false;
   #error: unknown;
 
-  public push(value: JsonValue): void {
+  public constructor(maximumMessages: number, maximumBytes: number) {
+    this.#maximumMessages = maximumMessages;
+    this.#maximumBytes = maximumBytes;
+  }
+
+  public push(value: JsonValue, bytes: number): AsyncQueueRejection | null {
     if (this.#closed) throw new ProtocolError("Received a stream event after terminal completion.");
     const waiter = this.#waiters.shift();
     if (waiter !== undefined) {
       waiter.resolve({ done: false, value });
-      return;
+      return null;
     }
-    if (this.#values.length >= LIMITS.maxStreamQueueMessages) {
-      throw new ProtocolError("Worker stream event queue exceeded its bound.");
+    const countExceeded = this.#values.length >= this.#maximumMessages;
+    const bytesExceeded = bytes > this.#maximumBytes - this.#queuedBytes;
+    if (countExceeded || bytesExceeded) {
+      return Object.freeze({
+        limit: countExceeded && bytesExceeded ? "count+bytes" : countExceeded ? "count" : "bytes",
+        queuedMessages: this.#values.length,
+        queuedBytes: this.#queuedBytes,
+        maximumMessages: this.#maximumMessages,
+        maximumBytes: this.#maximumBytes,
+        incomingBytes: bytes,
+      });
     }
-    this.#values.push(value);
+    this.#values.push({ value, bytes });
+    this.#queuedBytes += bytes;
+    return null;
   }
 
   public close(error?: unknown): void {
     if (this.#closed) return;
     this.#closed = true;
     this.#error = error;
+    if (error !== undefined) {
+      this.#values.length = 0;
+      this.#queuedBytes = 0;
+    }
     for (const waiter of this.#waiters.splice(0)) {
       if (error === undefined) waiter.resolve({ done: true, value: undefined });
       else waiter.reject(error);
@@ -2228,8 +2373,11 @@ class AsyncQueue {
   }
 
   #next(): Promise<IteratorResult<JsonValue>> {
-    const value = this.#values.shift();
-    if (value !== undefined) return Promise.resolve({ done: false, value });
+    const item = this.#values.shift();
+    if (item !== undefined) {
+      this.#queuedBytes -= item.bytes;
+      return Promise.resolve({ done: false, value: item.value });
+    }
     if (this.#closed) {
       return this.#error === undefined
         ? Promise.resolve({ done: true, value: undefined })
@@ -3196,7 +3344,16 @@ function booleanValue(root: Readonly<Record<string, JsonValue>>, name: string): 
 
 function rpcError(value: JsonValue | undefined): RpcError {
   const error = objectValue(value, "RPC error");
-  only(error, "kind", "code", "message", "dispatchState", "retrySafety");
+  const hasDetails = Object.hasOwn(error, "details");
+  only(
+    error,
+    "kind",
+    "code",
+    "message",
+    "dispatchState",
+    "retrySafety",
+    ...(hasDetails ? ["details"] : []),
+  );
   const kind = stringValue(error, "kind", 64) as RpcErrorValue["kind"];
   const allowed = new Set<RpcErrorValue["kind"]>([
     "domain", "permission-denied", "not-found", "stale-endpoint", "validation", "deadline-exceeded",
@@ -3209,13 +3366,18 @@ function rpcError(value: JsonValue | undefined): RpcError {
   if (dispatchState !== "not-dispatched" && dispatchState !== "possibly-dispatched") throw new ProtocolError("Host returned an invalid RPC dispatch state.");
   const retrySafety = stringValue(error, "retrySafety", 16);
   if (retrySafety !== "safe" && retrySafety !== "unsafe") throw new ProtocolError("Host returned an invalid RPC retry safety.");
-  return new RpcError({
+  const details = hasDetails ? requiredValue(error, "details") : undefined;
+  if (details !== undefined && kind !== "domain") {
+    throw new ProtocolError("Host returned details on a non-domain RPC error.");
+  }
+  const rpcErrorValue = {
     kind,
     code,
     message: stringValue(error, "message", 512),
-    dispatchState,
-    retrySafety,
-  }, true);
+    dispatchState: dispatchState as RpcErrorValue["dispatchState"],
+    retrySafety: retrySafety as RpcErrorValue["retrySafety"],
+  };
+  return new RpcError(details === undefined ? rpcErrorValue : { ...rpcErrorValue, details }, true);
 }
 
 function validateProviderIdentity(provider: RpcProviderRegistration): void {
@@ -3287,8 +3449,32 @@ function deadlineExceededError(): RpcError {
   return infrastructureError("deadline-exceeded", "rpc.call.deadline-exceeded", "The RPC call deadline elapsed.");
 }
 
-function infrastructureError(kind: RpcErrorValue["kind"], code: string, message: string): RpcError {
-  return new RpcError({ kind, code, message });
+function infrastructureError(
+  kind: RpcErrorValue["kind"],
+  code: string,
+  message: string,
+  dispatchState: RpcErrorValue["dispatchState"] = "not-dispatched",
+  retrySafety: RpcErrorValue["retrySafety"] = "safe",
+): RpcError {
+  return new RpcError({ kind, code, message, dispatchState, retrySafety });
+}
+
+function streamQueueLimitMessage(
+  identity: OutboundStreamIdentity | undefined,
+  rejection: AsyncQueueRejection,
+): string {
+  const stream: OutboundStreamIdentity = identity ?? { operation: "stream" };
+  let message = `The worker RPC stream queue exceeded its count or byte bound. Local diagnostic: limit=${rejection.limit}; queuedMessages=${rejection.queuedMessages}/${rejection.maximumMessages}; queuedBytes=${rejection.queuedBytes}/${rejection.maximumBytes}; incomingBytes=${rejection.incomingBytes}; operation=${stream.operation}`;
+  if (stream.serviceId !== undefined) message += `; service=${stream.serviceId}`;
+  if (stream.methodId !== undefined) message += `; method=${stream.methodId}`;
+  return `${message}.`.slice(0, 512);
+}
+
+function sanitizeDiagnosticIdentity(value: string): string {
+  return [...value]
+    .slice(0, 64)
+    .map((character) => /^[A-Za-z0-9._-]$/u.test(character) ? character : "_")
+    .join("");
 }
 
 function isAbortError(error: unknown): boolean {
@@ -3472,6 +3658,55 @@ function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function resourceProfile(value: JsonValue | undefined, expectedHash: string): WorkerResourceProfile {
+  const root = objectValue(value, "Host resourceProfile");
+  only(
+    root,
+    "version",
+    "rpcValueBytes",
+    "valueDepth",
+    "valueNodes",
+    "objectMembers",
+    "inlineDecodedBytes",
+    "contentReferenceBytes",
+  );
+  if (!SHA256.test(expectedHash)) throw new ProtocolError("Host resourceProfileHash is not canonical SHA-256.");
+  const profile = {
+    version: integerValue(root, "version"),
+    rpcValueBytes: integerValue(root, "rpcValueBytes"),
+    valueDepth: integerValue(root, "valueDepth"),
+    valueNodes: integerValue(root, "valueNodes"),
+    objectMembers: integerValue(root, "objectMembers"),
+    inlineDecodedBytes: integerValue(root, "inlineDecodedBytes"),
+    contentReferenceBytes: integerValue(root, "contentReferenceBytes"),
+  };
+  if (profile.version !== 1
+    || profile.rpcValueBytes <= 0 || profile.rpcValueBytes > 32 * 1024 * 1024
+    || profile.valueDepth <= 0 || profile.valueDepth > 64
+    || profile.valueNodes <= 0 || profile.valueNodes > 4_194_304
+    || profile.objectMembers <= 0 || profile.objectMembers > 65_536
+    || profile.inlineDecodedBytes <= 0 || profile.inlineDecodedBytes > 4 * 1024 * 1024
+    || profile.contentReferenceBytes <= 0 || profile.contentReferenceBytes > 256 * 1024 * 1024) {
+    throw new ProtocolError("Host resourceProfile exceeds Worker V3 protocol ceilings.");
+  }
+  const normalized: WorkerResourceProfile = Object.freeze({ ...profile, version: 1 });
+  const actualHash = computeWorkerResourceProfileHash(normalized);
+  if (actualHash !== expectedHash) {
+    throw new ProtocolError("host.hello resourceProfileHash does not match its closed resourceProfile.");
+  }
+  return normalized;
+}
+
+function applyResourceProfile(profile: WorkerResourceProfile): void {
+  LIMITS.maxRpcValueBytes = profile.rpcValueBytes;
+  LIMITS.maxValueDepth = profile.valueDepth;
+  LIMITS.maxFrameBytes = profile.rpcValueBytes + LIMITS.maxEnvelopeReserveBytes;
+  LIMITS.maxMessageDepth = profile.valueDepth + 8;
+  LIMITS.maxContentBytes = profile.contentReferenceBytes;
+  LIMITS.maxWriteQueueBytes = profile.rpcValueBytes * 8;
+  LIMITS.maxStreamQueueBytes = profile.rpcValueBytes * 2;
+}
+
 function safeNonNegativeInteger(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${label} must be a non-negative safe integer.`);
 }
@@ -3479,7 +3714,7 @@ function safeNonNegativeInteger(value: number, label: string): void {
 function assertJsonValue(value: unknown): asserts value is JsonValue {
   const seen = new Set<object>();
   const visit = (item: unknown, depth: number): void => {
-    if (depth > LIMITS.maxMessageDepth) throw new TypeError("JSON value exceeds the protocol depth limit.");
+    if (depth > LIMITS.maxValueDepth) throw new TypeError("JSON value exceeds the negotiated RPC value depth limit.");
     if (item === null || typeof item === "boolean") return;
     if (typeof item === "string") {
       if (!isWellFormed(item)) throw new TypeError("JSON value contains invalid Unicode.");
@@ -3616,6 +3851,7 @@ interface ClientCall {
   readonly id: string;
   readonly kind: "unary" | "stream";
   readonly lane: ClientCallLane;
+  readonly streamIdentity?: OutboundStreamIdentity;
   readonly queue: AsyncQueue;
   readonly promise: Promise<JsonValue>;
   readonly resolve: (value: JsonValue) => void;
@@ -3628,6 +3864,12 @@ interface ClientCall {
   cancelled: boolean;
   terminal: boolean;
   cleanup: () => void;
+}
+
+interface OutboundStreamIdentity {
+  readonly operation: "stream" | "watch" | "subscribe";
+  readonly serviceId?: string;
+  readonly methodId?: string;
 }
 
 interface ClientCallBehavior {

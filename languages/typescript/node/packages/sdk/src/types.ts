@@ -2,15 +2,45 @@ import type { Readable } from "node:stream";
 import type { JsonValue, RpcCallOptions, RpcInvoker } from "./core";
 import type { PackageStorageKeyMigration } from "./storage";
 
-export type { JsonPrimitive, JsonValue, RpcCallOptions, RpcInvoker } from "./core";
+export type { JsonObject, JsonPrimitive, JsonValue, RpcCallOptions, RpcInvoker } from "./core";
 
 export const SUNDER_WORKER_PROTOCOL = "sunder.worker.v3" as const;
 export const SUNDER_WORKER_PROTOCOL_VERSION = 3 as const;
 
-export const SUNDER_WORKER_LIMITS = Object.freeze({
-  maxFrameBytes: 1024 * 1024,
+export interface WorkerLimits {
+  maxFrameBytes: number;
+  maxHeaderBytes: number;
+  maxMessageDepth: number;
+  maxRpcValueBytes: number;
+  maxValueDepth: number;
+  maxEnvelopeReserveBytes: number;
+  maxInboundCalls: number;
+  maxOutboundCalls: number;
+  maxLoggingCalls: number;
+  maxCallScopes: number;
+  maxContentHandles: number;
+  maxPayloadHandles: number;
+  maxControlCalls: number;
+  maxStreamQueueMessages: number;
+  maxWriteQueue: number;
+  maxStreamQueueBytes: number;
+  maxWriteQueueBytes: number;
+  maxRememberedIds: number;
+  maxDiagnosticCharacters: number;
+  maxContentBytes: number;
+  maxPayloadBytes: number;
+  maxFilePayloadBytes: number;
+  maxContentUses: number;
+  inlineDataBytes: number;
+}
+
+export const SUNDER_WORKER_LIMITS: Readonly<WorkerLimits> = Object.freeze({
+  maxFrameBytes: 32 * 1024 * 1024 + 64 * 1024,
   maxHeaderBytes: 8 * 1024,
-  maxMessageDepth: 64,
+  maxMessageDepth: 72,
+  maxRpcValueBytes: 32 * 1024 * 1024,
+  maxValueDepth: 64,
+  maxEnvelopeReserveBytes: 64 * 1024,
   maxInboundCalls: 64,
   maxOutboundCalls: 32,
   maxLoggingCalls: 32,
@@ -20,16 +50,26 @@ export const SUNDER_WORKER_LIMITS = Object.freeze({
   maxControlCalls: 320,
   maxStreamQueueMessages: 32,
   maxWriteQueue: 128,
+  maxStreamQueueBytes: 64 * 1024 * 1024,
+  maxWriteQueueBytes: 256 * 1024 * 1024,
   maxRememberedIds: 2048,
   maxDiagnosticCharacters: 4096,
-  maxContentBytes: 64 * 1024 * 1024,
+  maxContentBytes: 256 * 1024 * 1024,
   maxPayloadBytes: 1024 * 1024,
   maxFilePayloadBytes: 16 * 1024 * 1024,
   maxContentUses: 32,
   inlineDataBytes: 64 * 1024,
-} as const);
+});
 
-export type WorkerLimits = typeof SUNDER_WORKER_LIMITS;
+export interface WorkerResourceProfile extends Readonly<Record<string, JsonValue>> {
+  readonly version: 1;
+  readonly rpcValueBytes: number;
+  readonly valueDepth: number;
+  readonly valueNodes: number;
+  readonly objectMembers: number;
+  readonly inlineDecodedBytes: number;
+  readonly contentReferenceBytes: number;
+}
 export type RpcMethodKind = "unary" | "server-stream";
 export type RpcMethodIdempotency = "none" | "idempotent";
 
@@ -61,6 +101,7 @@ export interface RpcContractDescriptorV1 {
 
 export interface RpcErrorDescriptorV2 {
   readonly description?: string;
+  readonly detailsSchema?: RpcSchemaReference;
 }
 
 export interface RpcMethodDescriptorV2Base {
@@ -88,6 +129,7 @@ export interface RpcServiceDescriptorV2 {
 export interface RpcContractDescriptorV2 {
   readonly $schema?: "https://json-schema.org/draft/2020-12/schema";
   readonly descriptorVersion: 2;
+  readonly schemaProfile: "sunder.rpc.values.v1";
   readonly contractId: string;
   readonly version: string;
   readonly errors: Readonly<Record<string, RpcErrorDescriptorV2>>;
@@ -121,6 +163,7 @@ export interface RpcErrorValue {
   readonly message: string;
   readonly dispatchState: "not-dispatched" | "possibly-dispatched";
   readonly retrySafety: "safe" | "unsafe";
+  readonly details?: JsonValue;
 }
 
 export class RpcError extends Error {
@@ -133,19 +176,56 @@ export class RpcError extends Error {
   ) {
     super(error.message);
     this.name = "RpcError";
-    this.error = Object.freeze({
-      ...error,
+    const value = {
+      kind: error.kind,
+      code: error.code,
+      message: error.message,
       dispatchState: error.dispatchState ?? "not-dispatched",
       retrySafety: error.retrySafety ?? "safe",
-    });
+    };
+    if (error.details !== undefined) {
+      if (error.kind !== "domain") throw new TypeError("Only domain RPC errors may carry details.");
+      this.error = Object.freeze({ ...value, details: cloneRpcErrorDetails(error.details) });
+    } else {
+      this.error = Object.freeze(value);
+    }
     this.isHostAuthenticated = isHostAuthenticated;
   }
 }
 
 export class RpcDomainError extends RpcError {
-  public constructor(code: string, message: string) {
-    super({ kind: "domain", code, message });
+  public constructor(code: string, message: string, details?: JsonValue) {
+    super(details === undefined
+      ? { kind: "domain", code, message }
+      : { kind: "domain", code, message, details });
     this.name = "RpcDomainError";
+  }
+}
+
+function cloneRpcErrorDetails(value: unknown, active = new WeakSet<object>()): JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("RPC error details must contain only finite JSON numbers.");
+    return value;
+  }
+  if (typeof value !== "object") throw new TypeError("RPC error details must be a JSON value.");
+  if (active.has(value)) throw new TypeError("RPC error details must not contain cycles.");
+  active.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return Object.freeze(value.map((item) => cloneRpcErrorDetails(item, active)));
+    }
+    const prototype = Object.getPrototypeOf(value) as unknown;
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError("RPC error details must contain only JSON objects.");
+    }
+    const output: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
+    for (const [name, item] of Object.entries(value)) {
+      output[name] = cloneRpcErrorDetails(item, active);
+    }
+    return Object.freeze(output);
+  } finally {
+    active.delete(value);
   }
 }
 
@@ -589,7 +669,7 @@ export interface WorkerStorageMigrationPlanWire {
 }
 
 export type HostEnvelope =
-  | Readonly<{ type: "host.hello"; protocol: typeof SUNDER_WORKER_PROTOCOL; protocolVersion: 3; challenge: string; packageId: string; packageVersion: string; activationId: string; sessionId: string; providers: readonly ProviderWireIdentity[] }>
+  | Readonly<{ type: "host.hello"; protocol: typeof SUNDER_WORKER_PROTOCOL; protocolVersion: 3; challenge: string; packageId: string; packageVersion: string; activationId: string; sessionId: string; providers: readonly ProviderWireIdentity[]; resourceProfile: WorkerResourceProfile; resourceProfileHash: string }>
   | Readonly<{ type: "host.start-candidate" }>
   | Readonly<{ type: "host.commit-generation"; activationId: string; sessionGeneration: number }>
   | Readonly<{ type: "host.prepare-storage-migrations"; activationId: string; sessionGeneration: number }>

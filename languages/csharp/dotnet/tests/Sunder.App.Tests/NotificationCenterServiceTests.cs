@@ -87,6 +87,23 @@ public sealed class NotificationCenterServiceTests
     }
 
     [Fact]
+    public async Task PublishAsync_WhenSubscriberThrowsFatalFault_DoesNotSwallowIt()
+    {
+        var statePath = Path.Combine(CreateTempDirectory(), "notifications.json");
+        var service = new NotificationCenterService(statePath);
+        service.ToastQueued += _ => throw new OutOfMemoryException("fatal subscriber fault");
+
+        await Assert.ThrowsAsync<OutOfMemoryException>(() => service.PublishAsync(
+            "agent",
+            "Agent",
+            new PackageNotificationRequest(
+                "Fault",
+                "Fault",
+                PackageNotificationDisplayMode.ToastOnly,
+                PackageNotificationSeverity.Error)).AsTask());
+    }
+
+    [Fact]
     public async Task PublishAsync_TrayNotification_DoesNotLeaveTemporaryStateFiles()
     {
         var rootPath = CreateTempDirectory();

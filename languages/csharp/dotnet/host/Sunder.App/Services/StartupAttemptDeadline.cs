@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Sunder.Runtime.Client;
 
 namespace Sunder.App.Services;
 
@@ -19,9 +20,11 @@ internal enum StartupPhase
 internal sealed class StartupAttemptDeadline : IDisposable
 {
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan DefaultRuntimePackagesPhaseBudget = TimeSpan.FromSeconds(45);
 
     private readonly object _syncRoot = new();
     private readonly TimeSpan _timeout;
+    private readonly TimeSpan? _runtimePackagesPhaseBudget;
     private readonly CancellationTokenSource _deadlineCancellation;
     private readonly CancellationTokenSource _linkedCancellation;
     private readonly long _startedAt;
@@ -40,12 +43,28 @@ internal sealed class StartupAttemptDeadline : IDisposable
     private bool _disposed;
 
     public StartupAttemptDeadline(CancellationToken cancellationToken, TimeSpan? timeout = null)
+        : this(cancellationToken, timeout ?? DefaultTimeout, runtimePackagesPhaseBudget: null)
     {
-        _timeout = timeout ?? DefaultTimeout;
+    }
+
+    private StartupAttemptDeadline(
+        CancellationToken cancellationToken,
+        TimeSpan timeout,
+        TimeSpan? runtimePackagesPhaseBudget)
+    {
+        _timeout = timeout;
         if (_timeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(timeout), "Startup timeout must be positive.");
         }
+        if (runtimePackagesPhaseBudget is { } phaseBudget && phaseBudget <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(runtimePackagesPhaseBudget),
+                "Runtime packages startup phase budget must be positive."
+            );
+        }
+        _runtimePackagesPhaseBudget = runtimePackagesPhaseBudget;
 
         _startedAt = Stopwatch.GetTimestamp();
         _deadlineCancellation = new CancellationTokenSource();
@@ -58,7 +77,41 @@ internal sealed class StartupAttemptDeadline : IDisposable
         }
     }
 
+    internal static StartupAttemptDeadline CreateForStartup(
+        CancellationToken cancellationToken,
+        bool openCoreShell,
+        int devPackageCount,
+        RuntimeClientTransport runtimeTransport)
+    {
+        ArgumentNullException.ThrowIfNull(runtimeTransport);
+        if (openCoreShell || devPackageCount <= 0)
+        {
+            return new StartupAttemptDeadline(cancellationToken);
+        }
+
+        var requestTimeout = runtimeTransport.Policy.RequestTimeout;
+        if (requestTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(runtimeTransport),
+                "The Runtime request timeout must be positive for dev package startup."
+            );
+        }
+
+        var totalBudget = requestTimeout * 1.5;
+        var runtimePackagesPhaseBudget = requestTimeout * 1.2;
+        return new StartupAttemptDeadline(
+            cancellationToken,
+            totalBudget > DefaultTimeout ? totalBudget : DefaultTimeout,
+            runtimePackagesPhaseBudget > DefaultRuntimePackagesPhaseBudget
+                ? runtimePackagesPhaseBudget
+                : DefaultRuntimePackagesPhaseBudget
+        );
+    }
+
     public CancellationToken Token => _linkedCancellation.Token;
+
+    internal TimeSpan TotalBudget => _timeout;
 
     public bool HasExpired
     {
@@ -96,7 +149,7 @@ internal sealed class StartupAttemptDeadline : IDisposable
     internal void EnterPhase(StartupPhase phase, TimeSpan? budget = null)
     {
         Token.ThrowIfCancellationRequested();
-        var phaseBudget = budget ?? GetDefaultPhaseBudget(phase);
+        var phaseBudget = budget ?? GetPhaseBudget(phase);
         if (phaseBudget <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(budget), "Startup phase budget must be positive.");
@@ -219,12 +272,17 @@ internal sealed class StartupAttemptDeadline : IDisposable
         _ => throw new ArgumentOutOfRangeException(nameof(phase), phase, null),
     };
 
+    internal TimeSpan GetPhaseBudget(StartupPhase phase) =>
+        phase == StartupPhase.RuntimePackages && _runtimePackagesPhaseBudget is { } budget
+            ? budget
+            : GetDefaultPhaseBudget(phase);
+
     private static TimeSpan GetDefaultPhaseBudget(StartupPhase phase) => phase switch
     {
         StartupPhase.Theme => TimeSpan.FromSeconds(5),
         StartupPhase.Cli => TimeSpan.FromSeconds(10),
         StartupPhase.RuntimeHost => TimeSpan.FromSeconds(45),
-        StartupPhase.RuntimePackages => TimeSpan.FromSeconds(45),
+        StartupPhase.RuntimePackages => DefaultRuntimePackagesPhaseBudget,
         StartupPhase.AppPackageActivation => TimeSpan.FromSeconds(30),
         StartupPhase.ShellComposition => TimeSpan.FromSeconds(10),
         StartupPhase.MainWindowCreation => TimeSpan.FromSeconds(10),

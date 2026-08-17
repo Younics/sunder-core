@@ -6,14 +6,17 @@ namespace Sunder.App.Services;
 
 public sealed class RuntimeEventSubscriptionService(
     IRuntimeApiClientFactory runtimeApiClientFactory,
-    DeveloperLogService developerLog) : IAsyncDisposable
+    DeveloperLogService developerLog,
+    RuntimePackageRecoveryNotificationService? recoveryNotifications = null) : IAsyncDisposable
 {
     private static readonly TimeSpan PresentationWaitTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RecoveryPollInterval = TimeSpan.FromMilliseconds(100);
     private const int MaximumTerminalOutcomes = 64;
     private const int MaximumRetiredRuntimeInstances = 8;
     private readonly object _syncRoot = new();
     private readonly CancellationTokenSource _cancellation = new();
     private readonly SemaphoreSlim _presentationGate = new(1, 1);
+    private readonly SemaphoreSlim _recoveryGate = new(1, 1);
     private readonly Channel<PresentationRefreshRequest> _presentationRequests = Channel.CreateBounded<PresentationRefreshRequest>(
         new BoundedChannelOptions(1)
         {
@@ -28,6 +31,11 @@ public sealed class RuntimeEventSubscriptionService(
     private Task _subscriptionTask = Task.CompletedTask;
     private Task _presentationWorkerTask = Task.CompletedTask;
     private CancellationTokenSource? _supersededPresentation;
+    private CancellationTokenSource? _forcedRecoveryPresentation;
+    private string? _forcedRecoveryPackageId;
+    private string? _forcedRecoveryContentHash;
+    private RuntimePackageSnapshot? _forcedRecoverySnapshot;
+    private RecoveryPresentationTransfer? _recoveryPresentationTransfer;
     private TaskCompletionSource? _presentationsDrained;
     private TaskCompletionSource _appliedStampChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task>? _writePresentationAsync;
@@ -97,6 +105,9 @@ public sealed class RuntimeEventSubscriptionService(
                 initialPackageSources,
                 writePresentationAsync,
                 writeMetadataAsync);
+            recoveryNotifications?.SeedSilently(
+                initialSnapshot.RuntimeInstanceId,
+                initialSnapshot.EventSequence);
             _started = true;
         }
 
@@ -178,6 +189,281 @@ public sealed class RuntimeEventSubscriptionService(
         }
     }
 
+    internal Task<AppPackageUiRecoveryPresentationOutcome> ForcePackageRecoveryPresentationAsync(
+        string packageId,
+        string contentHash,
+        CancellationToken cancellationToken = default)
+        => ForcePackageRecoveryPresentationAsync(
+            packageId,
+            contentHash,
+            PresentationWaitTimeout,
+            cancellationToken);
+
+    internal async Task<AppPackageUiRecoveryPresentationOutcome> ForcePackageRecoveryPresentationAsync(
+        string packageId,
+        string contentHash,
+        TimeSpan presentationWaitTimeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentHash);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(
+            presentationWaitTimeout,
+            TimeSpan.Zero);
+
+        lock (_syncRoot)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            if (_writePresentationAsync is null)
+            {
+                throw new InvalidOperationException(
+                    "The Runtime presentation writer has not been initialized.");
+            }
+            if (++_activePresentationCount == 1)
+            {
+                _presentationsDrained = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+
+        using var timeoutCancellation = new CancellationTokenSource(presentationWaitTimeout);
+        using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutCancellation.Token,
+            _cancellation.Token);
+        var recoveryGateHeld = false;
+        try
+        {
+            await _recoveryGate.WaitAsync(waitCancellation.Token).ConfigureAwait(false);
+            recoveryGateHeld = true;
+            while (true)
+            {
+                waitCancellation.Token.ThrowIfCancellationRequested();
+                var writerStarted = false;
+                var shouldRetry = false;
+                var presentationGateHeld = false;
+                CancellationTokenSource? attemptCancellation = null;
+                Task<AppPackageUiRecoveryPresentationOutcome>? transferredRecovery = null;
+                try
+                {
+                    lock (_syncRoot)
+                    {
+                        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+                        attemptCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                            waitCancellation.Token);
+                        _forcedRecoveryPresentation = attemptCancellation;
+                        _forcedRecoveryPackageId = packageId;
+                        _forcedRecoveryContentHash = contentHash;
+                        _forcedRecoverySnapshot = null;
+                        _recoveryPresentationTransfer = null;
+                    }
+
+                    AppPackageRecoverySnapshotRead read;
+                    try
+                    {
+                        read = await ReadRecoverySnapshotAsync(
+                                packageId,
+                                contentHash,
+                                attemptCancellation.Token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (
+                        !waitCancellation.IsCancellationRequested
+                        && attemptCancellation.IsCancellationRequested)
+                    {
+                        if (GetForcedRecoveryTransferTask(attemptCancellation) is { } transfer)
+                        {
+                            transferredRecovery = transfer;
+                        }
+                        else
+                        {
+                            shouldRetry = true;
+                        }
+                        read = AppPackageRecoverySnapshotRead.Waiting;
+                    }
+
+                    if (read.Outcome == AppPackageRecoverySnapshotOutcome.ContentChanged)
+                    {
+                        return AppPackageUiRecoveryPresentationOutcome.ContentChanged;
+                    }
+                    if (read.Outcome == AppPackageRecoverySnapshotOutcome.Failed)
+                    {
+                        throw read.Exception!;
+                    }
+                    if (read.Outcome != AppPackageRecoverySnapshotOutcome.Ready)
+                    {
+                        shouldRetry = true;
+                    }
+                    else
+                    {
+                        lock (_syncRoot)
+                        {
+                            if (ReferenceEquals(_forcedRecoveryPresentation, attemptCancellation))
+                            {
+                                _forcedRecoverySnapshot = read.Snapshot;
+                            }
+                        }
+                        await _presentationGate.WaitAsync(attemptCancellation.Token)
+                            .ConfigureAwait(false);
+                        presentationGateHeld = true;
+                        attemptCancellation.Token.ThrowIfCancellationRequested();
+
+                        Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync;
+                        lock (_syncRoot)
+                        {
+                            if (_retiredRuntimeInstances.Contains(read.Snapshot!.RuntimeInstanceId)
+                                || IsNewerGenerationTracked(read.Snapshot))
+                            {
+                                shouldRetry = true;
+                                writePresentationAsync = null!;
+                            }
+                            else
+                            {
+                                writePresentationAsync = _writePresentationAsync
+                                    ?? throw new InvalidOperationException(
+                                        "The Runtime presentation writer has not been initialized.");
+                            }
+                        }
+
+                        if (!shouldRetry)
+                        {
+                            writerStarted = true;
+                            await writePresentationAsync(
+                                    read.Snapshot!,
+                                    read.PackageSources!,
+                                    AppPackageQuarantineRetryIntent.ForAutomaticPackageRecovery(packageId),
+                                    attemptCancellation.Token)
+                                .ConfigureAwait(false);
+                            attemptCancellation.Token.ThrowIfCancellationRequested();
+
+                            var superseded = false;
+                            lock (_syncRoot)
+                            {
+                                if (!ReferenceEquals(_forcedRecoveryPresentation, attemptCancellation)
+                                    || attemptCancellation.IsCancellationRequested
+                                    || _retiredRuntimeInstances.Contains(read.Snapshot.RuntimeInstanceId)
+                                    || IsNewerGenerationTracked(read.Snapshot))
+                                {
+                                    superseded = true;
+                                    transferredRecovery = ReferenceEquals(
+                                        _forcedRecoveryPresentation,
+                                        attemptCancellation)
+                                            ? _recoveryPresentationTransfer?.Completion.Task
+                                            : null;
+                                }
+                                else
+                                {
+                                    CommitForcedRecoveryPresentation(
+                                        read.Snapshot,
+                                        read.PackageSources!);
+                                }
+                            }
+                            if (superseded)
+                            {
+                                if (transferredRecovery is null)
+                                {
+                                    return AppPackageUiRecoveryPresentationOutcome.Superseded;
+                                }
+                            }
+                            else
+                            {
+                                return AppPackageUiRecoveryPresentationOutcome.Applied;
+                            }
+                        }
+                    }
+                }
+                catch (OperationCanceledException) when (
+                    !waitCancellation.IsCancellationRequested
+                    && attemptCancellation?.IsCancellationRequested == true)
+                {
+                    if (writerStarted)
+                    {
+                        if (GetForcedRecoveryTransferTask(attemptCancellation) is { } transfer)
+                        {
+                            transferredRecovery = transfer;
+                        }
+                        else
+                        {
+                            return AppPackageUiRecoveryPresentationOutcome.Superseded;
+                        }
+                    }
+                    else if (GetForcedRecoveryTransferTask(attemptCancellation) is { } transfer)
+                    {
+                        transferredRecovery = transfer;
+                    }
+                    else
+                    {
+                        shouldRetry = true;
+                    }
+                }
+                finally
+                {
+                    lock (_syncRoot)
+                    {
+                        if (ReferenceEquals(_forcedRecoveryPresentation, attemptCancellation))
+                        {
+                            _forcedRecoveryPresentation = null;
+                            _forcedRecoveryPackageId = null;
+                            _forcedRecoveryContentHash = null;
+                            _forcedRecoverySnapshot = null;
+                        }
+                    }
+                    attemptCancellation?.Dispose();
+                    if (presentationGateHeld)
+                    {
+                        _presentationGate.Release();
+                    }
+                }
+
+                if (transferredRecovery is not null)
+                {
+                    return await transferredRecovery.WaitAsync(waitCancellation.Token)
+                        .ConfigureAwait(false);
+                }
+                if (shouldRetry)
+                {
+                    await Task.Delay(RecoveryPollInterval, waitCancellation.Token)
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested
+            && timeoutCancellation.IsCancellationRequested
+            && !_cancellation.IsCancellationRequested)
+        {
+            return AppPackageUiRecoveryPresentationOutcome.TimedOut;
+        }
+        finally
+        {
+            TaskCompletionSource? presentationsDrained = null;
+            lock (_syncRoot)
+            {
+                if (_recoveryPresentationTransfer is { } transfer
+                    && string.Equals(
+                        transfer.PackageId,
+                        packageId,
+                        StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(
+                        transfer.ContentHash,
+                        contentHash,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    _recoveryPresentationTransfer = null;
+                }
+                if (--_activePresentationCount == 0)
+                {
+                    presentationsDrained = _presentationsDrained;
+                }
+            }
+            if (recoveryGateHeld)
+            {
+                _recoveryGate.Release();
+            }
+            presentationsDrained?.TrySetResult();
+        }
+    }
+
     internal void ReleasePresentation()
     {
         lock (_syncRoot)
@@ -240,6 +526,7 @@ public sealed class RuntimeEventSubscriptionService(
     {
         if (snapshot.BootstrapState == RuntimeBootstrapState.Failed)
         {
+            CancelForcedRecoveryPresentation();
             var failure = CreateBootstrapFailure(snapshot);
             RecordTerminalFailure(snapshot.RuntimeInstanceId, snapshot.SessionGeneration, failure);
             throw failure;
@@ -251,6 +538,11 @@ public sealed class RuntimeEventSubscriptionService(
 
         CancellationTokenSource supersededPresentation;
         ShellStartupCoordinator.ValidatePackageSourceGeneration(snapshot, packageSources);
+        explicitRetryPackageIds = PrepareForcedRecoverySupersession(
+            snapshot,
+            packageSources,
+            explicitRetryPackageIds,
+            out var recoveryTransfer);
         if (await TryApplySameGenerationMetadataAsync(snapshot, cancellationToken).ConfigureAwait(false))
         {
             return;
@@ -320,6 +612,14 @@ public sealed class RuntimeEventSubscriptionService(
                     _appliedStampChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     changed.TrySetResult();
                     visibleCommitSucceeded = true;
+                    if (ReferenceEquals(
+                        _recoveryPresentationTransfer,
+                        recoveryTransfer))
+                    {
+                        _recoveryPresentationTransfer = null;
+                    }
+                    recoveryTransfer?.Completion.TrySetResult(
+                        AppPackageUiRecoveryPresentationOutcome.Applied);
                 }
             }
             finally
@@ -333,6 +633,7 @@ public sealed class RuntimeEventSubscriptionService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
+            recoveryTransfer?.Completion.TrySetException(ex);
             RecordTerminalFailure(snapshot.RuntimeInstanceId, snapshot.SessionGeneration, ex);
             throw;
         }
@@ -375,6 +676,9 @@ public sealed class RuntimeEventSubscriptionService(
         lock (_syncRoot)
         {
             _supersededPresentation?.Cancel();
+            _forcedRecoveryPresentation?.Cancel();
+            _recoveryPresentationTransfer?.Completion.TrySetResult(
+                AppPackageUiRecoveryPresentationOutcome.Superseded);
             _appliedStampChanged.TrySetResult();
             presentationsDrained = _presentationsDrained?.Task ?? Task.CompletedTask;
         }
@@ -401,8 +705,15 @@ public sealed class RuntimeEventSubscriptionService(
                 _writeMetadataAsync = null;
                 _supersededPresentation?.Dispose();
                 _supersededPresentation = null;
+                _forcedRecoveryPresentation?.Dispose();
+                _forcedRecoveryPresentation = null;
+                _forcedRecoveryPackageId = null;
+                _forcedRecoveryContentHash = null;
+                _forcedRecoverySnapshot = null;
+                _recoveryPresentationTransfer = null;
             }
             _presentationGate.Dispose();
+            _recoveryGate.Dispose();
             _cancellation.Dispose();
         }
     }
@@ -464,6 +775,7 @@ public sealed class RuntimeEventSubscriptionService(
             {
                 using var client = runtimeApiClientFactory.CreateClient<IRuntimeEventClient>();
                 var snapshot = await client.GetRuntimeEventSnapshotAsync(sequenceId, cancellationToken).ConfigureAwait(false);
+                recoveryNotifications?.SeedSilently(snapshot.RuntimeInstanceId, snapshot.SequenceId);
                 if (snapshot.RuntimeInstanceId != runtimeInstanceId)
                 {
                     using var handshakeClient = runtimeApiClientFactory.CreateClient<IRuntimeDevPackageOwnerClient>();
@@ -477,7 +789,7 @@ public sealed class RuntimeEventSubscriptionService(
                     QueuePresentationRefresh(
                         snapshot.RuntimeInstanceId,
                         snapshot.SessionGeneration,
-                        GetCatchUpRetryPackageIds(snapshot));
+                        explicitRetryPackageIds: null);
                 }
                 else
                 {
@@ -487,7 +799,7 @@ public sealed class RuntimeEventSubscriptionService(
                         QueuePresentationRefresh(
                             snapshot.RuntimeInstanceId,
                             snapshot.SessionGeneration,
-                            GetCatchUpRetryPackageIds(snapshot));
+                            explicitRetryPackageIds: null);
                     }
                     else if (HasSnapshotMetadataChange(snapshot))
                     {
@@ -511,6 +823,11 @@ public sealed class RuntimeEventSubscriptionService(
                         break;
                     }
                     sequenceId = runtimeEvent.SequenceId;
+                    if (recoveryNotifications is not null)
+                    {
+                        await recoveryNotifications.HandleAsync(runtimeEvent, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
                     if (runtimeEvent.Kind is RuntimeEventKind.Snapshot
                         or RuntimeEventKind.SessionGenerationChanged
                         or RuntimeEventKind.BootstrapStateChanged
@@ -519,9 +836,7 @@ public sealed class RuntimeEventSubscriptionService(
                         QueuePresentationRefresh(
                             runtimeEvent.RuntimeInstanceId,
                             runtimeEvent.SessionGeneration,
-                            runtimeEvent.Kind == RuntimeEventKind.SessionGenerationChanged
-                                ? runtimeEvent.PackageIds
-                                : null);
+                            explicitRetryPackageIds: null);
                     }
                     else if (runtimeEvent.Kind == RuntimeEventKind.DevReloadCompleted)
                     {
@@ -609,7 +924,12 @@ public sealed class RuntimeEventSubscriptionService(
                 ++_latestPresentationRequestId,
                 runtimeInstanceId,
                 sessionGeneration,
-                explicitRetryPackageIds?.ToArray());
+                explicitRetryPackageIds switch
+                {
+                    AppPackageQuarantineRetryIntent retryIntent => retryIntent.Snapshot(),
+                    null => null,
+                    _ => explicitRetryPackageIds.ToArray(),
+                });
             if (_activePresentationCount > 0
                 && _latestSnapshot is { } active
                 && (active.RuntimeInstanceId != runtimeInstanceId
@@ -633,6 +953,211 @@ public sealed class RuntimeEventSubscriptionService(
         }
 
         _presentationRequests.Writer.TryWrite(request);
+    }
+
+    private async Task<AppPackageRecoverySnapshotRead> ReadRecoverySnapshotAsync(
+        string packageId,
+        string contentHash,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var client = runtimeApiClientFactory.CreateClient<IRuntimeShellClient>();
+            var snapshot = await client.GetRuntimePackageSnapshotAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (snapshot.BootstrapState == RuntimeBootstrapState.Failed)
+            {
+                return AppPackageRecoverySnapshotRead.Failed(CreateBootstrapFailure(snapshot));
+            }
+            if (snapshot.BootstrapState != RuntimeBootstrapState.Ready)
+            {
+                return AppPackageRecoverySnapshotRead.Waiting;
+            }
+
+            var packageSources = await client.GetActivePackageUiSnapshotsAsync(
+                    AppPackageTargetEnvironment.CurrentRid,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            ShellStartupCoordinator.ValidatePackageSourceGeneration(snapshot, packageSources);
+            var matchingSources = packageSources
+                .Where(source => string.Equals(
+                    source.PackageId,
+                    packageId,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (matchingSources.Any(source => !string.Equals(
+                    source.ContentHash,
+                    contentHash,
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                return AppPackageRecoverySnapshotRead.ContentChanged;
+            }
+
+            var packageIsActive = snapshot.ActivePackages.Any(package =>
+                string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+                && package.IsEnabled
+                && (package.HostRoles & PackageHostRoles.App) != 0);
+            return packageIsActive && matchingSources.Length == 1
+                ? AppPackageRecoverySnapshotRead.Ready(snapshot, packageSources)
+                : AppPackageRecoverySnapshotRead.Waiting;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (AppPackageUiFaultPolicy.IsRecoverable(exception))
+        {
+            return AppPackageRecoverySnapshotRead.WaitingAfter(exception);
+        }
+    }
+
+    private void CommitForcedRecoveryPresentation(
+        RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources)
+    {
+        var committedSnapshot = _latestSnapshot is { } latest
+            && latest.RuntimeInstanceId == snapshot.RuntimeInstanceId
+            && latest.SessionGeneration == snapshot.SessionGeneration
+            && latest.EventSequence > snapshot.EventSequence
+                ? latest
+                : snapshot;
+        if (_appliedSnapshot is { } applied
+            && applied.RuntimeInstanceId != committedSnapshot.RuntimeInstanceId)
+        {
+            RetireRuntimeInstance(applied.RuntimeInstanceId);
+        }
+
+        _terminalOutcomes.Remove((
+            committedSnapshot.RuntimeInstanceId,
+            committedSnapshot.SessionGeneration));
+        _latestSnapshot = committedSnapshot;
+        _appliedSnapshot = committedSnapshot;
+        _appliedPackageSources = packageSources.ToArray();
+        PrunePresentationHistory(committedSnapshot);
+        var changed = _appliedStampChanged;
+        _appliedStampChanged = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        changed.TrySetResult();
+    }
+
+    private bool IsNewerGenerationTracked(RuntimePackageSnapshot snapshot)
+        => _latestSnapshot is { } latest
+            && latest.RuntimeInstanceId == snapshot.RuntimeInstanceId
+            && latest.SessionGeneration > snapshot.SessionGeneration;
+
+    private IReadOnlyCollection<string>? PrepareForcedRecoverySupersession(
+        RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
+        IReadOnlyCollection<string>? explicitRetryPackageIds,
+        out RecoveryPresentationTransfer? transfer)
+    {
+        transfer = null;
+        lock (_syncRoot)
+        {
+            if (_forcedRecoveryPresentation is null
+                && _recoveryPresentationTransfer is null)
+            {
+                return explicitRetryPackageIds;
+            }
+            var recoveryPackageId = _recoveryPresentationTransfer?.PackageId
+                ?? _forcedRecoveryPackageId!;
+            var recoveryContentHash = _recoveryPresentationTransfer?.ContentHash
+                ?? _forcedRecoveryContentHash!;
+            var recoverySnapshot = _forcedRecoverySnapshot ?? _latestSnapshot;
+            if (recoverySnapshot is null)
+            {
+                _forcedRecoveryPresentation?.Cancel();
+                return explicitRetryPackageIds;
+            }
+            if (!ShouldAcceptSnapshot(snapshot)
+                && (snapshot.RuntimeInstanceId != recoverySnapshot.RuntimeInstanceId
+                    || snapshot.SessionGeneration != recoverySnapshot.SessionGeneration))
+            {
+                return explicitRetryPackageIds;
+            }
+            var supersedesRecovery = snapshot.RuntimeInstanceId != recoverySnapshot.RuntimeInstanceId
+                || snapshot.SessionGeneration > recoverySnapshot.SessionGeneration;
+            var exactTargetIsActive = IsExactRecoveryTargetActive(
+                snapshot,
+                packageSources,
+                recoveryPackageId,
+                recoveryContentHash);
+            if (!supersedesRecovery)
+            {
+                if (snapshot.RuntimeInstanceId == recoverySnapshot.RuntimeInstanceId
+                    && snapshot.SessionGeneration == recoverySnapshot.SessionGeneration
+                    && !exactTargetIsActive)
+                {
+                    _forcedRecoveryPresentation?.Cancel();
+                }
+                return explicitRetryPackageIds;
+            }
+
+            if (!exactTargetIsActive)
+            {
+                _recoveryPresentationTransfer?.Completion.TrySetResult(
+                    AppPackageUiRecoveryPresentationOutcome.ContentChanged);
+                _recoveryPresentationTransfer = null;
+                _forcedRecoveryPresentation?.Cancel();
+                return explicitRetryPackageIds;
+            }
+
+            transfer = _recoveryPresentationTransfer ??= new RecoveryPresentationTransfer(
+                recoveryPackageId,
+                recoveryContentHash);
+            _forcedRecoveryPresentation?.Cancel();
+            return AppPackageQuarantineRetryIntent.ForAutomaticPackageRecovery(
+                (explicitRetryPackageIds ?? []).Append(transfer.PackageId));
+        }
+    }
+
+    private void CancelForcedRecoveryPresentation()
+    {
+        lock (_syncRoot)
+        {
+            _recoveryPresentationTransfer?.Completion.TrySetResult(
+                AppPackageUiRecoveryPresentationOutcome.Superseded);
+            _forcedRecoveryPresentation?.Cancel();
+        }
+    }
+
+    private Task<AppPackageUiRecoveryPresentationOutcome>? GetForcedRecoveryTransferTask(
+        CancellationTokenSource attemptCancellation)
+    {
+        lock (_syncRoot)
+        {
+            return ReferenceEquals(_forcedRecoveryPresentation, attemptCancellation)
+                ? _recoveryPresentationTransfer?.Completion.Task
+                : null;
+        }
+    }
+
+    private static bool IsExactRecoveryTargetActive(
+        RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
+        string packageId,
+        string contentHash)
+    {
+        var packageIsActive = snapshot.ActivePackages.Any(package =>
+            string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+            && package.IsEnabled
+            && (package.HostRoles & PackageHostRoles.App) != 0);
+        if (!packageIsActive)
+        {
+            return false;
+        }
+
+        var matchingSources = packageSources
+            .Where(source => string.Equals(
+                source.PackageId,
+                packageId,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        return matchingSources.Length == 1
+            && string.Equals(
+                matchingSources[0].ContentHash,
+                contentHash,
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private bool ShouldAcceptSnapshot(RuntimePackageSnapshot snapshot)
@@ -763,19 +1288,9 @@ public sealed class RuntimeEventSubscriptionService(
             }
         }
 
-        return packageIds;
-    }
-
-    private static IReadOnlyCollection<string>? GetCatchUpRetryPackageIds(RuntimeEventSnapshot snapshot)
-    {
-        var packageIds = snapshot.Events
-            .Where(runtimeEvent => runtimeEvent.Kind == RuntimeEventKind.SessionGenerationChanged
-                                   && runtimeEvent.RuntimeInstanceId == snapshot.RuntimeInstanceId
-                                   && runtimeEvent.SessionGeneration == snapshot.SessionGeneration)
-            .SelectMany(runtimeEvent => runtimeEvent.PackageIds)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        return packageIds.Length == 0 ? null : packageIds;
+        return explicitRetryPackageIds is AppPackageQuarantineRetryIntent retryIntent
+            ? retryIntent.WithPackageIds(packageIds)
+            : packageIds;
     }
 
     private static bool HasSnapshotMetadataChange(RuntimeEventSnapshot snapshot)
@@ -856,4 +1371,44 @@ public sealed class RuntimeEventSubscriptionService(
         Guid RuntimeInstanceId,
         long SessionGeneration,
         IReadOnlyCollection<string>? ExplicitRetryPackageIds);
+
+    private sealed record RecoveryPresentationTransfer(
+        string PackageId,
+        string ContentHash)
+    {
+        public TaskCompletionSource<AppPackageUiRecoveryPresentationOutcome> Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private enum AppPackageRecoverySnapshotOutcome
+    {
+        Waiting,
+        Ready,
+        ContentChanged,
+        Failed,
+    }
+
+    private sealed record AppPackageRecoverySnapshotRead(
+        AppPackageRecoverySnapshotOutcome Outcome,
+        RuntimePackageSnapshot? Snapshot = null,
+        IReadOnlyList<PackageUiSnapshotDescriptor>? PackageSources = null,
+        Exception? Exception = null)
+    {
+        public static AppPackageRecoverySnapshotRead Waiting { get; } = new(
+            AppPackageRecoverySnapshotOutcome.Waiting);
+
+        public static AppPackageRecoverySnapshotRead ContentChanged { get; } = new(
+            AppPackageRecoverySnapshotOutcome.ContentChanged);
+
+        public static AppPackageRecoverySnapshotRead Ready(
+            RuntimePackageSnapshot snapshot,
+            IReadOnlyList<PackageUiSnapshotDescriptor> packageSources)
+            => new(AppPackageRecoverySnapshotOutcome.Ready, snapshot, packageSources);
+
+        public static AppPackageRecoverySnapshotRead Failed(Exception exception)
+            => new(AppPackageRecoverySnapshotOutcome.Failed, Exception: exception);
+
+        public static AppPackageRecoverySnapshotRead WaitingAfter(Exception exception)
+            => new(AppPackageRecoverySnapshotOutcome.Waiting, Exception: exception);
+    }
 }

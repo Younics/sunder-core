@@ -27,6 +27,7 @@ export interface WorkerV3ConformanceCorpus {
         readonly kind: string;
         readonly code: string;
         readonly message: string;
+        readonly details: JsonValue;
       };
     };
     readonly undeclaredDomainFault: RpcCase & {

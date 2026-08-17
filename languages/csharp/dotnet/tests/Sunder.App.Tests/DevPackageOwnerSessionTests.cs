@@ -1,3 +1,4 @@
+using System.Net;
 using Sunder.App.Services;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
@@ -118,6 +119,48 @@ public sealed class DevPackageOwnerSessionTests
         Assert.Equal(client.Mutations[0].Folders, replacement.Folders);
     }
 
+    [Fact]
+    public async Task Heartbeat_WhenLeaseWasReaped_ReacquiresDesiredSetInSameRuntime()
+    {
+        var runtimeId = Guid.NewGuid();
+        var runtimeUrl = new Uri("http://127.0.0.1:5275/");
+        var connection = new RuntimeConnectionState(runtimeUrl);
+        connection.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "runtime-bearer-token"));
+        var client = new OwnerClient(runtimeId)
+        {
+            LeaseLifetime = TimeSpan.FromMilliseconds(30),
+            RejectFirstHeartbeat = true,
+        };
+        var heartbeatFailureLogged = false;
+        void Observe(AppSessionLogSnapshotEntry entry)
+            => heartbeatFailureLogged |= string.Equals(
+                entry.Message,
+                "The App dev package owner heartbeat failed; the Runtime TTL will fence a lost App session.",
+                StringComparison.Ordinal);
+
+        AppSessionLog.EntryWritten += Observe;
+        try
+        {
+            await using var session = new DevPackageOwnerSession(new OwnerClientFactory(client), connection);
+            var folders = new[] { Path.Combine(".", "dev-a"), Path.Combine(".", "dev-b") };
+            await session.AcquireAsync(folders, watch: true);
+
+            await client.SecondMutation.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+            Assert.Equal(2, client.Mutations.Count);
+            var replacement = client.Mutations[1];
+            Assert.Equal(runtimeId, replacement.RuntimeInstanceId);
+            Assert.Equal(1, replacement.Revision);
+            Assert.NotEqual(client.Mutations[0].MutationId, replacement.MutationId);
+            Assert.Equal(client.Mutations[0].Folders, replacement.Folders);
+            Assert.False(heartbeatFailureLogged);
+        }
+        finally
+        {
+            AppSessionLog.EntryWritten -= Observe;
+        }
+    }
+
     private sealed class OwnerClientFactory(OwnerClient client) : IRuntimeApiClientFactory
     {
         public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
@@ -136,8 +179,10 @@ public sealed class DevPackageOwnerSessionTests
         public DevPackageOwnerReleaseRequest? Release => Releases.LastOrDefault();
         public bool FailFirstMutation { get; init; }
         public bool FailFirstRelease { get; init; }
+        public bool RejectFirstHeartbeat { get; init; }
         public TimeSpan LeaseLifetime { get; init; } = TimeSpan.FromMinutes(1);
         public TaskCompletionSource SecondMutation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _heartbeatCount;
 
         public Guid RuntimeId
         {
@@ -184,7 +229,15 @@ public sealed class DevPackageOwnerSessionTests
             string ownerId,
             DevPackageOwnerHeartbeatRequest request,
             CancellationToken cancellationToken = default)
-            => Task.FromResult(new DevPackageOwnerLeaseResponse(
+        {
+            if (RejectFirstHeartbeat && Interlocked.Increment(ref _heartbeatCount) == 1)
+            {
+                throw new RuntimeClientException(
+                    HttpStatusCode.Unauthorized,
+                    "Authentication required",
+                    "Dev package owner credentials are invalid.");
+            }
+            return Task.FromResult(new DevPackageOwnerLeaseResponse(
                 RuntimeId,
                 ownerId,
                 Mutation!.MutationId,
@@ -192,6 +245,7 @@ public sealed class DevPackageOwnerSessionTests
                 DateTimeOffset.UtcNow.Add(LeaseLifetime),
                 Mutation.Revision,
                 []));
+        }
 
         public Task ReleaseDevPackageOwnerAsync(
             string ownerId,

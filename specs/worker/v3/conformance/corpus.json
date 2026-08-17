@@ -1,5 +1,5 @@
 {
-  "formatVersion": 2,
+  "formatVersion": 3,
   "protocol": {
     "identity": "sunder.worker.v3",
     "version": 3
@@ -20,6 +20,21 @@
         "crlf-header-terminator",
         "bounded-frame-body",
         "reject-trailing-or-conflicting-headers"
+      ]
+    },
+    "resource-profile": {
+      "requirements": [
+        "closed-effective-profile-in-host-hello",
+        "sha256-profile-hash-acknowledged-by-worker-ready",
+        "exact-profile-hash-match-required"
+      ]
+    },
+    "transport-bounds": {
+      "requirements": [
+        "rpc-value-bytes-plus-64k-envelope-reserve",
+        "rpc-value-depth-plus-eight-transport-depth",
+        "count-and-byte-bounded-write-and-stream-queues",
+        "resource-exhaustion-is-call-local"
       ]
     },
     "json": {
@@ -151,7 +166,11 @@
       "error": {
         "kind": "domain",
         "code": "example.rejected",
-        "message": "rejected"
+        "message": "rejected",
+        "details": {
+          "reason": "conformance rejection",
+          "retryable": false
+        }
       }
     },
     "undeclaredDomainFault": {

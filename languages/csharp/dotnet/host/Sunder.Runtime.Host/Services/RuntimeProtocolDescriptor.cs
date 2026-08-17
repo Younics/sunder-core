@@ -1,5 +1,6 @@
 using System.Reflection;
 using Sunder.Runtime.Contracts;
+using Sunder.Runtime.LocalState;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -17,10 +18,13 @@ internal sealed class RuntimeProtocolDescriptor
         RuntimeProtocolFeatures.SchemaFirstRpcV2,
         RuntimeProtocolFeatures.RpcPermissionsV2,
         RuntimeProtocolFeatures.AppWebRpcV2,
+        RuntimeProtocolFeatures.RuntimeResourcePolicyV1,
+        RuntimeProtocolFeatures.PackageRuntimeRecoveryV1,
     });
 
-    public RuntimeProtocolDescriptor()
+    public RuntimeProtocolDescriptor(RuntimeResourcePolicy? resourcePolicy = null)
     {
+        resourcePolicy ??= RuntimeResourcePolicies.Standard;
         var assembly = typeof(RuntimeProtocolDescriptor).Assembly;
         var informationalVersion = assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
@@ -37,7 +41,15 @@ internal sealed class RuntimeProtocolDescriptor
             new RuntimeProductVersionDiagnostics(
                 "Sunder.Runtime.Host",
                 productVersion,
-                string.IsNullOrWhiteSpace(informationalVersion) ? productVersion : informationalVersion));
+                string.IsNullOrWhiteSpace(informationalVersion) ? productVersion : informationalVersion),
+            new RuntimeResourceProfileDescriptor(
+                RuntimeResourcePolicyContract.GetEffectiveProfileHash(resourcePolicy),
+                resourcePolicy.MaximumRpcValueBytes,
+                resourcePolicy.MaximumValueDepth,
+                resourcePolicy.MaximumValueNodes,
+                resourcePolicy.MaximumObjectMembers,
+                resourcePolicy.MaximumInlineDecodedBytes,
+                resourcePolicy.MaximumContentReferenceBytes));
     }
 
     public RuntimeHandshakeResponse Handshake { get; }

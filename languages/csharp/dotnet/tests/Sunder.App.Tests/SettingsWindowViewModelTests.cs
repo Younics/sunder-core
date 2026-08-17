@@ -239,6 +239,43 @@ public sealed class SettingsWindowViewModelTests
     }
 
     [Fact]
+    public async Task HostedSettings_AfterViewQuarantine_ReturnsFallbackWithoutNavigationCandidate()
+    {
+        using var runtimeClient = new FakeRuntimeApiClient();
+        var probe = new SettingsNavigationProbe
+        {
+            NavigateAsync = static (_, _) => ValueTask.FromException(
+                new InvalidOperationException("settings view failed")),
+        };
+        await using var packageViewHostService = CreateHostedSettingsViewHost(probe);
+        var coordinator = new SettingsPackageSelectionCoordinator(
+            runtimeClient,
+            packageViewHostService);
+        var first = Assert.IsType<HostedPackageSettingsSelection>(await coordinator.LoadAsync(
+            "agent",
+            schema: null,
+            requireHostedViewReplacement: false,
+            CancellationToken.None));
+        var firstBoundary = Assert.IsType<HostedPackageViewBoundary>(first.View);
+
+        await firstBoundary.OnNavigatedToAsync(new PackageViewNavigationContext(
+            "settings:agent",
+            new Dictionary<string, string?>()));
+        first.Dispose();
+
+        var retry = Assert.IsType<HostedPackageSettingsSelection>(await coordinator.LoadAsync(
+            "agent",
+            schema: null,
+            requireHostedViewReplacement: true,
+            CancellationToken.None));
+        var fallback = Assert.IsType<HostedPackageViewBoundary>(retry.View);
+
+        Assert.Null(retry.Candidate);
+        Assert.True(fallback.IsFaulted);
+        Assert.Null(fallback.HostedView);
+    }
+
+    [Fact]
     public async Task RefreshPackageSectionsAsync_LoadsNewPackageSchemas()
     {
         using var runtimeClient = new FakeRuntimeApiClient
@@ -413,7 +450,7 @@ public sealed class SettingsWindowViewModelTests
     }
 
     [Fact]
-    public async Task SelectPackageSettingsAsync_WhenHostedNavigationFails_PreservesUsefulErrorText()
+    public async Task HostedSettings_WhenViewFaults_DisplaysFallbackAndRestoresItOnReopen()
     {
         using var runtimeClient = new FakeRuntimeApiClient();
         var probe = new SettingsNavigationProbe
@@ -429,9 +466,53 @@ public sealed class SettingsWindowViewModelTests
 
         var selected = await viewModel.SelectPackageSettingsAsync("agent");
 
-        Assert.False(selected);
-        Assert.Equal("Appearance", viewModel.SelectedTitle);
-        Assert.Contains("Navigation target failed.", viewModel.StatusText, StringComparison.Ordinal);
+        Assert.True(selected);
+        Assert.True(viewModel.IsPackageSelection);
+        var firstFallback = Assert.IsType<HostedPackageViewBoundary>(
+            viewModel.HostedSettingsView);
+        Assert.True(firstFallback.IsFaulted);
+        Assert.DoesNotContain("Navigation target failed.", viewModel.StatusText, StringComparison.Ordinal);
+
+        viewModel.DetachHostedPackageSettingsView();
+        await viewModel.RefreshPackageSectionsAsync();
+
+        var reopenedFallback = Assert.IsType<HostedPackageViewBoundary>(
+            viewModel.HostedSettingsView);
+        Assert.NotSame(firstFallback, reopenedFallback);
+        Assert.True(reopenedFallback.IsFaulted);
+        Assert.True(viewModel.IsPackageSelection);
+        Assert.Single(probe.Views);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HostedSettings_WhenSelectionThrowsFatalFault_PropagatesIt(
+        bool wrapped)
+    {
+        using var runtimeClient = new FakeRuntimeApiClient();
+        var fatal = new OutOfMemoryException("fatal settings fault");
+        Exception fault = wrapped
+            ? new InvalidOperationException("wrapped fatal settings fault", fatal)
+            : fatal;
+        var probe = new SettingsNavigationProbe
+        {
+            PrepareAsync = (_, _, _) => ValueTask.FromException(fault),
+        };
+        await using var packageViewHostService = CreateHostedSettingsViewHost(probe);
+        using var viewModel = new SettingsWindowViewModel(
+            runtimeClient,
+            packageViewHostService,
+            new CliInstallationService());
+        await viewModel.RefreshPackageSectionsAsync();
+
+        var thrown = await Record.ExceptionAsync(() =>
+            viewModel.SelectPackageSettingsAsync("agent"));
+
+        Assert.Same(fault, thrown);
+        Assert.False(viewModel.IsBusy);
+        Assert.Null(viewModel.HostedSettingsView);
+        Assert.Null(viewModel.StagedHostedSettingsView);
     }
 
     [Fact]
@@ -487,6 +568,123 @@ public sealed class SettingsWindowViewModelTests
 
         Assert.False(saved);
         Assert.Equal("Save failed.", viewModel.StatusText);
+    }
+
+    [Fact]
+    public async Task AdvancedRuntimeResources_ShowsDesiredAndReportedCurrentEffectivePolicy()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-settings-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var custom = new RuntimeResourcePolicy(
+                10 * 1024 * 1024,
+                40,
+                750_000,
+                8_000,
+                640 * 1024,
+                96 * 1024 * 1024);
+            var settingsService = new AppRuntimeResourcePolicySettingsService(
+                Path.Combine(root, "runtime-resource-policy.json"));
+            settingsService.Save(new RuntimeResourcePolicySelection(RuntimeResourcePolicyPreset.Custom, custom));
+            var statusSource = new FakeRuntimeResourcePolicyStatusSource(
+                RuntimeResourcePolicyEffectiveStatus.Available(custom));
+            using var runtimeClient = new FakeRuntimeApiClient();
+            using var viewModel = new SettingsWindowViewModel(
+                runtimeClient,
+                PackageViewHostService.Empty,
+                new CliInstallationService(),
+                runtimeResourcePolicySettingsService: settingsService,
+                runtimeResourcePolicyStatusSource: statusSource);
+
+            await viewModel.SelectSectionAsync(viewModel.CoreSections.Single(section => section.Id == "advanced"));
+
+            Assert.True(viewModel.ShowAdvancedSettings);
+            Assert.True(viewModel.RuntimeResources.IsCustom);
+            Assert.Equal("10", viewModel.RuntimeResources.CustomRpcValueMiBText);
+            Assert.Contains("10 MiB RPC value", viewModel.RuntimeResources.DesiredEffectiveText, StringComparison.Ordinal);
+            Assert.Equal(viewModel.RuntimeResources.DesiredProfileHash, viewModel.RuntimeResources.CurrentProfileHash);
+            Assert.False(viewModel.RuntimeResources.ShowPendingNotice);
+            Assert.Equal(1, statusSource.GetCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyAsync_AdvancedRuntimeResourcesSavesOnlyAndDoesNotRestartRuntime()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-settings-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settingsPath = Path.Combine(root, "runtime-resource-policy.json");
+            var settingsService = new AppRuntimeResourcePolicySettingsService(settingsPath);
+            var statusSource = new FakeRuntimeResourcePolicyStatusSource(
+                RuntimeResourcePolicyEffectiveStatus.Unavailable("Handshake field is not available."));
+            using var runtimeClient = new FakeRuntimeApiClient();
+            using var viewModel = new SettingsWindowViewModel(
+                runtimeClient,
+                PackageViewHostService.Empty,
+                new CliInstallationService(),
+                runtimeResourcePolicySettingsService: settingsService,
+                runtimeResourcePolicyStatusSource: statusSource);
+            await viewModel.SelectSectionAsync(viewModel.CoreSections.Single(section => section.Id == "advanced"));
+            viewModel.RuntimeResources.SelectedPresetOption = viewModel.RuntimeResources.PresetOptions.Single(
+                option => option.Preset == RuntimeResourcePolicyPreset.Custom);
+            viewModel.RuntimeResources.CustomRpcValueMiBText = "33";
+            viewModel.RuntimeResources.SelectedPresetOption = viewModel.RuntimeResources.PresetOptions.Single(
+                option => option.Preset == RuntimeResourcePolicyPreset.Large);
+
+            var applied = await viewModel.ApplyAsync();
+
+            Assert.True(applied);
+            Assert.Equal(RuntimeResourcePolicyPreset.Large, settingsService.Load().Preset);
+            Assert.Equal(RuntimeResourcePolicies.Standard, settingsService.Load().CustomPolicy);
+            Assert.Equal("Runtime resource policy saved. Pending until Runtime restarts.", viewModel.StatusText);
+            Assert.True(viewModel.RuntimeResources.ShowPendingNotice);
+            Assert.Equal(1, statusSource.GetCount);
+            Assert.Equal(0, runtimeClient.SavePackageConfigurationValuesCallCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyAsync_AdvancedCustomValueOutsideRangeIsRejectedWithoutWritingSettings()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-settings-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settingsPath = Path.Combine(root, "runtime-resource-policy.json");
+            var settingsService = new AppRuntimeResourcePolicySettingsService(settingsPath);
+            using var runtimeClient = new FakeRuntimeApiClient();
+            using var viewModel = new SettingsWindowViewModel(
+                runtimeClient,
+                PackageViewHostService.Empty,
+                new CliInstallationService(),
+                runtimeResourcePolicySettingsService: settingsService);
+            await viewModel.SelectSectionAsync(viewModel.CoreSections.Single(section => section.Id == "advanced"));
+            viewModel.RuntimeResources.SelectedPresetOption = viewModel.RuntimeResources.PresetOptions.Single(
+                option => option.Preset == RuntimeResourcePolicyPreset.Custom);
+            viewModel.RuntimeResources.CustomRpcValueMiBText = "33";
+
+            var applied = await viewModel.ApplyAsync();
+
+            Assert.False(applied);
+            Assert.False(File.Exists(settingsPath));
+            Assert.True(viewModel.RuntimeResources.HasValidationError);
+            Assert.Contains("1 to 32", viewModel.StatusText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -626,6 +824,8 @@ public sealed class SettingsWindowViewModelTests
 
         public int GetPackageConfigurationValuesCallCount { get; private set; }
 
+        public int SavePackageConfigurationValuesCallCount { get; private set; }
+
         public Task<IReadOnlyList<PackageSettingsSchemaDescriptor>> GetPackageSettingsSchemasAsync(
             CancellationToken cancellationToken = default)
         {
@@ -659,11 +859,26 @@ public sealed class SettingsWindowViewModelTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            SavePackageConfigurationValuesCallCount++;
             return SaveConfigurationValuesAsyncCallback?.Invoke(packageId, values, cancellationToken) ?? Task.CompletedTask;
         }
 
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class FakeRuntimeResourcePolicyStatusSource(
+        RuntimeResourcePolicyEffectiveStatus status) : IRuntimeResourcePolicyStatusSource
+    {
+        public int GetCount { get; private set; }
+
+        public ValueTask<RuntimeResourcePolicyEffectiveStatus> GetCurrentEffectivePolicyAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            GetCount++;
+            return ValueTask.FromResult(status);
         }
     }
 

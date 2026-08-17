@@ -7,6 +7,7 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
     private readonly object _syncRoot = new();
     private bool _stopping;
     private bool _stopped;
+    private bool _integrityFenced;
     private readonly TaskCompletionSource _shutdownCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly RuntimeEventStreamService? _eventStream;
     private readonly TimeSpan _shutdownTimeout;
@@ -24,7 +25,7 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
     {
         lock (_syncRoot)
         {
-            if (_stopping)
+            if (_stopping || _integrityFenced)
             {
                 throw new InvalidOperationException("The Runtime is shutting down and is not accepting new operations.");
             }
@@ -44,7 +45,7 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         var stopping = false;
         lock (_syncRoot)
         {
-            if (_stopping)
+            if (_stopping || _integrityFenced)
             {
                 stopping = true;
             }
@@ -68,6 +69,7 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         Task? existingShutdown = null;
+        var publishShutdown = true;
         lock (_syncRoot)
         {
             if (_stopped)
@@ -81,6 +83,7 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
             else
             {
                 _stopping = true;
+                publishShutdown = !_integrityFenced;
             }
         }
 
@@ -98,7 +101,10 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         try
         {
             _shutdown.Cancel();
-            _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.ShuttingDown);
+            if (publishShutdown)
+            {
+                _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.ShuttingDown);
+            }
             try
             {
                 await _gate.WaitAsync(deadline.Token);
@@ -160,6 +166,31 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         }
     }
 
+    internal void FenceForIntegrityFailure()
+    {
+        var publishShutdown = false;
+        lock (_syncRoot)
+        {
+            if (_stopped || _integrityFenced)
+            {
+                return;
+            }
+            _integrityFenced = true;
+            publishShutdown = !_stopping;
+        }
+        try
+        {
+            _shutdown.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        if (publishShutdown)
+        {
+            _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.ShuttingDown);
+        }
+    }
+
     private static async Task ObserveCleanupAsync(Task cleanup)
     {
         try
@@ -176,7 +207,7 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         bool stopping;
         lock (_syncRoot)
         {
-            stopping = _stopping;
+            stopping = _stopping || _integrityFenced;
         }
         if (!stopping)
         {

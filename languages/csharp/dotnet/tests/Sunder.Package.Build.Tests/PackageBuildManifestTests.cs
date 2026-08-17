@@ -3027,6 +3027,7 @@ public sealed class PackageBuildManifestTests
         => File.WriteAllText(path, """
             {
               "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"test.snapshot",
               "version":"1.0.0",
               "errors":{},
@@ -3038,12 +3039,13 @@ public sealed class PackageBuildManifestTests
             }
             """.Replace("PROPERTY_NAME", propertyName, StringComparison.Ordinal));
 
-    private const string MinimalV2DescriptorSha256 = "9d593e62790998a4367b5d1ffb4c07dbe834aa7978507293a4078c1fcdd31016";
-    private const string MinimalV2AbiSha256 = "45788031fe686da6d7f608d1b68b978b43f6ab0b51d8aa9461b012ad4f2a8544";
+    private const string MinimalV2DescriptorSha256 = "9455eede5aa70c5e06cd83954dfd16a51910e2a84b00f57fbe3a40c48a1f799a";
+    private const string MinimalV2AbiSha256 = "c9bc1aff363a952397d09a842443805a50f7873d6a56d5521de78bd1f479fc65";
     private const string MinimalV2Descriptor = """
         {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "descriptorVersion": 2,
+          "schemaProfile": "sunder.rpc.values.v1",
           "contractId": "example.rpc.v2.minimal",
           "version": "2.0.0",
           "errors": {},

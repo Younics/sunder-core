@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.Runtime.Host.Endpoints;
@@ -9,9 +10,14 @@ namespace Sunder.Runtime.Host.Endpoints;
 internal static class RuntimeRpcEndpoints
 {
     private static readonly byte[] NewLine = "\n"u8.ToArray();
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private const long MaxRequestBodyBytes = 2L * 1024 * 1024;
-    private const long MaxContentBodyBytes = 64L * 1024 * 1024;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        MaxDepth = RuntimeResourcePolicies.ProtocolCeilings.MaximumValueDepth + 8,
+    };
+    private static readonly long MaxRequestBodyBytes = checked(
+        6L * RuntimeResourcePolicies.ProtocolCeilings.MaximumRpcValueBytes + 64 * 1024);
+    private static readonly long MaxContentBodyBytes =
+        RuntimeResourcePolicies.ProtocolCeilings.MaximumContentReferenceBytes;
     private const string ContentMetadataHeader = "X-Sunder-Rpc-Content-Metadata";
 
     public static IEndpointRouteBuilder MapRuntimeRpcEndpoints(this IEndpointRouteBuilder endpoints)
@@ -493,7 +499,8 @@ internal static class RuntimeRpcEndpoints
                 : RuntimeRpcDispatchState.PossiblyDispatched,
             error.RetrySafety == SunderRpcRetrySafety.Safe
                 ? RuntimeRpcRetrySafety.Safe
-                : RuntimeRpcRetrySafety.Unsafe);
+                : RuntimeRpcRetrySafety.Unsafe,
+            error.Details);
 
     private static async Task WriteFrameAsync<T>(
         HttpResponse response,

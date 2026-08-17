@@ -76,6 +76,105 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public async Task Worker_OutboundSubscribeCountOverflowCancelsOnlyThatCall()
+    {
+        var activated = new TaskCompletionSource<ISunderRpcClient>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var limits = WorkerLimits.Default with { MaximumStreamQueueMessages = 2 };
+        await using var worker = new WorkerHarness(_ => new SunderWorkerOptions(
+            [WorkerHarness.Registration(new TestRpcHandler())])
+        {
+            OnActivated = (context, _) =>
+            {
+                activated.TrySetResult(context.Rpc);
+                return ValueTask.CompletedTask;
+            },
+        }, limits);
+        await worker.HandshakeAndActivateAsync();
+        var client = await activated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var endpoint = new SunderRpcEndpointReference("rpc1_private-endpoint");
+        const string serviceId = "messages\r\nprivate/path";
+        const string methodId = "watch\tprivate";
+        await using var stream = client.SubscribeAsync(
+                endpoint,
+                serviceId,
+                methodId,
+                JsonSerializer.SerializeToElement(new { token = "request-secret" }))
+            .GetAsyncEnumerator();
+        var firstMove = stream.MoveNextAsync().AsTask();
+        string callId;
+        using (var request = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.subscribe", request.RootElement.GetProperty("type").GetString());
+            callId = request.RootElement.GetProperty("id").GetString()!;
+        }
+        await worker.SendAsync(new { type = "host.event", id = callId, value = new { sequence = 1 } });
+        Assert.True(await firstMove.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        await worker.SendAsync(new { type = "host.event", id = callId, value = new { sequence = 2 } });
+        await worker.SendAsync(new { type = "host.event", id = callId, value = new { sequence = 3 } });
+        await worker.SendAsync(new { type = "host.event", id = callId, value = new { sequence = 4 } });
+        using (var cancellation = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.cancel", cancellation.RootElement.GetProperty("type").GetString());
+            Assert.Equal(callId, cancellation.RootElement.GetProperty("id").GetString());
+        }
+
+        var exhausted = await Assert.ThrowsAsync<SunderRpcException>(async () =>
+            await stream.MoveNextAsync().AsTask());
+        Assert.Equal(SunderRpcErrorKind.ResourceExhausted, exhausted.Error.Kind);
+        Assert.Equal("rpc.worker.stream-queue-limit", exhausted.Error.Code);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, exhausted.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, exhausted.Error.RetrySafety);
+        Assert.Null(exhausted.Error.Details);
+        Assert.StartsWith(
+            "The worker RPC stream queue exceeded its count or byte bound.",
+            exhausted.Error.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("limit=count", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("queuedMessages=2/2", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("operation=subscribe", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("service=messages__private_path", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("method=watch_private", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(endpoint.Value, exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("request-secret", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain('\r', exhausted.Error.Message);
+        Assert.DoesNotContain('\n', exhausted.Error.Message);
+        Assert.True(exhausted.Error.Message.Length <= 512);
+
+        await worker.SendAsync(new
+        {
+            type = "host.error",
+            id = callId,
+            error = new
+            {
+                kind = "cancelled",
+                code = "rpc.call.cancelled",
+                message = "The RPC call was cancelled.",
+                dispatchState = "possibly-dispatched",
+                retrySafety = "unsafe",
+            },
+        });
+
+        var sibling = client.InvokeAsync(
+            endpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "still-active" })).AsTask();
+        using (var request = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.invoke", request.RootElement.GetProperty("type").GetString());
+            await worker.SendAsync(new
+            {
+                type = "host.result",
+                id = request.RootElement.GetProperty("id").GetString(),
+                value = new { accepted = true },
+            });
+        }
+        Assert.True((await sibling).GetProperty("accepted").GetBoolean());
+        await worker.ShutdownAsync();
+    }
+
+    [Fact]
     public async Task Worker_MapsOnlyDomainErrorsAndBoundsProviderDiagnostics()
     {
         var handler = new TestRpcHandler
@@ -91,7 +190,11 @@ public sealed class WorkerRuntimeTests
             Unary = static (_, _, methodId, _, _) => methodId switch
             {
                 "domain" => ValueTask.FromException<JsonElement>(new SunderRpcException(
-                    new SunderRpcError(SunderRpcErrorKind.Domain, "example.rejected", "Request rejected."))),
+                    new SunderRpcError(
+                        SunderRpcErrorKind.Domain,
+                        "example.rejected",
+                        "Request rejected.",
+                        details: JsonSerializer.SerializeToElement(new { reason = "duplicate" })))),
                 "undeclared-domain" => ValueTask.FromException<JsonElement>(new SunderRpcException(
                     new SunderRpcError(SunderRpcErrorKind.Domain, "example.undeclared", "Must remain private."))),
                 _ => ValueTask.FromException<JsonElement>(new InvalidOperationException(
@@ -111,6 +214,7 @@ public sealed class WorkerRuntimeTests
             Assert.Equal("domain", error.GetProperty("kind").GetString());
             Assert.Equal("example.rejected", error.GetProperty("code").GetString());
             Assert.Equal("Request rejected.", error.GetProperty("message").GetString());
+            Assert.Equal("duplicate", error.GetProperty("details").GetProperty("reason").GetString());
         }
 
         await worker.SendInvocationAsync("undeclared1", "unary", "undeclared-domain");
@@ -195,6 +299,241 @@ public sealed class WorkerRuntimeTests
             await Assert.ThrowsAsync<WorkerProtocolException>(async () =>
                 await mismatch.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
         }
+    }
+
+    [Fact]
+    public async Task Worker_RequiresExactClosedResourceProfileHash()
+    {
+        Assert.Equal(
+            "15bde75ca257659d5742c38f678a445bc4bdfb7e21eff9b81fedc3195e0a3ec9",
+            WorkerHarness.ResourceProfileHash);
+        await using var worker = CreateNoOpWorker();
+
+        await worker.SendHelloAsync(
+            "challenge",
+            MinimumResourceProfile(),
+            new string('0', 64));
+
+        var failure = await Assert.ThrowsAsync<WorkerProtocolException>(async () =>
+            await worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Contains("resourceProfileHash", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Worker_ExposesValidatedResourceProfileDuringConfigurationAndThroughCallScope()
+    {
+        var hostProfile = MinimumResourceProfile();
+        var expected = new SunderRpcResourceProfile(
+            WorkerWire.ComputeResourceProfileHash(hostProfile),
+            hostProfile.RpcValueBytes,
+            hostProfile.ValueDepth,
+            hostProfile.ValueNodes,
+            hostProfile.ObjectMembers,
+            hostProfile.InlineDecodedBytes,
+            hostProfile.ContentReferenceBytes);
+        SunderRpcResourceProfile? configuredProfile = null;
+        SunderRpcResourceProfile? scopeProfile = null;
+        await using var worker = new WorkerHarness(context =>
+        {
+            configuredProfile = context.Rpc.ResourceProfile;
+            return new SunderWorkerOptions([WorkerHarness.Registration(new TestRpcHandler())])
+            {
+                OnActivated = async (_, cancellationToken) =>
+                {
+                    await using var scope = await context.Rpc.CreateCallScopeAsync(
+                        cancellationToken: cancellationToken);
+                    scopeProfile = scope.ResourceProfile;
+                },
+            };
+        });
+
+        await worker.HandshakeAsync(resourceProfile: hostProfile);
+        Assert.Equal(expected, configuredProfile);
+        await worker.StartCandidateAndCommitAsync();
+        await worker.PrepareStorageMigrationsAsync();
+        await worker.SendAsync(new { type = "host.activate", sessionGeneration = 7 });
+        const string scopeId = "resource-profile-scope";
+        using (var open = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.scope-open", open.RootElement.GetProperty("type").GetString());
+            await worker.SendAsync(new
+            {
+                type = "host.result",
+                id = open.RootElement.GetProperty("id").GetString(),
+                value = new
+                {
+                    scopeId,
+                    deadlineUtc = DateTimeOffset.UtcNow.AddMinutes(1).UtcDateTime.ToString("O"),
+                },
+            });
+        }
+        using (var close = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.scope-close", close.RootElement.GetProperty("type").GetString());
+            Assert.Equal(scopeId, close.RootElement.GetProperty("scopeId").GetString());
+            await worker.SendAsync(new
+            {
+                type = "host.result",
+                id = close.RootElement.GetProperty("id").GetString(),
+                value = (object?)null,
+            });
+        }
+        using (var activated = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.activated", activated.RootElement.GetProperty("type").GetString());
+        }
+
+        Assert.Same(configuredProfile, scopeProfile);
+        await worker.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task Worker_OversizedOutboundRequestIsNotRegisteredOrDispatched()
+    {
+        ISunderRpcClient? client = null;
+        var limits = WorkerLimits.Default with { MaximumOutboundCalls = 1 };
+        await using var worker = new WorkerHarness(
+            _ => new SunderWorkerOptions([WorkerHarness.Registration(new TestRpcHandler())])
+            {
+                OnActivated = (context, _) =>
+                {
+                    client = context.Rpc;
+                    return ValueTask.CompletedTask;
+                },
+            },
+            limits);
+        await ActivateAsync(worker, MinimumResourceProfile());
+
+        var oversized = JsonSerializer.SerializeToElement(new { text = new string('"', 600_000) });
+        var exhausted = await Assert.ThrowsAsync<SunderRpcException>(async () =>
+            await client!.InvokeAsync(
+                new SunderRpcEndpointReference("rpc1_example"),
+                "messages",
+                "echo",
+                oversized).AsTask());
+
+        Assert.Equal(SunderRpcErrorKind.ResourceExhausted, exhausted.Error.Kind);
+        Assert.Equal(SunderRpcDispatchState.NotDispatched, exhausted.Error.DispatchState);
+        var valid = client!.InvokeAsync(
+            new SunderRpcEndpointReference("rpc1_example"),
+            "messages",
+            "echo",
+            JsonSerializer.SerializeToElement(new { accepted = true })).AsTask();
+        using (var request = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.invoke", request.RootElement.GetProperty("type").GetString());
+            await worker.SendAsync(new
+            {
+                type = "host.result",
+                id = request.RootElement.GetProperty("id").GetString(),
+                value = new { accepted = true },
+            });
+        }
+        Assert.True((await valid).GetProperty("accepted").GetBoolean());
+        await worker.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task Worker_OversizedProviderResultIsCallLocalResourceExhaustion()
+    {
+        var handler = new TestRpcHandler
+        {
+            Unary = static (_, _, methodId, request, _) => ValueTask.FromResult(
+                methodId == "oversized"
+                    ? JsonSerializer.SerializeToElement(new { text = new string('"', 600_000) })
+                    : request.Clone()),
+        };
+        await using var worker = new WorkerHarness(_ => new SunderWorkerOptions(
+            [WorkerHarness.Registration(handler)]));
+        await ActivateAsync(worker, MinimumResourceProfile());
+
+        await worker.SendInvocationAsync("oversized1", "unary", "oversized");
+        using (var response = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.error", response.RootElement.GetProperty("type").GetString());
+            Assert.Equal("resource-exhausted", response.RootElement.GetProperty("error").GetProperty("kind").GetString());
+            Assert.Equal("rpc.worker.response-limit", response.RootElement.GetProperty("error").GetProperty("code").GetString());
+        }
+        Assert.False(worker.RunTask.IsCompleted);
+
+        await worker.SendInvocationAsync("valid1", "unary", "echo");
+        using (var response = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.result", response.RootElement.GetProperty("type").GetString());
+        }
+        Assert.False(worker.RunTask.IsCompleted);
+        await worker.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task Worker_PreservesHostDomainErrorDetailsAndRejectsInfrastructureDetails()
+    {
+        var activated = new TaskCompletionSource<ISunderRpcClient>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var worker = new WorkerHarness(_ => new SunderWorkerOptions(
+            [WorkerHarness.Registration(new TestRpcHandler())])
+        {
+            OnActivated = (context, _) =>
+            {
+                activated.TrySetResult(context.Rpc);
+                return ValueTask.CompletedTask;
+            },
+        });
+        await worker.HandshakeAndActivateAsync();
+        var client = await activated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var invocation = client.InvokeAsync(
+            new SunderRpcEndpointReference("rpc1_example"),
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "hello" })).AsTask();
+        string callId;
+        using (var request = await worker.ReadAsync())
+        {
+            callId = request.RootElement.GetProperty("id").GetString()!;
+        }
+        await worker.SendAsync(new
+        {
+            type = "host.error",
+            id = callId,
+            error = new
+            {
+                kind = "domain",
+                code = "messages.rejected",
+                message = "Rejected.",
+                dispatchState = "possibly-dispatched",
+                retrySafety = "unsafe",
+                details = new { reason = "duplicate" },
+            },
+        });
+
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(() => invocation);
+        Assert.Equal("duplicate", failure.Error.Details!.Value.GetProperty("reason").GetString());
+
+        var forged = client.InvokeAsync(
+            new SunderRpcEndpointReference("rpc1_example"),
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "again" })).AsTask();
+        using (var request = await worker.ReadAsync())
+        {
+            callId = request.RootElement.GetProperty("id").GetString()!;
+        }
+        await worker.SendAsync(new
+        {
+            type = "host.error",
+            id = callId,
+            error = new
+            {
+                kind = "unavailable",
+                code = "rpc.host.forged",
+                message = "Forged.",
+                dispatchState = "possibly-dispatched",
+                retrySafety = "unsafe",
+                details = new { reason = "forged" },
+            },
+        });
+
+        await Assert.ThrowsAsync<WorkerProtocolException>(() => worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        await Assert.ThrowsAnyAsync<Exception>(() => forged);
     }
 
     [Fact]
@@ -379,6 +718,26 @@ public sealed class WorkerRuntimeTests
     private static WorkerHarness CreateNoOpWorker()
         => new(_ => new SunderWorkerOptions(
             [WorkerHarness.Registration(new TestRpcHandler())]));
+
+    private static WorkerResourceProfile MinimumResourceProfile()
+        => new(
+            Version: 1,
+            RpcValueBytes: 1024 * 1024,
+            ValueDepth: 16,
+            ValueNodes: 16_384,
+            ObjectMembers: 256,
+            InlineDecodedBytes: 16 * 1024,
+            ContentReferenceBytes: 1024 * 1024);
+
+    private static async Task ActivateAsync(WorkerHarness worker, WorkerResourceProfile profile)
+    {
+        await worker.HandshakeAsync(resourceProfile: profile);
+        await worker.StartCandidateAndCommitAsync();
+        await worker.PrepareStorageMigrationsAsync();
+        await worker.SendAsync(new { type = "host.activate", sessionGeneration = 7 });
+        using var activated = await worker.ReadAsync();
+        Assert.Equal("worker.activated", activated.RootElement.GetProperty("type").GetString());
+    }
 
     private static async IAsyncEnumerable<JsonElement> Events(
         [EnumeratorCancellation] CancellationToken cancellationToken)

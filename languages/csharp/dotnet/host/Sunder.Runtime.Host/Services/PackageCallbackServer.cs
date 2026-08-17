@@ -1,5 +1,9 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Hosting;
 
 namespace Sunder.Runtime.Host.Services;
@@ -12,10 +16,9 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
     private readonly int _maxConcurrentRequests;
     private int _port;
     private readonly object _syncRoot = new();
-    private readonly Dictionary<string, Func<IReadOnlyDictionary<string, string?>, CancellationToken, Task<bool>>> _handlers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Func<IReadOnlyDictionary<string, string?>, CancellationToken, Task<bool>>> _handlers = new(StringComparer.Ordinal);
     private readonly HashSet<Task> _requestTasks = [];
-    private HttpListener? _listener;
-    private Task? _listenTask;
+    private WebApplication? _host;
     private Task? _stopTask;
     private bool _disposed;
 
@@ -79,25 +82,25 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
         lock (_syncRoot)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_listener is not null)
+            if (_host is not null)
             {
                 return;
             }
 
-            var listener = TryStartListener(_port, out var startException);
+            var host = TryStartHost(_port, out var startException);
             var actualPort = _port;
-            if (listener is null && _fallbackPort is { } fallbackPort && fallbackPort != _port)
+            if (host is null && _fallbackPort is { } fallbackPort && fallbackPort != _port)
             {
                 _logger.LogWarning(
                     startException,
                     "Package callback listener could not start on {CallbackUri}; trying fallback port {FallbackPort}",
                     BaseUri,
                     fallbackPort);
-                listener = TryStartListener(fallbackPort, out startException);
+                host = TryStartHost(fallbackPort, out startException);
                 actualPort = fallbackPort;
             }
 
-            if (listener is null)
+            if (host is null)
             {
                 throw new InvalidOperationException(
                     _fallbackPort is { } configuredFallbackPort && configuredFallbackPort != _port
@@ -108,27 +111,51 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
 
             _port = actualPort;
             BaseUri = CreateBaseUri(actualPort);
-            _listener = listener;
-            _listenTask = ListenLoopAsync(listener);
+            _host = host;
             _logger.LogInformation("Package callback listener started on {CallbackUri}", BaseUri);
         }
     }
 
-    private static HttpListener? TryStartListener(int port, out Exception? exception)
+    private WebApplication? TryStartHost(int port, out Exception? exception)
     {
-        var listener = new HttpListener();
-        listener.Prefixes.Add(CreateBaseUri(port).AbsoluteUri);
+        WebApplication? host = null;
         try
         {
-            listener.Start();
+            var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions
+            {
+                ApplicationName = typeof(PackageCallbackServer).Assembly.FullName,
+                Args = [],
+                ContentRootPath = AppContext.BaseDirectory,
+                EnvironmentName = Environments.Production,
+            });
+            builder.Logging.ClearProviders();
+            builder.WebHost.UseKestrelCore();
+            builder.WebHost.ConfigureKestrel(options => ConfigureKestrel(options, port));
+            host = builder.Build();
+            host.Run(HandleRequestSafelyAsync);
+            host.StartAsync().GetAwaiter().GetResult();
             exception = null;
-            return listener;
+            return host;
         }
         catch (Exception ex)
         {
-            listener.Close();
+            host?.DisposeAsync().AsTask().GetAwaiter().GetResult();
             exception = ex;
             return null;
+        }
+    }
+
+    private void ConfigureKestrel(KestrelServerOptions options, int port)
+    {
+        options.AddServerHeader = false;
+        options.Limits.MaxRequestLineSize = _policy.MaxCallbackRequestLineBytes;
+        options.Limits.MaxRequestHeaderCount = _policy.MaxCallbackHeaderCount;
+        options.Limits.MaxRequestHeadersTotalSize = _policy.MaxCallbackHeaderBytes;
+        options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(10);
+        options.Listen(IPAddress.Loopback, port);
+        if (Socket.OSSupportsIPv6)
+        {
+            options.Listen(IPAddress.IPv6Loopback, port);
         }
     }
 
@@ -173,84 +200,63 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
             {
                 _disposed = true;
                 _handlers.Clear();
-                var listener = _listener;
-                var listenTask = _listenTask;
-                _listener = null;
-                stopTask = StopCoreAsync(listener, listenTask);
+                var host = _host;
+                _host = null;
+                stopTask = StopCoreAsync(host);
                 _stopTask = stopTask;
             }
         }
         await stopTask.WaitAsync(cancellationToken);
     }
 
-    private async Task StopCoreAsync(HttpListener? listener, Task? listenTask)
+    private async Task StopCoreAsync(WebApplication? host)
     {
+        if (host is null)
+        {
+            return;
+        }
+
         try
         {
-            listener?.Stop();
-            listener?.Close();
+            await host.StopAsync(CancellationToken.None);
         }
-        catch (HttpListenerException)
+        finally
         {
-            // A concurrent listener shutdown can race endpoint-manager cleanup.
+            Task[] requestTasks;
+            lock (_syncRoot)
+            {
+                requestTasks = _requestTasks.ToArray();
+            }
+            await Task.WhenAll(requestTasks);
+            await host.DisposeAsync();
         }
+    }
 
-        if (listenTask is not null)
-        {
-            await listenTask;
-        }
-        Task[] requestTasks;
+    private async Task HandleRequestSafelyAsync(HttpContext context)
+    {
+        TaskCompletionSource? requestCompletion = null;
+        var unavailable = false;
         lock (_syncRoot)
         {
-            requestTasks = _requestTasks.ToArray();
+            _requestTasks.RemoveWhere(static task => task.IsCompleted);
+            unavailable = _disposed;
+            if (!unavailable && _requestTasks.Count < _maxConcurrentRequests)
+            {
+                requestCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _requestTasks.Add(requestCompletion.Task);
+            }
         }
-        await Task.WhenAll(requestTasks);
-    }
 
-    private async Task ListenLoopAsync(HttpListener listener)
-    {
-        while (listener.IsListening)
+        if (requestCompletion is null)
         {
-            HttpListenerContext? context = null;
-            try
-            {
-                context = await listener.GetContextAsync();
-                Task? requestTask = null;
-                lock (_syncRoot)
-                {
-                    _requestTasks.RemoveWhere(task => task.IsCompleted);
-                    if (!_disposed && _requestTasks.Count < _maxConcurrentRequests)
-                    {
-                        requestTask = HandleRequestSafelyAsync(context);
-                        _requestTasks.Add(requestTask);
-                    }
-                }
-                if (requestTask is null)
-                {
-                    await WriteResponseAsync(context.Response, false, "Too many callback requests.");
-                }
-            }
-            catch (HttpListenerException)
-            {
-                break;
-            }
-            catch (ObjectDisposedException)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Unexpected package callback listener failure");
-                if (context is not null)
-                {
-                    try { context.Response.OutputStream.Close(); } catch { }
-                }
-            }
+            await WriteResponseAsync(
+                context.Response,
+                false,
+                unavailable ? "The callback listener is shutting down." : "Too many callback requests.",
+                statusCode: unavailable ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.TooManyRequests);
+            return;
         }
-    }
 
-    private async Task HandleRequestSafelyAsync(HttpListenerContext context)
-    {
         try
         {
             await HandleRequestAsync(context);
@@ -258,28 +264,62 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Package callback request failed");
-            try { context.Response.Abort(); } catch { }
+            if (!context.Response.HasStarted)
+            {
+                try
+                {
+                    await WriteResponseAsync(
+                        context.Response,
+                        false,
+                        "The callback request failed.",
+                        statusCode: HttpStatusCode.InternalServerError);
+                }
+                catch
+                {
+                    context.Abort();
+                }
+            }
+            else
+            {
+                context.Abort();
+            }
+        }
+        finally
+        {
+            requestCompletion.TrySetResult();
+            lock (_syncRoot)
+            {
+                _requestTasks.Remove(requestCompletion.Task);
+            }
         }
     }
 
-    private async Task HandleRequestAsync(HttpListenerContext context)
+    private async Task HandleRequestAsync(HttpContext context)
     {
-        var callbackSessionId = GetSessionId(context.Request);
-        _logger.LogInformation(
-            "Package callback request received. HasSession={HasSession} HasCode={HasCode} HasError={HasError}",
-            !string.IsNullOrWhiteSpace(callbackSessionId),
-            !string.IsNullOrWhiteSpace(context.Request.QueryString["code"]),
-            !string.IsNullOrWhiteSpace(context.Request.QueryString["error"]));
-        if (string.IsNullOrWhiteSpace(callbackSessionId))
+        if (!TryValidateTransport(context, out var queryValues, out var transportError))
         {
-            _logger.LogWarning("Package callback request had an invalid path.");
-            await WriteResponseAsync(context.Response, false, "Invalid callback path.");
+            await WriteResponseAsync(
+                context.Response,
+                false,
+                transportError,
+                statusCode: HttpStatusCode.BadRequest);
             return;
         }
 
-        if (!TryValidateTransport(context.Request, out var queryValues, out var transportError))
+        var callbackSessionId = GetSessionId(context.Request, queryValues);
+        _logger.LogInformation(
+            "Package callback request received. HasSession={HasSession} HasCode={HasCode} HasError={HasError}",
+            !string.IsNullOrWhiteSpace(callbackSessionId),
+            queryValues.TryGetValue("code", out var code) && !string.IsNullOrWhiteSpace(code),
+            queryValues.TryGetValue("error", out var error) && !string.IsNullOrWhiteSpace(error));
+        if (string.IsNullOrWhiteSpace(callbackSessionId))
         {
-            await WriteResponseAsync(context.Response, false, transportError);
+            _logger.LogWarning("Package callback request had an invalid path.");
+            await WriteResponseAsync(
+                context.Response,
+                false,
+                "Invalid callback path.",
+                statusCode: HttpStatusCode.BadRequest);
             return;
         }
 
@@ -299,10 +339,35 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
         if (handler is null)
         {
             _logger.LogWarning("Package callback request did not match a registered handler.");
-            await WriteResponseAsync(context.Response, false, "No matching callback session was found.");
+            await WriteResponseAsync(
+                context.Response,
+                false,
+                "No matching callback session was found.",
+                statusCode: HttpStatusCode.NotFound);
             return;
         }
 
+        var completionTask = Task.Run(() => CompleteCallbackSafelyAsync(callbackSessionId, handler, queryValues));
+        try
+        {
+            await WriteResponseAsync(
+                context.Response,
+                success: true,
+                "Authorization received. Return to Sunder while sign-in finishes.",
+                "Authorization received",
+                HttpStatusCode.Accepted);
+        }
+        finally
+        {
+            await completionTask;
+        }
+    }
+
+    private async Task CompleteCallbackSafelyAsync(
+        string callbackSessionId,
+        Func<IReadOnlyDictionary<string, string?>, CancellationToken, Task<bool>> handler,
+        IReadOnlyDictionary<string, string?> queryValues)
+    {
         bool completed;
         try
         {
@@ -314,25 +379,38 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
             completed = false;
         }
         _logger.LogInformation("Package callback handling completed. Completed={Completed}", completed);
-
-        await WriteResponseAsync(context.Response, completed, completed
-            ? "You can close this browser window and return to Sunder."
-            : "The callback failed. Return to Sunder and retry.");
     }
 
     private bool TryValidateTransport(
-        HttpListenerRequest request,
+        HttpContext context,
         out IReadOnlyDictionary<string, string?> values,
         out string error)
     {
-        if (!string.Equals(request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase)
-            || request.ContentLength64 > 0)
+        var request = context.Request;
+        if (context.Connection.RemoteIpAddress is not { } remoteAddress
+            || !IPAddress.IsLoopback(remoteAddress))
+        {
+            values = new Dictionary<string, string?>();
+            error = "The callback request was not received from the local machine.";
+            return false;
+        }
+        if (!string.Equals(request.Host.Host, "localhost", StringComparison.OrdinalIgnoreCase)
+            || request.Host.Port != _port)
+        {
+            values = new Dictionary<string, string?>();
+            error = "The callback request had an invalid authority.";
+            return false;
+        }
+        if (!HttpMethods.IsGet(request.Method)
+            || request.ContentLength is > 0
+            || request.Headers.ContainsKey("Transfer-Encoding"))
         {
             values = new Dictionary<string, string?>();
             error = "The callback request was invalid.";
             return false;
         }
-        if ((request.RawUrl?.Length ?? 0) > _policy.MaxCallbackRequestLineBytes)
+        var rawTarget = context.Features.Get<IHttpRequestFeature>()?.RawTarget ?? string.Empty;
+        if (Encoding.UTF8.GetByteCount(rawTarget) > _policy.MaxCallbackRequestLineBytes)
         {
             values = new Dictionary<string, string?>();
             error = "The callback request was too large.";
@@ -346,60 +424,91 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
         }
 
         var headerBytes = 0;
-        foreach (var key in request.Headers.AllKeys)
+        var headerCount = 0;
+        foreach (var header in request.Headers)
         {
-            var value = request.Headers[key];
-            var lineBytes = key is null
-                ? int.MaxValue
-                : Encoding.UTF8.GetByteCount(key) + Encoding.UTF8.GetByteCount(value ?? string.Empty);
-            if (lineBytes > _policy.MaxCallbackHeaderLineBytes)
+            var headerValues = header.Value.Count == 0 ? new[] { string.Empty } : header.Value.ToArray();
+            foreach (var value in headerValues)
             {
-                values = new Dictionary<string, string?>();
-                error = "The callback request contained an oversized header.";
-                return false;
-            }
-            headerBytes = checked(headerBytes + lineBytes);
-            if (headerBytes > _policy.MaxCallbackHeaderBytes)
-            {
-                values = new Dictionary<string, string?>();
-                error = "The callback request headers were too large.";
-                return false;
+                headerCount++;
+                var lineBytes = Encoding.UTF8.GetByteCount(header.Key)
+                    + Encoding.UTF8.GetByteCount(value ?? string.Empty);
+                if (headerCount > _policy.MaxCallbackHeaderCount)
+                {
+                    values = new Dictionary<string, string?>();
+                    error = "The callback request contained too many headers.";
+                    return false;
+                }
+                if (lineBytes > _policy.MaxCallbackHeaderLineBytes)
+                {
+                    values = new Dictionary<string, string?>();
+                    error = "The callback request contained an oversized header.";
+                    return false;
+                }
+                headerBytes = checked(headerBytes + lineBytes);
+                if (headerBytes > _policy.MaxCallbackHeaderBytes)
+                {
+                    values = new Dictionary<string, string?>();
+                    error = "The callback request headers were too large.";
+                    return false;
+                }
             }
         }
         return TryReadQuery(request, out values, out error);
     }
 
-    private static string? GetSessionId(HttpListenerRequest request)
+    private static string? GetSessionId(
+        HttpRequest request,
+        IReadOnlyDictionary<string, string?> queryValues)
     {
-        var segments = request.Url?.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var segments = request.Path.Value?.Split('/', StringSplitOptions.RemoveEmptyEntries);
         var sessionId = segments switch
         {
-            ["callbacks", var pathSessionId] => Uri.UnescapeDataString(pathSessionId),
-            ["auth", "callback"] => request.QueryString["state"],
+            ["callbacks", var pathSessionId] => pathSessionId,
+            ["auth", "callback"] => GetAuthenticationSessionId(queryValues.GetValueOrDefault("state")),
             _ => null,
         };
         return sessionId?.Length is > 0 and <= 128 ? sessionId : null;
     }
 
+    private static string? GetAuthenticationSessionId(string? state)
+    {
+        if (string.IsNullOrEmpty(state))
+        {
+            return state;
+        }
+
+        // Providers may append a package-validated state suffix. Runtime session ids never contain '.'.
+        var suffixIndex = state.IndexOf('.');
+        return suffixIndex > 0 ? state[..suffixIndex] : state;
+    }
+
     private bool TryReadQuery(
-        HttpListenerRequest request,
+        HttpRequest request,
         out IReadOnlyDictionary<string, string?> values,
         out string error)
     {
-        var keys = request.QueryString.AllKeys.Where(static key => !string.IsNullOrWhiteSpace(key)).ToArray();
-        if (keys.Length > _policy.MaxPackageCallbackQueryValues)
+        var query = request.Query;
+        if (query.Count > _policy.MaxPackageCallbackQueryValues)
         {
             values = new Dictionary<string, string?>();
             error = "The callback contained too many values.";
             return false;
         }
 
-        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
         var total = 0;
-        foreach (var key in keys)
+        foreach (var pair in query)
         {
-            var value = request.QueryString[key!];
-            if (key!.Length > _policy.MaxPackageCallbackQueryKeyLength
+            var key = pair.Key;
+            if (string.IsNullOrWhiteSpace(key) || pair.Value.Count != 1)
+            {
+                values = new Dictionary<string, string?>();
+                error = "The callback contained a duplicate value.";
+                return false;
+            }
+            var value = pair.Value[0];
+            if (key.Length > _policy.MaxPackageCallbackQueryKeyLength
                 || value?.Length > _policy.MaxPackageCallbackQueryValueLength)
             {
                 values = new Dictionary<string, string?>();
@@ -413,26 +522,43 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
                 error = "The callback exceeded the allowed size.";
                 return false;
             }
-            result[key] = value;
+            if (!result.TryAdd(key, value))
+            {
+                values = new Dictionary<string, string?>();
+                error = "The callback contained a duplicate value.";
+                return false;
+            }
         }
         values = result;
         error = string.Empty;
         return true;
     }
 
-    private static async Task WriteResponseAsync(HttpListenerResponse response, bool success, string message)
+    private static async Task WriteResponseAsync(
+        HttpResponse response,
+        bool success,
+        string message,
+        string? title = null,
+        HttpStatusCode statusCode = HttpStatusCode.OK)
     {
-        var html = BuildCallbackPage(success, message);
+        var html = BuildCallbackPage(success, message, title);
         var bytes = Encoding.UTF8.GetBytes(html);
+        response.StatusCode = (int)statusCode;
         response.ContentType = "text/html; charset=utf-8";
-        response.ContentLength64 = bytes.Length;
-        await response.OutputStream.WriteAsync(bytes);
-        response.OutputStream.Close();
+        response.Headers.CacheControl = "no-store";
+        response.Headers.Pragma = "no-cache";
+        response.Headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+        response.Headers["Referrer-Policy"] = "no-referrer";
+        response.Headers["X-Content-Type-Options"] = "nosniff";
+        response.Headers["X-Frame-Options"] = "DENY";
+        response.ContentLength = bytes.Length;
+        await response.Body.WriteAsync(bytes);
+        await response.CompleteAsync();
     }
 
-    private static string BuildCallbackPage(bool success, string message)
+    private static string BuildCallbackPage(bool success, string message, string? titleOverride)
     {
-        var title = WebUtility.HtmlEncode(success ? "Authorization complete" : "Authorization failed");
+        var title = WebUtility.HtmlEncode(titleOverride ?? (success ? "Authorization complete" : "Authorization failed"));
         var subtitle = WebUtility.HtmlEncode(message);
 
         return $$"""
@@ -442,9 +568,6 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
                 <title>{{title}}</title>
-                <link rel="preconnect" href="https://fonts.googleapis.com" />
-                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-                <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
                 <style>
                     :root {
                         color-scheme: dark;

@@ -1,7 +1,9 @@
 using System.Buffers;
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using Sunder.Runtime.LocalState;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -11,16 +13,28 @@ internal static class SunderWorkerProtocol
     public const string Name = "sunder.worker.v3";
     public const int Version = 3;
     public const long MaximumSafeInteger = 9_007_199_254_740_991;
+    public const int EnvelopeReserveBytes = 64 * 1024;
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
-    public static async ValueTask<JsonDocument> ReadFrameAsync(
+    public static ValueTask<JsonDocument> ReadFrameAsync(
         Stream stream,
         RuntimeProcessPolicyOptions policy,
         CancellationToken cancellationToken)
+        => ReadFrameAsync(
+            stream,
+            CreateTransportLimits(
+                policy.EffectiveResourcePolicy ?? RuntimeResourcePolicies.Standard,
+                policy),
+            cancellationToken);
+
+    public static async ValueTask<JsonDocument> ReadFrameAsync(
+        Stream stream,
+        WorkerTransportLimits limits,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        var header = new byte[policy.MaxHeaderBytes];
+        var header = new byte[limits.MaximumHeaderBytes];
         var count = 0;
         while (true)
         {
@@ -58,7 +72,7 @@ internal static class SunderWorkerProtocol
                 CultureInfo.InvariantCulture,
                 out var contentLength)
             || contentLength <= 0
-            || contentLength > policy.MaxFrameBytes)
+            || contentLength > limits.MaximumFrameBytes)
         {
             throw new SunderWorkerProtocolException("Worker frame must contain exactly one canonical bounded Content-Length header.");
         }
@@ -75,13 +89,23 @@ internal static class SunderWorkerProtocol
             try
             {
                 _ = StrictUtf8.GetString(utf8);
-                ValidateJsonTokens(utf8, policy.MaxMessageDepth);
-                return JsonDocument.Parse(utf8.ToArray(), new JsonDocumentOptions
+                ValidateJsonTokens(utf8, limits.MaximumMessageDepth);
+                var document = JsonDocument.Parse(utf8.ToArray(), new JsonDocumentOptions
                 {
                     AllowTrailingCommas = false,
                     CommentHandling = JsonCommentHandling.Disallow,
-                    MaxDepth = policy.MaxMessageDepth,
+                    MaxDepth = limits.MaximumMessageDepth,
                 });
+                try
+                {
+                    ValidateEnvelopeBounds(document.RootElement, contentLength, limits);
+                    return document;
+                }
+                catch
+                {
+                    document.Dispose();
+                    throw;
+                }
             }
             catch (SunderWorkerProtocolException)
             {
@@ -98,22 +122,113 @@ internal static class SunderWorkerProtocol
         }
     }
 
-    public static byte[] SerializeFrameBody(object value, RuntimeProcessPolicyOptions policy)
+    public static byte[] SerializeFrameBody(object value, WorkerTransportLimits limits)
     {
-        byte[] body;
+        using var buffer = new FixedPooledBufferWriter(limits.MaximumFrameBytes);
         try
         {
-            body = JsonSerializer.SerializeToUtf8Bytes(value, WorkerJson.Options);
+            using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions
+            {
+                Encoder = WorkerJson.Encoder,
+                Indented = false,
+                MaxDepth = limits.MaximumMessageDepth,
+                SkipValidation = false,
+            }))
+            {
+                JsonSerializer.Serialize(writer, value, value.GetType(), WorkerJson.Options);
+                writer.Flush();
+            }
+
+            if (buffer.WrittenCount == 0)
+            {
+                throw new WorkerTransportResourceException(
+                    "Host worker protocol envelope serialized to an empty frame.");
+            }
+            var body = buffer.WrittenSpan.ToArray();
+            using var document = JsonDocument.Parse(body, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = limits.MaximumMessageDepth,
+            });
+            ValidateEnvelopeBounds(document.RootElement, body.Length, limits);
+            return body;
         }
-        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+        catch (WorkerTransportResourceException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is JsonException or NotSupportedException or InvalidOperationException or ArgumentException)
         {
             throw new SunderWorkerProtocolException("Host could not serialize a worker protocol envelope.", exception);
         }
-        if (body.Length == 0 || body.Length > policy.MaxFrameBytes)
+    }
+
+    public static WorkerTransportLimits CreateTransportLimits(
+        RuntimeResourcePolicy resourcePolicy,
+        RuntimeProcessPolicyOptions processPolicy)
+        => WorkerTransportLimits.Create(resourcePolicy, processPolicy.MaxHeaderBytes);
+
+    public static object ResourceProfileToWire(RuntimeResourcePolicy policy)
+        => new
         {
-            throw new SunderWorkerProtocolException("Host worker protocol frame exceeded the configured limit.");
+            version = RuntimeResourcePolicyContract.EffectiveProfileFormatVersion,
+            rpcValueBytes = policy.MaximumRpcValueBytes,
+            valueDepth = policy.MaximumValueDepth,
+            valueNodes = policy.MaximumValueNodes,
+            objectMembers = policy.MaximumObjectMembers,
+            inlineDecodedBytes = policy.MaximumInlineDecodedBytes,
+            contentReferenceBytes = policy.MaximumContentReferenceBytes,
+        };
+
+    public static int GetSerializedValueByteCount(JsonElement value, WorkerTransportLimits limits)
+        => SerializeValue(value, limits).Length;
+
+    public static JsonElement CloneValueForQueue(
+        JsonElement value,
+        WorkerTransportLimits limits,
+        out int serializedBytes)
+    {
+        var body = SerializeValue(value, limits);
+        serializedBytes = body.Length;
+        using var document = JsonDocument.Parse(body, new JsonDocumentOptions
+        {
+            AllowTrailingCommas = false,
+            CommentHandling = JsonCommentHandling.Disallow,
+            MaxDepth = limits.MaximumValueDepth,
+        });
+        return document.RootElement.Clone();
+    }
+
+    private static byte[] SerializeValue(JsonElement value, WorkerTransportLimits limits)
+    {
+        using var buffer = new FixedPooledBufferWriter(limits.MaximumRpcValueBytes);
+        try
+        {
+            using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions
+            {
+                Encoder = WorkerJson.Encoder,
+                Indented = false,
+                MaxDepth = limits.MaximumValueDepth,
+                SkipValidation = false,
+            }))
+            {
+                value.WriteTo(writer);
+                writer.Flush();
+            }
+            return buffer.WrittenSpan.ToArray();
         }
-        return body;
+        catch (WorkerTransportResourceException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
+        {
+            throw new WorkerTransportResourceException(
+                "RPC value exceeds the negotiated worker transport limits.",
+                exception);
+        }
     }
 
     public static async Task WriteFrameBodyAsync(
@@ -247,6 +362,74 @@ internal static class SunderWorkerProtocol
         }
     }
 
+    private static void ValidateEnvelopeBounds(
+        JsonElement root,
+        int bodyBytes,
+        WorkerTransportLimits limits)
+    {
+        RequireObject(root, "worker envelope");
+        JsonElement rpcValue = default;
+        var hasRpcValue = root.TryGetProperty("request", out rpcValue)
+                          || root.TryGetProperty("value", out rpcValue)
+                          || TryGetErrorDetails(root, out rpcValue);
+        var valueBytes = hasRpcValue
+            ? StrictUtf8.GetByteCount(rpcValue.GetRawText())
+            : 0;
+        if (valueBytes > limits.MaximumRpcValueBytes)
+        {
+            throw new WorkerTransportResourceException(
+                "Worker RPC value exceeded the negotiated byte limit.");
+        }
+        if (bodyBytes - valueBytes > EnvelopeReserveBytes)
+        {
+            throw new WorkerTransportResourceException(
+                "Worker protocol envelope metadata exceeded its reserved byte limit.");
+        }
+        if (hasRpcValue && GetValueDepth(rpcValue) > limits.MaximumValueDepth)
+        {
+            throw new WorkerTransportResourceException(
+                "Worker RPC value exceeded the negotiated depth limit.");
+        }
+    }
+
+    private static bool TryGetErrorDetails(JsonElement root, out JsonElement details)
+    {
+        if (root.TryGetProperty("error", out var error)
+            && error.ValueKind == JsonValueKind.Object
+            && error.TryGetProperty("details", out details))
+        {
+            return true;
+        }
+        details = default;
+        return false;
+    }
+
+    private static int GetValueDepth(JsonElement value)
+    {
+        var maximum = 0;
+        var pending = new Stack<(JsonElement Value, int Depth)>();
+        pending.Push((value, 1));
+        while (pending.TryPop(out var item))
+        {
+            maximum = Math.Max(maximum, item.Depth);
+            if (item.Value.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var child in item.Value.EnumerateArray())
+                {
+                    pending.Push((child, item.Depth + 1));
+                }
+            }
+            else if (item.Value.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in item.Value.EnumerateObject())
+                {
+                    pending.Push((property.Value, item.Depth + 1));
+                }
+            }
+        }
+        return maximum;
+    }
+
     private sealed class JsonObjectNames
     {
         public HashSet<string> Exact { get; } = new(StringComparer.Ordinal);
@@ -278,12 +461,100 @@ internal static class SunderWorkerProtocol
         private static char Fold(char value)
             => value is >= 'A' and <= 'Z' ? (char)(value + ('a' - 'A')) : value;
     }
+
+    private sealed class FixedPooledBufferWriter : IBufferWriter<byte>, IDisposable
+    {
+        private readonly int _capacity;
+        private byte[]? _buffer;
+
+        public FixedPooledBufferWriter(int capacity)
+        {
+            _capacity = capacity;
+            _buffer = ArrayPool<byte>.Shared.Rent(checked(capacity + EnvelopeReserveBytes));
+        }
+
+        public int WrittenCount { get; private set; }
+        public ReadOnlySpan<byte> WrittenSpan => _buffer.AsSpan(0, WrittenCount);
+
+        public void Advance(int count)
+        {
+            if (count < 0 || count > _capacity - WrittenCount)
+            {
+                throw new WorkerTransportResourceException(
+                    "Worker protocol frame exceeded the negotiated byte limit.");
+            }
+            WrittenCount += count;
+        }
+
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            EnsureAvailable(sizeHint);
+            return _buffer.AsMemory(WrittenCount);
+        }
+
+        public Span<byte> GetSpan(int sizeHint = 0)
+        {
+            EnsureAvailable(sizeHint);
+            return _buffer.AsSpan(WrittenCount);
+        }
+
+        public void Dispose()
+        {
+            if (_buffer is null) return;
+            ArrayPool<byte>.Shared.Return(_buffer);
+            _buffer = null;
+        }
+
+        private void EnsureAvailable(int sizeHint)
+        {
+            if (sizeHint < 0) throw new ArgumentOutOfRangeException(nameof(sizeHint));
+            if (sizeHint == 0) sizeHint = 1;
+            if (_buffer is null || sizeHint > _buffer.Length - WrittenCount)
+            {
+                throw new WorkerTransportResourceException(
+                    "Worker protocol frame exceeded the negotiated byte limit.");
+            }
+        }
+    }
+}
+
+internal sealed record WorkerTransportLimits(
+    int MaximumRpcValueBytes,
+    int MaximumValueDepth,
+    long MaximumContentReferenceBytes,
+    int MaximumFrameBytes,
+    int MaximumHeaderBytes,
+    int MaximumMessageDepth,
+    long MaximumWriteQueueBytes,
+    long MaximumStreamQueueBytes)
+{
+    public static WorkerTransportLimits Create(RuntimeResourcePolicy policy, int maximumHeaderBytes)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        if (maximumHeaderBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumHeaderBytes));
+        }
+
+        return new WorkerTransportLimits(
+            policy.MaximumRpcValueBytes,
+            policy.MaximumValueDepth,
+            policy.MaximumContentReferenceBytes,
+            checked(policy.MaximumRpcValueBytes + SunderWorkerProtocol.EnvelopeReserveBytes),
+            maximumHeaderBytes,
+            checked(policy.MaximumValueDepth + 8),
+            checked((long)policy.MaximumRpcValueBytes * 8),
+            checked((long)policy.MaximumRpcValueBytes * 2));
+    }
 }
 
 internal static class WorkerJson
 {
+    public static JavaScriptEncoder Encoder { get; } = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+
     public static JsonSerializerOptions Options { get; } = new(JsonSerializerDefaults.Web)
     {
+        Encoder = Encoder,
         PropertyNameCaseInsensitive = false,
         UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
     };
@@ -310,6 +581,19 @@ internal sealed class SunderWorkerProtocolException : ProcessRuntimeWorkerExcept
     }
 
     public SunderWorkerProtocolException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+internal sealed class WorkerTransportResourceException : ProcessRuntimeWorkerException
+{
+    public WorkerTransportResourceException(string message)
+        : base(message)
+    {
+    }
+
+    public WorkerTransportResourceException(string message, Exception innerException)
         : base(message, innerException)
     {
     }

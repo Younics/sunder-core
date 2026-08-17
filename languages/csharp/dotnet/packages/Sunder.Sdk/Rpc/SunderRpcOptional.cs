@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Sunder.Sdk.Compatibility;
@@ -47,21 +48,40 @@ public sealed class SunderRpcV2JsonConverterFactory : JsonConverterFactory
     /// <inheritdoc />
     public override bool CanConvert(Type typeToConvert)
         => typeToConvert == typeof(Guid)
+           || typeToConvert == typeof(DateOnly)
            || typeToConvert == typeof(DateTimeOffset)
+           || typeToConvert == typeof(long)
+           || typeToConvert == typeof(float)
+           || typeToConvert == typeof(double)
+           || typeToConvert == typeof(BigInteger)
+           || typeToConvert == typeof(byte[])
+           || typeToConvert == typeof(SunderRpcOffsetDateTime)
+           || typeToConvert == typeof(SunderRpcDuration)
+           || typeToConvert == typeof(SunderRpcUri)
+           || typeToConvert == typeof(SunderRpcDecimal)
            || typeToConvert == typeof(SunderRpcContentReference)
            || typeToConvert.IsGenericType
            && typeToConvert.GetGenericTypeDefinition() == typeof(SunderRpcOptional<>);
 
     /// <inheritdoc />
     public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
-        => typeToConvert == typeof(Guid)
-            ? new SunderRpcUuidJsonConverter()
-            : typeToConvert == typeof(DateTimeOffset)
-                ? new SunderRpcUtcDateTimeJsonConverter()
-                : typeToConvert == typeof(SunderRpcContentReference)
-                    ? new SunderRpcContentReferenceJsonConverter()
-                    : (JsonConverter)Activator.CreateInstance(
-                        typeof(SunderRpcOptionalJsonConverter<>).MakeGenericType(typeToConvert.GetGenericArguments()[0]))!;
+    {
+        if (typeToConvert == typeof(Guid)) return new SunderRpcUuidJsonConverter();
+        if (typeToConvert == typeof(DateOnly)) return new SunderRpcDateJsonConverter();
+        if (typeToConvert == typeof(DateTimeOffset)) return new SunderRpcUtcDateTimeJsonConverter();
+        if (typeToConvert == typeof(long)) return new SunderRpcSafeIntegerJsonConverter();
+        if (typeToConvert == typeof(float)) return new SunderRpcFloat32JsonConverter();
+        if (typeToConvert == typeof(double)) return new SunderRpcFloat64JsonConverter();
+        if (typeToConvert == typeof(BigInteger)) return new SunderRpcBigIntegerJsonConverter();
+        if (typeToConvert == typeof(byte[])) return new SunderRpcBase64JsonConverter();
+        if (typeToConvert == typeof(SunderRpcOffsetDateTime)) return new SunderRpcOffsetDateTimeJsonConverter();
+        if (typeToConvert == typeof(SunderRpcDuration)) return new SunderRpcDurationJsonConverter();
+        if (typeToConvert == typeof(SunderRpcUri)) return new SunderRpcUriJsonConverter();
+        if (typeToConvert == typeof(SunderRpcDecimal)) return new SunderRpcDecimalJsonConverter();
+        if (typeToConvert == typeof(SunderRpcContentReference)) return new SunderRpcContentReferenceJsonConverter();
+        return (JsonConverter)Activator.CreateInstance(
+            typeof(SunderRpcOptionalJsonConverter<>).MakeGenericType(typeToConvert.GetGenericArguments()[0]))!;
+    }
 
     private sealed class SunderRpcOptionalJsonConverter<T> : JsonConverter<SunderRpcOptional<T>>
     {

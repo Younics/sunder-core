@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.LocalState;
@@ -226,6 +228,253 @@ public sealed class RuntimeClientTransportTests
 
         Assert.Equal(replacement.RuntimeInstanceId, (await transport.NegotiateAsync()).RuntimeInstanceId);
         Assert.Equal(3, handler.Paths.Count(path => path == "/api/handshake"));
+    }
+
+    [Fact]
+    public async Task ResourceProfile_RefreshesWithReplacementRuntimeInstance()
+    {
+        var first = CreateResourceHandshake(RuntimeResourcePolicies.Standard);
+        var second = CreateResourceHandshake(RuntimeResourcePolicies.Large);
+        var current = first;
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(current),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var connection = new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret");
+        using var transport = new RuntimeClientTransport(() => connection, handler);
+
+        await transport.NegotiateAsync();
+
+        Assert.Equal(first.RuntimeInstanceId, transport.CurrentResourceProfile?.RuntimeInstanceId);
+        Assert.Equal(8 * RuntimeResourcePolicies.Mebibyte, transport.ResourceLimits.EffectivePolicy.MaximumRpcValueBytes);
+        Assert.Equal(first.ResourceProfile!.EffectiveProfileHash, transport.CurrentResourceProfile?.EffectiveProfileHash);
+
+        current = second;
+        await transport.RefreshHandshakeAsync();
+
+        Assert.Equal(second.RuntimeInstanceId, transport.CurrentResourceProfile?.RuntimeInstanceId);
+        Assert.Equal(16 * RuntimeResourcePolicies.Mebibyte, transport.ResourceLimits.EffectivePolicy.MaximumRpcValueBytes);
+        Assert.Equal(second.ResourceProfile!.EffectiveProfileHash, transport.CurrentResourceProfile?.EffectiveProfileHash);
+    }
+
+    [Fact]
+    public async Task ResourceProfile_RequiresClosedDescriptorAndMatchingHash()
+    {
+        var valid = CreateResourceHandshake(RuntimeResourcePolicies.Standard);
+        var currentJson = JsonSerializer.Serialize(valid with
+        {
+            ResourceProfile = valid.ResourceProfile! with { EffectiveProfileHash = new string('0', 64) },
+        });
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(currentJson, Encoding.UTF8, "application/json"),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var transport = new RuntimeClientTransport(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        await Assert.ThrowsAsync<RuntimeProtocolException>(() => transport.NegotiateAsync());
+        Assert.Null(transport.CurrentResourceProfile);
+
+        currentJson = JsonSerializer.Serialize(valid).Replace(
+            $"\"maximumContentReferenceBytes\":{RuntimeResourcePolicies.Standard.MaximumContentReferenceBytes}",
+            $"\"maximumContentReferenceBytes\":{RuntimeResourcePolicies.Standard.MaximumContentReferenceBytes},\"extra\":true",
+            StringComparison.Ordinal);
+        await Assert.ThrowsAsync<RuntimeProtocolException>(() => transport.NegotiateAsync());
+        Assert.Null(transport.CurrentResourceProfile);
+    }
+
+    [Fact]
+    public async Task RpcRequestPreflight_UsesExactFinalUtf8ValueBytesEscapingAndDepth()
+    {
+        var policy = CreateResourcePolicy(RuntimeResourcePolicies.Mebibyte, maximumValueDepth: 16);
+        var handshake = CreateResourceHandshake(policy);
+        var capturedValues = new List<JsonElement>();
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(handshake),
+            "/api/v1/rpc/app/invoke" => Json(new RuntimeRpcAppInvokeResponse(
+                JsonSerializer.SerializeToElement(true),
+                null)),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        }, request =>
+        {
+            if (request.RequestUri!.AbsolutePath != "/api/v1/rpc/app/invoke") return;
+            var body = request.Content!.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+            using var document = JsonDocument.Parse(body);
+            capturedValues.Add(document.RootElement.GetProperty("request").Clone());
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        await client.InvokeAppRpcAsync(Invocation(StringWithSerializedSize(
+            policy.MaximumRpcValueBytes,
+            escapedQuotes: false)));
+        await client.InvokeAppRpcAsync(Invocation(StringWithSerializedSize(
+            policy.MaximumRpcValueBytes,
+            escapedQuotes: true)));
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.InvokeAppRpcAsync(Invocation(
+            StringWithSerializedSize(policy.MaximumRpcValueBytes + 1, escapedQuotes: false))));
+        await client.InvokeAppRpcAsync(Invocation(NestedArray(depth: policy.MaximumValueDepth)));
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.InvokeAppRpcAsync(
+            Invocation(NestedArray(depth: policy.MaximumValueDepth + 1))));
+
+        Assert.Equal(3, capturedValues.Count);
+        Assert.Equal(
+            policy.MaximumRpcValueBytes,
+            Encoding.UTF8.GetByteCount(capturedValues[0].GetRawText()));
+        Assert.Equal(
+            policy.MaximumRpcValueBytes,
+            Encoding.UTF8.GetByteCount(capturedValues[1].GetRawText()));
+    }
+
+    [Fact]
+    public async Task RpcRequestAndResult_AllowNegotiatedDepth64AndRejectValueDepth65()
+    {
+        var responseDepth = 64;
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateResourceHandshake(RuntimeResourcePolicies.Standard)),
+            "/api/v1/rpc/app/invoke" => RawInvokeResponse(NestedArray(responseDepth)),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        var exact = await client.InvokeAppRpcAsync(Invocation(NestedArray(depth: 64)));
+
+        Assert.NotNull(exact.Value);
+        responseDepth = 65;
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.InvokeAppRpcAsync(
+            Invocation(JsonSerializer.SerializeToElement(true))));
+    }
+
+    [Theory]
+    [InlineData(false, 5)]
+    [InlineData(true, 12)]
+    public async Task RpcResponse_AllowsReportedStandardAndLargeValuesBeyondLegacyParserCap(
+        bool large,
+        int payloadMebibytes)
+    {
+        var policy = large ? RuntimeResourcePolicies.Large : RuntimeResourcePolicies.Standard;
+        var value = StringWithSerializedSize(
+            payloadMebibytes * RuntimeResourcePolicies.Mebibyte,
+            escapedQuotes: false);
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateResourceHandshake(policy)),
+            "/api/v1/rpc/app/invoke" => Json(new RuntimeRpcAppInvokeResponse(value, null)),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        var response = await client.InvokeAppRpcAsync(Invocation(JsonSerializer.SerializeToElement(true)));
+
+        Assert.Equal(
+            payloadMebibytes * RuntimeResourcePolicies.Mebibyte,
+            Encoding.UTF8.GetByteCount(response.Value!.Value.GetRawText()));
+    }
+
+    [Fact]
+    public async Task RpcResponseAndNdjson_EnforceValueAndEnvelopeParserCaps()
+    {
+        var policy = CreateResourcePolicy(RuntimeResourcePolicies.Mebibyte, maximumValueDepth: 16);
+        var handshake = CreateResourceHandshake(policy);
+        var responseValue = StringWithSerializedSize(policy.MaximumRpcValueBytes + 1, escapedQuotes: false);
+        var oversizedBody = new byte[policy.MaximumRpcValueBytes
+                                     + RuntimeClientResourceLimits.EnvelopeByteOverhead
+                                     + 1];
+        Array.Fill(oversizedBody, (byte)'x');
+        var oversizedLine = new byte[policy.MaximumRpcValueBytes
+                                     + RuntimeClientResourceLimits.EnvelopeByteOverhead
+                                     + 2];
+        Array.Fill(oversizedLine, (byte)'x');
+        oversizedLine[^1] = (byte)'\n';
+        var returnOversizedBody = false;
+        var returnOversizedLine = false;
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(handshake),
+            "/api/v1/rpc/app/invoke" when returnOversizedBody => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(oversizedBody),
+            },
+            "/api/v1/rpc/app/invoke" => Json(new RuntimeRpcAppInvokeResponse(responseValue, null)),
+            "/api/v1/rpc/app/subscribe" when returnOversizedLine => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new MemoryStream(oversizedLine, writable: false)),
+            },
+            "/api/v1/rpc/app/subscribe" => Ndjson(
+                new RuntimeRpcAppSubscriptionFrame(
+                    RuntimeRpcAppStreamFrameTypes.Event,
+                    StringWithSerializedSize(policy.MaximumRpcValueBytes, escapedQuotes: false),
+                    null),
+                new RuntimeRpcAppSubscriptionFrame(RuntimeRpcAppStreamFrameTypes.Completed, null, null)),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.InvokeAppRpcAsync(
+            Invocation(JsonSerializer.SerializeToElement(true))));
+        returnOversizedBody = true;
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.InvokeAppRpcAsync(
+            Invocation(JsonSerializer.SerializeToElement(true))));
+        returnOversizedBody = false;
+
+        var frames = new List<RuntimeRpcAppSubscriptionFrame>();
+        await foreach (var frame in client.SubscribeAppRpcAsync(
+                           Invocation(JsonSerializer.SerializeToElement(true))))
+        {
+            frames.Add(frame);
+        }
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(
+            policy.MaximumRpcValueBytes,
+            Encoding.UTF8.GetByteCount(frames[0].Event!.Value.GetRawText()));
+
+        returnOversizedLine = true;
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+        {
+            await foreach (var _ in client.SubscribeAppRpcAsync(
+                               Invocation(JsonSerializer.SerializeToElement(true))))
+            {
+            }
+        });
+    }
+
+    [Fact]
+    public async Task Handshake_RemainsUnderFixedParserCapBeforeResourceProfileExists()
+    {
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(new byte[64 * 1024 + 1]),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var transport = new RuntimeClientTransport(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => transport.NegotiateAsync());
+
+        Assert.Null(transport.CurrentResourceProfile);
+        Assert.Equal(
+            RuntimeResourcePolicies.Standard.MaximumRpcValueBytes,
+            transport.ResourceLimits.EffectivePolicy.MaximumRpcValueBytes);
     }
 
     [Fact]
@@ -539,6 +788,104 @@ public sealed class RuntimeClientTransportTests
 
     private static HttpResponseMessage Json<T>(T value)
         => new(HttpStatusCode.OK) { Content = JsonContent.Create(value) };
+
+    private static HttpResponseMessage Ndjson(params object[] frames)
+    {
+        var payload = string.Join(
+            '\n',
+            frames.Select(static frame => JsonSerializer.Serialize(frame, new JsonSerializerOptions(JsonSerializerDefaults.Web))))
+            + "\n";
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes(payload)),
+        };
+    }
+
+    private static HttpResponseMessage RawInvokeResponse(JsonElement value)
+        => new(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes(
+                $"{{\"value\":{value.GetRawText()},\"error\":null}}")),
+        };
+
+    private static RuntimeRpcAppInvokeRequest Invocation(JsonElement request)
+        => new(
+            "app-session",
+            "rpc1_provider",
+            "example",
+            "invoke",
+            request,
+            DeadlineUtc: null);
+
+    private static JsonElement StringWithSerializedSize(int byteCount, bool escapedQuotes)
+    {
+        if (byteCount < 2)
+        {
+            throw new ArgumentOutOfRangeException(nameof(byteCount));
+        }
+        var escapedCharacterBytes = JsonSerializer.SerializeToUtf8Bytes("\"").Length - 2;
+        var escapedCharacters = escapedQuotes ? 1 : 0;
+        var plainCharacters = byteCount - 2 - escapedCharacters * escapedCharacterBytes;
+        if (plainCharacters < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(byteCount));
+        }
+        var value = JsonSerializer.SerializeToElement(
+            (escapedQuotes ? "\"" : string.Empty) + new string('x', plainCharacters));
+        if (Encoding.UTF8.GetByteCount(value.GetRawText()) != byteCount)
+        {
+            throw new InvalidOperationException("The test RPC value did not serialize to the requested size.");
+        }
+        return value;
+    }
+
+    private static JsonElement NestedArray(int depth)
+    {
+        if (depth < 1 || depth > 72)
+        {
+            throw new ArgumentOutOfRangeException(nameof(depth));
+        }
+        using var document = JsonDocument.Parse(
+            new string('[', depth - 1) + "0" + new string(']', depth - 1),
+            new JsonDocumentOptions { MaxDepth = 72 });
+        return document.RootElement.Clone();
+    }
+
+    private static RuntimeResourcePolicy CreateResourcePolicy(
+        int maximumRpcValueBytes,
+        int maximumValueDepth)
+        => new(
+            maximumRpcValueBytes,
+            maximumValueDepth,
+            RuntimeResourcePolicies.CustomMinimums.MaximumValueNodes,
+            RuntimeResourcePolicies.CustomMinimums.MaximumObjectMembers,
+            RuntimeResourcePolicies.CustomMinimums.MaximumInlineDecodedBytes,
+            RuntimeResourcePolicies.CustomMinimums.MaximumContentReferenceBytes);
+
+    private static RuntimeHandshakeResponse CreateResourceHandshake(RuntimeResourcePolicy policy)
+    {
+        var hash = RuntimeResourcePolicyContract.GetEffectiveProfileHash(policy);
+        return new RuntimeHandshakeResponse(
+            RuntimeProtocol.Identity,
+            RuntimeProtocol.CurrentRevision,
+            RuntimeProtocol.MinimumSupportedRevision,
+            RuntimeProtocol.MaximumSupportedRevision,
+            Guid.NewGuid(),
+            [
+                RuntimeProtocolFeatures.VersionedApiV1,
+                RuntimeProtocolFeatures.AppWebRpcV2,
+                RuntimeProtocolFeatures.RuntimeResourcePolicyV1,
+            ],
+            new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"),
+            new RuntimeResourceProfileDescriptor(
+                hash,
+                policy.MaximumRpcValueBytes,
+                policy.MaximumValueDepth,
+                policy.MaximumValueNodes,
+                policy.MaximumObjectMembers,
+                policy.MaximumInlineDecodedBytes,
+                policy.MaximumContentReferenceBytes));
+    }
 
     private static RuntimeHandshakeResponse CreateHandshake(
         int revision = RuntimeProtocol.CurrentRevision,

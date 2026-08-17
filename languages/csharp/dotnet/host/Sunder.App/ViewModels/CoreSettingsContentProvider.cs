@@ -29,7 +29,7 @@ internal static class CoreSettingsContentProvider
             ],
             "advanced" =>
             [
-                "Advanced settings will eventually host diagnostic and power-user controls for package developers and operators.",
+                "Advanced settings control App-owned Runtime launch policy and other power-user behavior.",
             ],
             _ =>
             [

@@ -32,6 +32,53 @@ public sealed class SunderRpcContractDescriptorTests
         Assert.Contains("required", missingError, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Parse_RetainsImmutableDomainErrorDeclarationsAndDetailSchemas()
+    {
+        var fixturePath = Path.Combine(
+            AppContext.BaseDirectory,
+            "RpcV2Conformance",
+            "valid",
+            "complete.rpc.json");
+        var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(fixturePath));
+
+        var declaration = descriptor.Errors["example.not-found"];
+        Assert.Same(declaration, descriptor.FindError("example.not-found"));
+        Assert.Equal("example.not-found", declaration.Code);
+        Assert.Equal("The requested item does not exist.", declaration.Description);
+        Assert.Equal("#/$defs/ErrorDetails", declaration.DetailsSchema);
+        Assert.Null(descriptor.Errors["example.conflict"].DetailsSchema);
+        Assert.Null(descriptor.FindError("example.missing"));
+        Assert.Throws<NotSupportedException>(() =>
+            ((IDictionary<string, SunderRpcErrorDeclaration>)descriptor.Errors).Clear());
+    }
+
+    [Fact]
+    public void RpcError_ClonesDomainDetailsAndRejectsInfrastructureDetails()
+    {
+        SunderRpcError error;
+        using (var document = JsonDocument.Parse("""{"resource":"item-1"}"""))
+        {
+            error = new SunderRpcError(
+                SunderRpcErrorKind.Domain,
+                "example.not-found",
+                "Not found.",
+                details: document.RootElement);
+        }
+
+        Assert.Equal("item-1", error.Details!.Value.GetProperty("resource").GetString());
+        Assert.Throws<ArgumentException>(() => new SunderRpcError(
+            SunderRpcErrorKind.PermissionDenied,
+            "rpc.permission.denied",
+            "Denied.",
+            details: JsonSerializer.SerializeToElement(new { reason = "forged" })));
+        Assert.Throws<ArgumentException>(() => new SunderRpcError(
+            SunderRpcErrorKind.Domain,
+            "example.invalid",
+            "Invalid.",
+            details: default(JsonElement)));
+    }
+
     [Theory]
     [InlineData("\uFEFF{")]
     [InlineData("{\"descriptorVersion\":1,\"DescriptorVersion\":1}")]
@@ -197,6 +244,7 @@ public sealed class SunderRpcContractDescriptorTests
         var descriptorJson = """
             {
               "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"CONTRACT_ID",
               "version":"CONTRACT_VERSION",
               "errors":{},
@@ -239,7 +287,7 @@ public sealed class SunderRpcContractDescriptorTests
     }
 
     [Fact]
-    public void CSharpGenerator_CompilesCompleteV2FixtureWithLogicalAndBinary64Types()
+    public void CSharpGenerator_CompilesCompleteV2FixtureWithFormatsAndBinary64Types()
     {
         var fixturePath = Path.Combine(
             AppContext.BaseDirectory,
@@ -251,7 +299,10 @@ public sealed class SunderRpcContractDescriptorTests
         var source = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated");
 
         Assert.Contains("public required global::System.Guid CorrelationId", source, StringComparison.Ordinal);
-        Assert.Contains("public required string ObservedAt", source, StringComparison.Ordinal);
+        Assert.Contains(
+            "public required global::Sunder.Sdk.Rpc.SunderRpcOffsetDateTime ObservedAt",
+            source,
+            StringComparison.Ordinal);
         Assert.Contains("public required global::Sunder.Sdk.Rpc.SunderRpcContentReference Content", source, StringComparison.Ordinal);
         Assert.Contains("public required double Ratio", source, StringComparison.Ordinal);
         Assert.Contains("public global::Sunder.Sdk.Rpc.SunderRpcOptional<string?> OptionalNote", source, StringComparison.Ordinal);
@@ -259,7 +310,20 @@ public sealed class SunderRpcContractDescriptorTests
         Assert.Contains($"public const string AbiSha256 = \"{descriptor.AbiSha256}\";", source, StringComparison.Ordinal);
         Assert.Contains("useV2WireFormat: true", source, StringComparison.Ordinal);
         Assert.Contains("ISunderRpcDeclaredErrorMetadata", source, StringComparison.Ordinal);
+        Assert.Contains("public static class ExampleNotFoundRpcError", source, StringComparison.Ordinal);
+        Assert.Contains("public static global::Sunder.Sdk.Rpc.SunderRpcException Create(ErrorDetails details", source, StringComparison.Ordinal);
+        Assert.Contains("public static bool TryGetDetails", source, StringComparison.Ordinal);
         var assembly = CompileAndLoad(source);
+        var detailsType = assembly.GetType("Example.Generated.ErrorDetails", throwOnError: true)!;
+        var details = Activator.CreateInstance(detailsType)!;
+        detailsType.GetProperty("Resource")!.SetValue(details, "item-1");
+        var errorType = assembly.GetType("Example.Generated.ExampleNotFoundRpcError", throwOnError: true)!;
+        var domainError = Assert.IsType<SunderRpcException>(
+            errorType.GetMethod("Create")!.Invoke(null, [details, "Not found."]));
+        Assert.Equal("item-1", domainError.Error.Details!.Value.GetProperty("resource").GetString());
+        object?[] detailArguments = [domainError, null];
+        Assert.True((bool)errorType.GetMethod("TryGetDetails")!.Invoke(null, detailArguments)!);
+        Assert.Equal("item-1", detailsType.GetProperty("Resource")!.GetValue(detailArguments[1]));
         var handlerType = Assert.Single(
             assembly.GetTypes(),
             static type => typeof(ISunderRpcDeclaredErrorMetadata).IsAssignableFrom(type));
@@ -324,17 +388,18 @@ public sealed class SunderRpcContractDescriptorTests
     }
 
     [Fact]
-    public void CSharpGenerator_V2UtcDateTimeStringRoundTripsNineFractionalDigits()
+    public void CSharpGenerator_V2OffsetDateTimeRoundTripsNineFractionalDigits()
     {
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.rpc.v2.instant",
               "version":"2.0.0",
               "errors":{},
               "services":{"instant":{"methods":{"echo":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Payload"},"responseSchema":{"$ref":"#/$defs/Payload"}}}}},
               "$defs":{
-                "Instant":{"type":"string","logicalType":"utc-date-time"},
+                "Instant":{"type":"string","format":"date-time"},
                 "Payload":{"type":"object","properties":{"observedAt":{"$ref":"#/$defs/Instant"}},"required":["observedAt"],"additionalProperties":false}
               }
             }
@@ -345,13 +410,13 @@ public sealed class SunderRpcContractDescriptorTests
         var observedAt = payloadType.GetProperty("ObservedAt")!;
         const string exact = "2000-02-29T23:59:59.123456789Z";
         var payload = Activator.CreateInstance(payloadType)!;
-        observedAt.SetValue(payload, exact);
+        observedAt.SetValue(payload, new SunderRpcOffsetDateTime(exact));
 
         var json = JsonSerializer.Serialize(payload, payloadType);
         var roundTrip = JsonSerializer.Deserialize(json, payloadType)!;
 
         Assert.Equal(exact, JsonDocument.Parse(json).RootElement.GetProperty("observedAt").GetString());
-        Assert.Equal(exact, observedAt.GetValue(roundTrip));
+        Assert.Equal(exact, Assert.IsType<SunderRpcOffsetDateTime>(observedAt.GetValue(roundTrip)).Value);
     }
 
     [Fact]
@@ -416,6 +481,7 @@ public sealed class SunderRpcContractDescriptorTests
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.rpc.v2.optional",
               "version":"2.0.0",
               "errors":{},

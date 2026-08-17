@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Sunder.Package.Format;
@@ -145,8 +144,11 @@ internal sealed class RuntimeRpcBroker
             "rpc-scope-" + Guid.NewGuid().ToString("N"),
             caller,
             sessionLease.Generation,
+            sessionLease.GenerationIdentity,
             deadline,
             requirePermission,
+            sessionLease.RetirementToken,
+            sessionLease.GenerationRetirementToken,
             _hostStopping);
         lock (_callScopeGate)
         {
@@ -528,6 +530,7 @@ internal sealed class RuntimeRpcBroker
                 cancellationToken,
                 _hostStopping,
                 sessionLease.RetirementToken,
+                sessionLease.GenerationRetirementToken,
                 callerLease.RetirementToken,
                 permissionChanges,
             };
@@ -1091,6 +1094,7 @@ internal sealed class RuntimeRpcBroker
                 cancellationToken,
                 _hostStopping,
                 sessionLease.RetirementToken,
+                sessionLease.GenerationRetirementToken,
                 callerLease.RetirementToken,
                 calleeLease.RetirementToken,
                 deadlineCancellation.Token,
@@ -1176,6 +1180,7 @@ internal sealed class RuntimeRpcBroker
             cancellationToken,
             scope.RevocationToken,
             sessionLease.RetirementToken,
+            sessionLease.GenerationRetirementToken,
             scope.Caller.RetirementToken,
             provider.Owner.RetirementToken);
         var now = _timeProvider.GetUtcNow();
@@ -1376,13 +1381,23 @@ internal sealed class RuntimeRpcBroker
             : throw StaleEndpoint("rpc.caller-retired", "The caller package activation is retired.");
 
     private PackageSessionLease AcquireSessionLease(IRuntimeRpcCallerActivation caller)
-        => caller is RuntimeRpcPackageActivation package && package.AllowsPrePublicationLease
-            ? _sessions.AcquirePackageActivationLease(
-                package.PackageId,
+    {
+        if (caller is RuntimeRpcPackageActivation { AllowsPrePublicationLease: true } candidate)
+        {
+            return _sessions.AcquirePackageActivationLease(
+                candidate.PackageId,
                 new RuntimePackageGeneration(
-                    package.Package.RuntimeActivationId,
-                    package.SessionGeneration))
-            : _sessions.AcquireLease();
+                    candidate.Package.RuntimeActivationId,
+                    candidate.ActivationGeneration));
+        }
+
+        var lease = _sessions.AcquireLease();
+        if (caller is RuntimeRpcPackageActivation package)
+        {
+            _ = _sessions.GetLoadedPackage(lease, package.PackageId);
+        }
+        return lease;
+    }
 
     private bool TryGetEndpoint(
         IRuntimeRpcCallerActivation caller,
@@ -1434,6 +1449,7 @@ internal sealed class RuntimeRpcBroker
         }
         if (scope.IsRevoked
             || !ReferenceEquals(scope.Caller, caller)
+            || !ReferenceEquals(scope.SessionGenerationIdentity, sessionLease.GenerationIdentity)
             || scope.SessionGeneration != sessionLease.Generation)
         {
             throw Unavailable("rpc.scope.unavailable", "The RPC call scope is stale or unavailable.");
@@ -1591,10 +1607,15 @@ internal sealed class RuntimeRpcBroker
         {
             throw Validation($"rpc.{label}.undefined", $"The RPC {label} is undefined.");
         }
-        var bytes = Encoding.UTF8.GetByteCount(value.GetRawText());
-        if (bytes > _policy.MaxPayloadBytes || GetDepth(value) > _policy.MaxPayloadDepth)
+        try
         {
-            throw ResourceExhausted($"rpc.{label}.limit", $"The RPC {label} exceeds a payload limit.");
+            _ = RuntimeRpcValueMeasurer.Measure(value, _policy);
+        }
+        catch (RuntimeRpcValueLimitException exception)
+        {
+            throw ResourceExhausted(
+                $"rpc.{label}.{GetValueLimitName(exception.LimitKind)}-limit",
+                $"The RPC {label} exceeds its {GetValueLimitName(exception.LimitKind)} limit.");
         }
         if (!contract.IsValid(schemaReference, value, out var error))
         {
@@ -1610,7 +1631,7 @@ internal sealed class RuntimeRpcBroker
         {
             ValidatePayload(call.Contract, call.Method.OutputSchemaReference, value, "output");
         }
-        catch (SunderRpcException exception) when (exception.Error.Kind is SunderRpcErrorKind.Validation or SunderRpcErrorKind.ResourceExhausted)
+        catch (SunderRpcException exception) when (exception.Error.Kind == SunderRpcErrorKind.Validation)
         {
             throw FaultProvider(
                 call,
@@ -1651,10 +1672,35 @@ internal sealed class RuntimeRpcBroker
                         "The provider returned a domain error that is not declared by the RPC method.",
                         rpcException);
                 }
+                var declaration = call.Contract.FindError(rpcException.Error.Code);
+                if (rpcException.Error.Details is { } details)
+                {
+                    if (declaration?.DetailsSchema is null)
+                    {
+                        return FaultProvider(
+                            call,
+                            "rpc.provider.invalid-error-details",
+                            "The provider returned domain error details that are not declared by the contract.",
+                            rpcException);
+                    }
+                    try
+                    {
+                        ValidatePayload(call.Contract, declaration.DetailsSchema, details, "error-details");
+                    }
+                    catch (SunderRpcException validationException)
+                    {
+                        return FaultProvider(
+                            call,
+                            "rpc.provider.invalid-error-details",
+                            "The provider returned domain error details that violate the contract.",
+                            validationException);
+                    }
+                }
                 return new SunderRpcException(new SunderRpcError(
                     SunderRpcErrorKind.Domain,
                     rpcException.Error.Code,
-                    Sanitize(rpcException.Error.Message)));
+                    Sanitize(rpcException.Error.Message),
+                    details: rpcException.Error.Details));
             }
             if (rpcException.IsHostAuthenticated)
             {
@@ -1756,25 +1802,15 @@ internal sealed class RuntimeRpcBroker
         return failure;
     }
 
-    private static int GetDepth(JsonElement value)
-    {
-        var maximum = 1;
-        var stack = new Stack<(JsonElement Value, int Depth)>();
-        stack.Push((value, 1));
-        while (stack.TryPop(out var item))
+    private static string GetValueLimitName(RuntimeRpcValueLimitKind kind)
+        => kind switch
         {
-            maximum = Math.Max(maximum, item.Depth);
-            if (item.Value.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var child in item.Value.EnumerateArray()) stack.Push((child, item.Depth + 1));
-            }
-            else if (item.Value.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var child in item.Value.EnumerateObject()) stack.Push((child.Value, item.Depth + 1));
-            }
-        }
-        return maximum;
-    }
+            RuntimeRpcValueLimitKind.Bytes => "byte",
+            RuntimeRpcValueLimitKind.Depth => "depth",
+            RuntimeRpcValueLimitKind.Nodes => "node",
+            RuntimeRpcValueLimitKind.ObjectMembers => "object-member",
+            _ => "resource",
+        };
 
     private static bool IsSafeDomainCode(string value)
         => value.Length is > 0 and <= 128
@@ -1960,24 +1996,33 @@ internal sealed class RuntimeRpcCallerScopeState
         string id,
         IRuntimeRpcCallerActivation caller,
         long sessionGeneration,
+        object sessionGenerationIdentity,
         DateTimeOffset deadlineUtc,
         bool requirePermission,
+        CancellationToken sessionRetirement,
+        CancellationToken generationRetirement,
         CancellationToken hostStopping)
     {
         Id = id;
         Caller = caller;
         SessionGeneration = sessionGeneration;
+        SessionGenerationIdentity = sessionGenerationIdentity;
         DeadlineUtc = deadlineUtc;
         RequirePermission = requirePermission;
         ContentAuthority = new RuntimeRpcContentAuthority(id);
         _revocation = CancellationTokenSource.CreateLinkedTokenSource(
-            caller.RetirementToken,
-            hostStopping);
+            [
+                caller.RetirementToken,
+                sessionRetirement,
+                generationRetirement,
+                hostStopping,
+            ]);
     }
 
     public string Id { get; }
     public IRuntimeRpcCallerActivation Caller { get; }
     public long SessionGeneration { get; }
+    public object SessionGenerationIdentity { get; }
     public DateTimeOffset DeadlineUtc { get; }
     public bool RequirePermission { get; }
     public RuntimeRpcContentAuthority ContentAuthority { get; }

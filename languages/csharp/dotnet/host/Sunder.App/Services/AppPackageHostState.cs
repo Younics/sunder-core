@@ -8,6 +8,8 @@ internal sealed class AppPackageHostState(
     IReadOnlyList<AppPackageLoadContext> loadContexts)
 {
     private readonly Dictionary<string, AppLoadedPackageHandle> _loadedPackages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _packageContentHashes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _activatedPackageIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<AppPackageLoadContext> _loadContexts = loadContexts.ToList();
     private readonly List<object> _ownedDisposables = ownedDisposables.ToList();
     private readonly object _syncRoot = new();
@@ -92,7 +94,25 @@ internal sealed class AppPackageHostState(
         lock (_syncRoot)
         {
             disabledPackageIds.Remove(packageId);
+            _activatedPackageIds.Add(packageId);
             _loadedPackages[packageId] = loadedPackage;
+            _packageContentHashes[packageId] = loadedPackage.Source.ContentHash;
+        }
+    }
+
+    public void SetPackageContentHash(string packageId, string contentHash)
+    {
+        lock (_syncRoot)
+        {
+            _packageContentHashes[packageId] = contentHash;
+        }
+    }
+
+    public string? GetPackageContentHash(string packageId)
+    {
+        lock (_syncRoot)
+        {
+            return _packageContentHashes.GetValueOrDefault(packageId);
         }
     }
 
@@ -108,6 +128,7 @@ internal sealed class AppPackageHostState(
             if (!preserveDisabled)
             {
                 disabledPackageIds.Remove(packageId);
+                _packageContentHashes.Remove(packageId);
             }
 
             return true;
@@ -127,6 +148,14 @@ internal sealed class AppPackageHostState(
         lock (_syncRoot)
         {
             return disabledPackageIds.Contains(packageId);
+        }
+    }
+
+    public bool HasActivatedPackage(string packageId)
+    {
+        lock (_syncRoot)
+        {
+            return _activatedPackageIds.Contains(packageId);
         }
     }
 

@@ -86,6 +86,68 @@ internal sealed class AppPackageAssemblyTracker
         return null;
     }
 
+    public string? ResolveExclusivePackageId(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var packageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pending = new Stack<(Exception Exception, bool PathAttributed)>();
+        pending.Push((exception, false));
+        while (pending.TryPop(out var item))
+        {
+            var currentAttributed = CollectPackageIds(item.Exception, packageIds);
+            if (packageIds.Count > 1)
+            {
+                return null;
+            }
+
+            var pathAttributed = item.PathAttributed || currentAttributed;
+            if (item.Exception is AggregateException aggregate)
+            {
+                if (aggregate.InnerExceptions.Count == 0 && !pathAttributed)
+                {
+                    return null;
+                }
+                foreach (var inner in aggregate.InnerExceptions)
+                {
+                    pending.Push((inner, pathAttributed));
+                }
+            }
+            else if (item.Exception.InnerException is { } inner)
+            {
+                pending.Push((inner, pathAttributed));
+            }
+            else if (!pathAttributed)
+            {
+                return null;
+            }
+        }
+
+        return packageIds.Count == 1 ? packageIds.Single() : null;
+    }
+
+    private bool CollectPackageIds(Exception exception, ISet<string> packageIds)
+    {
+        var attributed = false;
+        var assembly = exception.TargetSite?.DeclaringType?.Assembly;
+        if (assembly is not null && TryResolvePackageId(assembly, out var packageId))
+        {
+            packageIds.Add(packageId);
+            attributed = true;
+        }
+
+        foreach (var frame in new StackTrace(exception, fNeedFileInfo: false).GetFrames() ?? [])
+        {
+            assembly = frame.GetMethod()?.DeclaringType?.Assembly;
+            if (assembly is not null && TryResolvePackageId(assembly, out packageId))
+            {
+                packageIds.Add(packageId);
+                attributed = true;
+            }
+        }
+
+        return attributed;
+    }
+
     private bool TryResolvePackageId(Assembly assembly, out string packageId)
     {
         lock (_syncRoot)

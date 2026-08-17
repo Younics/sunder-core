@@ -283,9 +283,14 @@ public sealed class RuntimeArchitectureRatchetTests
             "Program.cs"));
         var handshakeIndex = program.IndexOf("MapRuntimeHandshakeEndpoint", StringComparison.Ordinal);
         var versionedGroupIndex = program.IndexOf("MapGroup(\"/api/v1\")", StringComparison.Ordinal);
+        var resourcePolicyIndex = program.IndexOf(
+            "RuntimeResourcePolicyLaunch.ReadAndClearEnvironment",
+            StringComparison.Ordinal);
+        var builderIndex = program.IndexOf("WebApplication.CreateBuilder", StringComparison.Ordinal);
         var appServices = Path.Combine(root, "languages", "csharp", "dotnet", "host", "Sunder.App", "Services");
 
         Assert.True(handshakeIndex >= 0 && handshakeIndex < versionedGroupIndex);
+        Assert.True(resourcePolicyIndex >= 0 && resourcePolicyIndex < builderIndex);
         Assert.False(File.Exists(Path.Combine(appServices, "RuntimeHostVersionComparer.cs")));
         Assert.Contains(
             "RuntimeProtocolCompatibility.IsCompatible",
@@ -337,6 +342,22 @@ public sealed class RuntimeArchitectureRatchetTests
         Assert.Contains("OnCompleted", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Task.Run", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ResponseDrainDelay", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RuntimeShutdown_CompletesLongLivedStreamsBeforeStoppingWebHost()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            LocateRepositoryRoot(), "languages", "csharp", "dotnet", "host", "Sunder.Runtime.Host", "Program.cs"));
+        var retireSessions = source.IndexOf("\"retire package sessions\"", StringComparison.Ordinal);
+        var stopPackageLogs = source.IndexOf("\"stop package log streaming\"", StringComparison.Ordinal);
+        var completeRuntimeEvents = source.IndexOf("runtimeEventStreamService.Complete()", StringComparison.Ordinal);
+        var stopWebHost = source.IndexOf("\"stop the Runtime web host\"", StringComparison.Ordinal);
+
+        Assert.True(retireSessions >= 0);
+        Assert.True(stopPackageLogs > retireSessions);
+        Assert.True(completeRuntimeEvents > stopPackageLogs);
+        Assert.True(stopWebHost > completeRuntimeEvents);
     }
 
     [Fact]

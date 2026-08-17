@@ -96,8 +96,25 @@ internal sealed class PackageCallbackSessionStore
         {
             if (!_sessions.TryGetValue(sessionId, out var session)
                 || session.Generation != generation
-                || !string.Equals(session.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
-                || session.State != PackageCallbackLifecycleState.Pending)
+                || !string.Equals(session.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            if (session.State == PackageCallbackLifecycleState.Completing)
+            {
+                if (session.CompletionCancellation is null || session.CompletionCancellationRequested)
+                {
+                    return null;
+                }
+
+                session.CompletionCancellationRequested = true;
+                return new PackageCallbackCancellationWork(
+                    session,
+                    PackageCallbackCancellationReason.CallerRequested,
+                    CancelCompletion: true);
+            }
+            if (session.State != PackageCallbackLifecycleState.Pending)
             {
                 return null;
             }
@@ -113,7 +130,8 @@ internal sealed class PackageCallbackSessionStore
             RemoveStartLocked(session);
             return new PackageCallbackCancellationWork(
                 session,
-                PackageCallbackCancellationReason.CallerRequested);
+                PackageCallbackCancellationReason.CallerRequested,
+                CancelCompletion: false);
         }
     }
 
@@ -129,13 +147,14 @@ internal sealed class PackageCallbackSessionStore
             }
 
             session.State = PackageCallbackLifecycleState.Completing;
-            session.WorkCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            session.CompletionCancellation = new CancellationTokenSource();
+            session.CompletionWork = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             session.CallbackServer.UnregisterHandler(sessionId);
             return session;
         }
     }
 
-    public void Complete(
+    public PackageCallbackSessionResponse Complete(
         ActivePackageCallbackSession session,
         PackageCallbackSessionResponse status,
         DateTimeOffset removeAtUtc)
@@ -146,7 +165,15 @@ internal sealed class PackageCallbackSessionStore
                 || !ReferenceEquals(current, session)
                 || session.State != PackageCallbackLifecycleState.Completing)
             {
-                return;
+                return session.Status ?? status;
+            }
+            if (session.CompletionCancellationRequested)
+            {
+                status = status with
+                {
+                    State = PackageCallbackSessionState.Cancelled,
+                    Message = "The callback session was cancelled.",
+                };
             }
 
             session.Status = status;
@@ -159,6 +186,7 @@ internal sealed class PackageCallbackSessionStore
                 PackageCallbackSessionState.Expired => PackageCallbackLifecycleState.Expired,
                 _ => PackageCallbackLifecycleState.Failed,
             };
+            return status;
         }
     }
 
@@ -178,7 +206,7 @@ internal sealed class PackageCallbackSessionStore
                 {
                     session.State = PackageCallbackLifecycleState.Expired;
                     RemoveLocked(session);
-                    cancellations.Add(new(session, PackageCallbackCancellationReason.Expired));
+                    cancellations.Add(new(session, PackageCallbackCancellationReason.Expired, CancelCompletion: false));
                 }
                 else if (session.State == PackageCallbackLifecycleState.Pending)
                 {
@@ -191,7 +219,7 @@ internal sealed class PackageCallbackSessionStore
                         Message = "The callback session expired.",
                     };
                     RemoveStartLocked(session);
-                    cancellations.Add(new(session, PackageCallbackCancellationReason.Expired));
+                    cancellations.Add(new(session, PackageCallbackCancellationReason.Expired, CancelCompletion: false));
                 }
                 else
                 {
@@ -226,7 +254,7 @@ internal sealed class PackageCallbackSessionStore
                 cancellations,
                 _sessions.Values
                     .Where(static session => session.State == PackageCallbackLifecycleState.Completing)
-                    .Select(static session => session.WorkCompletion.Task)
+                    .Select(static session => session.CompletionWork!.Task)
                     .ToArray());
         }
     }
@@ -255,7 +283,7 @@ internal sealed class PackageCallbackSessionStore
                     session.CallbackServer.UnregisterHandler(session.SessionId);
                     session.State = PackageCallbackLifecycleState.Cancelled;
                     RemoveLocked(session);
-                    cancellations.Add(new(session, reason));
+                    cancellations.Add(new(session, reason, CancelCompletion: false));
                 }
                 else
                 {
@@ -304,7 +332,8 @@ internal readonly record struct PackageCallbackStartReservation(
 
 internal readonly record struct PackageCallbackCancellationWork(
     ActivePackageCallbackSession Session,
-    PackageCallbackCancellationReason Reason);
+    PackageCallbackCancellationReason Reason,
+    bool CancelCompletion);
 
 internal readonly record struct PackageCallbackShutdownWork(
     IReadOnlyList<PackageCallbackCancellationWork> Cancellations,
@@ -333,5 +362,7 @@ internal sealed class ActivePackageCallbackSession(
     public PackageCallbackLifecycleState State { get; set; } = PackageCallbackLifecycleState.Starting;
     public PackageCallbackSessionResponse? Status { get; set; }
     public TaskCompletionSource<PackageCallbackSessionResponse?> StartCompletion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    public TaskCompletionSource WorkCompletion { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public CancellationTokenSource? CompletionCancellation { get; set; }
+    public bool CompletionCancellationRequested { get; set; }
+    public TaskCompletionSource? CompletionWork { get; set; }
 }

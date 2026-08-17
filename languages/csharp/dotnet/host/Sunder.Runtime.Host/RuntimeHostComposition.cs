@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.LocalState;
 
 namespace Sunder.Runtime.Host;
 
@@ -10,19 +11,28 @@ internal static class RuntimeHostComposition
     internal static IServiceCollection AddRuntimeHostServices(
         this IServiceCollection services,
         RuntimePackagePaths packagePaths,
-        RuntimeBearerTokenValidator bearerTokenValidator)
+        RuntimeBearerTokenValidator bearerTokenValidator,
+        RuntimeResourcePolicy? resourcePolicy = null)
     {
+        resourcePolicy ??= RuntimeResourcePolicies.Standard;
         services.AddLogging();
         services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
+        services.ConfigureHttpJsonOptions(options =>
+            options.SerializerOptions.MaxDepth = RuntimeResourcePolicies.ProtocolCeilings.MaximumValueDepth + 8);
         services.AddSingleton(bearerTokenValidator);
         services.AddSingleton(packagePaths);
+        services.AddSingleton(resourcePolicy);
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton<RuntimeTransportPolicyOptions>();
+        services.AddSingleton(RuntimeTransportPolicyOptions.FromResourcePolicy(resourcePolicy));
         services.AddSingleton<RuntimeAuthPolicyOptions>();
         services.AddSingleton<RuntimeStackPolicyOptions>();
-        services.AddSingleton<RuntimeRpcPolicyOptions>();
-        services.AddSingleton<RuntimeProcessPolicyOptions>();
+        services.AddSingleton(RuntimeRpcPolicyOptions.FromResourcePolicy(resourcePolicy));
+        services.AddSingleton(new RuntimeProcessPolicyOptions
+        {
+            EffectiveResourcePolicy = resourcePolicy,
+        });
         services.AddSingleton<RuntimeLifecyclePolicyOptions>();
+        services.AddSingleton<RuntimePackageRecoveryPolicyOptions>();
         services.AddSingleton<RuntimeProtocolDescriptor>();
         services.AddSingleton<RuntimeOperationGate>();
         services.AddSingleton<RuntimeResetChallengeService>();
@@ -34,6 +44,7 @@ internal static class RuntimeHostComposition
         services.AddHostedService<RuntimeContentTransferCleanupService>();
         services.AddSingleton<RuntimeContentTransferService>();
         services.AddSingleton<RuntimeEventStreamService>();
+        services.AddSingleton<RuntimePackageRecoveryQueue>();
         services.AddSingleton<RuntimeRpcCatalog>();
         services.AddSingleton<RuntimeRpcPermissionStore>();
         services.AddSingleton<RuntimeRpcReadinessEvaluator>();
@@ -49,8 +60,12 @@ internal static class RuntimeHostComposition
             provider.GetRequiredService<PackageUiSnapshotStore>(),
             provider.GetRequiredService<RuntimeLifecyclePolicyOptions>(),
             provider.GetRequiredService<RuntimeRpcCatalog>(),
-            provider.GetRequiredService<RuntimeRpcReadinessEvaluator>()));
+            provider.GetRequiredService<RuntimeRpcReadinessEvaluator>(),
+            provider.GetRequiredService<RuntimePackageRecoveryQueue>()));
         services.AddSingleton(provider => provider.GetRequiredService<RuntimeSessionOwner>().State);
+        services.AddSingleton<RuntimePackageRecoveryCoordinator>();
+        services.AddSingleton<IHostedService>(provider =>
+            provider.GetRequiredService<RuntimePackageRecoveryCoordinator>());
         services.AddSingleton<RuntimeRpcAppSessionManager>();
         services.AddSingleton<RuntimeRpcBroker>();
         services.AddSingleton<RuntimeRpcPermissionService>();

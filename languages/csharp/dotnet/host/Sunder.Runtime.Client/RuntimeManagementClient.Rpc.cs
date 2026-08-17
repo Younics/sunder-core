@@ -8,7 +8,12 @@ namespace Sunder.Runtime.Client;
 
 public sealed partial class RuntimeManagementClient
 {
-    private static readonly JsonSerializerOptions RpcStreamJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions RpcMetadataJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions RpcTransportJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        MaxDepth = RuntimeResourcePolicies.ProtocolCeilings.MaximumValueDepth
+                   + RuntimeClientResourceLimits.EnvelopeDepthOverhead,
+    };
     private const string RpcContentMetadataHeader = "X-Sunder-Rpc-Content-Metadata";
 
     public Task<RuntimeRpcCatalogSnapshot> GetRpcCatalogAsync(CancellationToken token = default)
@@ -88,44 +93,66 @@ public sealed partial class RuntimeManagementClient
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
     }
 
-    public Task<RuntimeRpcAppDiscoverResponse> DiscoverAppRpcAsync(
+    public async Task<RuntimeRpcAppDiscoverResponse> DiscoverAppRpcAsync(
         RuntimeRpcAppDiscoverRequest request,
         CancellationToken token = default)
-        => PostAsync<RuntimeRpcAppDiscoverRequest, RuntimeRpcAppDiscoverResponse>(
+    {
+        var response = await PostAsync<RuntimeRpcAppDiscoverRequest, RuntimeRpcAppDiscoverResponse>(
             "rpc/app/discover",
             request,
             RuntimeProtocolFeatures.AppWebRpcV2,
-            token);
+            token).ConfigureAwait(false);
+        EnsureRpcErrorDetails(response.Error, "Runtime RPC discovery error details");
+        return response;
+    }
 
-    public Task<RuntimeRpcAppProviderResponse> GetAppRpcProviderAsync(
+    public async Task<RuntimeRpcAppProviderResponse> GetAppRpcProviderAsync(
         RuntimeRpcAppProviderRequest request,
         CancellationToken token = default)
-        => PostAsync<RuntimeRpcAppProviderRequest, RuntimeRpcAppProviderResponse>(
+    {
+        var response = await PostAsync<RuntimeRpcAppProviderRequest, RuntimeRpcAppProviderResponse>(
             "rpc/app/provider",
             request,
             RuntimeProtocolFeatures.AppWebRpcV2,
-            token);
+            token).ConfigureAwait(false);
+        EnsureRpcErrorDetails(response.Error, "Runtime RPC provider error details");
+        return response;
+    }
 
     public Task<RuntimeRpcAppInvariantViolationResponse> TryReportAppRpcInvariantViolationAsync(
         RuntimeRpcAppInvariantViolationRequest request,
         CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return PostAsync<RuntimeRpcAppInvariantViolationRequest, RuntimeRpcAppInvariantViolationResponse>(
+        return SendAsync();
+
+        async Task<RuntimeRpcAppInvariantViolationResponse> SendAsync()
+        {
+            var response = await PostAsync<RuntimeRpcAppInvariantViolationRequest, RuntimeRpcAppInvariantViolationResponse>(
             "rpc/app/invariant-violation",
             request with { ExceptionMessage = SanitizeInvariantMessage(request.ExceptionMessage) },
             RuntimeProtocolFeatures.AppWebRpcV2,
-            token);
+            token).ConfigureAwait(false);
+            EnsureRpcErrorDetails(response.Error, "Runtime RPC invariant error details");
+            return response;
+        }
     }
 
-    public Task<RuntimeRpcAppInvokeResponse> InvokeAppRpcAsync(
+    public async Task<RuntimeRpcAppInvokeResponse> InvokeAppRpcAsync(
         RuntimeRpcAppInvokeRequest request,
         CancellationToken token = default)
-        => PostAsync<RuntimeRpcAppInvokeRequest, RuntimeRpcAppInvokeResponse>(
-            "rpc/app/invoke",
-            request,
-            RuntimeProtocolFeatures.AppWebRpcV2,
-            token);
+    {
+        using var message = CreateRpcRequest("rpc/app/invoke", request);
+        using var httpResponse = await _httpClient.SendAsync(message, token).ConfigureAwait(false);
+        var result = await _responses.ReadRequiredJsonAsync<RuntimeRpcAppInvokeResponse>(httpResponse, token)
+            .ConfigureAwait(false);
+        if (result.Value is { } value)
+        {
+            _transport.ResourceLimits.EnsureRpcValue(value, "Runtime RPC result value");
+        }
+        EnsureRpcErrorDetails(result.Error, "Runtime RPC invocation error details");
+        return result;
+    }
 
     public IAsyncEnumerable<RuntimeRpcAppCatalogFrame> WatchAppRpcAsync(
         RuntimeRpcAppWatchRequest request,
@@ -158,13 +185,15 @@ public sealed partial class RuntimeManagementClient
         if (metadata.Length is { } length) request.Content.Headers.ContentLength = length;
         request.Headers.TryAddWithoutValidation(
             RpcContentMetadataHeader,
-            Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(metadata, RpcStreamJsonOptions)));
+            Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(metadata, RpcMetadataJsonOptions)));
         request.Options.Set(
             RuntimeAuthenticatedHttpMessageHandler.RequiredFeaturesKey,
             new[] { RuntimeProtocolFeatures.AppWebRpcV2 });
         using var response = await _httpClient.SendAsync(request, token).ConfigureAwait(false);
-        return await _responses.ReadRequiredJsonAsync<RuntimeRpcAppContentRegisterResponse>(response, token)
+        var result = await _responses.ReadRequiredJsonAsync<RuntimeRpcAppContentRegisterResponse>(response, token)
             .ConfigureAwait(false);
+        EnsureRpcErrorDetails(result.Error, "Runtime RPC content registration error details");
+        return result;
     }
 
     public async Task<RuntimeRpcAppContentOpenResult> OpenAppRpcContentAsync(
@@ -182,6 +211,7 @@ public sealed partial class RuntimeManagementClient
             {
                 var error = await _responses.ReadJsonAsync<RuntimeRpcErrorDescriptor>(response, token)
                     .ConfigureAwait(false);
+                EnsureRpcErrorDetails(error, "Runtime RPC content-open error details");
                 return new RuntimeRpcAppContentOpenResult(null, error);
             }
             finally
@@ -207,11 +237,15 @@ public sealed partial class RuntimeManagementClient
     {
         var request = new HttpRequestMessage(HttpMethod.Post, CreateUri(path))
         {
-            Content = JsonContent.Create(payload),
+            Content = JsonContent.Create(payload, options: RpcTransportJsonOptions),
         };
         request.Options.Set(
             RuntimeAuthenticatedHttpMessageHandler.RequiredFeaturesKey,
             new[] { RuntimeProtocolFeatures.AppWebRpcV2 });
+        if (payload is RuntimeRpcAppInvokeRequest invocation)
+        {
+            request.Options.Set(RuntimeAuthenticatedHttpMessageHandler.RpcValueKey, invocation.Request);
+        }
         return request;
     }
 
@@ -236,20 +270,42 @@ public sealed partial class RuntimeManagementClient
             token).ConfigureAwait(false);
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
         await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
-        using var reader = new StreamReader(stream, Encoding.UTF8, false, 8192, leaveOpen: false);
-        while (await reader.ReadLineAsync(token).ConfigureAwait(false) is { } line)
+        var limits = _transport.ResourceLimits;
+        var maximumFrameBytes = Math.Min(
+            _transport.Policy.MaxStreamEventBytes,
+            limits.MaximumJsonEnvelopeBytes);
+        var reader = new RuntimeBoundedUtf8LineReader(stream);
+        while (await reader.ReadLineAsync(maximumFrameBytes, token).ConfigureAwait(false) is { } line)
         {
             if (line.Length == 0)
             {
                 continue;
             }
-            if (Encoding.UTF8.GetByteCount(line) > _transport.Policy.MaxStreamEventBytes)
+            var frame = JsonSerializer.Deserialize<TFrame>(line, limits.CreateJsonOptions())
+                        ?? throw new InvalidDataException("Runtime RPC stream returned an empty frame.");
+            if (frame is RuntimeRpcAppSubscriptionFrame { Event: { } item })
             {
-                throw new InvalidDataException("Runtime RPC stream frame exceeded the client parser limit.");
+                limits.EnsureRpcValue(item, "Runtime RPC stream event value");
             }
-            yield return JsonSerializer.Deserialize<TFrame>(line, RpcStreamJsonOptions)
-                         ?? throw new InvalidDataException("Runtime RPC stream returned an empty frame.");
+            var error = frame switch
+            {
+                RuntimeRpcAppCatalogFrame catalog => catalog.Error,
+                RuntimeRpcAppSubscriptionFrame subscription => subscription.Error,
+                _ => null,
+            };
+            EnsureRpcErrorDetails(error, "Runtime RPC stream error details");
+            yield return frame;
         }
+    }
+
+    private void EnsureRpcErrorDetails(RuntimeRpcErrorDescriptor? error, string label)
+    {
+        if (error?.Details is not { } details) return;
+        if (error.Kind != RuntimeRpcErrorKind.Domain)
+        {
+            throw new InvalidDataException("The Runtime returned details on a non-domain RPC error.");
+        }
+        _transport.ResourceLimits.EnsureRpcValue(details, label);
     }
 }
 

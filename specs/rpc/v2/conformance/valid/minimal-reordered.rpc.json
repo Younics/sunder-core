@@ -25,5 +25,6 @@
   "version": "2.0.0",
   "contractId": "example.rpc.v2.minimal",
   "descriptorVersion": 2,
+  "schemaProfile": "sunder.rpc.values.v1",
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

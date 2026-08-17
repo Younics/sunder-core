@@ -266,7 +266,7 @@ public sealed class AppPackageResourceAssemblyRegistry
                     ? null
                     : new AppPackageAvaloniaResourceCatalog(assembly, resources);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
             {
                 AppSessionLog.WriteError($"Failed to index Avalonia resources for package assembly '{assembly.GetName().Name}'.", ex);
                 return null;

@@ -1,5 +1,6 @@
 {
   "descriptorVersion": 2,
+  "schemaProfile": "sunder.rpc.values.v1",
   "contractId": "SUNDER_PACKAGE_ID_TEXT.sample",
   "version": "2.0.0",
   "errors": {},

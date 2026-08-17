@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Settings;
@@ -15,8 +17,79 @@ internal sealed record WorkerContentFileHandle(string HandleId, string FilePath)
 
 internal sealed record WorkerCallScopeIdentity(string ScopeId, DateTimeOffset DeadlineUtc);
 
+internal sealed record WorkerResourceProfile(
+    int Version,
+    int RpcValueBytes,
+    int ValueDepth,
+    int ValueNodes,
+    int ObjectMembers,
+    int InlineDecodedBytes,
+    int ContentReferenceBytes);
+
 internal static partial class WorkerWire
 {
+    public static WorkerResourceProfile ReadResourceProfile(JsonElement value, string expectedHash)
+    {
+        WorkerJson.RequireOnlyProperties(
+            value,
+            "version",
+            "rpcValueBytes",
+            "valueDepth",
+            "valueNodes",
+            "objectMembers",
+            "inlineDecodedBytes",
+            "contentReferenceBytes");
+        if (expectedHash.Length != 64
+            || expectedHash.Any(static character => character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')))
+        {
+            throw new WorkerProtocolException("Host resourceProfileHash is not canonical SHA-256.");
+        }
+
+        var profile = new WorkerResourceProfile(
+            ReadPositiveInt32(value, "version"),
+            ReadPositiveInt32(value, "rpcValueBytes"),
+            ReadPositiveInt32(value, "valueDepth"),
+            ReadPositiveInt32(value, "valueNodes"),
+            ReadPositiveInt32(value, "objectMembers"),
+            ReadPositiveInt32(value, "inlineDecodedBytes"),
+            ReadPositiveInt32(value, "contentReferenceBytes"));
+        if (profile.Version != 1
+            || profile.RpcValueBytes > 32 * 1024 * 1024
+            || profile.ValueDepth > 64
+            || profile.ValueNodes > 4_194_304
+            || profile.ObjectMembers > 65_536
+            || profile.InlineDecodedBytes > 4 * 1024 * 1024
+            || profile.ContentReferenceBytes > 256 * 1024 * 1024)
+        {
+            throw new WorkerProtocolException("Host resourceProfile exceeds Worker V3 protocol ceilings.");
+        }
+        var actualHash = ComputeResourceProfileHash(profile);
+        if (!string.Equals(actualHash, expectedHash, StringComparison.Ordinal))
+        {
+            throw new WorkerProtocolException(
+                "host.hello resourceProfileHash does not match its closed resourceProfile.");
+        }
+        return profile;
+    }
+
+    public static string ComputeResourceProfileHash(WorkerResourceProfile profile)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("version", profile.Version);
+            writer.WriteNumber("rpcValueBytes", profile.RpcValueBytes);
+            writer.WriteNumber("valueDepth", profile.ValueDepth);
+            writer.WriteNumber("valueNodes", profile.ValueNodes);
+            writer.WriteNumber("objectMembers", profile.ObjectMembers);
+            writer.WriteNumber("inlineDecodedBytes", profile.InlineDecodedBytes);
+            writer.WriteNumber("contentReferenceBytes", profile.ContentReferenceBytes);
+            writer.WriteEndObject();
+        }
+        return Convert.ToHexString(SHA256.HashData(buffer.ToArray())).ToLowerInvariant();
+    }
+
     public static WorkerProviderIdentity ReadProviderIdentity(JsonElement value)
     {
         WorkerJson.RequireOnlyProperties(
@@ -176,7 +249,14 @@ internal static partial class WorkerWire
 
     public static SunderRpcException ReadHostError(JsonElement value)
     {
-        WorkerJson.RequireOnlyProperties(value, "kind", "code", "message", "dispatchState", "retrySafety");
+        WorkerJson.RequireOnlyProperties(
+            value,
+            "kind",
+            "code",
+            "message",
+            "dispatchState",
+            "retrySafety",
+            "details");
         var kind = WorkerJson.RequiredString(value, "kind", 64) switch
         {
             "domain" => SunderRpcErrorKind.Domain,
@@ -210,8 +290,15 @@ internal static partial class WorkerWire
             "unsafe" => SunderRpcRetrySafety.Unsafe,
             _ => throw new WorkerProtocolException("Host returned an invalid RPC retry safety."),
         };
+        JsonElement? details = value.TryGetProperty("details", out var detailValue)
+            ? detailValue.Clone()
+            : null;
+        if (details is not null && kind != SunderRpcErrorKind.Domain)
+        {
+            throw new WorkerProtocolException("Host returned details on a non-domain RPC error.");
+        }
         return new SunderRpcException(
-            new SunderRpcError(kind, code, message, dispatchState, retrySafety),
+            new SunderRpcError(kind, code, message, dispatchState, retrySafety, details),
             hostAuthenticated: true);
     }
 
@@ -334,5 +421,18 @@ internal static partial class WorkerWire
             throw new WorkerProtocolException($"Host envelope property '{propertyName}' is not a SHA-256 value.");
         }
         return sha256;
+    }
+
+    private static int ReadPositiveInt32(JsonElement value, string propertyName)
+    {
+        var element = WorkerJson.RequiredValue(value, propertyName);
+        if (element.ValueKind != JsonValueKind.Number
+            || !element.TryGetInt32(out var result)
+            || result <= 0)
+        {
+            throw new WorkerProtocolException(
+                $"Host resourceProfile property '{propertyName}' must be a positive 32-bit integer.");
+        }
+        return result;
     }
 }

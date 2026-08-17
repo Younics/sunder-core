@@ -10,6 +10,7 @@ const identity = {
   abiSha256: "b".repeat(64),
 } as const;
 const mode = process.env.SUNDER_TEST_MODE;
+let releaseOverflowConsumption: (() => void) | undefined;
 
 async function* stream(context: RpcInvocationContext, request: JsonValue): AsyncIterable<JsonValue> {
   context.signal.throwIfAborted();
@@ -30,9 +31,43 @@ async function outbound(client: RpcClient): Promise<void> {
     for await (const _ of client.watch(0, 0)) {
       // The mock Host controls stream termination.
     }
-  } else if (mode === "outbound-stream-overflow") {
-    client.watch(0, 0);
+  } else if (mode === "outbound-stream-overflow" || mode === "outbound-subscribe-count-overflow") {
+    const countOverflow = mode === "outbound-subscribe-count-overflow";
+    const endpointReference = "rpc1_private-endpoint";
+    const events = countOverflow
+      ? client.subscribe(
+        endpointReference,
+        "messages\r\nprivate/path",
+        "watch\tprivate",
+        { token: "request-secret" },
+      )
+      : client.watch(0, 0);
+    const released = new Promise<void>((resolve) => {
+      releaseOverflowConsumption = resolve;
+    });
     safeStderr("OUTBOUND_STARTED");
+    await released;
+    try {
+      for await (const _ of events) {
+        // The queue must already have rejected the burst before consumption starts.
+      }
+      throw new Error("Stream queue exhaustion unexpectedly completed normally.");
+    } catch (error) {
+      if (!(error instanceof RpcError)
+        || error.error.kind !== "resource-exhausted"
+        || error.error.code !== "rpc.worker.stream-queue-limit"
+        || !error.error.message.includes(countOverflow ? "limit=count" : "limit=bytes")
+        || !error.error.message.includes(countOverflow ? "operation=subscribe" : "operation=watch")
+        || countOverflow && (
+          !error.error.message.includes("service=messages__private_path")
+          || !error.error.message.includes("method=watch_private")
+          || error.error.message.includes(endpointReference)
+          || error.error.message.includes("request-secret")
+          || error.error.message.includes("\r")
+          || error.error.message.includes("\n")
+        )) throw error;
+      safeStderr("STREAM_QUEUE_EXHAUSTED");
+    }
   } else if (mode === "outbound-deadline") {
     await client.invoke("rpc1_endpoint", "messages", "echo", null, {
       deadline: new Date("2030-01-02T03:04:05.678Z"),
@@ -53,6 +88,32 @@ async function outbound(client: RpcClient): Promise<void> {
     }
   } else if (mode === "outbound-limit") {
     for (let index = 0; index <= 32; index++) client.watch(0, index);
+  } else if (mode === "outbound-oversize") {
+    try {
+      await client.invoke("rpc1_endpoint", "messages", "echo", { text: "\"".repeat(600_000) });
+      throw new Error("Oversized outbound RPC unexpectedly dispatched.");
+    } catch (error) {
+      if (!(error instanceof RpcError)
+        || error.error.kind !== "resource-exhausted"
+        || error.error.dispatchState !== "not-dispatched") throw error;
+      safeStderr("OUTBOUND_OVERSIZE_REJECTED");
+    }
+  } else if (mode === "outbound-domain-details") {
+    try {
+      await client.invoke("rpc1_endpoint", "messages", "echo", null);
+      throw new Error("Domain error details were not returned.");
+    } catch (error) {
+      if (!(error instanceof RpcError)
+        || !error.isHostAuthenticated
+        || error.error.kind !== "domain"
+        || error.error.code !== "messages.rejected"
+        || error.error.details === null
+        || Array.isArray(error.error.details)
+        || typeof error.error.details !== "object"
+        || (error.error.details as Readonly<Record<string, JsonValue>>).reason !== "duplicate"
+        || !Object.isFrozen(error.error.details)) throw error;
+      safeStderr("OUTBOUND_DOMAIN_DETAILS_OK");
+    }
   }
 }
 
@@ -240,9 +301,12 @@ void runWorker((workerContext) => {
       messages: {
         content: [],
         domain: workerV3ConformanceCorpus.rpc.declaredErrors.domain ?? [],
+        "domain-details": ["messages.rejected"],
         echo: [],
         fault: [],
         infrastructure: [],
+        oversized: [],
+        "release-overflow": [],
         "undeclared-domain": workerV3ConformanceCorpus.rpc.declaredErrors["undeclared-domain"] ?? [],
         wait: [],
         watch: [],
@@ -250,6 +314,11 @@ void runWorker((workerContext) => {
     },
     handler: {
       async invokeUnary(context, _serviceId, methodId, request): Promise<JsonValue> {
+        if (methodId === "release-overflow") {
+          releaseOverflowConsumption?.();
+          releaseOverflowConsumption = undefined;
+          return { accepted: true };
+        }
         if (methodId === "wait") {
           await new Promise<void>((resolve, reject) => {
             context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true });
@@ -259,7 +328,11 @@ void runWorker((workerContext) => {
           throw new RpcDomainError(
             workerV3ConformanceCorpus.rpc.domainFault.error.code,
             workerV3ConformanceCorpus.rpc.domainFault.error.message,
+            workerV3ConformanceCorpus.rpc.domainFault.error.details,
           );
+        }
+        if (methodId === "domain-details") {
+          throw new RpcDomainError("messages.rejected", "Rejected.", { reason: "duplicate" });
         }
         if (methodId === "undeclared-domain") {
           throw new RpcDomainError(
@@ -271,6 +344,7 @@ void runWorker((workerContext) => {
           throw new RpcError({ kind: "validation", code: "rpc.validation", message: "must be hidden" });
         }
         if (methodId === "fault") throw new TypeError("must be hidden");
+        if (methodId === "oversized") return { text: "\"".repeat(600_000) };
         if (methodId === "content") {
           if (request === null || Array.isArray(request) || typeof request !== "object") {
             throw new TypeError("Content test request must be an object.");

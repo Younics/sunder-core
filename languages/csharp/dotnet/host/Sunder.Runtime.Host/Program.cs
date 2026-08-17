@@ -8,6 +8,7 @@ using Sunder.Runtime.Host.Services;
 using Sunder.Runtime.LocalState;
 
 var startupPhaseStarted = Stopwatch.GetTimestamp();
+var runtimeResourcePolicy = RuntimeResourcePolicyLaunch.ReadAndClearEnvironment();
 var startupDiagnostics = RuntimeStartupDiagnosticReporter.StartFromEnvironment();
 var startupOptions = RuntimeHostStartupOptions.Parse(args);
 var supervisorEndpoint = RuntimeSupervisedTransport.ReadFromEnvironment();
@@ -66,7 +67,8 @@ try
 {
     builder.Services.AddRuntimeHostServices(
         packagePaths,
-        new RuntimeBearerTokenValidator(bearerToken));
+        new RuntimeBearerTokenValidator(bearerToken),
+        runtimeResourcePolicy.EffectivePolicy);
     LogStartupPhase("service registration", ref startupPhaseStarted);
 
     await using var app = builder.Build();
@@ -166,11 +168,6 @@ try
         app.Lifetime.StopApplication();
         runtimeSessionOwner.MarkShuttingDown();
         await RunCleanupStepAsync(
-            "stop the Runtime web host",
-            cancellationToken => app.StopAsync(cancellationToken),
-            shutdownDeadline.Token,
-            shutdownLogger);
-        await RunCleanupStepAsync(
             "finish package log discovery",
             _ => packageLogStartupTask,
             shutdownDeadline.Token,
@@ -196,6 +193,19 @@ try
             _ => packageLogStreamService.DisposeAsync().AsTask(),
             shutdownDeadline.Token,
             shutdownLogger);
+        try
+        {
+            runtimeEventStreamService.Complete();
+        }
+        catch (Exception exception)
+        {
+            shutdownLogger.LogWarning(exception, "Failed to complete the Runtime event stream during shutdown");
+        }
+        await RunCleanupStepAsync(
+            "stop the Runtime web host",
+            cancellationToken => app.StopAsync(cancellationToken),
+            shutdownDeadline.Token,
+            shutdownLogger);
         await RunCleanupStepAsync(
             "clean content transfers",
             _ => Task.Run(transferStore.Dispose),
@@ -206,14 +216,6 @@ try
             _ => Task.Run(snapshotStore.Dispose),
             shutdownDeadline.Token,
             shutdownLogger);
-        try
-        {
-            runtimeEventStreamService.Complete();
-        }
-        catch (Exception exception)
-        {
-            shutdownLogger.LogWarning(exception, "Failed to complete the Runtime event stream during shutdown");
-        }
     }
 }
 finally

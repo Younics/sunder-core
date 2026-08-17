@@ -25,6 +25,7 @@ const requestSchema = {
 
 const descriptor: RpcContractDescriptorV2 = {
   descriptorVersion: 2,
+  schemaProfile: "sunder.rpc.values.v1",
   contractId: CONTRACT_ID,
   version: CONTRACT_VERSION,
   errors: {},

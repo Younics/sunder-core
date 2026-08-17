@@ -15,20 +15,72 @@ internal sealed class ShellPackageLifecyclePresenter(
     Action<bool, IReadOnlySet<string>?> rebuildRailCollections,
     Action persistShellState,
     Action<IReadOnlySet<string>>? removeRetainedPackageViews = null,
-    Action<IReadOnlySet<string>>? refreshPackageMetadata = null)
+    Action<IReadOnlySet<string>>? refreshPackageMetadata = null,
+    Func<string, bool>? isPackageAppUiQuarantined = null)
 {
     public ShellPackageLifecyclePresentation PrepareLifecycleChanges(
-        IReadOnlyList<ActivePackageDescriptor> activePackages)
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        IReadOnlyList<ActivePackageDescriptor>? runtimeActivePackages = null)
     {
         var projectedState = CloneProjectionState(shellState);
         var shellSnapshot = shellCompositionService.Compose(
-            activePackages,
+            IncludeQuarantinedPackages(activePackages, runtimeActivePackages),
             projectedState,
             systemStatus: null,
             startupWarnings,
             startupErrors,
             ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
-        return new ShellPackageLifecyclePresentation(shellSnapshot, GetSelectedViewIds(shellSnapshot));
+        var stabilizableViewIds = activePackages
+            .SelectMany(package => package.Views)
+            .Select(view => view.ViewId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return new ShellPackageLifecyclePresentation(
+            shellSnapshot,
+            GetSelectedViewIds(shellSnapshot)
+                .Where(stabilizableViewIds.Contains)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private IReadOnlyList<ActivePackageDescriptor> IncludeQuarantinedPackages(
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        IReadOnlyList<ActivePackageDescriptor>? runtimeActivePackages)
+    {
+        if (isPackageAppUiQuarantined is null || runtimeActivePackages is null)
+        {
+            return activePackages;
+        }
+
+        var includedPackageIds = activePackages
+            .Select(package => package.PackageId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var presentationPackages = activePackages.ToList();
+        foreach (var package in runtimeActivePackages)
+        {
+            if (includedPackageIds.Contains(package.PackageId)
+                || !isPackageAppUiQuarantined(package.PackageId))
+            {
+                continue;
+            }
+
+            var retainedViews = viewsById.Values
+                .Where(view => string.Equals(
+                    view.PackageId,
+                    package.PackageId,
+                    StringComparison.OrdinalIgnoreCase))
+                .Select(view => new PackageViewDescriptor(
+                    view.ViewId,
+                    view.PackageId,
+                    view.Title,
+                    view.Icon,
+                    view.Placement.ToString(),
+                    view.ShowInHotbarByDefault))
+                .ToArray();
+            if (retainedViews.Length > 0)
+            {
+                presentationPackages.Add(package with { Views = retainedViews });
+            }
+        }
+        return presentationPackages;
     }
 
     public void CommitPreparedLifecycleChanges(

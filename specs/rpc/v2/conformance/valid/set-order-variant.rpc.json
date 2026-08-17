@@ -1,11 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "descriptorVersion": 2,
+  "schemaProfile": "sunder.rpc.values.v1",
   "contractId": "example.rpc.v2.conformance",
   "version": "2.1.0",
   "errors": {
     "example.not-found": {
-      "description": "The requested item does not exist."
+      "description": "The requested item does not exist.",
+      "detailsSchema": { "$ref": "#/$defs/ErrorDetails" }
     },
     "example.conflict": {
       "description": "The request conflicts with current state."
@@ -34,12 +36,12 @@
   "$defs": {
     "Uuid": {
       "type": "string",
-      "logicalType": "uuid",
+      "format": "uuid",
       "description": "Canonical lowercase UUID."
     },
     "Instant": {
       "type": "string",
-      "logicalType": "utc-date-time"
+      "format": "date-time"
     },
     "Content": {
       "type": "object",
@@ -57,8 +59,9 @@
     },
     "Ratio": {
       "type": "number",
-      "minimum": -1000,
-      "maximum": 1000
+      "format": "float64",
+      "minimum": -1000.5,
+      "maximum": 1000.5
     },
     "Priority": {
       "type": "integer",
@@ -71,6 +74,14 @@
         { "$ref": "#/$defs/Text" },
         { "type": "null" }
       ]
+    },
+    "ErrorDetails": {
+      "type": "object",
+      "properties": {
+        "resource": { "$ref": "#/$defs/Text" }
+      },
+      "required": ["resource"],
+      "additionalProperties": false
     },
     "Tags": {
       "type": "array",

@@ -21,6 +21,8 @@ internal sealed class RuntimeSessionOwner
     private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy;
     private readonly RuntimeRpcCatalog? _rpcCatalog;
     private readonly RuntimeRpcReadinessEvaluator? _rpcReadiness;
+    private readonly RuntimePackageRecoveryQueue? _recoveryQueue;
+    private readonly Action? _packageRecoveryPublication;
     private readonly TaskCompletionSource _bootstrapCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private RuntimePackageSnapshot _snapshot;
     private RuntimeStartupDiagnostic? _startupFailure;
@@ -34,7 +36,9 @@ internal sealed class RuntimeSessionOwner
         PackageUiSnapshotStore? uiSnapshots = null,
         RuntimeLifecyclePolicyOptions? lifecyclePolicy = null,
         RuntimeRpcCatalog? rpcCatalog = null,
-        RuntimeRpcReadinessEvaluator? rpcReadiness = null)
+        RuntimeRpcReadinessEvaluator? rpcReadiness = null,
+        RuntimePackageRecoveryQueue? recoveryQueue = null,
+        Action? packageRecoveryPublication = null)
     {
         _logger = logger;
         _events = events;
@@ -43,6 +47,8 @@ internal sealed class RuntimeSessionOwner
         _lifecyclePolicy = lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions();
         _rpcCatalog = rpcCatalog;
         _rpcReadiness = rpcReadiness;
+        _recoveryQueue = recoveryQueue;
+        _packageRecoveryPublication = packageRecoveryPublication;
         _snapshot = new RuntimePackageSnapshot(
             events.RuntimeInstanceId,
             0,
@@ -57,7 +63,8 @@ internal sealed class RuntimeSessionOwner
             logger,
             () => callbacks?.Clear(),
             packageId => callbacks?.RemovePackageSessions(packageId),
-            _lifecyclePolicy.SessionDrainTimeout);
+            _lifecyclePolicy.SessionDrainTimeout,
+            _timeProvider);
         Callbacks = callbacks = new PackageCallbackSessionCoordinator(
             State,
             authPolicy,
@@ -408,7 +415,8 @@ internal sealed class RuntimeSessionOwner
 
         using (sessionLease)
         {
-            var (applied, generation) = CommitPackageFault(
+            RuntimePackageRecoveryRequest? recoveryRequest = null;
+            var applied = CommitPackageFault(
                 packageId,
                 exception.Message,
                 (expectedGeneration, committed) => State.HandlePackageFault(
@@ -427,10 +435,19 @@ internal sealed class RuntimeSessionOwner
                                    faulted: true,
                                    rpcFaultCode)
                                ?? Task.CompletedTask;
-                    }));
+                    },
+                    out recoveryRequest),
+                committedGeneration => AlignRpcCatalogAfterPackageFault(
+                    sessionLease.Session,
+                    committedGeneration));
             if (applied)
             {
-                AlignRpcCatalogAfterPackageFault(sessionLease.Session, generation);
+                if (recoveryRequest is not null && _recoveryQueue is not null)
+                {
+                    State.TryEnqueueCurrentPackageRecovery(
+                        recoveryRequest,
+                        _recoveryQueue.Enqueue);
+                }
             }
             return applied;
         }
@@ -483,7 +500,8 @@ internal sealed class RuntimeSessionOwner
 
         using (sessionLease)
         {
-            var (applied, generation) = CommitPackageFault(
+            RuntimePackageRecoveryRequest? recoveryRequest = null;
+            var applied = CommitPackageFault(
                 packageId,
                 exception.Message,
                 (expectedGeneration, committed) => State.HandleRuntimeGenerationFault(
@@ -501,10 +519,19 @@ internal sealed class RuntimeSessionOwner
                                    runtimeGeneration.ActivationId,
                                    faulted: true)
                                ?? Task.CompletedTask;
-                    }));
+                    },
+                    out recoveryRequest),
+                committedGeneration => AlignRpcCatalogAfterPackageFault(
+                    sessionLease.Session,
+                    committedGeneration));
             if (applied)
             {
-                AlignRpcCatalogAfterPackageFault(sessionLease.Session, generation);
+                if (recoveryRequest is not null && _recoveryQueue is not null)
+                {
+                    State.TryEnqueueCurrentPackageRecovery(
+                        recoveryRequest,
+                        _recoveryQueue.Enqueue);
+                }
             }
         }
     }
@@ -518,7 +545,7 @@ internal sealed class RuntimeSessionOwner
 
         while (true)
         {
-            _rpcCatalog.ActivateSession(session, generation);
+            _rpcCatalog.ReconcileActiveSession(session, generation);
             var currentGeneration = State.Generation;
             if (currentGeneration == generation)
             {
@@ -529,10 +556,139 @@ internal sealed class RuntimeSessionOwner
         }
     }
 
-    private (bool Applied, long Generation) CommitPackageFault(
+    internal bool RecordPackageRecoveryFailure(
+        RuntimePackageRecoveryRequest request,
+        Exception exception,
+        DateTimeOffset failedAtUtc)
+    {
+        lock (_packageFaultGate)
+        {
+            var origin = exception is ProcessRuntimeWorkerException
+                ? PackageFailureOrigin.RuntimeProcess
+                : PackageFailureOrigin.RuntimeActivation;
+            if (!State.RecordPackageRecoveryFailure(request, origin, exception, failedAtUtc))
+            {
+                return false;
+            }
+
+            var current = GetSnapshot();
+            _events.PublishSnapshotMetadata(
+                current.SessionGeneration,
+                [request.PackageId],
+                runtimeEvent =>
+                {
+                    lock (_snapshotGate)
+                    {
+                        if (_snapshot.SessionGeneration == current.SessionGeneration)
+                        {
+                            _snapshot = new RuntimePackageSnapshot(
+                                _snapshot.RuntimeInstanceId,
+                                _snapshot.SessionGeneration,
+                                runtimeEvent.SequenceId,
+                                _snapshot.BootstrapState,
+                                State.GetActivePackages(),
+                                State.GetSessionPackages(),
+                                _snapshot.Warnings,
+                                _snapshot.Errors);
+                        }
+                    }
+                });
+            return true;
+        }
+    }
+
+    internal RuntimePackageRecoveryValidation CommitPackageRecovery(
+        RuntimePackageRecoveryRequest request,
+        ActiveLoadedPackage replacement,
+        CancellationToken cancellationToken,
+        out long committedGeneration)
+    {
+        lock (_packageFaultGate)
+        {
+            var current = GetSnapshot();
+            var warnings = current.Warnings;
+            var errors = RemovePackageFailureDiagnostic(current.Errors, request.PackageId);
+            var sources = Sources.Snapshot();
+            try
+            {
+                return State.CommitPackageRecovery(
+                    request,
+                    replacement,
+                    generation =>
+                    {
+                        if (_rpcReadiness is not null)
+                        {
+                            State.RefreshRpcReadiness(_rpcReadiness, generation);
+                        }
+
+                        void Publish()
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            _packageRecoveryPublication?.Invoke();
+                            if (!CommitGeneration(
+                                    generation,
+                                    State.GetActivePackages(),
+                                    State.GetSessionPackages(),
+                                    sources,
+                                    warnings,
+                                    errors))
+                            {
+                                throw new RuntimeStaleGenerationException(
+                                    "The recovered package Runtime generation could not be published.");
+                            }
+                        }
+
+                        if (_rpcCatalog is null)
+                        {
+                            Publish();
+                        }
+                        else
+                        {
+                            _rpcCatalog.ReconcileActiveSession(
+                                request.Session,
+                                generation,
+                                request.PackageId,
+                                Publish);
+                            _rpcCatalog.VerifySessionGeneration(generation);
+                        }
+                    },
+                    cancellationToken,
+                    out committedGeneration);
+            }
+            catch
+            {
+                if (_rpcReadiness is not null)
+                {
+                    State.RefreshRpcReadiness(_rpcReadiness);
+                }
+                throw;
+            }
+        }
+    }
+
+    internal void EnqueueRestoredPackageRecoveries(
+        PackageSessionState.SessionPublication publication,
+        IReadOnlyList<DrainingPackageRecoveryCandidate> candidates)
+    {
+        if (_recoveryQueue is null)
+        {
+            return;
+        }
+        foreach (var candidate in candidates)
+        {
+            var request = State.CreateRestoredRecoveryRequest(publication, candidate);
+            if (request is not null)
+            {
+                _recoveryQueue.Enqueue(request);
+            }
+        }
+    }
+
+    private bool CommitPackageFault(
         string packageId,
         string message,
-        Func<long, Action<long>, bool> apply)
+        Func<long, Action<long>, bool> apply,
+        Action<long>? committed = null)
     {
         lock (_packageFaultGate)
         {
@@ -561,13 +717,14 @@ internal sealed class RuntimeSessionOwner
             });
             if (!applied)
             {
-                return (false, current.SessionGeneration);
+                return false;
             }
             if (committedGeneration < 0)
             {
                 throw new InvalidOperationException("The applied package fault did not commit a Runtime generation.");
             }
-            return (true, committedGeneration);
+            committed?.Invoke(committedGeneration);
+            return true;
         }
     }
 
@@ -853,6 +1010,16 @@ internal sealed class RuntimeSessionOwner
             .Select(message => message.Trim())
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+
+    private static IReadOnlyList<string> RemovePackageFailureDiagnostic(
+        IEnumerable<string> errors,
+        string packageId)
+    {
+        var prefix = $"Package '{packageId}' failed:";
+        return errors
+            .Where(error => !error.StartsWith(prefix, StringComparison.Ordinal))
+            .ToArray();
+    }
 }
 
 internal sealed class RuntimeSnapshotService(RuntimeSessionOwner sessions)

@@ -118,7 +118,7 @@ internal sealed class AppPackageGenerationPublication
         {
             _revocation.Cancel();
         }
-        catch (Exception exception)
+        catch (Exception exception) when (AppPackageUiFaultPolicy.IsRecoverable(exception))
         {
             AppSessionLog.WriteError(
                 "Failed to cancel work owned by a retired App package generation.",
@@ -168,7 +168,7 @@ internal sealed class AppPackageGenerationPublication
         {
             action();
         }
-        catch (Exception exception)
+        catch (Exception exception) when (AppPackageUiFaultPolicy.IsRecoverable(exception))
         {
             AppSessionLog.WriteError("Failed to publish a buffered App package side effect.", exception);
         }

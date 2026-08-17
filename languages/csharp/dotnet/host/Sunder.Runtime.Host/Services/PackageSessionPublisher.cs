@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
 
@@ -26,10 +27,12 @@ internal sealed class PackageSessionPublisher(
     RuntimeLifecyclePolicyOptions? lifecyclePolicy = null,
     RuntimeRpcCatalog? rpcCatalog = null,
     RuntimeRpcPermissionStore? rpcPermissions = null,
-    RuntimeRpcReadinessEvaluator? rpcReadiness = null)
+    RuntimeRpcReadinessEvaluator? rpcReadiness = null,
+    TimeProvider? timeProvider = null)
 {
     private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy = ValidateLifecyclePolicy(
         lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions());
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     public PreparedPackageSession Prepare(
         ActivePackageSession session,
@@ -82,16 +85,25 @@ internal sealed class PackageSessionPublisher(
         PreparedPackageSession candidate,
         CancellationToken cancellationToken)
     {
+        var preparationStarted = Stopwatch.GetTimestamp();
         try
         {
             var publication = await sessions.PreparePublicationAsync(
                 candidate.Session,
                 candidate.BaseGeneration,
                 cancellationToken);
+            logger.LogInformation(
+                "Prepared package session publication for generation {SessionGeneration} in {ElapsedMilliseconds} ms",
+                publication.CandidateGeneration,
+                Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
             return new PendingPackageSessionPublication(candidate, publication);
         }
         catch
         {
+            logger.LogWarning(
+                "Package session publication preparation from generation {BaseGeneration} failed after {ElapsedMilliseconds} ms",
+                candidate.BaseGeneration,
+                Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
             await DiscardAsync(candidate);
             throw;
         }
@@ -102,6 +114,10 @@ internal sealed class PackageSessionPublisher(
         CancellationToken cancellationToken = default)
     {
         var candidate = pending.Candidate;
+        var publicationStarted = Stopwatch.GetTimestamp();
+        using var publicationScope = logger.BeginScope(
+            "Publishing package session generation {SessionGeneration}",
+            pending.Publication.CandidateGeneration);
         try
         {
             var previousSession = pending.Publication.PreviousEntry.Session;
@@ -140,6 +156,7 @@ internal sealed class PackageSessionPublisher(
                     candidate.Session.StartRuntimeGenerationMonitoring(sessions.HandleRuntimeGenerationFault);
                 },
                 cancellationToken);
+            var snapshotPublicationStarted = Stopwatch.GetTimestamp();
             Task<(RuntimePackageStamp Stamp, IReadOnlyList<string> Warnings)>? publicationTask = null;
             candidate.Session.PublishCommittedRuntimeGeneration(() =>
             {
@@ -157,11 +174,24 @@ internal sealed class PackageSessionPublisher(
             var publication = await (publicationTask
                                      ?? throw new InvalidOperationException(
                                          "The candidate Runtime generation did not begin publication."));
+            logger.LogInformation(
+                "Published package session snapshot for generation {SessionGeneration} in {ElapsedMilliseconds} ms",
+                publication.Stamp.SessionGeneration,
+                Stopwatch.GetElapsedTime(snapshotPublicationStarted).TotalMilliseconds);
             candidate.Session.CompleteStorageMigrations();
+            logger.LogInformation(
+                "Published package session generation {SessionGeneration} with {ActivePackageCount} active package(s) in {ElapsedMilliseconds} ms",
+                publication.Stamp.SessionGeneration,
+                candidate.Session.GetActivePackages().Count,
+                Stopwatch.GetElapsedTime(publicationStarted).TotalMilliseconds);
             return new PackageSessionPublicationResult(publication.Stamp, publication.Warnings);
         }
         catch (Exception exception)
         {
+            logger.LogWarning(
+                "Package session publication for generation {SessionGeneration} failed after {ElapsedMilliseconds} ms; starting failure recovery",
+                pending.Publication.CandidateGeneration,
+                Stopwatch.GetElapsedTime(publicationStarted).TotalMilliseconds);
             if (pending.Publication.Committed)
             {
                 candidate.Session.CompleteStorageMigrations();
@@ -173,6 +203,10 @@ internal sealed class PackageSessionPublisher(
                 AlignRpcCatalogToActiveSession();
                 const string warning = "The package session was applied, but publishing its Runtime snapshot did not complete; reconciliation is pending.";
                 logger.LogError(exception, "Package session publication failed after Runtime generation activation completed");
+                logger.LogWarning(
+                    "Package session generation {SessionGeneration} requires reconciliation after {ElapsedMilliseconds} ms",
+                    pending.Publication.CandidateGeneration,
+                    Stopwatch.GetElapsedTime(publicationStarted).TotalMilliseconds);
                 return new PackageSessionPublicationResult(
                     sessions.Stamp,
                     [warning],
@@ -259,11 +293,17 @@ internal sealed class PackageSessionPublisher(
     {
         for (var attempt = 1; ; attempt++)
         {
+            var attemptStarted = Stopwatch.GetTimestamp();
             try
             {
                 await session.CommitRuntimeGenerationAsync(
                     sessionGeneration,
                     cancellationToken);
+                logger.LogInformation(
+                    "Committed package Runtime generation {SessionGeneration} on attempt {Attempt} in {ElapsedMilliseconds} ms",
+                    sessionGeneration,
+                    attempt,
+                    Stopwatch.GetElapsedTime(attemptStarted).TotalMilliseconds);
                 return;
             }
             catch (Exception exception) when (
@@ -272,9 +312,10 @@ internal sealed class PackageSessionPublisher(
             {
                 logger.LogWarning(
                     exception,
-                    "Package Runtime generation activation attempt {Attempt} of {MaximumAttempts} failed; retrying the exact generation",
+                    "Package Runtime generation activation attempt {Attempt} of {MaximumAttempts} failed after {ElapsedMilliseconds} ms; retrying the exact generation",
                     attempt,
-                    _lifecyclePolicy.PackageRuntimeGenerationActivationAttempts);
+                    _lifecyclePolicy.PackageRuntimeGenerationActivationAttempts,
+                    Stopwatch.GetElapsedTime(attemptStarted).TotalMilliseconds);
             }
         }
     }
@@ -285,28 +326,45 @@ internal sealed class PackageSessionPublisher(
         Action prepareActivation,
         CancellationToken cancellationToken)
     {
-        using var timeoutCancellation = new CancellationTokenSource(
-            _lifecyclePolicy.PackageRuntimeGenerationActivationTimeout);
-        using var activationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            timeoutCancellation.Token);
+        var activationStarted = Stopwatch.GetTimestamp();
         try
         {
-            await CommitRuntimeGenerationAsync(
-                session,
+            using var timeoutCancellation = new CancellationTokenSource(
+                _lifecyclePolicy.PackageRuntimeGenerationActivationTimeout);
+            using var activationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeoutCancellation.Token);
+            try
+            {
+                await CommitRuntimeGenerationAsync(
+                    session,
+                    sessionGeneration,
+                    activationCancellation.Token).ConfigureAwait(false);
+                prepareActivation();
+                await session.ActivateCommittedRuntimeGenerationAsync(activationCancellation.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException exception) when (
+                timeoutCancellation.IsCancellationRequested
+                && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Package Runtime generation {sessionGeneration} did not complete commit, migration preparation, and activation acknowledgement within {_lifecyclePolicy.PackageRuntimeGenerationActivationTimeout.TotalSeconds:0.###} seconds.",
+                    exception);
+            }
+            logger.LogInformation(
+                "Activated package Runtime generation {SessionGeneration} for {PackageWorkerCount} package worker(s) in {ElapsedMilliseconds} ms",
                 sessionGeneration,
-                activationCancellation.Token).ConfigureAwait(false);
-            prepareActivation();
-            await session.ActivateCommittedRuntimeGenerationAsync(activationCancellation.Token)
-                .ConfigureAwait(false);
+                session.LoadedPackageMap.Count,
+                Stopwatch.GetElapsedTime(activationStarted).TotalMilliseconds);
         }
-        catch (OperationCanceledException exception) when (
-            timeoutCancellation.IsCancellationRequested
-            && !cancellationToken.IsCancellationRequested)
+        catch
         {
-            throw new TimeoutException(
-                $"Package Runtime generation {sessionGeneration} did not complete commit, migration preparation, and activation acknowledgement within {_lifecyclePolicy.PackageRuntimeGenerationActivationTimeout.TotalSeconds:0.###} seconds.",
-                exception);
+            logger.LogWarning(
+                "Package Runtime generation {SessionGeneration} activation failed after {ElapsedMilliseconds} ms",
+                sessionGeneration,
+                Stopwatch.GetElapsedTime(activationStarted).TotalMilliseconds);
+            throw;
         }
     }
 
@@ -386,7 +444,12 @@ internal sealed class PackageSessionPublisher(
         ActivePackageSession session,
         PackageSessionState.SessionPublication publication)
     {
+        var rollbackStarted = Stopwatch.GetTimestamp();
+        logger.LogWarning(
+            "Rolling back rejected package session generation {SessionGeneration}",
+            publication.CandidateGeneration);
         List<Exception>? failures = null;
+        var workersQuiesced = false;
         var callsDrained = false;
         var disposed = false;
         try
@@ -394,6 +457,7 @@ internal sealed class PackageSessionPublisher(
             await session.QuiesceWorkersAsync(
                 logger,
                 _lifecyclePolicy.PackageWorkerCleanupTimeout);
+            workersQuiesced = true;
         }
         catch (Exception exception)
         {
@@ -436,6 +500,22 @@ internal sealed class PackageSessionPublisher(
             session.RegisterPostDisposalCleanup(
                 RollbackStorageAfterDisposalAsync(session, "rejected candidate"));
         }
+        var rollbackFailureCount = (failures?.Count ?? 0) + (workersQuiesced ? 0 : 1);
+        if (rollbackFailureCount == 0)
+        {
+            logger.LogInformation(
+                "Rolled back rejected package session generation {SessionGeneration} in {ElapsedMilliseconds} ms",
+                publication.CandidateGeneration,
+                Stopwatch.GetElapsedTime(rollbackStarted).TotalMilliseconds);
+        }
+        else
+        {
+            logger.LogWarning(
+                "Rollback for rejected package session generation {SessionGeneration} completed with {RollbackFailureCount} failure(s) after {ElapsedMilliseconds} ms",
+                publication.CandidateGeneration,
+                rollbackFailureCount,
+                Stopwatch.GetElapsedTime(rollbackStarted).TotalMilliseconds);
+        }
         return failures is null
             ? null
             : new AggregateException("Candidate session cleanup failed.", failures);
@@ -445,11 +525,16 @@ internal sealed class PackageSessionPublisher(
         PackageSessionState.SessionPublication publication,
         Exception candidateFailure)
     {
+        var recoveryStarted = Stopwatch.GetTimestamp();
         var faults = sessions.GetDrainingFaults(publication);
         if (!publication.PreviousWorkersQuiesced
             && faults.Count == 0
             && sessions.TryRestoreRejectedPublication(publication))
         {
+            logger.LogInformation(
+                "Restored the previous package session after generation {SessionGeneration} was rejected in {ElapsedMilliseconds} ms without worker recovery",
+                publication.CandidateGeneration,
+                Stopwatch.GetElapsedTime(recoveryStarted).TotalMilliseconds);
             return null;
         }
         faults = sessions.GetDrainingFaults(publication);
@@ -458,6 +543,10 @@ internal sealed class PackageSessionPublisher(
         var snapshot = sessions.GetSnapshot();
         var sources = sessions.Sources.Snapshot();
         var diagnostics = DrainingFaultDiagnostics(publication);
+        logger.LogWarning(
+            "Recovering the previous package session after generation {SessionGeneration} was rejected",
+            publication.CandidateGeneration);
+        IReadOnlyList<DrainingPackageRecoveryCandidate> drainingRecoveries = [];
         try
         {
             if (!publication.PreviousWorkersQuiesced)
@@ -470,7 +559,7 @@ internal sealed class PackageSessionPublisher(
                 diagnostics = DrainingFaultDiagnostics(publication);
             }
             await sessions.BeginRecoveryPublicationAsync(publication).ConfigureAwait(false);
-            await previousSession.ApplyDrainingFaultsAsync(
+            drainingRecoveries = await previousSession.ApplyDrainingFaultsAsync(
                 faults,
                 logger,
                 _lifecyclePolicy.PackageWorkerCleanupTimeout).ConfigureAwait(false);
@@ -506,6 +595,11 @@ internal sealed class PackageSessionPublisher(
                 rpcReadiness?.Evaluate(previousSession);
                 PublishRecovery();
             }
+            sessions.EnqueueRestoredPackageRecoveries(publication, drainingRecoveries);
+            logger.LogInformation(
+                "Recovered the previous package session after generation {SessionGeneration} was rejected in {ElapsedMilliseconds} ms",
+                publication.CandidateGeneration,
+                Stopwatch.GetElapsedTime(recoveryStarted).TotalMilliseconds);
             return null;
 
             void PublishRecovery()
@@ -524,12 +618,17 @@ internal sealed class PackageSessionPublisher(
         }
         catch (Exception recoveryFailure)
         {
+            logger.LogWarning(
+                "Previous package session recovery after generation {SessionGeneration} was rejected failed after {ElapsedMilliseconds} ms",
+                publication.CandidateGeneration,
+                Stopwatch.GetElapsedTime(recoveryStarted).TotalMilliseconds);
             if (publication.RecoveryCommitted)
             {
                 previousSession.CompleteStorageMigrations();
                 logger.LogError(
                     recoveryFailure,
-                    "Recovered package workers became active, but publishing the recovery snapshot did not complete");
+                    "Recovered package workers became active, but publishing the recovery snapshot did not complete after {ElapsedMilliseconds} ms",
+                    Stopwatch.GetElapsedTime(recoveryStarted).TotalMilliseconds);
                 return null;
             }
             rpcCatalog?.DiscardCandidateSession(previousSession);
@@ -595,6 +694,7 @@ internal sealed class PackageSessionPublisher(
         Exception candidateFailure,
         Exception recoveryFailure)
     {
+        var abandonmentStarted = Stopwatch.GetTimestamp();
         Exception? failure = null;
         try
         {
@@ -639,6 +739,20 @@ internal sealed class PackageSessionPublisher(
                     : new AggregateException(failure, cleanupFailure);
             }
         }
+        if (failure is null)
+        {
+            logger.LogInformation(
+                "Completed failed recovery handling for package session generation {SessionGeneration} in {ElapsedMilliseconds} ms",
+                publication.CandidateGeneration,
+                Stopwatch.GetElapsedTime(abandonmentStarted).TotalMilliseconds);
+        }
+        else
+        {
+            logger.LogWarning(
+                "Failed recovery handling for package session generation {SessionGeneration} completed with cleanup failures after {ElapsedMilliseconds} ms",
+                publication.CandidateGeneration,
+                Stopwatch.GetElapsedTime(abandonmentStarted).TotalMilliseconds);
+        }
         return failure;
     }
 
@@ -646,17 +760,23 @@ internal sealed class PackageSessionPublisher(
         ActivePackageSession session,
         string operation)
     {
+        var rollbackStarted = Stopwatch.GetTimestamp();
         try
         {
             await session.WaitForDisposalCompletionAsync().ConfigureAwait(false);
             await session.RollbackStorageMigrationsAsync().ConfigureAwait(false);
+            logger.LogInformation(
+                "Completed deferred package storage rollback after {Operation} disposal in {ElapsedMilliseconds} ms",
+                operation,
+                Stopwatch.GetElapsedTime(rollbackStarted).TotalMilliseconds);
         }
         catch (Exception exception)
         {
             logger.LogCritical(
                 exception,
-                "Deferred package storage rollback failed after {Operation} disposal",
-                operation);
+                "Deferred package storage rollback failed after {Operation} disposal in {ElapsedMilliseconds} ms",
+                operation,
+                Stopwatch.GetElapsedTime(rollbackStarted).TotalMilliseconds);
         }
     }
 

@@ -2,6 +2,7 @@ import type { JsonPrimitive, JsonValue, RpcCallOptions, RpcInvoker } from "./cor
 import { formatUtcTimestamp } from "./timestamp";
 
 export { formatUtcTimestamp } from "./timestamp";
+export { RpcDomainError, RpcError } from "./types";
 export {
   RpcDescriptorError,
   canonicalizeDescriptor,
@@ -58,6 +59,7 @@ export interface BrowserRpcError {
   readonly message: string;
   readonly dispatchState: "not-dispatched" | "possibly-dispatched";
   readonly retrySafety: "safe" | "unsafe";
+  readonly details?: BrowserJsonValue;
 }
 
 export interface BrowserRpcFailure extends Error {
@@ -158,15 +160,34 @@ export function getSunder(): SunderBrowserApi {
 export function isSunderRpcFailure(value: unknown): value is BrowserRpcFailure {
   if (!(value instanceof Error) || value.name !== "SunderRpcError") return false;
   const error = (value as { readonly error?: unknown }).error;
+  const kind = (error as { readonly kind?: unknown })?.kind;
+  const hasDetails = error !== null
+    && typeof error === "object"
+    && Object.prototype.hasOwnProperty.call(error, "details");
   return error !== null
     && typeof error === "object"
-    && typeof (error as { readonly kind?: unknown }).kind === "string"
+    && typeof kind === "string"
     && typeof (error as { readonly code?: unknown }).code === "string"
     && typeof (error as { readonly message?: unknown }).message === "string"
     && ((error as { readonly dispatchState?: unknown }).dispatchState === "not-dispatched"
       || (error as { readonly dispatchState?: unknown }).dispatchState === "possibly-dispatched")
     && ((error as { readonly retrySafety?: unknown }).retrySafety === "safe"
-      || (error as { readonly retrySafety?: unknown }).retrySafety === "unsafe");
+      || (error as { readonly retrySafety?: unknown }).retrySafety === "unsafe")
+    && (!hasDetails || kind === "domain" && isBrowserJsonValue((error as { readonly details?: unknown }).details));
+}
+
+function isBrowserJsonValue(value: unknown, active = new WeakSet<object>()): value is BrowserJsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || active.has(value)) return false;
+  active.add(value);
+  try {
+    return Array.isArray(value)
+      ? value.every((item) => isBrowserJsonValue(item, active))
+      : Object.values(value).every((item) => isBrowserJsonValue(item, active));
+  } finally {
+    active.delete(value);
+  }
 }
 
 function outboundOptions(options?: BrowserCallOptions): BrowserCallOptions | undefined {

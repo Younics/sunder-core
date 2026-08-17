@@ -263,7 +263,9 @@ internal sealed partial class SunderWorkerRuntime
             "packageVersion",
             "activationId",
             "sessionId",
-            "providers");
+            "providers",
+            "resourceProfile",
+            "resourceProfileHash");
         lock (Gate)
         {
             if (_phase != RuntimePhase.WaitingForHello)
@@ -290,6 +292,20 @@ internal sealed partial class SunderWorkerRuntime
             throw new WorkerProtocolException(
                 "host.hello does not match the exact protocol and sanitized process activation environment.");
         }
+
+        var resourceProfileHash = WorkerJson.RequiredString(root, "resourceProfileHash", 64);
+        var resourceProfile = WorkerWire.ReadResourceProfile(
+            WorkerJson.RequiredValue(root, "resourceProfile"),
+            resourceProfileHash);
+        _client.ResourceProfile = new SunderRpcResourceProfile(
+            resourceProfileHash,
+            resourceProfile.RpcValueBytes,
+            resourceProfile.ValueDepth,
+            resourceProfile.ValueNodes,
+            resourceProfile.ObjectMembers,
+            resourceProfile.InlineDecodedBytes,
+            resourceProfile.ContentReferenceBytes);
+        _limits.ApplyResourceProfile(resourceProfile);
 
         ConfigureForActivation();
 
@@ -319,6 +335,7 @@ internal sealed partial class SunderWorkerRuntime
             writer.WriteString("packageVersion", packageVersion);
             writer.WriteString("activationId", activationId);
             writer.WriteString("sessionId", sessionId);
+            writer.WriteString("resourceProfileHash", resourceProfileHash);
             WriteContributions(writer);
             writer.WriteEndObject();
         });
@@ -995,7 +1012,14 @@ internal sealed partial class SunderWorkerRuntime
             await WriteProviderFailureAsync(invocation, exception).ConfigureAwait(false);
             return;
         }
-        await _output.WriteAsync(body).ConfigureAwait(false);
+        try
+        {
+            await _output.WriteAsync(body).ConfigureAwait(false);
+        }
+        catch (WorkerTransportResourceException exception)
+        {
+            await WriteProviderFailureAsync(invocation, exception).ConfigureAwait(false);
+        }
     }
 
     private async Task RunStreamInvocationAsync(
@@ -1073,7 +1097,14 @@ internal sealed partial class SunderWorkerRuntime
         string kind;
         string code;
         string message;
-        if (invocation.HostCancelled)
+        JsonElement? details = null;
+        if (exception is WorkerTransportResourceException)
+        {
+            kind = "resource-exhausted";
+            code = "rpc.worker.response-limit";
+            message = "The RPC response exceeds the negotiated worker transport limits.";
+        }
+        else if (invocation.HostCancelled)
         {
             kind = "cancelled";
             code = "rpc.call.cancelled";
@@ -1092,6 +1123,7 @@ internal sealed partial class SunderWorkerRuntime
             code = rpcException.Error.Code;
             message = WorkerDiagnosticSink.Sanitize(rpcException.Error.Message, 512);
             if (message.Length == 0) message = "The provider rejected the request.";
+            details = rpcException.Error.Details;
         }
         else
         {
@@ -1129,6 +1161,11 @@ internal sealed partial class SunderWorkerRuntime
             writer.WriteString("kind", kind);
             writer.WriteString("code", code);
             writer.WriteString("message", message);
+            if (details is { } detail)
+            {
+                writer.WritePropertyName("details");
+                detail.WriteTo(writer);
+            }
             writer.WriteEndObject();
             writer.WriteEndObject();
         });

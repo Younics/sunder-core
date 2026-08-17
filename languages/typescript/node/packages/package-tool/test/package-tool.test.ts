@@ -2037,6 +2037,7 @@ async function exists(path: string): Promise<boolean> {
 
 const descriptor = {
   descriptorVersion: 2,
+  schemaProfile: "sunder.rpc.values.v1",
   contractId: "example.rpc",
   version: "1.0.0",
   errors: {},

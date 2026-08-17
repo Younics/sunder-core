@@ -16,21 +16,26 @@ internal sealed class AppPackageHostComposition : IDisposable
     private readonly AppPackageUnloadCoordinator _unloadCoordinator;
     private readonly AppPackagePublicationServices _publicationServices;
     private readonly AppPackageGenerationPublication _publication = new();
+    private readonly Action<Guid, string, string?, Assembly> _registerFaultAttribution;
     private readonly BackgroundProcessQueueService? _ownedBackgroundProcessQueue;
     private readonly Guid _generationId;
+    private int _cleanupUnproven;
 
     public AppPackageHostComposition(
         object eventSender,
         Guid generationId,
         AppPackageViewRegistry viewRegistry,
         AppPackageHostState state,
-        Action<Guid, string, string, PackageFailureOrigin, Exception?> disablePackage,
+        Func<Guid, string, string, string?, Exception, bool> quarantineView,
+        Func<Guid, string, Task<AppPackageUiCleanupOutcome>> quarantinePackageBoundariesAsync,
+        Action<Guid, string, string?, Assembly> registerFaultAttribution,
         AppSharedAssemblyRegistry? sharedAssemblyRegistry,
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
         Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
+        IUiDispatcher uiDispatcher,
         IAppWebViewFactory? webViewFactory = null,
         IAppWebRpcClientFactory? webRpcClientFactory = null,
         ExternalBrowserService? externalBrowser = null)
@@ -38,19 +43,20 @@ internal sealed class AppPackageHostComposition : IDisposable
         _eventSender = eventSender;
         _generationId = generationId;
         _state = state;
+        _registerFaultAttribution = registerFaultAttribution;
         AssemblyTracker = new AppPackageAssemblyTracker();
         var faultNotificationService = notificationCenter is null
             ? null
             : new AppPackageNotificationService(notificationCenter, "sunder.app", "Sunder");
-        FaultNotifier = new AppPackageFaultNotifier(faultNotificationService);
+        FaultNotifier = new AppPackageFaultNotifier(faultNotificationService, uiDispatcher);
         ViewFacade = new AppPackageHostedViewFacade(
             viewRegistry,
             _state.IsPackageDisabled,
-            (packageId, message, exception) => disablePackage(
+            (packageId, viewId, exception) => quarantineView(
                 generationId,
                 packageId,
-                message,
-                PackageFailureOrigin.AppHostedView,
+                viewId,
+                _state.GetPackageContentHash(packageId),
                 exception));
 
         _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
@@ -85,7 +91,10 @@ internal sealed class AppPackageHostComposition : IDisposable
             ViewFacade,
             runtimeWorkStopper,
             FaultNotifier,
-            _state.TryMarkPackageDisabled);
+            _state.TryMarkPackageDisabled,
+            _state.IsPackageDisabled);
+        _quarantinePackageBoundariesAsync = packageId =>
+            quarantinePackageBoundariesAsync(_generationId, packageId);
     }
 
     public AppPackageAssemblyTracker AssemblyTracker { get; }
@@ -93,6 +102,14 @@ internal sealed class AppPackageHostComposition : IDisposable
     public AppPackageFaultNotifier FaultNotifier { get; }
 
     public AppPackageHostedViewFacade ViewFacade { get; }
+
+    internal AppPackageUiCleanupOutcome CleanupOutcome
+        => Volatile.Read(ref _cleanupUnproven) == 0
+            ? AppPackageUiCleanupOutcome.Proven
+            : AppPackageUiCleanupOutcome.Unproven;
+
+    private readonly Func<string, Task<AppPackageUiCleanupOutcome>>
+        _quarantinePackageBoundariesAsync;
 
     public void PublishServices() => _publication.Publish();
 
@@ -160,12 +177,13 @@ internal sealed class AppPackageHostComposition : IDisposable
         {
             if (!activated)
             {
-                await _unloadCoordinator.RollBackActivationAsync(
+                var cleanupOutcome = await _unloadCoordinator.RollBackActivationAsync(
                     package.PackageId,
                     activation.PackageInfo,
                     activation.ServiceProvider,
                     activation.LoadContext,
                     activation.TargetLifetime).ConfigureAwait(false);
+                RecordCleanupOutcome(cleanupOutcome);
             }
         }
     }
@@ -187,8 +205,35 @@ internal sealed class AppPackageHostComposition : IDisposable
             message,
             origin,
             exception,
-            UnloadPackageAsync,
+            UnloadPackageForDisableAsync,
+            () => _quarantinePackageBoundariesAsync(packageId),
             cancellationToken).ConfigureAwait(false);
+
+    public bool TryBeginDisablePackage(
+        string packageId,
+        string message,
+        PackageFailureOrigin origin,
+        Exception? exception,
+        out Task<AppPackageUiCleanupOutcome> completion)
+        => _disableCoordinator.TryBeginDisablePackage(
+            _eventSender,
+            packageId,
+            message,
+            origin,
+            exception,
+            UnloadPackageForDisableAsync,
+            () => _quarantinePackageBoundariesAsync(packageId),
+            out completion);
+
+    public async Task ApplyInheritedPackageQuarantineAsync(string packageId)
+    {
+        _state.TryMarkPackageDisabled(packageId);
+        await _disableCoordinator.CleanupDisabledPackageAsync(
+            _eventSender,
+            packageId,
+            UnloadPackageForDisableAsync,
+            () => _quarantinePackageBoundariesAsync(packageId)).ConfigureAwait(false);
+    }
 
     public async Task<bool> UnloadPackageAsync(
         string packageId,
@@ -201,37 +246,105 @@ internal sealed class AppPackageHostComposition : IDisposable
             return false;
         }
 
-        await _unloadCoordinator.UnloadPackageAsync(packageId, handle).ConfigureAwait(false);
-        PackageStateChanged?.Invoke();
+        RecordCleanupOutcome(await _unloadCoordinator.UnloadPackageAsync(packageId, handle)
+            .ConfigureAwait(false));
+        PublishPackageStateChanged();
         return true;
     }
 
-    public async Task<bool> UnloadPackageForGenerationRetirementAsync(string packageId)
+    private async Task<AppPackageUnloadResult> UnloadPackageForDisableAsync(
+        string packageId,
+        CancellationToken cancellationToken,
+        bool preserveDisabled)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_state.TryRemoveLoadedPackage(packageId, preserveDisabled, out var handle) || handle is null)
+        {
+            return AppPackageUnloadResult.NotLoaded;
+        }
+
+        var cleanupOutcome = await _unloadCoordinator.UnloadPackageAsync(packageId, handle)
+            .ConfigureAwait(false);
+        RecordCleanupOutcome(cleanupOutcome);
+        PublishPackageStateChanged();
+        return new AppPackageUnloadResult(
+            WasLoaded: true,
+            cleanupOutcome);
+    }
+
+    public async Task<AppPackageUnloadResult> UnloadPackageForGenerationRetirementAsync(
+        string packageId)
     {
         if (!_state.TryRemoveLoadedPackage(packageId, preserveDisabled: true, out var handle) || handle is null)
         {
-            return false;
+            return AppPackageUnloadResult.NotLoaded;
         }
 
-        await _unloadCoordinator.UnloadPackageAsync(
+        var cleanupOutcome = await _unloadCoordinator.UnloadPackageAsync(
             packageId,
             handle,
             useRetirementDeadline: false).ConfigureAwait(false);
-        return true;
+        RecordCleanupOutcome(cleanupOutcome);
+        return new AppPackageUnloadResult(
+            WasLoaded: true,
+            cleanupOutcome);
     }
 
-    public async Task DisposeRemainingOwnedResourcesAsync()
+    public async Task<AppPackageUiCleanupOutcome> DisposeRemainingOwnedResourcesAsync()
     {
         var (ownedDisposables, loadContexts) = _state.SnapshotOwnedResources();
-        await _unloadCoordinator.DisposeOwnedResourcesAsync(ownedDisposables, loadContexts).ConfigureAwait(false);
+        var cleanupOutcome = await _unloadCoordinator.DisposeOwnedResourcesAsync(
+            ownedDisposables,
+            loadContexts).ConfigureAwait(false);
+        RecordCleanupOutcome(cleanupOutcome);
+        return cleanupOutcome;
     }
 
     public void RegisterPackageAssembly(string packageId, Assembly assembly)
-        => AssemblyTracker.RegisterPackageAssembly(packageId, assembly);
+    {
+        AssemblyTracker.RegisterPackageAssembly(packageId, assembly);
+        _registerFaultAttribution(
+            _generationId,
+            packageId,
+            _state.GetPackageContentHash(packageId),
+            assembly);
+    }
 
     public void DisposeSharedAssemblies()
         => _sharedAssemblyRegistry.Dispose();
 
     public event Action? PackageStateChanged;
+
+    private void PublishPackageStateChanged()
+    {
+        var handlers = PackageStateChanged;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler();
+            }
+            catch (Exception exception) when (
+                AppPackageUiFaultPolicy.IsRecoverable(exception))
+            {
+                AppSessionLog.WriteError(
+                    "An App package state subscriber failed during package cleanup.",
+                    exception);
+            }
+        }
+    }
+
+    internal void RecordCleanupOutcome(AppPackageUiCleanupOutcome cleanupOutcome)
+    {
+        if (cleanupOutcome == AppPackageUiCleanupOutcome.Unproven)
+        {
+            Interlocked.Exchange(ref _cleanupUnproven, 1);
+        }
+    }
 
 }

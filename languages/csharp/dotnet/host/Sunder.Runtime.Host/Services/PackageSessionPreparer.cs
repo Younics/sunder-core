@@ -1,4 +1,7 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Rpc;
@@ -8,9 +11,11 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed class PackageSessionPreparer
 {
     private readonly string _runtimeIdentifier;
+    private readonly ILogger _logger;
 
-    public PackageSessionPreparer(string? runtimeIdentifier = null)
+    public PackageSessionPreparer(string? runtimeIdentifier = null, ILogger? logger = null)
     {
+        _logger = logger ?? NullLogger.Instance;
         _runtimeIdentifier = runtimeIdentifier ?? PackageTargetSelection.GetCurrentRuntimeIdentifier();
         if (!SunderPackageFormat.IsRuntimeIdentifier(_runtimeIdentifier))
         {
@@ -27,20 +32,39 @@ internal sealed class PackageSessionPreparer
         ICollection<string> errors,
         CancellationToken cancellationToken)
     {
+        var preparationStarted = Stopwatch.GetTimestamp();
         if (!Directory.Exists(folder))
         {
             errors.Add($"Dev package folder '{folder}' does not exist.");
+            _logger.LogWarning(
+                "Dev package validation failed in {ElapsedMilliseconds} ms",
+                Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
             return null;
         }
 
+        var validationStarted = Stopwatch.GetTimestamp();
         var validation = await ValidateSourceAsync(folder, "Dev package", errors, cancellationToken);
         if (validation is null)
         {
+            _logger.LogWarning(
+                "Dev package validation failed in {ElapsedMilliseconds} ms",
+                Stopwatch.GetElapsedTime(validationStarted).TotalMilliseconds);
             return null;
         }
+        _logger.LogInformation(
+            "Validated {PackageSourceKind} package {PackageId} in {ElapsedMilliseconds} ms",
+            PackageSourceKind.Dev,
+            validation.Manifest.Id,
+            Stopwatch.GetElapsedTime(validationStarted).TotalMilliseconds);
+        using var preparationScope = _logger.BeginScope(
+            "Preparing {PackageSourceKind} package {PackageId}",
+            PackageSourceKind.Dev,
+            validation.Manifest.Id);
 
         var packageFolderName = $"{index:D2}-{SanitizeFolderName(validation.Manifest.Id)}";
         var canonicalShadow = Path.Combine(sessionFolder, packageFolderName, "source");
+        var canonicalShadowStarted = Stopwatch.GetTimestamp();
+        var canonicalShadowMaterialized = false;
         try
         {
             await PackageProjectionMaterializer.MaterializeCanonicalPackageAsync(
@@ -48,7 +72,12 @@ internal sealed class PackageSessionPreparer
                 canonicalShadow,
                 validation.ContentIndex,
                 cancellationToken);
-            return await PrepareValidatedPackageAsync(
+            canonicalShadowMaterialized = true;
+            _logger.LogInformation(
+                "Materialized canonical shadow for package {PackageId} in {ElapsedMilliseconds} ms",
+                validation.Manifest.Id,
+                Stopwatch.GetElapsedTime(canonicalShadowStarted).TotalMilliseconds);
+            var prepared = await PrepareValidatedPackageAsync(
                 folder,
                 canonicalShadow,
                 canonicalShadow,
@@ -60,13 +89,47 @@ internal sealed class PackageSessionPreparer
                 approvedSensitiveCapabilities: [],
                 errors,
                 cancellationToken);
+            if (prepared is null)
+            {
+                _logger.LogWarning(
+                    "Preparation failed for {PackageSourceKind} package {PackageId} after {ElapsedMilliseconds} ms",
+                    PackageSourceKind.Dev,
+                    validation.Manifest.Id,
+                    Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Prepared {PackageSourceKind} package {PackageId} in {ElapsedMilliseconds} ms",
+                    PackageSourceKind.Dev,
+                    validation.Manifest.Id,
+                    Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
+            }
+            return prepared;
         }
         catch (OperationCanceledException)
         {
+            _logger.LogInformation(
+                "Canceled preparation for {PackageSourceKind} package {PackageId} after {ElapsedMilliseconds} ms",
+                PackageSourceKind.Dev,
+                validation.Manifest.Id,
+                Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
             throw;
         }
         catch (Exception exception)
         {
+            if (!canonicalShadowMaterialized)
+            {
+                _logger.LogWarning(
+                    "Canonical shadow materialization failed for package {PackageId} after {ElapsedMilliseconds} ms",
+                    validation.Manifest.Id,
+                    Stopwatch.GetElapsedTime(canonicalShadowStarted).TotalMilliseconds);
+            }
+            _logger.LogWarning(
+                "Preparation failed for {PackageSourceKind} package {PackageId} after {ElapsedMilliseconds} ms",
+                PackageSourceKind.Dev,
+                validation.Manifest.Id,
+                Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
             errors.Add($"Failed to materialize dev package '{validation.Manifest.Id}': {exception.Message}");
             return null;
         }
@@ -80,33 +143,86 @@ internal sealed class PackageSessionPreparer
         ICollection<string> errors,
         CancellationToken cancellationToken)
     {
+        var preparationStarted = Stopwatch.GetTimestamp();
+        using var preparationScope = _logger.BeginScope(
+            "Preparing {PackageSourceKind} package {PackageId}",
+            PackageSourceKind.Installed,
+            package.PackageId);
         if (DevProcessLaunchMetadata.RejectForInstalledSource(physicalSourceRoot, errors))
         {
+            _logger.LogWarning(
+                "Preparation failed for {PackageSourceKind} package {PackageId} after {ElapsedMilliseconds} ms",
+                PackageSourceKind.Installed,
+                package.PackageId,
+                Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
             return null;
         }
-        var validation = await ValidateInstalledSourceAsync(
-            package,
-            physicalSourceRoot,
-            errors,
-            cancellationToken);
-        if (validation is null)
+        try
         {
-            return null;
-        }
+            var validation = await ValidateInstalledSourceAsync(
+                package,
+                physicalSourceRoot,
+                errors,
+                cancellationToken);
+            if (validation is null)
+            {
+                _logger.LogWarning(
+                    "Preparation failed for {PackageSourceKind} package {PackageId} after {ElapsedMilliseconds} ms",
+                    PackageSourceKind.Installed,
+                    package.PackageId,
+                    Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
+                return null;
+            }
 
-        var packageFolderName = $"{index:D2}-{SanitizeFolderName(package.PackageId)}";
-        return await PrepareValidatedPackageAsync(
-            package.InstallPath,
-            PathsEqual(package.InstallPath, physicalSourceRoot) ? null : physicalSourceRoot,
-            physicalSourceRoot,
-            Path.Combine(sessionFolder, packageFolderName, "runtime"),
-            PackageSourceKind.Installed,
-            validation.Manifest,
-            validation.ContentIndex,
-            package.ContentIdentity,
-            package.CapabilityGrants.Select(static grant => grant.Capability).ToArray(),
-            errors,
-            cancellationToken);
+            var packageFolderName = $"{index:D2}-{SanitizeFolderName(package.PackageId)}";
+            var prepared = await PrepareValidatedPackageAsync(
+                package.InstallPath,
+                PathsEqual(package.InstallPath, physicalSourceRoot) ? null : physicalSourceRoot,
+                physicalSourceRoot,
+                Path.Combine(sessionFolder, packageFolderName, "runtime"),
+                PackageSourceKind.Installed,
+                validation.Manifest,
+                validation.ContentIndex,
+                package.ContentIdentity,
+                package.CapabilityGrants.Select(static grant => grant.Capability).ToArray(),
+                errors,
+                cancellationToken);
+            if (prepared is null)
+            {
+                _logger.LogWarning(
+                    "Preparation failed for {PackageSourceKind} package {PackageId} after {ElapsedMilliseconds} ms",
+                    PackageSourceKind.Installed,
+                    package.PackageId,
+                    Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Prepared {PackageSourceKind} package {PackageId} in {ElapsedMilliseconds} ms",
+                    PackageSourceKind.Installed,
+                    package.PackageId,
+                    Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
+            }
+            return prepared;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation(
+                "Canceled preparation for {PackageSourceKind} package {PackageId} after {ElapsedMilliseconds} ms",
+                PackageSourceKind.Installed,
+                package.PackageId,
+                Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
+            throw;
+        }
+        catch
+        {
+            _logger.LogWarning(
+                "Preparation failed for {PackageSourceKind} package {PackageId} after {ElapsedMilliseconds} ms",
+                PackageSourceKind.Installed,
+                package.PackageId,
+                Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
+            throw;
+        }
     }
 
     public async Task<RuntimePackageActivationState?> ReadInstalledActivationStateAsync(
@@ -183,6 +299,7 @@ internal sealed class PackageSessionPreparer
                 return null;
             }
 
+            var projectionStarted = Stopwatch.GetTimestamp();
             try
             {
                 await PackageProjectionMaterializer.MaterializeProjectionAsync(
@@ -192,6 +309,10 @@ internal sealed class PackageSessionPreparer
                     contentIndex,
                     runtimeTargetKey,
                     cancellationToken);
+                _logger.LogInformation(
+                    "Materialized Runtime target projection for package {PackageId} in {ElapsedMilliseconds} ms",
+                    manifest.Id,
+                    Stopwatch.GetElapsedTime(projectionStarted).TotalMilliseconds);
             }
             catch (OperationCanceledException)
             {
@@ -199,6 +320,10 @@ internal sealed class PackageSessionPreparer
             }
             catch (Exception exception)
             {
+                _logger.LogWarning(
+                    "Runtime target projection failed for package {PackageId} after {ElapsedMilliseconds} ms",
+                    manifest.Id,
+                    Stopwatch.GetElapsedTime(projectionStarted).TotalMilliseconds);
                 errors.Add(
                     $"Package '{manifest.Id}' target '{runtimeTargetKey}' projection failed: {exception.Message}");
                 return null;
@@ -224,7 +349,28 @@ internal sealed class PackageSessionPreparer
                 mode |= UnixFileMode.UserExecute;
                 File.SetUnixFileMode(entryAssemblyPath, mode);
             }
-            rpcContracts = await LoadRpcContractsAsync(projectionFolder, manifest, cancellationToken);
+            var contractLoadStarted = Stopwatch.GetTimestamp();
+            try
+            {
+                rpcContracts = await LoadRpcContractsAsync(projectionFolder, manifest, cancellationToken);
+                _logger.LogInformation(
+                    "Loaded {ContractCount} RPC contract(s) for package {PackageId} in {ElapsedMilliseconds} ms",
+                    rpcContracts.Count,
+                    manifest.Id,
+                    Stopwatch.GetElapsedTime(contractLoadStarted).TotalMilliseconds);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                _logger.LogWarning(
+                    "RPC contract loading failed for package {PackageId} after {ElapsedMilliseconds} ms",
+                    manifest.Id,
+                    Stopwatch.GetElapsedTime(contractLoadStarted).TotalMilliseconds);
+                throw;
+            }
             if (sourceKind == PackageSourceKind.Dev)
             {
                 devProcessLaunch = DevProcessLaunchMetadata.LoadForDevSource(
@@ -299,42 +445,73 @@ internal sealed class PackageSessionPreparer
         return new ValidatedPackage(validation.Manifest, validation.ContentIndex);
     }
 
-    private static async Task<ValidatedPackage?> ValidateInstalledSourceAsync(
+    private async Task<ValidatedPackage?> ValidateInstalledSourceAsync(
         InstalledPackageRecord package,
         string physicalSourceRoot,
         ICollection<string> errors,
         CancellationToken cancellationToken)
     {
-        if (!Directory.Exists(physicalSourceRoot))
+        var validationStarted = Stopwatch.GetTimestamp();
+        var outcome = "Failed";
+        try
         {
-            errors.Add($"Installed package folder '{physicalSourceRoot}' does not exist.");
-            return null;
+            if (!Directory.Exists(physicalSourceRoot))
+            {
+                errors.Add($"Installed package folder '{physicalSourceRoot}' does not exist.");
+                return null;
+            }
+            var validation = await ValidateSourceAsync(
+                physicalSourceRoot,
+                $"Installed package '{package.PackageId}'",
+                errors,
+                cancellationToken);
+            if (validation is null)
+            {
+                return null;
+            }
+            if (!string.Equals(validation.Manifest.Id, package.PackageId, StringComparison.Ordinal)
+                || !string.Equals(validation.Manifest.Version, package.Version, StringComparison.Ordinal)
+                || !string.Equals(validation.Manifest.Name, package.Name, StringComparison.Ordinal)
+                || !string.Equals(validation.Manifest.Summary, package.Summary, StringComparison.Ordinal)
+                || !string.Equals(validation.Manifest.Icon, package.Icon, StringComparison.Ordinal))
+            {
+                errors.Add($"Installed package '{package.PackageId}' catalog identity does not match its strict manifest.");
+                return null;
+            }
+            if (!string.Equals(ComputeContentIdentity(physicalSourceRoot), package.ContentIdentity, StringComparison.Ordinal)
+                || !InventoryMatches(validation.ContentIndex, package.ContentInventory))
+            {
+                errors.Add($"Installed package '{package.PackageId}' content identity or inventory does not match its strict package content.");
+                return null;
+            }
+            outcome = "Succeeded";
+            return validation;
         }
-        var validation = await ValidateSourceAsync(
-            physicalSourceRoot,
-            $"Installed package '{package.PackageId}'",
-            errors,
-            cancellationToken);
-        if (validation is null)
+        catch (OperationCanceledException)
         {
-            return null;
+            outcome = "Canceled";
+            throw;
         }
-        if (!string.Equals(validation.Manifest.Id, package.PackageId, StringComparison.Ordinal)
-            || !string.Equals(validation.Manifest.Version, package.Version, StringComparison.Ordinal)
-            || !string.Equals(validation.Manifest.Name, package.Name, StringComparison.Ordinal)
-            || !string.Equals(validation.Manifest.Summary, package.Summary, StringComparison.Ordinal)
-            || !string.Equals(validation.Manifest.Icon, package.Icon, StringComparison.Ordinal))
+        finally
         {
-            errors.Add($"Installed package '{package.PackageId}' catalog identity does not match its strict manifest.");
-            return null;
+            if (string.Equals(outcome, "Succeeded", StringComparison.Ordinal))
+            {
+                _logger.LogInformation(
+                    "Validated {PackageSourceKind} package {PackageId} in {ElapsedMilliseconds} ms",
+                    PackageSourceKind.Installed,
+                    package.PackageId,
+                    Stopwatch.GetElapsedTime(validationStarted).TotalMilliseconds);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Validation for {PackageSourceKind} package {PackageId} completed with {ValidationOutcome} after {ElapsedMilliseconds} ms",
+                    PackageSourceKind.Installed,
+                    package.PackageId,
+                    outcome,
+                    Stopwatch.GetElapsedTime(validationStarted).TotalMilliseconds);
+            }
         }
-        if (!string.Equals(ComputeContentIdentity(physicalSourceRoot), package.ContentIdentity, StringComparison.Ordinal)
-            || !InventoryMatches(validation.ContentIndex, package.ContentInventory))
-        {
-            errors.Add($"Installed package '{package.PackageId}' content identity or inventory does not match its strict package content.");
-            return null;
-        }
-        return validation;
     }
 
     private static RuntimePackageActivationState CreateActivationState(

@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Sunder.App.Services;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
+using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
@@ -16,6 +18,7 @@ public sealed class RuntimeAppWebRpcClientTests
         var handler = new InvariantReportHandler();
         var connection = new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret");
         var management = new RuntimeManagementClient(() => connection, handler);
+        await management.GetRuntimeHandshakeAsync();
         await using var client = new RuntimeAppWebRpcClient(management, "app-session");
         var endpoint = new SunderRpcEndpointReference("rpc1_exact_provider");
 
@@ -33,10 +36,106 @@ public sealed class RuntimeAppWebRpcClientTests
         Assert.DoesNotContain('\r', request.ExceptionMessage);
         Assert.DoesNotContain('\n', request.ExceptionMessage);
         Assert.DoesNotContain(nameof(InvalidOperationException), request.ExceptionMessage, StringComparison.Ordinal);
+        Assert.Null(client.ResourceProfile);
     }
 
-    private sealed class InvariantReportHandler : HttpMessageHandler
+    [Fact]
+    public async Task ResourceProfile_ReflectsNegotiatedLimitsAndIsDelegatedByCallScope()
     {
+        var handler = new InvariantReportHandler(RuntimeResourcePolicies.Large);
+        var management = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+        await management.GetRuntimeHandshakeAsync();
+        await using var client = new RuntimeAppWebRpcClient(management, "app-session");
+
+        await client.TryReportInvariantViolationAsync(
+            new SunderRpcEndpointReference("rpc1_exact_provider"),
+            new InvalidOperationException("failure"));
+
+        Assert.True(client.ResourceLimits.IsRuntimeReported);
+        Assert.Equal(
+            RuntimeResourcePolicies.Large.MaximumRpcValueBytes,
+            client.ResourceLimits.EffectivePolicy.MaximumRpcValueBytes);
+        Assert.Equal(
+            RuntimeResourcePolicyContract.GetEffectiveProfileHash(RuntimeResourcePolicies.Large),
+            client.ResourceLimits.Profile?.EffectiveProfileHash);
+        var profile = Assert.IsType<SunderRpcResourceProfile>(client.ResourceProfile);
+        Assert.Equal(
+            RuntimeResourcePolicyContract.GetEffectiveProfileHash(RuntimeResourcePolicies.Large),
+            profile.EffectiveProfileHash);
+        Assert.Equal(RuntimeResourcePolicies.Large.MaximumRpcValueBytes, profile.MaximumRpcValueBytes);
+        Assert.Equal(RuntimeResourcePolicies.Large.MaximumValueDepth, profile.MaximumValueDepth);
+        Assert.Equal(RuntimeResourcePolicies.Large.MaximumValueNodes, profile.MaximumValueNodes);
+        Assert.Equal(RuntimeResourcePolicies.Large.MaximumObjectMembers, profile.MaximumObjectMembers);
+        Assert.Equal(RuntimeResourcePolicies.Large.MaximumInlineDecodedBytes, profile.MaximumInlineDecodedBytes);
+        Assert.Equal(RuntimeResourcePolicies.Large.MaximumContentReferenceBytes, profile.MaximumContentReferenceBytes);
+
+        await using var scope = await client.CreateCallScopeAsync();
+        Assert.Same(profile, scope.ResourceProfile);
+    }
+
+    [Fact]
+    public async Task Invoke_PreservesRuntimeDomainErrorDetails()
+    {
+        var handler = new InvariantReportHandler();
+        var management = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+        await using var client = new RuntimeAppWebRpcClient(management, "app-session");
+
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(() => client.InvokeAsync(
+            "rpc1_exact_provider",
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "hello" }),
+            null,
+            CancellationToken.None).AsTask());
+
+        Assert.Equal(SunderRpcErrorKind.Domain, failure.Error.Kind);
+        Assert.Equal("duplicate", failure.Error.Details!.Value.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task CallScopeDisposal_RuntimeUnavailable_DoesNotLogExpectedRestartFailure()
+    {
+        var handler = new InvariantReportHandler
+        {
+            CallScopeCloseStatusCode = HttpStatusCode.ServiceUnavailable,
+        };
+        var management = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+        var failureLogged = false;
+        void Observe(AppSessionLogSnapshotEntry entry)
+            => failureLogged |= string.Equals(
+                entry.Message,
+                "Failed to close a package App RPC call scope.",
+                StringComparison.Ordinal);
+
+        AppSessionLog.EntryWritten += Observe;
+        try
+        {
+            await using var client = new RuntimeAppWebRpcClient(management, "app-session");
+            var scope = await client.CreateCallScopeAsync();
+
+            await scope.DisposeAsync();
+
+            Assert.Equal(1, handler.CallScopeCloseCount);
+            Assert.False(failureLogged);
+        }
+        finally
+        {
+            AppSessionLog.EntryWritten -= Observe;
+        }
+    }
+
+    private sealed class InvariantReportHandler(RuntimeResourcePolicy? resourcePolicy = null) : HttpMessageHandler
+    {
+        public HttpStatusCode CallScopeCloseStatusCode { get; init; } = HttpStatusCode.NoContent;
+
+        public int CallScopeCloseCount { get; private set; }
+
         public string? InvariantReportPath { get; private set; }
 
         public RuntimeRpcAppInvariantViolationRequest? InvariantReport { get; private set; }
@@ -47,17 +146,36 @@ public sealed class RuntimeAppWebRpcClientTests
         {
             if (request.RequestUri?.AbsolutePath == "/api/handshake")
             {
+                var features = new List<string>
+                {
+                    RuntimeProtocolFeatures.VersionedApiV1,
+                    RuntimeProtocolFeatures.AppWebRpcV2,
+                };
+                RuntimeResourceProfileDescriptor? profile = null;
+                if (resourcePolicy is not null)
+                {
+                    features.Add(RuntimeProtocolFeatures.RuntimeResourcePolicyV1);
+                    profile = new RuntimeResourceProfileDescriptor(
+                        RuntimeResourcePolicyContract.GetEffectiveProfileHash(resourcePolicy),
+                        resourcePolicy.MaximumRpcValueBytes,
+                        resourcePolicy.MaximumValueDepth,
+                        resourcePolicy.MaximumValueNodes,
+                        resourcePolicy.MaximumObjectMembers,
+                        resourcePolicy.MaximumInlineDecodedBytes,
+                        resourcePolicy.MaximumContentReferenceBytes);
+                }
                 return Json(new RuntimeHandshakeResponse(
                     RuntimeProtocol.Identity,
                     RuntimeProtocol.CurrentRevision,
                     RuntimeProtocol.MinimumSupportedRevision,
                     RuntimeProtocol.MaximumSupportedRevision,
                     Guid.NewGuid(),
-                    [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AppWebRpcV2],
+                    features,
                     new RuntimeProductVersionDiagnostics(
                         "Sunder.Runtime.Host",
                         "Development",
-                        "Development")));
+                        "Development"),
+                    profile));
             }
 
             if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app/invariant-violation")
@@ -66,6 +184,32 @@ public sealed class RuntimeAppWebRpcClientTests
                 InvariantReport = await request.Content!
                     .ReadFromJsonAsync<RuntimeRpcAppInvariantViolationRequest>(cancellationToken);
                 return Json(new RuntimeRpcAppInvariantViolationResponse(true, null));
+            }
+
+            if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app/call-scopes/open")
+            {
+                return Json(new RuntimeRpcAppCallScopeDescriptor(
+                    "call-scope",
+                    DateTimeOffset.UtcNow.AddMinutes(1)));
+            }
+
+            if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app/call-scopes/close")
+            {
+                CallScopeCloseCount++;
+                return new HttpResponseMessage(CallScopeCloseStatusCode);
+            }
+
+            if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app/invoke")
+            {
+                return Json(new RuntimeRpcAppInvokeResponse(
+                    null,
+                    new RuntimeRpcErrorDescriptor(
+                        RuntimeRpcErrorKind.Domain,
+                        "messages.rejected",
+                        "Rejected.",
+                        RuntimeRpcDispatchState.PossiblyDispatched,
+                        RuntimeRpcRetrySafety.Unsafe,
+                        JsonSerializer.SerializeToElement(new { reason = "duplicate" }))));
             }
 
             if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app-sessions/close")

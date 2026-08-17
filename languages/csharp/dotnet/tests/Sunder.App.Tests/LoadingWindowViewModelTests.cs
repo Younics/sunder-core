@@ -1,5 +1,6 @@
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
+using Sunder.Runtime.Client;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -35,6 +36,49 @@ public sealed class LoadingWindowViewModelTests
         Assert.True(viewModel.IsBusy);
         Assert.Equal("Opening Core Shell...", viewModel.StatusMessage);
         Assert.Equal(56, viewModel.ProgressWidth);
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(true, 2)]
+    public void StartupAttemptDeadline_NormalAndCoreShellStartupRetainDefaultBudgets(
+        bool openCoreShell,
+        int devPackageCount)
+    {
+        using var transport = CreateRuntimeTransport(TimeSpan.FromMinutes(10));
+        using var deadline = StartupAttemptDeadline.CreateForStartup(
+            CancellationToken.None,
+            openCoreShell,
+            devPackageCount,
+            transport);
+
+        Assert.Equal(TimeSpan.FromSeconds(60), deadline.TotalBudget);
+        Assert.Equal(
+            TimeSpan.FromSeconds(45),
+            deadline.GetPhaseBudget(StartupPhase.RuntimePackages));
+    }
+
+    [Theory]
+    [InlineData(600, 900, 720)]
+    [InlineData(100, 150, 120)]
+    public void StartupAttemptDeadline_DevPackageStartupDerivesBudgetsFromTransportPolicy(
+        int requestTimeoutSeconds,
+        int expectedTotalSeconds,
+        int expectedRuntimePackagesSeconds)
+    {
+        using var transport = CreateRuntimeTransport(
+            TimeSpan.FromSeconds(requestTimeoutSeconds));
+        using var deadline = StartupAttemptDeadline.CreateForStartup(
+            CancellationToken.None,
+            openCoreShell: false,
+            devPackageCount: 2,
+            transport);
+
+        Assert.Equal(TimeSpan.FromSeconds(expectedTotalSeconds), deadline.TotalBudget);
+        Assert.Equal(
+            TimeSpan.FromSeconds(expectedRuntimePackagesSeconds),
+            deadline.GetPhaseBudget(StartupPhase.RuntimePackages));
     }
 
     [Fact]
@@ -127,4 +171,9 @@ public sealed class LoadingWindowViewModelTests
         Assert.True(deadline.Token.IsCancellationRequested);
         Assert.False(deadline.HasExpired);
     }
+
+    private static RuntimeClientTransport CreateRuntimeTransport(TimeSpan requestTimeout) =>
+        new(
+            static () => null,
+            policy: new RuntimeClientPolicyOptions { RequestTimeout = requestTimeout });
 }

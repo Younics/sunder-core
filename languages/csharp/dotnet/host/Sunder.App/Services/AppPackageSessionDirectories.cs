@@ -71,7 +71,7 @@ internal static class AppPackageSessionDirectories
         {
             return false;
         }
-        catch
+        catch (Exception exception) when (AppPackageUiFaultPolicy.IsRecoverable(exception))
         {
             return true;
         }
@@ -86,7 +86,7 @@ internal static class AppPackageSessionDirectories
                 Directory.Delete(path, recursive: true);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             AppSessionLog.WriteError("Failed to delete a stale app package session folder.", ex);
         }

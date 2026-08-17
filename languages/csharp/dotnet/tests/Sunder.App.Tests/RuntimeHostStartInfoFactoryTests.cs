@@ -9,18 +9,26 @@ public sealed class RuntimeHostStartInfoFactoryTests
     public void Create_ManagedSupervisorCarriesCanonicalDeploymentIdentity()
     {
         var identity = Sunder.Host.Contracts.HostDeploymentIdentity.FromSha256(new string('a', 64));
+        var policyPath = OperatingSystem.IsWindows()
+            ? @"C:\Users\test\AppData\Local\Sunder\app\v1\runtime-resource-policy.json"
+            : "/home/test/.local/share/Sunder/app/v1/runtime-resource-policy.json";
 
         var startInfo = RuntimeHostStartInfoFactory.Create(
             OperatingSystem.IsWindows() ? @"C:\Sunder\Sunder.Host.Supervisor.exe" : "/opt/sunder/Sunder.Host.Supervisor",
             new Uri("http://127.0.0.1:5275/"),
             OperatingSystem.IsWindows() ? @"C:\Sunder\host.json" : "/tmp/sunder/host.json",
             managedSupervisor: true,
-            deploymentIdentity: identity);
+            deploymentIdentity: identity,
+            runtimeResourcePolicyFilePath: policyPath);
 
         var identityOption = startInfo.ArgumentList.IndexOf("--deployment-identity");
         Assert.True(identityOption >= 0);
         Assert.Equal(identity, startInfo.ArgumentList[identityOption + 1]);
         Assert.False(startInfo.Environment.ContainsKey("SUNDER_HOST_RUNTIME_PATH"));
+        Assert.Equal(
+            Path.GetFullPath(policyPath),
+            startInfo.Environment[RuntimeResourcePolicyEnvironment.PolicyFilePathVariable]);
+        Assert.False(startInfo.Environment.ContainsKey(RuntimeResourcePolicyEnvironment.LaunchPayloadVariable));
     }
 
     [Fact]
@@ -34,6 +42,8 @@ public sealed class RuntimeHostStartInfoFactoryTests
             ["SUNDER_UNRELATED_SECRET"] = "secret",
             ["sunder_runtime_bearer_token"] = "mixed-case-secret",
             ["sunder_wait_for_debugger"] = "1",
+            [RuntimeResourcePolicyEnvironment.PolicyFilePathVariable] = "/inherited/policy.json",
+            [RuntimeResourcePolicyEnvironment.LaunchPayloadVariable] = "inherited-payload",
             ["SUNDER_HOST_RUNTIME_PATH"] = "/opt/sunder/runtime",
             ["SUNDER_HOST_STATE_ROOT"] = "/state/host",
             ["SUNDER_RUNTIME_STATE_ROOT"] = "/state/runtime",
@@ -52,6 +62,24 @@ public sealed class RuntimeHostStartInfoFactoryTests
         Assert.DoesNotContain("SUNDER_UNRELATED_SECRET", environment.Keys);
         Assert.DoesNotContain("sunder_runtime_bearer_token", environment.Keys);
         Assert.DoesNotContain("sunder_wait_for_debugger", environment.Keys);
+        Assert.DoesNotContain(RuntimeResourcePolicyEnvironment.PolicyFilePathVariable, environment.Keys);
+        Assert.DoesNotContain(RuntimeResourcePolicyEnvironment.LaunchPayloadVariable, environment.Keys);
+    }
+
+    [Fact]
+    public void Create_StandaloneRuntimeDoesNotReceiveAppPolicyFilePath()
+    {
+        var startInfo = RuntimeHostStartInfoFactory.Create(
+            OperatingSystem.IsWindows() ? @"C:\Sunder\Sunder.Runtime.Host.exe" : "/opt/sunder/Sunder.Runtime.Host",
+            new Uri("http://127.0.0.1:5275/"),
+            OperatingSystem.IsWindows() ? @"C:\Sunder\host.json" : "/tmp/sunder/host.json",
+            managedSupervisor: false,
+            runtimeResourcePolicyFilePath: OperatingSystem.IsWindows()
+                ? @"C:\Sunder\runtime-resource-policy.json"
+                : "/tmp/sunder/runtime-resource-policy.json");
+
+        Assert.False(startInfo.Environment.ContainsKey(RuntimeResourcePolicyEnvironment.PolicyFilePathVariable));
+        Assert.False(startInfo.Environment.ContainsKey(RuntimeResourcePolicyEnvironment.LaunchPayloadVariable));
     }
 
 }

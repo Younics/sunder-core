@@ -482,6 +482,97 @@ public sealed class ActivePackageSessionTests
     }
 
     [Fact]
+    public async Task GenerationRetirement_ReentrantCallbackDoesNotBlockFaultAndShutdownDrainsOldLease()
+    {
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService());
+        var service = new RecordingGenerationBackgroundService();
+        var session = CreateSession("faulting.package", service);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance);
+        await publisher.PublishAsync(
+            session,
+            owner.Sources.Snapshot(),
+            [],
+            [],
+            owner.Generation,
+            CancellationToken.None);
+        var lease = owner.State.AcquireLease();
+        var loadedPackage = Assert.IsType<ActiveLoadedPackage>(
+            owner.State.GetLoadedPackage(lease, "faulting.package"));
+        var identity = lease.GetPackageActivationIdentity(loadedPackage);
+        var generation = lease.Generation;
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCallback = new ManualResetEventSlim();
+        using var callback = lease.GenerationRetirementToken.Register(() =>
+        {
+            using var freshLease = Task.Run(owner.State.AcquireLease)
+                .WaitAsync(TimeSpan.FromSeconds(2))
+                .GetAwaiter().GetResult();
+            Assert.Equal(generation + 1, freshLease.Generation);
+            Assert.NotSame(lease.GenerationIdentity, freshLease.GenerationIdentity);
+            callbackEntered.TrySetResult();
+            releaseCallback.Wait();
+        });
+        Task<bool>? fault = null;
+        Task<IReadOnlyList<string>>? shutdown = null;
+
+        try
+        {
+            fault = Task.Run(() => owner.State.HandlePackageFault(
+                "faulting.package",
+                identity,
+                generation,
+                PackageFailureOrigin.RuntimeBackgroundService,
+                new InvalidOperationException("fault generation"),
+                "run package",
+                committed: _ =>
+                {
+                    Assert.True(lease.GenerationRetirementToken.IsCancellationRequested);
+                    return Task.CompletedTask;
+                }));
+            await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            shutdown = owner.State.ClearActiveSessionAsync();
+            await Task.Delay(50);
+
+            Assert.True(await fault.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.False(shutdown.IsCompleted);
+            Assert.True(lease.GenerationRetirementToken.IsCancellationRequested);
+            Assert.True(lease.RetirementToken.IsCancellationRequested);
+            releaseCallback.Set();
+            Assert.False(shutdown.IsCompleted);
+
+            lease.Dispose();
+            await shutdown.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(owner.State.ActiveSession.IsEmpty);
+            Assert.Throws<ObjectDisposedException>(() =>
+                _ = lease.GenerationRetirementToken.WaitHandle);
+            Assert.Throws<ObjectDisposedException>(() =>
+                _ = lease.RetirementToken.WaitHandle);
+        }
+        finally
+        {
+            releaseCallback.Set();
+            lease.Dispose();
+            if (fault is not null)
+            {
+                await fault.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            if (shutdown is not null)
+            {
+                await shutdown.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            else if (!owner.State.ActiveSession.IsEmpty)
+            {
+                await owner.State.ClearActiveSessionAsync();
+            }
+        }
+    }
+
+    [Fact]
     public async Task PackageSessionPublisher_PublishesPackagesAndFreshEmptySessionsRepeatedly()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));

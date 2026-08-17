@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Authentication;
 using Sunder.Sdk.Callbacks;
 using Sunder.Sdk.Compatibility;
@@ -66,6 +67,23 @@ public sealed class ProcessRuntimeWorkerTests
         Assert.Equal(4, value.EnumerateObject().Count());
         Assert.True(value.GetProperty("k").GetBoolean());
         Assert.False(value.GetProperty("\u212a").GetBoolean());
+    }
+
+    [Fact]
+    public void WorkerEventQueueValueClone_CompactsLexicalPaddingBeforeByteAccounting()
+    {
+        var padding = new string(' ', 4096);
+        using var source = JsonDocument.Parse($"{{{padding}\"value\"{padding}:{padding}1{padding}}}");
+        var limits = WorkerTransportLimits.Create(RuntimeResourcePolicies.Standard, maximumHeaderBytes: 8192);
+
+        var queued = SunderWorkerProtocol.CloneValueForQueue(
+            source.RootElement,
+            limits,
+            out var serializedBytes);
+
+        Assert.True(Encoding.UTF8.GetByteCount(source.RootElement.GetRawText()) > serializedBytes);
+        Assert.Equal(serializedBytes, Encoding.UTF8.GetByteCount(queued.GetRawText()));
+        Assert.Equal(1, queued.GetProperty("value").GetInt32());
     }
 
     [Fact]
@@ -282,6 +300,46 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
+    public async Task WorkerV3_RecoveryCandidateUsesPackageDataUntilExactAuthorityIsRevoked()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(
+            "v3-recovery-candidate-package-data",
+            enforcePackageSessionLease: true);
+        await fixture.Context.Storage.State.SetValueAsync("legacy.value", "candidate-value");
+        var (request, candidate) = await fixture.BeginRecoveryCandidateAsync();
+        var generation = new RuntimePackageGeneration(
+            candidate.RuntimeActivationId,
+            request.ActivationGeneration);
+
+        await fixture.Worker.StartAsync();
+        await fixture.Worker.CommitGenerationAsync(generation);
+        await fixture.Worker.PrepareStorageMigrationsAsync(generation);
+
+        using (var candidateStatus = await fixture.WaitForWorkerStatusAsync(
+                   "v3-migration-preparation-state.json"))
+        {
+            Assert.Equal(
+                "candidate-value",
+                candidateStatus.RootElement.GetProperty("stateValue").GetString());
+            Assert.Equal(
+                ["legacy.value"],
+                candidateStatus.RootElement.GetProperty("keys").EnumerateArray()
+                    .Select(static item => item.GetString()));
+        }
+
+        await fixture.RevokeRecoveryCandidateAsync(request, candidate);
+        await fixture.Worker.ActivateGenerationAsync();
+
+        using var staleStatus = await fixture.WaitForWorkerStatusAsync("v3-stale-package-data.json");
+        Assert.Equal("unavailable", staleStatus.RootElement.GetProperty("kind").GetString());
+        Assert.Equal(
+            "worker.activation.unavailable",
+            staleStatus.RootElement.GetProperty("code").GetString());
+        Assert.True(staleStatus.RootElement.GetProperty("uploadConsumed").GetBoolean());
+        Assert.Equal(0, fixture.WorkerPayloadHandleCount());
+    }
+
+    [Fact]
     public async Task WorkerV3_MigrationPreparationRejectsStateMutation()
     {
         await using var fixture = await WorkerFixture.CreateAsync("v3-migration-preparation-mutation");
@@ -469,6 +527,57 @@ public sealed class ProcessRuntimeWorkerTests
 
         await Task.WhenAll(fixture.Worker.StopAsync(), fixture.Worker.StopAsync());
         await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Worker_StreamCountOverflowIsHostAuthenticatedAndCallLocal()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("stream-queue-overflow");
+        var activation = await fixture.PublishBrokerSessionAsync();
+        await fixture.SetSubscribePermissionAsync(RuntimeRpcPermissionState.Granted);
+        await using var stream = activation.Client.SubscribeAsync(
+                activation.Endpoint,
+                "messages",
+                "watch",
+                JsonSerializer.SerializeToElement(new { message = "slow-consumer" }))
+            .GetAsyncEnumerator();
+
+        Assert.True(await stream.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(stream.Current.GetProperty("accepted").GetBoolean());
+        using (var cancelled = await fixture.WaitForWorkerStatusAsync(
+                   "stream-queue-overflow-cancelled.json"))
+        {
+            Assert.False(string.IsNullOrWhiteSpace(cancelled.RootElement.GetProperty("id").GetString()));
+        }
+
+        var exhausted = await Assert.ThrowsAsync<SunderRpcException>(async () =>
+            await stream.MoveNextAsync().AsTask());
+        Assert.True(exhausted.IsHostAuthenticated);
+        Assert.Equal(SunderRpcErrorKind.ResourceExhausted, exhausted.Error.Kind);
+        Assert.Equal("rpc.worker.stream-queue-limit", exhausted.Error.Code);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, exhausted.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, exhausted.Error.RetrySafety);
+        Assert.Null(exhausted.Error.Details);
+        Assert.StartsWith(
+            "The process worker stream queue exceeded its count or byte bound.",
+            exhausted.Error.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("limit=count", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("queuedMessages=32/32", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("provider=example.provider", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("service=messages", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("method=watch", exhausted.Error.Message, StringComparison.Ordinal);
+        Assert.False(RuntimeRpcFailureContextStore.TryGet(exhausted, out _));
+        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
+
+        var sibling = await activation.Client.InvokeAsync(
+            activation.Endpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "still-active" }));
+        Assert.True(sibling.GetProperty("accepted").GetBoolean());
+        Assert.Single(fixture.Catalog.GetSnapshot().Providers);
+        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
     }
 
     [Fact]
@@ -940,6 +1049,49 @@ public sealed class ProcessRuntimeWorkerTests
             JsonSerializer.SerializeToElement(new { message = "ready" }),
             CancellationToken.None);
         Assert.True(result.GetProperty("accepted").GetBoolean());
+    }
+
+    [Fact]
+    public async Task WorkerV3_RejectsMismatchedEffectiveResourceProfileHash()
+    {
+        var exception = await Assert.ThrowsAnyAsync<ProcessRuntimeWorkerException>(async () =>
+            await WorkerFixture.CreateAsync("resource-profile-mismatch"));
+
+        Assert.Contains("resource profile", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task WorkerV3_OversizedRequestIsNotDispatchedAndDoesNotFaultProcess()
+    {
+        var policy = new RuntimeProcessPolicyOptions
+        {
+            EffectiveResourcePolicy = RuntimeResourcePolicies.CustomMinimums,
+        };
+        await using var fixture = await WorkerFixture.CreateAsync("normal", policy);
+        await fixture.StartAndActivateAsync();
+        var oversized = JsonSerializer.SerializeToElement(new { text = new string('"', 600_000) });
+
+        var exhausted = await Assert.ThrowsAsync<SunderRpcException>(async () =>
+            await fixture.Worker.InvokeUnaryAsync(
+                "example.provider",
+                fixture.InvocationContext(),
+                "messages",
+                "send",
+                oversized,
+                CancellationToken.None));
+
+        Assert.Equal(SunderRpcErrorKind.ResourceExhausted, exhausted.Error.Kind);
+        Assert.Equal(SunderRpcDispatchState.NotDispatched, exhausted.Error.DispatchState);
+        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
+        var valid = await fixture.Worker.InvokeUnaryAsync(
+            "example.provider",
+            fixture.InvocationContext(),
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "still-active" }),
+            CancellationToken.None);
+        Assert.True(valid.GetProperty("accepted").GetBoolean());
+        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
     }
 
     [Fact]
@@ -1626,6 +1778,41 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
+    public async Task Broker_PreservesValidatedProcessProviderDomainErrorDetails()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("domain-details");
+        var activation = await fixture.PublishBrokerSessionAsync();
+
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(async () =>
+            await activation.Client.InvokeAsync(
+                activation.Endpoint,
+                "messages",
+                "send",
+                JsonSerializer.SerializeToElement(new { message = "hello" })));
+
+        Assert.Equal(SunderRpcErrorKind.Domain, failure.Error.Kind);
+        Assert.Equal("duplicate", failure.Error.Details!.Value.GetProperty("reason").GetString());
+        Assert.Single(fixture.Catalog.GetSnapshot().Providers);
+    }
+
+    [Fact]
+    public async Task ProcessWorker_RejectsForgedInfrastructureErrorDetails()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("forged-error-details");
+        await fixture.StartAndActivateAsync();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => fixture.Worker.InvokeUnaryAsync(
+            "example.provider",
+            fixture.InvocationContext(),
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "hello" }),
+            CancellationToken.None).AsTask());
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
     public async Task SessionRetirement_DrainsFakeWorkerCallBeforeProcessShutdown()
     {
         await using var fixture = await WorkerFixture.CreateAsync("normal");
@@ -1664,6 +1851,7 @@ public sealed class ProcessRuntimeWorkerTests
         private readonly string _root;
         private readonly string _mode;
         private readonly RuntimeRpcCatalog _catalog;
+        private readonly RuntimePackageRecoveryQueue _recoveryQueue;
         private readonly RuntimeRpcPermissionStore _permissions;
         private readonly RuntimeSessionOwner _owner;
         private readonly RuntimePackageDataResources _context;
@@ -1677,6 +1865,7 @@ public sealed class ProcessRuntimeWorkerTests
             Guid activationId,
             ProcessRuntimeWorker worker,
             RuntimeRpcCatalog catalog,
+            RuntimePackageRecoveryQueue recoveryQueue,
             RuntimeRpcPermissionStore permissions,
             RuntimeSessionOwner owner,
             RuntimePackageDataResources context,
@@ -1689,6 +1878,7 @@ public sealed class ProcessRuntimeWorkerTests
             ActivationId = activationId;
             Worker = worker;
             _catalog = catalog;
+            _recoveryQueue = recoveryQueue;
             _permissions = permissions;
             _owner = owner;
             _context = context;
@@ -1806,10 +1996,12 @@ public sealed class ProcessRuntimeWorkerTests
             };
             var paths = new RuntimePackagePaths(Path.Combine(root, "runtime-data"));
             var catalog = new RuntimeRpcCatalog();
+            var recoveryQueue = new RuntimePackageRecoveryQueue();
             var owner = new RuntimeSessionOwner(
                 NullLogger<RuntimeSessionOwner>.Instance,
                 new RuntimeEventStreamService(),
-                rpcCatalog: catalog);
+                rpcCatalog: catalog,
+                recoveryQueue: recoveryQueue);
             var permissions = new RuntimeRpcPermissionStore(paths);
             var transfers = new RuntimeContentTransferStore(paths);
             var broker = new RuntimeRpcBroker(
@@ -1843,6 +2035,7 @@ public sealed class ProcessRuntimeWorkerTests
                 activationId,
                 worker,
                 catalog,
+                recoveryQueue,
                 permissions,
                 owner,
                 context,
@@ -1891,6 +2084,86 @@ public sealed class ProcessRuntimeWorkerTests
 
         public async Task WaitForActivationAsync()
             => await Worker.ActivationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        public async Task<(RuntimePackageRecoveryRequest Request, ActiveLoadedPackage Candidate)>
+            BeginRecoveryCandidateAsync()
+        {
+            var candidate = CreateProcessLoadedPackage();
+            var failedActivationId = Guid.NewGuid();
+            var failedPackage = candidate with
+            {
+                Worker = new TestRuntimePackageWorker(),
+                RuntimeActivationId = failedActivationId,
+                RpcProviders = new Dictionary<string, RuntimeRpcProviderRegistration>(StringComparer.Ordinal),
+                RecoveryFactory = () => candidate,
+            };
+            var session = new ActivePackageSession(
+                sessionFolder: null,
+                new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [failedPackage.Descriptor.PackageId] = failedPackage,
+                },
+                new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [failedPackage.Descriptor.PackageId] = new SessionPackageDescriptor(
+                        failedPackage.Descriptor.PackageId,
+                        failedPackage.Descriptor.DisplayName,
+                        failedPackage.Descriptor.Version,
+                        PackageHostRoles.Runtime,
+                        null,
+                        true,
+                        PackageReadinessState.Ready,
+                        [],
+                        null,
+                        null,
+                        null,
+                        0),
+                },
+                workersStarted: false,
+                readySources: [Prepared.Source]);
+            var publisher = new PackageSessionPublisher(
+                _owner,
+                NullLogger<PackageSessionPublisher>.Instance,
+                rpcCatalog: _catalog);
+            await publisher.PublishAsync(
+                session,
+                _owner.Sources.Snapshot(),
+                [],
+                [],
+                _owner.Generation,
+                CancellationToken.None);
+            var activationGeneration = _owner.Generation;
+
+            _owner.HandleRuntimeGenerationFault(
+                failedPackage.Descriptor.PackageId,
+                new RuntimePackageGeneration(failedActivationId, activationGeneration),
+                new InvalidOperationException("old activation failed"));
+            var request = await _recoveryQueue.Reader.ReadAsync().AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            await request.CleanupCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(
+                RuntimePackageRecoveryValidation.Ready,
+                _owner.State.BeginPackageRecoveryActivation(request, candidate));
+            _catalog.PreparePackageRecovery(
+                candidate,
+                _owner.Generation,
+                request.ActivationGeneration);
+            return (request, candidate);
+        }
+
+        public async Task RevokeRecoveryCandidateAsync(
+            RuntimePackageRecoveryRequest request,
+            ActiveLoadedPackage candidate)
+        {
+            var packageDrain = _owner.State.AbandonPackageRecoveryActivation(
+                request,
+                candidate.RuntimeActivationId);
+            var rpcDrain = _catalog.DiscardPackageRecovery(
+                request.PackageId,
+                candidate.RuntimeActivationId);
+            await Task.WhenAll(packageDrain, rpcDrain).WaitAsync(TimeSpan.FromSeconds(5));
+        }
 
         public async Task PublishCandidateSessionAsync()
         {
@@ -2105,6 +2378,12 @@ public sealed class ProcessRuntimeWorkerTests
                 state,
                 CancellationToken.None);
 
+        public Task SetSubscribePermissionAsync(RuntimeRpcPermissionState state)
+            => _permissions.SetAsync(
+                PermissionKey("caller.package", SunderRpcProtocol.SubscribeAction),
+                state,
+                CancellationToken.None);
+
         private static RuntimeRpcPermissionKey PermissionKey(string packageId, string action)
             => new(
                 packageId,
@@ -2274,11 +2553,12 @@ public sealed class ProcessRuntimeWorkerTests
         {
           "$schema":"https://json-schema.org/draft/2020-12/schema",
           "descriptorVersion":2,
+          "schemaProfile":"sunder.rpc.values.v1",
           "contractId":"example.rpc",
           "version":"1.0.0",
-          "errors":{},
+          "errors":{"messages.rejected":{"detailsSchema":{"$ref":"#/$defs/ErrorDetails"}}},
           "services":{"messages":{"methods":{
-            "send":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Response"}},
+            "send":{"kind":"unary","idempotency":"none","errors":["messages.rejected"],"requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Response"}},
             "wait":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Response"}},
             "content-roundtrip":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/ContentRequest"},"responseSchema":{"$ref":"#/$defs/ContentResponse"}},
             "watch":{"kind":"server-stream","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Request"},"eventSchema":{"$ref":"#/$defs/Response"}}
@@ -2286,6 +2566,7 @@ public sealed class ProcessRuntimeWorkerTests
           "$defs":{
             "Request":{"type":"object","properties":{"message":{"type":"string","minLength":1,"maxLength":128}},"required":["message"],"additionalProperties":false},
             "Response":{"type":"object","properties":{"accepted":{"type":"boolean"}},"required":["accepted"],"additionalProperties":false},
+            "ErrorDetails":{"type":"object","properties":{"reason":{"type":"string","minLength":1,"maxLength":128}},"required":["reason"],"additionalProperties":false},
             "ContentReference":{"type":"object","properties":{"id":{"type":"string","minLength":1,"maxLength":128},"length":{"type":"integer","minimum":0,"maximum":67108864},"sha256":{"type":"string","minLength":64,"maxLength":64},"mediaType":{"type":"string","minLength":1,"maxLength":128},"fileName":{"type":"string","minLength":1,"maxLength":255},"expiresAtUtc":{"type":"string","minLength":1,"maxLength":64},"repeatability":{"type":"string","minLength":1,"maxLength":32,"enum":["single-use","repeatable"]}},"required":["id","length","sha256","mediaType","fileName","expiresAtUtc","repeatability"],"additionalProperties":false},
             "ContentRequest":{"type":"object","properties":{"message":{"type":"string","minLength":1,"maxLength":128},"content":{"$ref":"#/$defs/ContentReference"}},"required":["message","content"],"additionalProperties":false},
             "ContentResponse":{"type":"object","properties":{"accepted":{"type":"boolean"},"content":{"$ref":"#/$defs/ContentReference"},"openedFileReleased":{"type":"boolean"}},"required":["accepted","content","openedFileReleased"],"additionalProperties":false}

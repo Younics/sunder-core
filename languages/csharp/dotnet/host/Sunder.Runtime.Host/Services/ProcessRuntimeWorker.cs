@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 using Sunder.Package.Format;
 using Sunder.Runtime.Host.Infrastructure.Storage;
+using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Rpc;
 
@@ -28,11 +29,15 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     private readonly RuntimeRpcCallerStamp _callerStamp;
     private readonly PackageSessionState? _packageSessionState;
     private readonly RuntimeProcessPolicyOptions _policy;
+    private readonly RuntimeResourcePolicy _resourcePolicy;
+    private readonly string _resourceProfileHash;
+    private readonly WorkerTransportLimits _transportLimits;
     private readonly CancellationToken _hostStopping;
     private readonly string _workerTemporaryPath;
     private readonly IReadOnlyList<ProviderIdentity> _expectedProviders;
     private readonly object _stateGate = new();
     private readonly object _callGate = new();
+    private readonly object _writeQueueGate = new();
     private readonly Dictionary<string, HostCall> _hostCalls = new(StringComparer.Ordinal);
     private int _pendingHostCalls;
     private readonly Dictionary<string, WorkerCall> _workerCalls = new(StringComparer.Ordinal);
@@ -72,6 +77,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     private byte[]? _activationFrameBody;
     private bool _shutdownAcknowledgementReceived;
     private bool _stopStarted;
+    private long _queuedWriteBytes;
 
     public ProcessRuntimeWorker(
         ILogger logger,
@@ -91,6 +97,9 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         _callerStamp = new RuntimeRpcCallerStamp(package.PackageId, activationId);
         _packageSessionState = packageSessionState;
         _policy = ValidatePolicy(policy ?? new RuntimeProcessPolicyOptions());
+        _resourcePolicy = ResolveEffectiveResourcePolicy(_policy);
+        _resourceProfileHash = RuntimeResourcePolicyContract.GetEffectiveProfileHash(_resourcePolicy);
+        _transportLimits = SunderWorkerProtocol.CreateTransportLimits(_resourcePolicy, _policy);
         _hostStopping = hostStopping;
         _workerTemporaryPath = Path.Combine(
             Path.GetTempPath(),
@@ -199,6 +208,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 activationId = _activationId.ToString("N"),
                 sessionId = _package.SessionId,
                 providers = _expectedProviders.Select(static provider => provider.ToWire()).ToArray(),
+                resourceProfile = SunderWorkerProtocol.ResourceProfileToWire(_resourcePolicy),
+                resourceProfileHash = _resourceProfileHash,
             });
 
             using var startupTimeout = new CancellationTokenSource(_policy.StartupTimeout);
@@ -405,14 +416,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 {
                     type = "host.activate",
                     sessionGeneration = generation,
-                }, _policy);
-                if (_writes is null)
+                }, _transportLimits);
+                if (!TryQueueFrameBody(body))
                 {
-                    queueFailure = new InvalidOperationException("Process worker protocol writer is unavailable.");
-                }
-                else if (!_writes.Writer.TryWrite(body))
-                {
-                    queueFailure = new SunderWorkerProtocolException(
+                    queueFailure = new WorkerTransportResourceException(
                         "Process worker protocol write queue exceeded its bound.");
                 }
                 else
@@ -583,12 +590,22 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         JsonElement request,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        var invocation = SerializeInvocation(
+            HostCallKind.Unary,
+            providerId,
+            context,
+            serviceId,
+            methodId,
+            request);
         ReservePendingHostCall();
         var reservationHeld = true;
+        HostCall? call = null;
         try
         {
             await WaitForInvocationReadinessAsync(cancellationToken).ConfigureAwait(false);
-            var call = AddHostCall(
+            call = AddHostCall(
+                invocation.Id,
                 HostCallKind.Unary,
                 context,
                 providerId,
@@ -598,15 +615,12 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             reservationHeld = false;
             return await InvokeUnaryCoreAsync(
                 call,
-                providerId,
-                context,
-                serviceId,
-                methodId,
-                request,
+                invocation.Body,
                 cancellationToken).ConfigureAwait(false);
         }
         finally
         {
+            if (call is { InvocationQueued: false }) RemoveUnwrittenHostCall(call);
             if (reservationHeld) ReleasePendingHostCall();
         }
     }
@@ -634,12 +648,22 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         JsonElement request,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        var invocation = SerializeInvocation(
+            HostCallKind.ServerStream,
+            providerId,
+            context,
+            serviceId,
+            methodId,
+            request);
         ReservePendingHostCall();
         var reservationHeld = true;
+        HostCall? call = null;
         try
         {
             await WaitForInvocationReadinessAsync(cancellationToken).ConfigureAwait(false);
-            var call = AddHostCall(
+            call = AddHostCall(
+                invocation.Id,
                 HostCallKind.ServerStream,
                 context,
                 providerId,
@@ -649,11 +673,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             reservationHeld = false;
             await foreach (var item in InvokeServerStreamCoreAsync(
                 call,
-                providerId,
-                context,
-                serviceId,
-                methodId,
-                request,
+                invocation.Body,
                 cancellationToken).ConfigureAwait(false))
             {
                 yield return item;
@@ -661,6 +681,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
         finally
         {
+            if (call is { InvocationQueued: false }) RemoveUnwrittenHostCall(call);
             if (reservationHeld) ReleasePendingHostCall();
         }
     }
@@ -704,32 +725,26 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 
     private async ValueTask<JsonElement> InvokeUnaryCoreAsync(
         HostCall call,
-        string providerId,
-        SunderRpcInvocationContext context,
-        string serviceId,
-        string methodId,
-        JsonElement request,
+        byte[] body,
         CancellationToken cancellationToken)
     {
-        QueueInvocation(call, providerId, context, serviceId, methodId, request);
+        QueueHostCallBody(body);
+        call.InvocationQueued = true;
         using var registration = cancellationToken.Register(() => CancelHostCall(call, cancellationToken));
         return await call.UnaryCompletion.Task.ConfigureAwait(false);
     }
 
     private async IAsyncEnumerable<JsonElement> InvokeServerStreamCoreAsync(
         HostCall call,
-        string providerId,
-        SunderRpcInvocationContext context,
-        string serviceId,
-        string methodId,
-        JsonElement request,
+        byte[] body,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        QueueInvocation(call, providerId, context, serviceId, methodId, request);
+        QueueHostCallBody(body);
+        call.InvocationQueued = true;
         using var registration = cancellationToken.Register(() => CancelHostCall(call, cancellationToken));
         try
         {
-            await foreach (var item in call.Events.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            await foreach (var item in call.Events.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
                 yield return item;
             }
@@ -799,35 +814,45 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
     }
 
-    private void QueueInvocation(
-        HostCall call,
+    private SerializedHostInvocation SerializeInvocation(
+        HostCallKind kind,
         string providerId,
         SunderRpcInvocationContext context,
         string serviceId,
         string methodId,
         JsonElement request)
     {
-        QueueEnvelope(new
+        var id = Guid.NewGuid().ToString("N");
+        try
         {
-            type = "host.invoke",
-            id = call.Id,
-            kind = call.Kind == HostCallKind.Unary ? "unary" : "server-stream",
-            providerId,
-            serviceId,
-            methodId,
-            request = request.Clone(),
-            context = new
+            var body = SunderWorkerProtocol.SerializeFrameBody(new
             {
-                callerPackageId = context.CallerPackageId,
-                callerPackageVersion = context.CallerPackageVersion,
-                deadlineUtc = context.DeadlineUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
-                callDepth = context.CallDepth,
-                provider = WorkerWire.ToWire(context.Provider),
-            },
-        });
+                type = "host.invoke",
+                id,
+                kind = kind == HostCallKind.Unary ? "unary" : "server-stream",
+                providerId,
+                serviceId,
+                methodId,
+                request,
+                context = new
+                {
+                    callerPackageId = context.CallerPackageId,
+                    callerPackageVersion = context.CallerPackageVersion,
+                    deadlineUtc = context.DeadlineUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
+                    callDepth = context.CallDepth,
+                    provider = WorkerWire.ToWire(context.Provider),
+                },
+            }, _transportLimits);
+            return new SerializedHostInvocation(id, body);
+        }
+        catch (WorkerTransportResourceException exception)
+        {
+            throw HostRequestResourceExhausted(exception);
+        }
     }
 
     private HostCall AddHostCall(
+        string id,
         HostCallKind kind,
         SunderRpcInvocationContext context,
         string providerId,
@@ -844,12 +869,13 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
         }
         var call = new HostCall(
-            Guid.NewGuid().ToString("N"),
+            id,
             kind,
             context,
             providerId,
             serviceId,
-            methodId);
+            methodId,
+            _transportLimits.MaximumStreamQueueBytes);
         lock (_callGate)
         {
             if (!consumePendingReservation
@@ -873,6 +899,17 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
         }
         return call;
+    }
+
+    private void RemoveUnwrittenHostCall(HostCall call)
+    {
+        lock (_callGate)
+        {
+            if (call.Terminal || !_hostCalls.Remove(call.Id)) return;
+            call.Terminal = true;
+            CleanupWorkerContentFiles(call);
+            call.Events.Fail(HostRequestResourceExhausted());
+        }
     }
 
     private void ReservePendingHostCall()
@@ -914,7 +951,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             if (call.Terminal || call.Cancelled) return;
             call.Cancelled = true;
             call.UnaryCompletion.TrySetCanceled(cancellationToken);
-            call.Events.Writer.TryComplete(new OperationCanceledException(cancellationToken));
+            call.Events.Fail(new OperationCanceledException(cancellationToken));
         }
         TryQueueEnvelope(new { type = "host.cancel", id = call.Id });
         _ = EnforceCancellationDrainAsync(call);
@@ -946,7 +983,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             {
                 using var document = await SunderWorkerProtocol.ReadFrameAsync(
                     stdout,
-                    _policy,
+                    _transportLimits,
                     _forceStop.Token).ConfigureAwait(false);
                 HandleEnvelope(document.RootElement);
             }
@@ -1070,6 +1107,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             "packageVersion",
             "activationId",
             "sessionId",
+            "resourceProfileHash",
             "contributions");
         if (!string.Equals(
                 SunderWorkerProtocol.RequiredString(root, "protocol", 64),
@@ -1080,10 +1118,14 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             || !string.Equals(SunderWorkerProtocol.RequiredString(root, "packageId", 256), _package.PackageId, StringComparison.Ordinal)
             || !string.Equals(SunderWorkerProtocol.RequiredString(root, "packageVersion", 128), _package.Version, StringComparison.Ordinal)
             || !string.Equals(SunderWorkerProtocol.RequiredString(root, "activationId", 64), _activationId.ToString("N"), StringComparison.Ordinal)
-            || !string.Equals(SunderWorkerProtocol.RequiredString(root, "sessionId", 256), _package.SessionId, StringComparison.Ordinal))
+            || !string.Equals(SunderWorkerProtocol.RequiredString(root, "sessionId", 256), _package.SessionId, StringComparison.Ordinal)
+            || !string.Equals(
+                SunderWorkerProtocol.RequiredString(root, "resourceProfileHash", 64),
+                _resourceProfileHash,
+                StringComparison.Ordinal))
         {
             throw new SunderWorkerProtocolException(
-                "Process worker ready envelope did not bind the exact protocol, challenge, package, activation, and session.");
+                "Process worker ready envelope did not bind the exact protocol, challenge, package, activation, session, and resource profile.");
         }
         var contributions = ReadContributions(
             SunderWorkerProtocol.RequiredValue(root, "contributions"));
@@ -1374,10 +1416,22 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     {
                         throw new SunderWorkerProtocolException("Process worker sent an event for a unary call.");
                     }
-                    if (!call.Cancelled
-                        && !call.Events.Writer.TryWrite(SunderWorkerProtocol.RequiredValue(root, "value").Clone()))
+                    if (!call.Cancelled)
                     {
-                        throw new SunderWorkerProtocolException("Process worker stream event queue exceeded its bound.");
+                        var value = SunderWorkerProtocol.RequiredValue(root, "value");
+                        var queuedValue = SunderWorkerProtocol.CloneValueForQueue(
+                            value,
+                            _transportLimits,
+                            out var valueBytes);
+                        if (call.Events.TryWrite(queuedValue, valueBytes) is { } rejection)
+                        {
+                            call.Cancelled = true;
+                            var exhausted = StreamQueueResourceExhausted(call, rejection);
+                            call.UnaryCompletion.TrySetException(exhausted);
+                            call.Events.Fail(exhausted);
+                            TryQueueEnvelope(new { type = "host.cancel", id = call.Id });
+                            _ = EnforceCancellationDrainAsync(call);
+                        }
                     }
                     return;
                 case "worker.result":
@@ -1402,7 +1456,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     call.Terminal = true;
                     _hostCalls.Remove(id);
                     CleanupWorkerContentFiles(call);
-                    if (!call.Cancelled) call.Events.Writer.TryComplete();
+                    if (!call.Cancelled) call.Events.Complete();
                     return;
                 default:
                     var exception = call.Cancelled
@@ -1414,7 +1468,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     if (!call.Cancelled)
                     {
                         call.UnaryCompletion.TrySetException(exception!);
-                        call.Events.Writer.TryComplete(exception);
+                        call.Events.Fail(exception!);
                     }
                     return;
             }
@@ -1423,7 +1477,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 
     private static Exception ReadWorkerError(JsonElement value, HostCall call)
     {
-        SunderWorkerProtocol.RequireOnlyProperties(value, "kind", "code", "message");
+        SunderWorkerProtocol.RequireOnlyProperties(value, "kind", "code", "message", "details");
         var kindText = SunderWorkerProtocol.RequiredString(value, "kind", 64);
         var code = SunderWorkerProtocol.RequiredString(value, "code", 128);
         if (!code.All(static character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_'))
@@ -1431,8 +1485,16 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             throw new SunderWorkerProtocolException("Process worker returned an unsafe provider error code.");
         }
         var message = SunderWorkerProtocol.RequiredString(value, "message", 512);
+        JsonElement? details = value.TryGetProperty("details", out var detailValue)
+            ? detailValue.Clone()
+            : null;
         if (kindText == "provider-fault")
         {
+            if (details is not null)
+            {
+                throw new SunderWorkerProtocolException(
+                    "Process worker returned details on a provider-fault error.");
+            }
             return new ProcessRpcProviderFaultException(
                 code,
                 call.ProviderExceptionType,
@@ -1443,12 +1505,31 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             throw new SunderWorkerProtocolException(
                 "Process worker returned a non-provider error after a provider-fault diagnostic.");
         }
+        if (kindText == "resource-exhausted"
+            && string.Equals(code, "rpc.worker.response-limit", StringComparison.Ordinal))
+        {
+            if (details is not null)
+            {
+                throw new SunderWorkerProtocolException(
+                    "Process worker returned details on a resource-exhausted error.");
+            }
+            return new SunderRpcException(new SunderRpcError(
+                SunderRpcErrorKind.ResourceExhausted,
+                code,
+                message,
+                SunderRpcDispatchState.PossiblyDispatched,
+                SunderRpcRetrySafety.Unsafe));
+        }
         if (kindText != "domain")
         {
             throw new SunderWorkerProtocolException(
                 $"Process worker attempted to return unauthenticated infrastructure error kind '{kindText}'.");
         }
-        return new SunderRpcException(new SunderRpcError(SunderRpcErrorKind.Domain, code, message));
+        return new SunderRpcException(new SunderRpcError(
+            SunderRpcErrorKind.Domain,
+            code,
+            message,
+            details: details));
     }
 
     private void BeginWorkerCall(string type, JsonElement root)
@@ -1579,6 +1660,21 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                         SunderRpcErrorKind.Validation,
                         PackageDataValidationCode(type),
                         "The package data request violates its declared storage contract.")),
+            });
+        }
+        catch (WorkerTransportResourceException)
+        {
+            TryQueueEnvelope(new
+            {
+                type = "host.error",
+                id = call.Id,
+                error = WorkerWire.Error(
+                    new SunderRpcError(
+                        SunderRpcErrorKind.ResourceExhausted,
+                        "rpc.worker.response-limit",
+                        "The RPC response exceeds the negotiated worker transport limits.",
+                        SunderRpcDispatchState.PossiblyDispatched,
+                        SunderRpcRetrySafety.Unsafe)),
             });
         }
         catch (SunderWorkerProtocolException exception)
@@ -1892,7 +1988,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     SunderWorkerProtocol.RequiredString(root, "filePath", 4096));
                 var options = ReadContentRegistrationOptions(
                     SunderWorkerProtocol.RequiredValue(root, "options"));
-                await using var source = OpenWorkerOwnedContentFile(filePath);
+                await using var source = OpenWorkerOwnedContentFileBounded(filePath);
                 if (scoped)
                 {
                     var scope = GetWorkerCallScope(ReadSafeId(root, "scopeId"));
@@ -2281,6 +2377,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         SunderRpcContentReference reference,
         CancellationToken cancellationToken)
     {
+        if (reference.Length > _transportLimits.MaximumContentReferenceBytes)
+        {
+            throw ContentReferenceResourceExhausted();
+        }
         var contentDirectory = PackageWorkspacePath.Resolve(
             _workerTemporaryPath,
             "rpc-content");
@@ -2438,6 +2538,14 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
     }
 
+    private FileStream OpenWorkerOwnedContentFileBounded(string filePath)
+    {
+        var stream = OpenWorkerOwnedContentFile(filePath);
+        if (stream.Length <= _transportLimits.MaximumContentReferenceBytes) return stream;
+        stream.Dispose();
+        throw ContentReferenceResourceExhausted();
+    }
+
     private static FileStream OpenWorkerOwnedContentFile(string filePath)
     {
         try
@@ -2457,7 +2565,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     128 * 1024,
                     FileOptions.Asynchronous | FileOptions.SequentialScan)
                 : OpenUnixWorkerOwnedContentFile(filePath);
-            if (stream.CanSeek) return stream;
+            var canSeek = stream.CanSeek;
+            if (canSeek) return stream;
             stream.Dispose();
             throw new SunderWorkerProtocolException(
                 "Process worker content path must identify a regular file.");
@@ -2511,7 +2620,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                && !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
     }
 
-    private static SunderRpcContentRegistrationOptions ReadContentRegistrationOptions(JsonElement value)
+    private SunderRpcContentRegistrationOptions ReadContentRegistrationOptions(JsonElement value)
     {
         SunderWorkerProtocol.RequireOnlyProperties(
             value,
@@ -2550,6 +2659,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             throw new SunderWorkerProtocolException(
                 "Process worker content registration maximumUses is invalid.");
         }
+        if (length > _transportLimits.MaximumContentReferenceBytes)
+        {
+            throw ContentReferenceResourceExhausted();
+        }
         return new SunderRpcContentRegistrationOptions(
             SunderWorkerProtocol.RequiredString(value, "mediaType", 128),
             SunderWorkerProtocol.RequiredString(value, "fileName", 255),
@@ -2559,7 +2672,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             (int)maximumUses);
     }
 
-    private static SunderRpcContentReference ReadContentReference(JsonElement value)
+    private SunderRpcContentReference ReadContentReference(JsonElement value)
     {
         SunderWorkerProtocol.RequireOnlyProperties(
             value,
@@ -2582,9 +2695,14 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             "repeatable" => SunderRpcContentRepeatability.Repeatable,
             _ => throw new SunderWorkerProtocolException("Process worker RPC content repeatability is invalid."),
         };
+        var length = SunderWorkerProtocol.RequiredNonNegativeInt64(value, "length");
+        if (length > _transportLimits.MaximumContentReferenceBytes)
+        {
+            throw ContentReferenceResourceExhausted();
+        }
         return new SunderRpcContentReference(
             id,
-            SunderWorkerProtocol.RequiredNonNegativeInt64(value, "length"),
+            length,
             hash,
             SunderWorkerProtocol.RequiredString(value, "mediaType", 128),
             SunderWorkerProtocol.RequiredString(value, "fileName", 255),
@@ -2718,6 +2836,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         {
             await foreach (var body in _writes!.Reader.ReadAllAsync(_forceStop.Token).ConfigureAwait(false))
             {
+                ReleaseWriteQueueBytes(body.Length);
                 await SunderWorkerProtocol.WriteFrameBodyAsync(stdin, body, _forceStop.Token).ConfigureAwait(false);
                 if (ReferenceEquals(body, Volatile.Read(ref _activationFrameBody)))
                 {
@@ -2736,6 +2855,13 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         catch (Exception exception)
         {
             if (!IsStopping()) Fault(new SunderWorkerProtocolException("Process worker protocol writer failed.", exception));
+        }
+        finally
+        {
+            if (_writes is not null)
+            {
+                while (_writes.Reader.TryRead(out var body)) ReleaseWriteQueueBytes(body.Length);
+            }
         }
     }
 
@@ -2789,13 +2915,54 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 
     private void QueueEnvelope(object envelope)
     {
-        var body = SunderWorkerProtocol.SerializeFrameBody(envelope, _policy);
-        var writes = _writes ?? throw new InvalidOperationException("Process worker protocol writer is unavailable.");
-        if (!writes.Writer.TryWrite(body))
+        var body = SunderWorkerProtocol.SerializeFrameBody(envelope, _transportLimits);
+        if (!TryQueueFrameBody(body))
         {
-            var exception = new SunderWorkerProtocolException("Process worker protocol write queue exceeded its bound.");
-            Fault(exception);
-            throw exception;
+            throw new WorkerTransportResourceException(
+                "Process worker protocol write queue exceeded its count or byte bound.");
+        }
+    }
+
+    private void QueueHostCallBody(byte[] body)
+    {
+        if (TryQueueFrameBody(body)) return;
+        throw new SunderRpcException(new SunderRpcError(
+            SunderRpcErrorKind.ResourceExhausted,
+            "rpc.worker.write-queue-limit",
+            "The process worker write queue is full.",
+            SunderRpcDispatchState.NotDispatched,
+            SunderRpcRetrySafety.Safe));
+    }
+
+    private bool TryQueueFrameBody(byte[] body)
+    {
+        var writes = _writes;
+        if (writes is null || !TryReserveWriteQueueBytes(body.Length)) return false;
+        if (writes.Writer.TryWrite(body)) return true;
+        ReleaseWriteQueueBytes(body.Length);
+        return false;
+    }
+
+    private bool TryReserveWriteQueueBytes(int bodyBytes)
+    {
+        lock (_writeQueueGate)
+        {
+            if (bodyBytes > _transportLimits.MaximumWriteQueueBytes - _queuedWriteBytes) return false;
+            _queuedWriteBytes += bodyBytes;
+            return true;
+        }
+    }
+
+    private void ReleaseWriteQueueBytes(int bodyBytes)
+    {
+        lock (_writeQueueGate)
+        {
+            _queuedWriteBytes -= bodyBytes;
+            if (_queuedWriteBytes < 0)
+            {
+                _queuedWriteBytes = 0;
+                throw new InvalidOperationException("Process worker write-queue byte accounting underflowed.");
+            }
         }
     }
 
@@ -2807,7 +2974,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
         catch (Exception exception)
         {
-            if (!IsStopping()) Fault(exception);
+            _ = ObserveAsync(Task.Run(() => Fault(exception)));
         }
     }
 
@@ -2870,7 +3037,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             call.Terminal = true;
             CleanupWorkerContentFiles(call);
             call.UnaryCompletion.TrySetException(exception);
-            call.Events.Writer.TryComplete(exception);
+            call.Events.Fail(exception);
         }
     }
 
@@ -2994,9 +3161,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 
     private static RuntimeProcessPolicyOptions ValidatePolicy(RuntimeProcessPolicyOptions policy)
     {
-        if (policy.MaxFrameBytes <= 0
-            || policy.MaxHeaderBytes <= 0
-            || policy.MaxMessageDepth <= 0
+        if (policy.MaxHeaderBytes <= 0
             || policy.MaxOutstandingHostCalls <= 0
             || policy.MaxOutstandingWorkerCalls <= 0
             || policy.MaxOutstandingWorkerLoggingCalls <= 0
@@ -3021,6 +3186,79 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
         return policy;
     }
+
+    private static RuntimeResourcePolicy ResolveEffectiveResourcePolicy(RuntimeProcessPolicyOptions policy)
+    {
+        if (policy.EffectiveResourcePolicy is not null) return policy.EffectiveResourcePolicy;
+        var launchPayload = Environment.GetEnvironmentVariable(
+            RuntimeResourcePolicyEnvironment.LaunchPayloadVariable);
+        if (string.IsNullOrWhiteSpace(launchPayload)) return RuntimeResourcePolicies.Standard;
+        try
+        {
+            return RuntimeResourcePolicyContract.ParseLaunchPayload(
+                Encoding.UTF8.GetBytes(launchPayload)).EffectivePolicy;
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new ProcessRuntimeWorkerException(
+                "The Runtime resource-policy launch payload is invalid.",
+                exception);
+        }
+    }
+
+    private static SunderRpcException HostRequestResourceExhausted(Exception? _ = null)
+        => new(new SunderRpcError(
+            SunderRpcErrorKind.ResourceExhausted,
+            "rpc.worker.request-limit",
+            "The RPC request exceeds the negotiated worker transport limits.",
+            SunderRpcDispatchState.NotDispatched,
+            SunderRpcRetrySafety.Safe));
+
+    private static SunderRpcException StreamQueueResourceExhausted(
+        HostCall call,
+        HostEventQueueRejection rejection)
+    {
+        var message = FormattableString.Invariant(
+            $"The process worker stream queue exceeded its count or byte bound. Local diagnostic: limit={FormatQueueLimit(rejection.Limit)}; queuedMessages={rejection.QueuedMessages}/{rejection.MaximumMessages}; queuedBytes={rejection.QueuedBytes}/{rejection.MaximumBytes}; incomingBytes={rejection.IncomingBytes}; provider={SanitizeQueueIdentity(call.ProviderId)}; service={SanitizeQueueIdentity(call.ServiceId)}; method={SanitizeQueueIdentity(call.MethodId)}.");
+        if (message.Length > 512) message = message[..512];
+        return SunderRpcException.Infrastructure(
+                SunderRpcErrorKind.ResourceExhausted,
+                "rpc.worker.stream-queue-limit",
+                message)
+            .WithDispatchMetadata(
+                SunderRpcDispatchState.PossiblyDispatched,
+                SunderRpcRetrySafety.Unsafe);
+    }
+
+    private static string FormatQueueLimit(HostEventQueueLimit limit)
+        => limit switch
+        {
+            HostEventQueueLimit.Count => "count",
+            HostEventQueueLimit.Bytes => "bytes",
+            HostEventQueueLimit.Count | HostEventQueueLimit.Bytes => "count+bytes",
+            _ => "unknown",
+        };
+
+    private static string SanitizeQueueIdentity(string value)
+    {
+        var characters = new char[Math.Min(value.Length, 64)];
+        for (var index = 0; index < characters.Length; index++)
+        {
+            var character = value[index];
+            characters[index] = char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_'
+                ? character
+                : '_';
+        }
+        return new string(characters);
+    }
+
+    private static SunderRpcException ContentReferenceResourceExhausted()
+        => new(new SunderRpcError(
+            SunderRpcErrorKind.ResourceExhausted,
+            "rpc.worker.content-reference-limit",
+            "The RPC content reference exceeds the negotiated worker byte limit.",
+            SunderRpcDispatchState.NotDispatched,
+            SunderRpcRetrySafety.Safe));
 
     private enum WorkerState
     {
@@ -3052,7 +3290,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         SunderRpcInvocationContext context,
         string providerId,
         string serviceId,
-        string methodId)
+        string methodId,
+        long streamQueueBytes)
     {
         public string Id { get; } = id;
         public HostCallKind Kind { get; } = kind;
@@ -3062,19 +3301,111 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         public string MethodId { get; } = methodId;
         public Dictionary<string, string> ContentFiles { get; } = new(StringComparer.Ordinal);
         public TaskCompletionSource<JsonElement> UnaryCompletion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Channel<JsonElement> Events { get; } = Channel.CreateBounded<JsonElement>(new BoundedChannelOptions(StreamBufferCapacity)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = true,
-            SingleWriter = true,
-            AllowSynchronousContinuations = false,
-        });
+        public BoundedHostEventQueue Events { get; } = new(StreamBufferCapacity, streamQueueBytes);
         public bool Cancelled { get; set; }
         public bool Terminal { get; set; }
+        public bool InvocationQueued { get; set; }
         public bool ProviderFaultDiagnosticPending { get; set; }
         public string? ProviderExceptionType { get; set; }
         public string? ProviderExceptionFingerprint { get; set; }
     }
+
+    private sealed class BoundedHostEventQueue
+    {
+        private readonly Channel<QueuedHostEvent> _channel;
+        private readonly int _maximumMessages;
+        private readonly long _maximumBytes;
+        private readonly object _gate = new();
+        private int _queuedMessages;
+        private long _queuedBytes;
+
+        public BoundedHostEventQueue(int maximumMessages, long maximumBytes)
+        {
+            _maximumMessages = maximumMessages;
+            _maximumBytes = maximumBytes;
+            _channel = Channel.CreateBounded<QueuedHostEvent>(new BoundedChannelOptions(maximumMessages)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = false,
+                SingleWriter = true,
+                AllowSynchronousContinuations = false,
+            });
+        }
+
+        public HostEventQueueRejection? TryWrite(JsonElement value, int bytes)
+        {
+            lock (_gate)
+            {
+                var exceededLimit = HostEventQueueLimit.None;
+                if (_queuedMessages >= _maximumMessages) exceededLimit |= HostEventQueueLimit.Count;
+                if (bytes > _maximumBytes - _queuedBytes) exceededLimit |= HostEventQueueLimit.Bytes;
+                if (exceededLimit != HostEventQueueLimit.None)
+                {
+                    return new HostEventQueueRejection(
+                        exceededLimit,
+                        _queuedMessages,
+                        _queuedBytes,
+                        _maximumMessages,
+                        _maximumBytes,
+                        bytes);
+                }
+                _queuedMessages++;
+                _queuedBytes += bytes;
+            }
+            if (_channel.Writer.TryWrite(new QueuedHostEvent(value, bytes))) return null;
+            Release(bytes);
+            throw new InvalidOperationException("Host event queue rejected an admitted value.");
+        }
+
+        public async IAsyncEnumerable<JsonElement> ReadAllAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await foreach (var item in _channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                Release(item.Bytes);
+                yield return item.Value;
+            }
+        }
+
+        public void Complete() => _channel.Writer.TryComplete();
+
+        public void Fail(Exception exception)
+        {
+            _channel.Writer.TryComplete(exception);
+            while (_channel.Reader.TryRead(out var item)) Release(item.Bytes);
+        }
+
+        private void Release(int bytes)
+        {
+            lock (_gate)
+            {
+                _queuedMessages--;
+                _queuedBytes -= bytes;
+                if (_queuedMessages < 0 || _queuedBytes < 0)
+                {
+                    throw new InvalidOperationException("Host event-queue accounting underflowed.");
+                }
+            }
+        }
+
+        private sealed record QueuedHostEvent(JsonElement Value, int Bytes);
+    }
+
+    [Flags]
+    private enum HostEventQueueLimit
+    {
+        None = 0,
+        Count = 1,
+        Bytes = 2,
+    }
+
+    private readonly record struct HostEventQueueRejection(
+        HostEventQueueLimit Limit,
+        int QueuedMessages,
+        long QueuedBytes,
+        int MaximumMessages,
+        long MaximumBytes,
+        int IncomingBytes);
 
     private sealed class WorkerCallScope(string id, ISunderRpcCallScope scope)
     {
@@ -3148,6 +3479,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     }
 
     private sealed record MaterializedWorkerContent(string HandleId, string FilePath);
+
+    private sealed record SerializedHostInvocation(string Id, byte[] Body);
 
     private sealed record ProviderIdentity(
         string ProviderId,
@@ -3302,6 +3635,20 @@ internal static class WorkerWire
             SunderRpcErrorKind.ProviderFaulted => "provider-faulted",
             _ => "protocol",
         };
+        if (error.Details is { } details)
+        {
+            return new
+            {
+                kind,
+                error.Code,
+                error.Message,
+                dispatchState = error.DispatchState == SunderRpcDispatchState.NotDispatched
+                    ? "not-dispatched"
+                    : "possibly-dispatched",
+                retrySafety = error.RetrySafety == SunderRpcRetrySafety.Safe ? "safe" : "unsafe",
+                details,
+            };
+        }
         return new
         {
             kind,

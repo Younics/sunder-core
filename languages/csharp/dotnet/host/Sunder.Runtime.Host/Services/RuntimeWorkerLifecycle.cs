@@ -102,6 +102,77 @@ internal static class RuntimeWorkerLifecycle
         }
     }
 
+    public static async Task ProveStoppedAndDisposedAsync(
+        IRuntimePackageWorker worker,
+        string packageId,
+        ILogger logger,
+        TimeSpan timeout)
+    {
+        var cleanup = CompleteWorkerCleanupAsync(worker, packageId, logger, timeout);
+        try
+        {
+            await cleanup.WaitAsync(timeout + timeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException exception)
+        {
+            _ = ObserveAsync(cleanup, packageId, logger, "cleanup proof");
+            throw new RuntimeWorkerCleanupUnprovenException(
+                $"Worker cleanup for package '{packageId}' could not be proven within {(timeout + timeout).TotalSeconds:0.###} seconds.",
+                cleanup,
+                exception);
+        }
+        catch (Exception exception)
+        {
+            throw new RuntimeWorkerCleanupUnprovenException(
+                $"Worker cleanup for package '{packageId}' could not be proven.",
+                cleanup,
+                exception);
+        }
+    }
+
+    private static async Task CompleteWorkerCleanupAsync(
+        IRuntimePackageWorker worker,
+        string packageId,
+        ILogger logger,
+        TimeSpan timeout)
+    {
+        var stopTask = Task.Run(
+            () => worker.StopAsync(CancellationToken.None),
+            CancellationToken.None);
+        try
+        {
+            await stopTask.WaitAsync(timeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Worker stop for package {PackageId} exceeded its cleanup deadline; disposal will attempt to prove termination",
+                packageId);
+            _ = ObserveAsync(stopTask, packageId, logger, "stop");
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Worker stop for package {PackageId} failed; disposal will attempt to prove termination",
+                packageId);
+        }
+
+        await worker.DisposeAsync().ConfigureAwait(false);
+        var completion = worker.GenerationCompletion
+                         ?? throw new InvalidOperationException(
+                             $"Worker cleanup for package '{packageId}' returned no termination proof.");
+        try
+        {
+            await completion.ConfigureAwait(false);
+        }
+        catch
+        {
+            // A faulted or cancelled generation is still proof that execution terminated.
+        }
+    }
+
     private static async Task ObserveAsync(
         Task task,
         string packageId,
@@ -122,4 +193,12 @@ internal static class RuntimeWorkerLifecycle
         }
     }
 
+}
+
+internal sealed class RuntimeWorkerCleanupUnprovenException(
+    string message,
+    Task cleanupCompletion,
+    Exception innerException) : Exception(message, innerException)
+{
+    public Task CleanupCompletion { get; } = cleanupCompletion;
 }

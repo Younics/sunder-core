@@ -245,6 +245,17 @@ public sealed class RuntimeProtocolHttpIntegrationTests
         Assert.Contains(RuntimeProtocolFeatures.DevPackageOwnerLeasesV1, first.SupportedFeatures);
         Assert.Contains(RuntimeProtocolFeatures.SchemaFirstRpcV2, first.SupportedFeatures);
         Assert.Contains(RuntimeProtocolFeatures.RpcPermissionsV2, first.SupportedFeatures);
+        Assert.Contains(RuntimeProtocolFeatures.RuntimeResourcePolicyV1, first.SupportedFeatures);
+        Assert.Contains(RuntimeProtocolFeatures.PackageRuntimeRecoveryV1, first.SupportedFeatures);
+        Assert.Equal(
+            RuntimeResourcePolicyContract.GetEffectiveProfileHash(RuntimeResourcePolicies.Standard),
+            first.ResourceProfile?.EffectiveProfileHash);
+        Assert.Equal(
+            RuntimeResourcePolicies.Standard.MaximumRpcValueBytes,
+            first.ResourceProfile?.MaximumRpcValueBytes);
+        Assert.Equal(
+            RuntimeResourcePolicies.Standard.MaximumContentReferenceBytes,
+            first.ResourceProfile?.MaximumContentReferenceBytes);
         Assert.False(string.IsNullOrWhiteSpace(first.Product.ProductVersion));
     }
 

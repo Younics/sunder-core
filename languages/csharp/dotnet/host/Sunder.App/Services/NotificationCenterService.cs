@@ -208,7 +208,7 @@ public sealed class NotificationCenterService
             {
                 handler();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
             {
                 AppSessionLog.WriteError("Notification subscriber failed while handling notification state changes.", ex);
             }
@@ -229,7 +229,7 @@ public sealed class NotificationCenterService
             {
                 handler(notification);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
             {
                 AppSessionLog.WriteError("Notification subscriber failed while handling queued toast notification.", ex);
             }

@@ -18,7 +18,8 @@ internal static class RuntimeHostStartInfoFactory
         Uri runtimeUrl,
         string connectionInfoPath,
         bool managedSupervisor = false,
-        string? deploymentIdentity = null)
+        string? deploymentIdentity = null,
+        string? runtimeResourcePolicyFilePath = null)
     {
         var runtimeUrlText = runtimeUrl.ToString().TrimEnd('/');
         var isDotnetAssembly = string.Equals(Path.GetExtension(runtimeHostPath), ".dll", StringComparison.OrdinalIgnoreCase);
@@ -38,6 +39,17 @@ internal static class RuntimeHostStartInfoFactory
             }
         }
         startInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"] = connectionInfoPath;
+        if (managedSupervisor && !string.IsNullOrWhiteSpace(runtimeResourcePolicyFilePath))
+        {
+            if (!Path.IsPathFullyQualified(runtimeResourcePolicyFilePath))
+            {
+                throw new ArgumentException(
+                    "The Runtime resource policy file path must be absolute.",
+                    nameof(runtimeResourcePolicyFilePath));
+            }
+            startInfo.Environment[RuntimeResourcePolicyEnvironment.PolicyFilePathVariable] =
+                Path.GetFullPath(runtimeResourcePolicyFilePath);
+        }
 
         if (isDotnetAssembly)
         {

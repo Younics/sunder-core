@@ -22,6 +22,7 @@ public sealed class RuntimeHostProcessManager : IDisposable
     private readonly IDisposable? _ownedHostServiceManager;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly string _connectionInfoPath;
+    private readonly string _runtimeResourcePolicyFilePath;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _startupTimeout;
     private readonly Func<bool> _isRuntimeLeaseAvailable;
@@ -75,7 +76,8 @@ public sealed class RuntimeHostProcessManager : IDisposable
         Func<Uri, CancellationToken, Task<bool>>? tryEnsureSupervisedRuntimeStartedAsync = null,
         Func<bool>? isHostInstanceLockAvailable = null,
         IHostServiceManager? hostServiceManager = null,
-        Func<Uri, CancellationToken, Task<HostRuntimeStatus?>>? tryGetHostStatusAsync = null)
+        Func<Uri, CancellationToken, Task<HostRuntimeStatus?>>? tryGetHostStatusAsync = null,
+        string? runtimeResourcePolicyFilePath = null)
     {
         _startupOptions = startupOptions;
         _runtimeConnectionState = runtimeConnectionState ?? new RuntimeConnectionState(startupOptions.RuntimeUrl);
@@ -136,6 +138,9 @@ public sealed class RuntimeHostProcessManager : IDisposable
         }
         _delayAsync = delayAsync ?? Task.Delay;
         _connectionInfoPath = connectionInfoPath ?? HostConnectionInfoStore.GetDefaultPath();
+        _runtimeResourcePolicyFilePath = Path.GetFullPath(
+            runtimeResourcePolicyFilePath
+            ?? AppRuntimeResourcePolicySettingsService.GetDefaultSettingsFilePath());
         _timeProvider = timeProvider ?? TimeProvider.System;
         _startupTimeout = startupTimeout ?? DefaultStartupTimeout;
         _isRuntimeLeaseAvailable = isRuntimeLeaseAvailable ?? (() => RuntimeLocalState.IsLeaseAvailable());
@@ -392,7 +397,8 @@ public sealed class RuntimeHostProcessManager : IDisposable
                 runtimeUrl,
                 _connectionInfoPath,
                 managedSupervisor: launchingSupervisor,
-                deploymentIdentity: payload?.DeploymentIdentity), replaceExistingRuntime, cancellationToken).ConfigureAwait(false);
+                deploymentIdentity: payload?.DeploymentIdentity,
+                runtimeResourcePolicyFilePath: _runtimeResourcePolicyFilePath), replaceExistingRuntime, cancellationToken).ConfigureAwait(false);
             acceptedLaunchReceipt = launchReceipt;
             payloadLaunchAccepted = payload is not null;
             AppSessionLog.WriteInfo(
@@ -502,7 +508,8 @@ public sealed class RuntimeHostProcessManager : IDisposable
                         runtimeUrl,
                      _connectionInfoPath,
                      managedSupervisor: true,
-                     deploymentIdentity: previous.DeploymentIdentity),
+                     deploymentIdentity: previous.DeploymentIdentity,
+                     runtimeResourcePolicyFilePath: _runtimeResourcePolicyFilePath),
                  replaceExisting: true,
                  cancellationToken)
                 .ConfigureAwait(false);

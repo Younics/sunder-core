@@ -10,14 +10,18 @@ internal sealed class RuntimeEventStreamService
     private readonly object _stateGate = new();
     private readonly BoundedReplayFeed<RuntimeEventDescriptor> _feed = new(ReplayCapacity, SubscriberCapacity);
     private readonly Guid _runtimeInstanceId;
+    private readonly TimeProvider _timeProvider;
     private long _sessionGeneration;
     private RuntimeOperationPhase _operationPhase;
     private RuntimeBootstrapState _bootstrapState = RuntimeBootstrapState.Starting;
     private IReadOnlyList<string> _activePackageIds = [];
 
-    public RuntimeEventStreamService(RuntimeProtocolDescriptor? protocol = null)
+    public RuntimeEventStreamService(
+        RuntimeProtocolDescriptor? protocol = null,
+        TimeProvider? timeProvider = null)
     {
         _runtimeInstanceId = protocol?.RuntimeInstanceId ?? Guid.NewGuid();
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public Guid RuntimeInstanceId => _runtimeInstanceId;
@@ -102,6 +106,38 @@ internal sealed class RuntimeEventStreamService
                 _operationPhase,
                 _bootstrapState,
                 NormalizePackageIds(packageIds),
+                success,
+                NormalizeMessage(message)));
+        }
+    }
+
+    public RuntimeEventDescriptor? PublishPackageRecovery(
+        RuntimeEventKind kind,
+        long generation,
+        string packageId,
+        bool? success,
+        string message)
+    {
+        if (kind is not (RuntimeEventKind.PackageRecoveryStarted
+            or RuntimeEventKind.PackageRecoverySucceeded
+            or RuntimeEventKind.PackageRecoverySuspended))
+        {
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "The event kind is not a package recovery event.");
+        }
+
+        lock (_stateGate)
+        {
+            if (generation < _sessionGeneration)
+            {
+                return null;
+            }
+            return _feed.Publish(sequenceId => CreateEvent(
+                sequenceId,
+                kind,
+                generation,
+                _operationPhase,
+                _bootstrapState,
+                NormalizePackageIds([packageId]),
                 success,
                 NormalizeMessage(message)));
         }
@@ -201,7 +237,7 @@ internal sealed class RuntimeEventStreamService
         => new(
             _runtimeInstanceId,
             sequenceId,
-            DateTimeOffset.UtcNow,
+            _timeProvider.GetUtcNow(),
             kind,
             generation,
             phase,

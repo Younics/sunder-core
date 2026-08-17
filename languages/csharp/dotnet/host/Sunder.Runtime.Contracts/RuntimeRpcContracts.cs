@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Sunder.Runtime.Contracts;
 
@@ -224,12 +225,46 @@ public enum RuntimeRpcRetrySafety
     Unsafe,
 }
 
-public sealed record RuntimeRpcErrorDescriptor(
-    RuntimeRpcErrorKind Kind,
-    string Code,
-    string Message,
-    RuntimeRpcDispatchState DispatchState = RuntimeRpcDispatchState.NotDispatched,
-    RuntimeRpcRetrySafety RetrySafety = RuntimeRpcRetrySafety.Safe);
+public sealed record RuntimeRpcErrorDescriptor
+{
+    [JsonConstructor]
+    public RuntimeRpcErrorDescriptor(
+        RuntimeRpcErrorKind kind,
+        string code,
+        string message,
+        RuntimeRpcDispatchState dispatchState = RuntimeRpcDispatchState.NotDispatched,
+        RuntimeRpcRetrySafety retrySafety = RuntimeRpcRetrySafety.Safe,
+        JsonElement? details = null)
+    {
+        if (details is { } detail)
+        {
+            if (kind != RuntimeRpcErrorKind.Domain)
+            {
+                throw new ArgumentException("Only domain RPC errors may carry details.", nameof(details));
+            }
+            if (detail.ValueKind == JsonValueKind.Undefined)
+            {
+                throw new ArgumentException("RPC error details must be a defined JSON value.", nameof(details));
+            }
+        }
+
+        Kind = kind;
+        Code = code;
+        Message = message;
+        DispatchState = dispatchState;
+        RetrySafety = retrySafety;
+        Details = details is { } value ? value.Clone() : null;
+    }
+
+    public RuntimeRpcErrorKind Kind { get; }
+    public string Code { get; }
+    public string Message { get; }
+    public RuntimeRpcDispatchState DispatchState { get; }
+    public RuntimeRpcRetrySafety RetrySafety { get; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonElement? Details { get; }
+}
 
 public sealed record RuntimeRpcAppDiscoverResponse(
     RuntimeRpcCatalogSnapshot? Snapshot,

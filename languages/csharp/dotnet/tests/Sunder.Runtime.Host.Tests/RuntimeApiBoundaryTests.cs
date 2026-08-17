@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.LocalState;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -20,8 +21,20 @@ public sealed class RuntimeApiBoundaryTests
             RuntimeProtocol.MinimumSupportedRevision,
             RuntimeProtocol.MaximumSupportedRevision,
             Guid.Parse("11111111-1111-1111-1111-111111111111"),
-            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.SchemaFirstRpcV2],
-            new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "1.2.3", "1.2.3+test"));
+            [
+                RuntimeProtocolFeatures.VersionedApiV1,
+                RuntimeProtocolFeatures.SchemaFirstRpcV2,
+                RuntimeProtocolFeatures.RuntimeResourcePolicyV1,
+            ],
+            new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "1.2.3", "1.2.3+test"),
+            new RuntimeResourceProfileDescriptor(
+                RuntimeResourcePolicyContract.GetEffectiveProfileHash(RuntimeResourcePolicies.Standard),
+                8 * 1024 * 1024,
+                64,
+                524_288,
+                4_096,
+                512 * 1024,
+                64 * 1024 * 1024));
         var actual = JsonSerializer.SerializeToNode(handshake, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "RuntimeProtocolContracts.golden.json");
         var expected = JsonNode.Parse(File.ReadAllText(fixturePath));

@@ -218,7 +218,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             RebuildRailCollectionsForLifecycle,
             PersistShellState,
             RemoveRetainedPackageViews,
-            RefreshPackageMetadata
+            RefreshPackageMetadata,
+            packageViewHostService.IsPackageAppUiQuarantined
         );
         _packageLifecycleRefreshCoordinator = new ShellPackageLifecycleRefreshCoordinator(
             effectivePackageLifecycleCoordinator,
@@ -1530,34 +1531,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
-        SuspendPackageViewPreloading();
-        try
-        {
-            var affectedPlacements = _viewsById
-                .Values.Where(view =>
-                    string.Equals(view.PackageId, e.PackageId, StringComparison.OrdinalIgnoreCase)
-                )
-                .Select(view => view.Placement)
-                .ToHashSet();
-            RemoveRetainedPackageViews(
-                new HashSet<string>([e.PackageId], StringComparer.OrdinalIgnoreCase)
-            );
-            if (!_packageLifecyclePresenter.RemovePackageViewsFromShell(e.PackageId))
-            {
-                return;
-            }
-
-            UpdateRailCollections(
-                affectedPlacements,
-                new HashSet<string>([e.PackageId], StringComparer.OrdinalIgnoreCase),
-                createHostedViews: true
-            );
-            PersistShellState();
-        }
-        finally
-        {
-            ResumePackageViewPreloading();
-        }
+        // Quarantine is temporary App-host state. Boundaries already show a host fallback;
+        // retaining the projection avoids persisting the fault as an uninstall/layout change.
     }
 
     private readonly record struct ViewPresentationRequest(

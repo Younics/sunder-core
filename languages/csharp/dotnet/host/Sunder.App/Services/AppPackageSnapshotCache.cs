@@ -181,7 +181,7 @@ internal sealed class AppPackageSnapshotCache
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (AppPackageUiFaultPolicy.IsRecoverable(exception))
         {
             AppSessionLog.WriteError(
                 "Failed to clean the App package content cache.",
@@ -352,7 +352,7 @@ internal sealed class AppPackageSnapshotCache
             Directory.CreateDirectory(_quarantineRoot);
             Directory.Move(objectPath, Path.Combine(_quarantineRoot, $"{Path.GetFileName(objectPath)}-{Guid.NewGuid():N}"));
         }
-        catch (Exception exception)
+        catch (Exception exception) when (AppPackageUiFaultPolicy.IsRecoverable(exception))
         {
             AppSessionLog.WriteError("Failed to quarantine a corrupt package content cache object.", exception, visibleInDeveloperLog: false);
         }

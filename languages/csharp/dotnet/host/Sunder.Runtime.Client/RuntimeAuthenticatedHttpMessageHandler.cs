@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net;
+using System.Text.Json;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Client;
@@ -10,9 +11,12 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         new("Sunder.Runtime.RequiredFeatures");
     internal static readonly HttpRequestOptionsKey<bool> SkipProtocolNegotiationKey =
         new("Sunder.Runtime.SkipProtocolNegotiation");
+    internal static readonly HttpRequestOptionsKey<JsonElement> RpcValueKey =
+        new("Sunder.Runtime.RpcValue");
     private readonly Func<RuntimeConnectionInfo?> _getConnection;
     private readonly RuntimeClientPolicyOptions _policy;
     private readonly RuntimeProtocolNegotiationCache _negotiations;
+    private readonly RuntimeClientResourceProfileStore _resourceProfiles;
     private readonly bool _ownsNegotiations;
 
     public RuntimeAuthenticatedHttpMessageHandler(
@@ -24,6 +28,7 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
             innerHandler,
             policy ?? new RuntimeClientPolicyOptions(),
             new RuntimeProtocolNegotiationCache(),
+            new RuntimeClientResourceProfileStore(),
             ownsNegotiations: true)
     {
     }
@@ -32,8 +37,15 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         Func<RuntimeConnectionInfo?> getConnection,
         HttpMessageHandler? innerHandler,
         RuntimeClientPolicyOptions policy,
-        RuntimeProtocolNegotiationCache negotiations)
-        : this(getConnection, innerHandler, policy, negotiations, ownsNegotiations: false)
+        RuntimeProtocolNegotiationCache negotiations,
+        RuntimeClientResourceProfileStore resourceProfiles)
+        : this(
+            getConnection,
+            innerHandler,
+            policy,
+            negotiations,
+            resourceProfiles,
+            ownsNegotiations: false)
     {
     }
 
@@ -42,12 +54,14 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         HttpMessageHandler? innerHandler,
         RuntimeClientPolicyOptions policy,
         RuntimeProtocolNegotiationCache negotiations,
+        RuntimeClientResourceProfileStore resourceProfiles,
         bool ownsNegotiations)
         : base(innerHandler ?? new HttpClientHandler())
     {
         _getConnection = getConnection ?? throw new ArgumentNullException(nameof(getConnection));
         _policy = policy;
         _negotiations = negotiations;
+        _resourceProfiles = resourceProfiles;
         _ownsNegotiations = ownsNegotiations;
     }
 
@@ -78,6 +92,12 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         deadline.CancelAfter(timeout);
         try
         {
+            var limits = new RuntimeClientResourceLimits(_resourceProfiles.Get(connection));
+            if (request.Options.TryGetValue(RpcValueKey, out var rpcValue))
+            {
+                limits.EnsureRpcValue(rpcValue, "Runtime RPC request value");
+            }
+            await PreflightJsonContentAsync(request, limits, deadline.Token).ConfigureAwait(false);
             var response = await base.SendAsync(request, deadline.Token).ConfigureAwait(false);
             response.Content = new DeadlineHttpContent(response.Content, deadline);
             return response;
@@ -100,13 +120,22 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
     {
         var connection = _getConnection()
             ?? throw new InvalidOperationException("Authenticated Runtime connection information is not available.");
-        return await _negotiations.RefreshAsync(
-            connection,
-            negotiationToken => RequestHandshakeAsync(
+        _resourceProfiles.Remove(connection);
+        try
+        {
+            return await _negotiations.RefreshAsync(
                 connection,
-                requireCompatibility: true,
-                negotiationToken),
-            cancellationToken).ConfigureAwait(false);
+                negotiationToken => RequestHandshakeAsync(
+                    connection,
+                    requireCompatibility: true,
+                    negotiationToken),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            _resourceProfiles.Remove(connection);
+            throw;
+        }
     }
 
     internal Task<RuntimeHandshakeResponse> ProbeHandshakeAsync(CancellationToken cancellationToken = default)
@@ -134,6 +163,10 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         bool requireCompatibility,
         CancellationToken cancellationToken)
     {
+        if (requireCompatibility)
+        {
+            _resourceProfiles.Remove(connection);
+        }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_policy.RequestTimeout);
         using var request = new HttpRequestMessage(
@@ -141,16 +174,107 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
             new Uri(RuntimeConnectionInfo.Normalize(connection.RuntimeUrl), "api/handshake"));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", connection.BearerToken);
         using var response = await base.SendAsync(request, timeout.Token).ConfigureAwait(false);
-        var handshakePolicy = _policy with { MaxJsonResponseBytes = _policy.MaxHandshakeResponseBytes };
-        var handshake = await new RuntimeHttpResponseReader(handshakePolicy)
-            .ReadRequiredJsonAsync<RuntimeHandshakeResponse>(response, timeout.Token)
+        var reader = new RuntimeHttpResponseReader(_policy);
+        var payload = await reader.ReadRequiredPayloadAsync(
+                response,
+                _policy.MaxHandshakeResponseBytes,
+                timeout.Token)
             .ConfigureAwait(false);
+        var handshake = payload.Length == 0
+            ? null
+            : JsonSerializer.Deserialize<RuntimeHandshakeResponse>(
+                payload,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web) { MaxDepth = 16 });
+        if (handshake is null)
+        {
+            throw new RuntimeProtocolException("Runtime did not return a handshake.");
+        }
         if (requireCompatibility
             && RuntimeProtocolCompatibility.GetIncompatibility(handshake) is { } incompatibility)
         {
             throw new RuntimeProtocolException(incompatibility);
         }
+        if (requireCompatibility)
+        {
+            try
+            {
+                _resourceProfiles.Set(
+                    connection,
+                    RuntimeClientResourceProfileParser.Parse(handshake, payload));
+            }
+            catch (InvalidDataException exception)
+            {
+                _resourceProfiles.Remove(connection);
+                throw new RuntimeProtocolException(exception.Message);
+            }
+        }
         return handshake;
+    }
+
+    private async Task PreflightJsonContentAsync(
+        HttpRequestMessage request,
+        RuntimeClientResourceLimits limits,
+        CancellationToken cancellationToken)
+    {
+        var content = request.Content;
+        var mediaType = content?.Headers.ContentType?.MediaType;
+        if (content is null
+            || mediaType is null
+            || (!mediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+                && !mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+        var charset = content.Headers.ContentType?.CharSet;
+        if (!string.IsNullOrWhiteSpace(charset)
+            && !charset.Equals("utf-8", StringComparison.OrdinalIgnoreCase)
+            && !charset.Equals("utf8", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("Runtime JSON requests must use UTF-8.");
+        }
+
+        var maximumBytes = Math.Min(_policy.MaxJsonRequestBytes, limits.MaximumJsonEnvelopeBytes);
+        if (content.Headers.ContentLength is { } declaredLength && declaredLength > maximumBytes)
+        {
+            throw new InvalidDataException(
+                $"Runtime request payload exceeds the {maximumBytes} byte limit.");
+        }
+
+        var destination = new BoundedWriteStream(maximumBytes);
+        try
+        {
+            await content.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+        }
+        catch (BoundedWriteLimitException)
+        {
+            throw new InvalidDataException(
+                $"Runtime request payload exceeds the {maximumBytes} byte limit.");
+        }
+
+        var bytes = destination.ToArray();
+        try
+        {
+            using var _ = JsonDocument.Parse(bytes, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = limits.MaximumJsonEnvelopeDepth,
+            });
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException(
+                "Runtime request payload is not valid bounded UTF-8 JSON.",
+                exception);
+        }
+
+        var replacement = new ByteArrayContent(bytes);
+        foreach (var header in content.Headers)
+        {
+            replacement.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+        request.Content = replacement;
+        content.Dispose();
     }
 
     private static bool IsVersionedRequest(RuntimeConnectionInfo connection, Uri requestUri)
@@ -162,6 +286,65 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
     private static bool IsStreamRequest(HttpRequestMessage request)
         => request.Headers.Accept.Any(value => string.Equals(value.MediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase))
            || request.RequestUri?.AbsolutePath.Contains("/streams/", StringComparison.Ordinal) == true;
+
+    private sealed class BoundedWriteStream(long maximumBytes) : Stream
+    {
+        private readonly MemoryStream _inner = new();
+
+        public byte[] ToArray() => _inner.ToArray();
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _inner.Length;
+        public override long Position { get => _inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => Write(buffer.AsSpan(offset, count));
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            EnsureCapacity(buffer.Length);
+            _inner.Write(buffer);
+        }
+
+        public override Task WriteAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Write(buffer, offset, count);
+            return Task.CompletedTask;
+        }
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Write(buffer.Span);
+            return ValueTask.CompletedTask;
+        }
+
+        private void EnsureCapacity(int count)
+        {
+            if (_inner.Length + count > maximumBytes)
+            {
+                throw new BoundedWriteLimitException();
+            }
+        }
+    }
+
+    private sealed class BoundedWriteLimitException : Exception
+    {
+    }
 
     protected override void Dispose(bool disposing)
     {
@@ -356,9 +539,4 @@ internal sealed class RuntimeProtocolNegotiationCache : IDisposable
 
     public void Dispose() => _gate.Dispose();
 
-    private readonly record struct RuntimeConnectionIdentity(string RuntimeUrl, string BearerToken)
-    {
-        public static RuntimeConnectionIdentity Create(RuntimeConnectionInfo connection)
-            => new(RuntimeConnectionInfo.Normalize(connection.RuntimeUrl).AbsoluteUri, connection.BearerToken);
-    }
 }

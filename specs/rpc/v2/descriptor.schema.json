@@ -2,11 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sunder.dev/specs/rpc/v2/descriptor.schema.json",
   "title": "Sunder RPC V2 contract descriptor",
-  "description": "Structural schema for descriptorVersion 2. README.md contains additional lexical, graph, uniqueness, ordering, union, and hashing requirements.",
+  "description": "Structural schema for descriptorVersion 2 and sunder.rpc.values.v1. README.md defines additional lexical, graph, format, ordering, and hashing requirements.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "descriptorVersion",
+    "schemaProfile",
     "contractId",
     "version",
     "errors",
@@ -19,6 +20,9 @@
     },
     "descriptorVersion": {
       "const": 2
+    },
+    "schemaProfile": {
+      "const": "sunder.rpc.values.v1"
     },
     "contractId": {
       "$ref": "#/$defs/contractId"
@@ -82,6 +86,11 @@
       "minimum": 0,
       "maximum": 1000000
     },
+    "positiveCollectionBound": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
     "propertyBound": {
       "type": "integer",
       "minimum": 0,
@@ -99,6 +108,9 @@
       "properties": {
         "description": {
           "$ref": "#/$defs/annotation"
+        },
+        "detailsSchema": {
+          "$ref": "#/$defs/referenceSchema"
         }
       }
     },
@@ -174,7 +186,6 @@
       "allOf": [
         {
           "if": {
-            "type": "object",
             "required": ["kind"],
             "properties": {
               "kind": {
@@ -183,17 +194,14 @@
             }
           },
           "then": {
-            "type": "object",
             "required": ["responseSchema"],
             "properties": {
-              "responseSchema": true,
               "eventSchema": false
             }
           }
         },
         {
           "if": {
-            "type": "object",
             "required": ["kind"],
             "properties": {
               "kind": {
@@ -202,11 +210,9 @@
             }
           },
           "then": {
-            "type": "object",
             "required": ["eventSchema"],
             "properties": {
-              "responseSchema": false,
-              "eventSchema": true
+              "responseSchema": false
             }
           }
         }
@@ -232,6 +238,12 @@
           "$ref": "#/$defs/unionSchema"
         },
         {
+          "$ref": "#/$defs/unconstrainedSchema"
+        },
+        {
+          "$ref": "#/$defs/dynamicObjectSchema"
+        },
+        {
           "$ref": "#/$defs/recordSchema"
         },
         {
@@ -244,22 +256,28 @@
           "$ref": "#/$defs/stringSchema"
         },
         {
+          "$ref": "#/$defs/standardFormatSchema"
+        },
+        {
+          "$ref": "#/$defs/bigIntegerSchema"
+        },
+        {
+          "$ref": "#/$defs/decimalSchema"
+        },
+        {
+          "$ref": "#/$defs/base64Schema"
+        },
+        {
           "$ref": "#/$defs/integerSchema"
         },
         {
-          "$ref": "#/$defs/numberSchema"
+          "$ref": "#/$defs/floatingPointSchema"
         },
         {
           "$ref": "#/$defs/booleanSchema"
         },
         {
           "$ref": "#/$defs/nullSchema"
-        },
-        {
-          "$ref": "#/$defs/uuidSchema"
-        },
-        {
-          "$ref": "#/$defs/utcDateTimeSchema"
         },
         {
           "$ref": "#/$defs/contentReferenceSchema"
@@ -288,6 +306,37 @@
           "items": {
             "$ref": "#/$defs/schema"
           }
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    },
+    "unconstrainedSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    },
+    "dynamicObjectSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "const": "object"
+        },
+        "maxProperties": {
+          "$ref": "#/$defs/collectionBound"
         },
         "title": {
           "$ref": "#/$defs/annotation"
@@ -450,39 +499,160 @@
         }
       },
       "not": {
-        "type": "object",
-        "required": ["enum", "const"],
-        "properties": {
-          "enum": true,
-          "const": true
+        "required": ["enum", "const"]
+      }
+    },
+    "standardFormatSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "format"],
+      "properties": {
+        "type": {
+          "const": "string"
+        },
+        "format": {
+          "enum": ["uuid", "date", "date-time", "duration", "uri"]
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    },
+    "canonicalBigInteger": {
+      "type": "string",
+      "pattern": "^(?:0|-?[1-9][0-9]*)$"
+    },
+    "canonicalDecimal": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*(?:\\.[0-9]*[1-9])?|0\\.[0-9]*[1-9]|-(?:[1-9][0-9]*(?:\\.[0-9]*[1-9])?|0\\.[0-9]*[1-9]))$"
+    },
+    "bigIntegerSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "format", "maxDigits"],
+      "properties": {
+        "type": {
+          "const": "string"
+        },
+        "format": {
+          "const": "big-integer"
+        },
+        "maxDigits": {
+          "$ref": "#/$defs/positiveCollectionBound"
+        },
+        "valueMinimum": {
+          "$ref": "#/$defs/canonicalBigInteger"
+        },
+        "valueExclusiveMinimum": {
+          "$ref": "#/$defs/canonicalBigInteger"
+        },
+        "valueMaximum": {
+          "$ref": "#/$defs/canonicalBigInteger"
+        },
+        "valueExclusiveMaximum": {
+          "$ref": "#/$defs/canonicalBigInteger"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": ["valueMinimum", "valueExclusiveMinimum"]
+          }
+        },
+        {
+          "not": {
+            "required": ["valueMaximum", "valueExclusiveMaximum"]
+          }
+        }
+      ]
+    },
+    "decimalSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "format", "maxPrecision", "maxScale"],
+      "properties": {
+        "type": {
+          "const": "string"
+        },
+        "format": {
+          "const": "decimal"
+        },
+        "maxPrecision": {
+          "$ref": "#/$defs/positiveCollectionBound"
+        },
+        "maxScale": {
+          "$ref": "#/$defs/collectionBound"
+        },
+        "valueMinimum": {
+          "$ref": "#/$defs/canonicalDecimal"
+        },
+        "valueExclusiveMinimum": {
+          "$ref": "#/$defs/canonicalDecimal"
+        },
+        "valueMaximum": {
+          "$ref": "#/$defs/canonicalDecimal"
+        },
+        "valueExclusiveMaximum": {
+          "$ref": "#/$defs/canonicalDecimal"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": ["valueMinimum", "valueExclusiveMinimum"]
+          }
+        },
+        {
+          "not": {
+            "required": ["valueMaximum", "valueExclusiveMaximum"]
+          }
+        }
+      ]
+    },
+    "base64Schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "contentEncoding", "maxDecodedBytes"],
+      "properties": {
+        "type": {
+          "const": "string"
+        },
+        "contentEncoding": {
+          "const": "base64"
+        },
+        "maxDecodedBytes": {
+          "$ref": "#/$defs/collectionBound"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
         }
       }
     },
     "integerSchema": {
       "type": "object",
-      "$ref": "#/$defs/numericSchemaBase",
-      "properties": {
-        "type": {
-          "const": "integer"
-        }
-      }
-    },
-    "numberSchema": {
-      "type": "object",
-      "$ref": "#/$defs/numericSchemaBase",
-      "properties": {
-        "type": {
-          "const": "number"
-        }
-      }
-    },
-    "numericSchemaBase": {
-      "type": "object",
       "additionalProperties": false,
       "required": ["type"],
       "properties": {
         "type": {
-          "enum": ["integer", "number"]
+          "const": "integer"
         },
         "minimum": {
           "$ref": "#/$defs/safeInteger"
@@ -517,49 +687,78 @@
       },
       "allOf": [
         {
-          "oneOf": [
-            {
-              "type": "object",
-              "required": ["minimum"],
-              "properties": {
-                "minimum": true
-              }
-            },
-            {
-              "type": "object",
-              "required": ["exclusiveMinimum"],
-              "properties": {
-                "exclusiveMinimum": true
-              }
-            }
-          ]
-        },
-        {
-          "oneOf": [
-            {
-              "type": "object",
-              "required": ["maximum"],
-              "properties": {
-                "maximum": true
-              }
-            },
-            {
-              "type": "object",
-              "required": ["exclusiveMaximum"],
-              "properties": {
-                "exclusiveMaximum": true
-              }
-            }
-          ]
+          "not": {
+            "required": ["minimum", "exclusiveMinimum"]
+          }
         },
         {
           "not": {
-            "type": "object",
-            "required": ["enum", "const"],
-            "properties": {
-              "enum": true,
-              "const": true
-            }
+            "required": ["maximum", "exclusiveMaximum"]
+          }
+        },
+        {
+          "not": {
+            "required": ["enum", "const"]
+          }
+        }
+      ]
+    },
+    "floatingPointSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "format"],
+      "properties": {
+        "type": {
+          "const": "number"
+        },
+        "format": {
+          "enum": ["float32", "float64"]
+        },
+        "minimum": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "exclusiveMinimum": {
+          "type": "number"
+        },
+        "exclusiveMaximum": {
+          "type": "number"
+        },
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "number"
+          }
+        },
+        "const": {
+          "type": "number"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": ["minimum", "exclusiveMinimum"]
+          }
+        },
+        {
+          "not": {
+            "required": ["maximum", "exclusiveMaximum"]
+          }
+        },
+        {
+          "not": {
+            "required": ["enum", "const"]
           }
         }
       ]
@@ -592,12 +791,7 @@
         }
       },
       "not": {
-        "type": "object",
-        "required": ["enum", "const"],
-        "properties": {
-          "enum": true,
-          "const": true
-        }
+        "required": ["enum", "const"]
       }
     },
     "nullSchema": {
@@ -628,50 +822,7 @@
         }
       },
       "not": {
-        "type": "object",
-        "required": ["enum", "const"],
-        "properties": {
-          "enum": true,
-          "const": true
-        }
-      }
-    },
-    "uuidSchema": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "logicalType"],
-      "properties": {
-        "type": {
-          "const": "string"
-        },
-        "logicalType": {
-          "const": "uuid"
-        },
-        "title": {
-          "$ref": "#/$defs/annotation"
-        },
-        "description": {
-          "$ref": "#/$defs/annotation"
-        }
-      }
-    },
-    "utcDateTimeSchema": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "logicalType"],
-      "properties": {
-        "type": {
-          "const": "string"
-        },
-        "logicalType": {
-          "const": "utc-date-time"
-        },
-        "title": {
-          "$ref": "#/$defs/annotation"
-        },
-        "description": {
-          "$ref": "#/$defs/annotation"
-        }
+        "required": ["enum", "const"]
       }
     },
     "contentReferenceSchema": {

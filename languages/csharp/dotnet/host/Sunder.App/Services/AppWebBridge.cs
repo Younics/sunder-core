@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Sunder.Package.Format;
+using Sunder.Runtime.Client;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.App.Services;
@@ -11,18 +12,15 @@ internal sealed class AppWebBridge : IAsyncDisposable
 {
     internal const string Protocol = "sunder.bridge.v2";
     internal const int ProtocolVersion = 2;
-    internal const int MaxMessageBytes = 1024 * 1024;
-    internal const int MaxMessageDepth = 32;
-    internal const int MaxPendingRequests = 64;
     private const int MaxRememberedRequestIds = 2048;
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromMinutes(10);
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly IAppWebView _webView;
     private readonly AppWebContentServer _contentServer;
     private readonly IAppWebRpcClient _rpc;
     private readonly AppWebRpcContractCatalog _contracts;
     private readonly ExternalBrowserService _externalBrowser;
     private readonly Action<Uri> _navigate;
+    private readonly RuntimeClientResourceLimits _limits;
+    private readonly JsonSerializerOptions _boundedJsonOptions;
     private readonly object _gate = new();
     private readonly Dictionary<string, PendingRequest> _pending = new(StringComparer.Ordinal);
     private readonly HashSet<string> _rememberedIds = new(StringComparer.Ordinal);
@@ -43,7 +41,8 @@ internal sealed class AppWebBridge : IAsyncDisposable
         IAppWebRpcClient rpc,
         AppWebRpcContractCatalog contracts,
         ExternalBrowserService externalBrowser,
-        Action<Uri> navigate)
+        Action<Uri> navigate,
+        RuntimeClientResourceLimits? resourceLimits = null)
     {
         _webView = webView;
         _contentServer = contentServer;
@@ -51,6 +50,11 @@ internal sealed class AppWebBridge : IAsyncDisposable
         _contracts = contracts;
         _externalBrowser = externalBrowser;
         _navigate = navigate;
+        _limits = resourceLimits ?? rpc.ResourceLimits;
+        _boundedJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            MaxDepth = _limits.MaximumJsonEnvelopeDepth,
+        };
         _origin = contentServer.Origin.GetLeftPart(UriPartial.Authority);
     }
 
@@ -125,9 +129,20 @@ internal sealed class AppWebBridge : IAsyncDisposable
 
     public async Task HandleMessageAsync(string? body, CancellationToken cancellationToken = default)
     {
-        if (body is null || Encoding.UTF8.GetByteCount(body) > MaxMessageBytes)
+        var recoveredRequestId = body is null ? null : TryRecoverRequestId(body);
+        if (body is null)
         {
-            RejectProtocol("The browser bridge message exceeds its size limit.");
+            RejectProtocol("The browser bridge message is empty.");
+            return;
+        }
+        if (Encoding.UTF8.GetByteCount(body) > _limits.MaximumJsonEnvelopeBytes)
+        {
+            await RejectRecoveredAsync(
+                recoveredRequestId,
+                ResourceLimit(
+                    "rpc.bridge.request-envelope-limit",
+                    "The browser bridge request exceeds its negotiated envelope size limit."))
+                .ConfigureAwait(false);
             return;
         }
 
@@ -136,31 +151,55 @@ internal sealed class AppWebBridge : IAsyncDisposable
         {
             document = JsonDocument.Parse(body, new JsonDocumentOptions
             {
-                MaxDepth = MaxMessageDepth,
+                MaxDepth = _limits.MaximumJsonEnvelopeDepth,
                 CommentHandling = JsonCommentHandling.Disallow,
                 AllowTrailingCommas = false,
             });
         }
         catch (JsonException)
         {
-            RejectProtocol("The browser bridge message is invalid JSON.");
+            await RejectRecoveredAsync(
+                    recoveredRequestId,
+                    ResourceLimit(
+                        "rpc.bridge.request-depth-or-json",
+                        "The browser bridge request is invalid or exceeds its negotiated depth limit."))
+                .ConfigureAwait(false);
             return;
         }
         using (document)
         {
+            recoveredRequestId = TryReadSafeRequestId(document.RootElement, out var safeRequestId)
+                ? safeRequestId
+                : null;
             if (!TryReadRequest(document.RootElement, out var request, out var error))
             {
-                RejectProtocol(error);
+                await RejectRecoveredAsync(
+                        recoveredRequestId,
+                        new SunderRpcError(
+                            SunderRpcErrorKind.Protocol,
+                            "rpc.bridge.request-envelope",
+                            "The browser bridge request envelope is invalid."),
+                        error)
+                    .ConfigureAwait(false);
                 return;
             }
 
             if (request.Method == "bridge.cancel")
             {
-                CancelRequest(request);
+                try
+                {
+                    CancelRequest(request);
+                }
+                catch (SunderRpcException exception)
+                {
+                    await RejectRecoveredAsync(request.RequestId, Sanitize(exception.Error)).ConfigureAwait(false);
+                }
                 return;
             }
 
-            PendingRequest pending;
+            PendingRequest? pending = null;
+            SunderRpcError? immediateError = null;
+            string? protocolRejection = null;
             lock (_gate)
             {
                 if (!_trustedNavigation
@@ -168,47 +207,54 @@ internal sealed class AppWebBridge : IAsyncDisposable
                     || !string.Equals(request.Nonce, _nonce, StringComparison.Ordinal)
                     || !string.Equals(request.Origin, _origin, StringComparison.Ordinal))
                 {
-                    RejectProtocol("The browser bridge origin or nonce is invalid.");
-                    return;
+                    protocolRejection = "The browser bridge origin or nonce is invalid.";
+                    immediateError = new SunderRpcError(
+                        SunderRpcErrorKind.Protocol,
+                        "rpc.bridge.authentication",
+                        "The browser bridge origin or nonce is invalid.");
                 }
-                if (!_rememberedIds.Add(request.RequestId))
+                else if (!_rememberedIds.Add(request.RequestId))
                 {
-                    RejectProtocol($"The browser bridge reused request id '{request.RequestId}'.");
-                    return;
+                    protocolRejection = $"The browser bridge reused request id '{request.RequestId}'.";
+                    immediateError = new SunderRpcError(
+                        SunderRpcErrorKind.Protocol,
+                        "rpc.bridge.request-id-reused",
+                        "The browser bridge request id was already used.");
                 }
-                _rememberedOrder.Enqueue(request.RequestId);
-                while (_rememberedOrder.Count > MaxRememberedRequestIds)
+                else
                 {
-                    _rememberedIds.Remove(_rememberedOrder.Dequeue());
-                }
-                if (_pending.Count >= MaxPendingRequests)
-                {
-                    pending = PendingRequest.Create(
-                        _documentGeneration,
-                        cancellationToken,
-                        _lifetime.Token,
-                        RequestTimeout,
-                        request.DeadlineUtc);
-                    _pending.Add(request.RequestId, pending);
-                    _ = FinishErrorAsync(
-                        request.RequestId,
-                        pending,
-                        new SunderRpcError(
+                    _rememberedOrder.Enqueue(request.RequestId);
+                    while (_rememberedOrder.Count > MaxRememberedRequestIds)
+                    {
+                        _rememberedIds.Remove(_rememberedOrder.Dequeue());
+                    }
+                    if (_pending.Count >= RuntimeClientResourceLimits.MaximumPendingBrowserRequests)
+                    {
+                        immediateError = new SunderRpcError(
                             SunderRpcErrorKind.ResourceExhausted,
                             "rpc.bridge.pending-limit",
-                            "The browser bridge request limit was reached."));
-                    return;
+                            "The browser bridge request limit was reached.");
+                    }
+                    else
+                    {
+                        pending = PendingRequest.Create(
+                            _documentGeneration,
+                            cancellationToken,
+                            _lifetime.Token,
+                            RuntimeClientResourceLimits.BrowserRequestTimeout,
+                            request.DeadlineUtc);
+                        _pending.Add(request.RequestId, pending);
+                    }
                 }
-                pending = PendingRequest.Create(
-                    _documentGeneration,
-                    cancellationToken,
-                    _lifetime.Token,
-                    RequestTimeout,
-                    request.DeadlineUtc);
-                _pending.Add(request.RequestId, pending);
             }
 
-            await ExecuteAsync(request, pending).ConfigureAwait(false);
+            if (immediateError is not null)
+            {
+                await RejectRecoveredAsync(request.RequestId, immediateError, protocolRejection)
+                    .ConfigureAwait(false);
+                return;
+            }
+            await ExecuteAsync(request, pending!).ConfigureAwait(false);
         }
     }
 
@@ -427,13 +473,17 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 || !string.Equals(request.Nonce, _nonce, StringComparison.Ordinal)
                 || !string.Equals(request.Origin, _origin, StringComparison.Ordinal))
             {
-                RejectProtocol("A browser bridge cancellation has an invalid origin or nonce.");
-                return;
+                throw new SunderRpcException(new SunderRpcError(
+                    SunderRpcErrorKind.Protocol,
+                    "rpc.bridge.cancel-authentication",
+                    "The browser bridge cancellation has an invalid origin or nonce."));
             }
             if (!_pending.TryGetValue(target, out var pending))
             {
-                RejectProtocol($"The browser bridge cancellation references unknown request '{target}'.");
-                return;
+                throw new SunderRpcException(new SunderRpcError(
+                    SunderRpcErrorKind.Protocol,
+                    "rpc.bridge.cancel-target",
+                    "The browser bridge cancellation target is not pending."));
             }
             pending.Cancel();
         }
@@ -632,22 +682,37 @@ internal sealed class AppWebBridge : IAsyncDisposable
             requestId,
             type,
             value,
-            error = error is null ? null : new
-            {
-                kind = ErrorKind(error.Kind),
-                code = error.Code,
-                message = error.Message,
-                dispatchState = error.DispatchState == SunderRpcDispatchState.NotDispatched
-                    ? "not-dispatched"
-                    : "possibly-dispatched",
-                retrySafety = error.RetrySafety == SunderRpcRetrySafety.Safe ? "safe" : "unsafe",
-            },
+            error = error is null ? null : MapError(error),
         };
-        var json = JsonSerializer.Serialize(envelope, JsonOptions);
-        if (Encoding.UTF8.GetByteCount(json) > MaxMessageBytes)
+        if (error?.Details is { } details && !IsBounded(details)) return false;
+        byte[] utf8;
+        try
+        {
+            utf8 = JsonSerializer.SerializeToUtf8Bytes(envelope, _boundedJsonOptions);
+        }
+        catch (JsonException)
         {
             return false;
         }
+        if (utf8.Length > _limits.MaximumJsonEnvelopeBytes)
+        {
+            return false;
+        }
+        if (error is null && type is "result" or "event")
+        {
+            using var document = JsonDocument.Parse(utf8, new JsonDocumentOptions
+            {
+                MaxDepth = _limits.MaximumJsonEnvelopeDepth,
+            });
+            var emittedValue = document.RootElement.GetProperty("value");
+            if (Encoding.UTF8.GetByteCount(emittedValue.GetRawText())
+                    > _limits.EffectivePolicy.MaximumRpcValueBytes
+                || Depth(emittedValue) > _limits.EffectivePolicy.MaximumValueDepth)
+            {
+                return false;
+            }
+        }
+        var json = Encoding.UTF8.GetString(utf8);
         var script = $"window.__sunderReceive?.({JsonSerializer.Serialize(json)});";
         await _webView.InvokeScriptAsync(script).ConfigureAwait(false);
         return true;
@@ -658,43 +723,127 @@ internal sealed class AppWebBridge : IAsyncDisposable
         var protocol = JsonSerializer.Serialize(Protocol);
         var nonce = JsonSerializer.Serialize(sessionNonce);
         var origin = JsonSerializer.Serialize(_origin);
-        return $$$"""
+        var profileHash = JsonSerializer.Serialize(_limits.Profile?.EffectiveProfileHash);
+        var runtimeInstanceId = JsonSerializer.Serialize(_limits.Profile?.RuntimeInstanceId.ToString("D"));
+        var reportedByRuntime = _limits.IsRuntimeReported ? "true" : "false";
+        var policy = _limits.EffectivePolicy;
+        return FormattableString.Invariant($$$"""
             (() => {
               'use strict';
               const protocol = {{{protocol}}};
               const version = 2;
               const nonce = {{{nonce}}};
               const expectedOrigin = {{{origin}}};
+              const encoder = new TextEncoder();
+              const maxEnvelopeBytes = {{{_limits.MaximumJsonEnvelopeBytes}}};
+              const maxPendingRequests = {{{RuntimeClientResourceLimits.MaximumPendingBrowserRequests}}};
+              const maxRequestMilliseconds = {{{(long)RuntimeClientResourceLimits.BrowserRequestTimeout.TotalMilliseconds}}};
+              const maxQueuedEvents = {{{RuntimeClientResourceLimits.MaximumQueuedBrowserEvents}}};
+              const maxQueuedEventBytes = {{{_limits.MaximumQueuedBrowserEventBytes}}};
+              const resourceProfile = Object.freeze({
+                reportedByRuntime: {{{reportedByRuntime}}},
+                runtimeInstanceId: {{{runtimeInstanceId}}},
+                effectiveProfileHash: {{{profileHash}}},
+                effectivePolicy: Object.freeze({
+                  rpcValueBytes: {{{policy.MaximumRpcValueBytes}}},
+                  valueDepth: {{{policy.MaximumValueDepth}}},
+                  valueNodes: {{{policy.MaximumValueNodes}}},
+                  objectMembers: {{{policy.MaximumObjectMembers}}},
+                  inlineDecodedBytes: {{{policy.MaximumInlineDecodedBytes}}},
+                  contentReferenceBytes: {{{policy.MaximumContentReferenceBytes}}}
+                })
+              });
               if (location.origin !== expectedOrigin || typeof window.invokeCSharpAction !== 'function') return false;
               const marker = `__sunderBridge_${nonce}`;
               if (window[marker] === true && window.sunder?.version === version && typeof window.__sunderReceive === 'function') return true;
               if (Object.prototype.hasOwnProperty.call(window, 'sunder')) return false;
               let sequence = 0;
               const pending = new Map();
-              const maxQueuedEvents = 32;
-              const maxQueuedCharacters = 4 * 1024 * 1024;
-              let queuedCharacters = 0;
-              const failure = (kind, code, message, dispatchState = 'not-dispatched', retrySafety = 'safe') => Object.assign(new Error(message), {
-                name: 'SunderRpcError',
-                error: Object.freeze({ kind, code, message, dispatchState, retrySafety })
-              });
+              let queuedEventBytes = 0;
+              const freezeJson = (value) => {
+                if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+                  for (const child of Object.values(value)) freezeJson(child);
+                  Object.freeze(value);
+                }
+                return value;
+              };
+              const failure = (kind, code, message, dispatchState = 'not-dispatched', retrySafety = 'safe', details) => {
+                const error = { kind, code, message, dispatchState, retrySafety };
+                if (details !== undefined) error.details = freezeJson(details);
+                return Object.assign(new Error(message), {
+                  name: 'SunderRpcError',
+                  error: Object.freeze(error)
+                });
+              };
+              const depth = (root) => {
+                let maximum = 1;
+                const stack = [{ value: root, depth: 1 }];
+                while (stack.length) {
+                  const current = stack.pop();
+                  maximum = Math.max(maximum, current.depth);
+                  if (current.value !== null && typeof current.value === 'object') {
+                    for (const value of Object.values(current.value)) stack.push({ value, depth: current.depth + 1 });
+                  }
+                }
+                return maximum;
+              };
+              const rejected = (error, stream) => {
+                if (!stream) return Promise.reject(error);
+                return Object.freeze({
+                  [Symbol.asyncIterator]() {
+                    let returned = false;
+                    return {
+                      next() {
+                        if (returned) return Promise.resolve({ done: true, value: undefined });
+                        returned = true;
+                        return Promise.reject(error);
+                      },
+                      return() { returned = true; return Promise.resolve({ done: true, value: undefined }); }
+                    };
+                  }
+                });
+              };
               const finish = (state, error) => {
                 if (state.done) return;
                 state.done = true;
                 state.error = error;
+                if (state.timer !== null) clearTimeout(state.timer);
                 state.signal?.removeEventListener('abort', state.cancel);
                 pending.delete(state.requestId);
-                for (const item of state.queue.splice(0)) queuedCharacters -= item.size;
+                for (const item of state.queue.splice(0)) queuedEventBytes -= item.size;
                 for (const waiter of state.waiters.splice(0)) error ? waiter.fail(error) : waiter.ok({ done: true, value: undefined });
                 if (!state.stream && error) state.reject(error);
               };
               const send = (method, payload, options, stream) => {
                 const requestId = `b_${++sequence}`;
+                let body;
+                let normalized;
+                try {
+                  body = JSON.stringify({ protocol, version, nonce, origin: location.origin, requestId, method, deadlineUtc: options?.deadline?.toISOString?.() ?? null, payload });
+                  if (typeof body !== 'string') throw new TypeError('Request serialization returned no JSON.');
+                  normalized = JSON.parse(body);
+                } catch {
+                  return rejected(failure('validation', 'rpc.bridge.serialization', 'The browser bridge request is not valid JSON.'), stream);
+                }
+                const value = method === 'rpc.invoke' || method === 'rpc.subscribe'
+                  ? normalized.payload?.request
+                  : normalized.payload;
+                let valueJson;
+                try { valueJson = JSON.stringify(value); } catch { valueJson = undefined; }
+                if (typeof valueJson !== 'string'
+                    || encoder.encode(valueJson).byteLength > resourceProfile.effectivePolicy.rpcValueBytes
+                    || depth(value) > resourceProfile.effectivePolicy.valueDepth
+                    || encoder.encode(body).byteLength > maxEnvelopeBytes) {
+                  return rejected(failure('resource-exhausted', 'rpc.bridge.request-limit', 'The browser bridge request exceeds a negotiated resource limit.'), stream);
+                }
+                if (pending.size >= maxPendingRequests) {
+                  return rejected(failure('resource-exhausted', 'rpc.bridge.pending-limit', 'The browser bridge request limit was reached.'), stream);
+                }
                 let resolve = () => {};
                 let reject = () => {};
                 const promise = stream ? null : new Promise((ok, fail) => { resolve = ok; reject = fail; });
-                const state = { requestId, resolve, reject, stream, queue: [], waiters: [], done: false, error: null, signal: options?.signal, cancelSent: false };
-                const cancel = () => {
+                const state = { requestId, resolve, reject, stream, queue: [], waiters: [], done: false, error: null, signal: options?.signal, cancelSent: false, timer: null };
+                const notifyCancel = () => {
                   if (state.done || state.cancelSent) return;
                   state.cancelSent = true;
                   try {
@@ -703,14 +852,24 @@ internal sealed class AppWebBridge : IAsyncDisposable
                     finish(state, failure('unavailable', 'rpc.bridge.native-unavailable', 'The native browser bridge is unavailable.', 'possibly-dispatched', 'unsafe'));
                   }
                 };
+                const cancel = () => {
+                  if (state.done) return;
+                  notifyCancel();
+                  finish(state, failure('cancelled', 'rpc.bridge.cancelled', 'The browser bridge request was cancelled.', 'possibly-dispatched', 'unsafe'));
+                };
                 state.cancel = cancel;
+                state.notifyCancel = notifyCancel;
                 pending.set(requestId, state);
-                let body;
-                try {
-                  body = JSON.stringify({ protocol, version, nonce, origin: location.origin, requestId, method, deadlineUtc: options?.deadline?.toISOString?.() ?? null, payload });
-                } catch {
-                  finish(state, failure('validation', 'rpc.bridge.serialization', 'The browser bridge request is not valid JSON.'));
-                }
+                const requestedDeadline = Date.parse(normalized.deadlineUtc ?? '');
+                const remaining = Number.isFinite(requestedDeadline)
+                  ? Math.max(0, requestedDeadline - Date.now())
+                  : maxRequestMilliseconds;
+                const timeout = Math.min(maxRequestMilliseconds, remaining);
+                state.timer = setTimeout(() => {
+                  if (state.done) return;
+                  notifyCancel();
+                  finish(state, failure('deadline-exceeded', 'rpc.call.deadline-exceeded', 'The browser bridge request deadline elapsed.', 'possibly-dispatched', 'unsafe'));
+                }, timeout);
                 if (!state.done) {
                   try {
                     window.invokeCSharpAction(body);
@@ -729,13 +888,13 @@ internal sealed class AppWebBridge : IAsyncDisposable
                       next() {
                         if (state.queue.length) {
                           const item = state.queue.shift();
-                          queuedCharacters -= item.size;
+                          queuedEventBytes -= item.size;
                           return Promise.resolve({ done: false, value: item.value });
                         }
                         if (state.done) return state.error ? Promise.reject(state.error) : Promise.resolve({ done: true, value: undefined });
                         return new Promise((ok, fail) => state.waiters.push({ ok, fail }));
                       },
-                      return() { cancel(); finish(state); return Promise.resolve({ done: true, value: undefined }); }
+                      return() { cancel(); return Promise.resolve({ done: true, value: undefined }); }
                     };
                   }
                 });
@@ -746,6 +905,23 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 if (message?.protocol !== protocol || message?.version !== version || message?.nonce !== nonce) return;
                 const state = pending.get(message.requestId);
                 if (!state || state.done) return;
+                const emittedBytes = encoder.encode(raw).byteLength;
+                if (emittedBytes > maxEnvelopeBytes) {
+                  state.notifyCancel();
+                  finish(state, failure('resource-exhausted', 'rpc.bridge.response-envelope-limit', 'The browser bridge response exceeds its negotiated envelope limit.', 'possibly-dispatched', 'unsafe'));
+                  return;
+                }
+                if (message.type === 'event' || message.type === 'result') {
+                  let valueJson;
+                  try { valueJson = JSON.stringify(message.value); } catch { valueJson = undefined; }
+                  if (typeof valueJson !== 'string'
+                      || encoder.encode(valueJson).byteLength > resourceProfile.effectivePolicy.rpcValueBytes
+                      || depth(message.value) > resourceProfile.effectivePolicy.valueDepth) {
+                    state.notifyCancel();
+                    finish(state, failure('resource-exhausted', 'rpc.bridge.response-limit', 'The browser bridge response exceeds a negotiated resource limit.', 'possibly-dispatched', 'unsafe'));
+                    return;
+                  }
+                }
                 if (message.type === 'event') {
                   if (!state.stream) {
                     finish(state, failure('protocol', 'rpc.bridge.unexpected-event', 'The browser bridge returned an unexpected stream event.', 'possibly-dispatched', 'unsafe'));
@@ -754,12 +930,12 @@ internal sealed class AppWebBridge : IAsyncDisposable
                   const waiter = state.waiters.shift();
                   if (waiter) {
                     waiter.ok({ done: false, value: message.value });
-                  } else if (state.queue.length >= maxQueuedEvents || queuedCharacters + raw.length > maxQueuedCharacters) {
-                    state.cancel();
+                  } else if (state.queue.length >= maxQueuedEvents || queuedEventBytes + emittedBytes > maxQueuedEventBytes) {
+                    state.notifyCancel();
                     finish(state, failure('resource-exhausted', 'rpc.bridge.event-queue-limit', 'The browser bridge event queue limit was reached.', 'possibly-dispatched', 'unsafe'));
                   } else {
-                    state.queue.push({ value: message.value, size: raw.length });
-                    queuedCharacters += raw.length;
+                    state.queue.push({ value: message.value, size: emittedBytes });
+                    queuedEventBytes += emittedBytes;
                   }
                   return;
                 }
@@ -777,7 +953,20 @@ internal sealed class AppWebBridge : IAsyncDisposable
                   const detail = message.error ?? {};
                   const dispatchState = detail.dispatchState === 'not-dispatched' ? 'not-dispatched' : 'possibly-dispatched';
                   const retrySafety = detail.retrySafety === 'safe' ? 'safe' : 'unsafe';
-                  finish(state, failure(detail.kind ?? 'protocol', detail.code ?? 'rpc.bridge.error', detail.message ?? 'Sunder RPC failed.', dispatchState, retrySafety));
+                  let details;
+                  if (Object.prototype.hasOwnProperty.call(detail, 'details')) {
+                    let detailsJson;
+                    try { detailsJson = JSON.stringify(detail.details); } catch { detailsJson = undefined; }
+                    if (detail.kind !== 'domain'
+                        || typeof detailsJson !== 'string'
+                        || encoder.encode(detailsJson).byteLength > resourceProfile.effectivePolicy.rpcValueBytes
+                        || depth(detail.details) > resourceProfile.effectivePolicy.valueDepth) {
+                      finish(state, failure('protocol', 'rpc.bridge.invalid-error-details', 'The browser bridge returned invalid RPC error details.', dispatchState, retrySafety));
+                      return;
+                    }
+                    details = detail.details;
+                  }
+                  finish(state, failure(detail.kind ?? 'protocol', detail.code ?? 'rpc.bridge.error', detail.message ?? 'Sunder RPC failed.', dispatchState, retrySafety, details));
                   return;
                 }
                 finish(state, failure('protocol', 'rpc.bridge.message-type', 'The browser bridge returned an unknown message type.', 'possibly-dispatched', 'unsafe'));
@@ -790,6 +979,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
               });
               const api = Object.freeze({
                 version,
+                resourceProfile,
                 rpc,
                 openExternal: (url, options) => send('host.openExternal', { url }, options, false),
                 getNavigationState: (options) => send('navigation.getState', {}, options, false),
@@ -799,15 +989,20 @@ internal sealed class AppWebBridge : IAsyncDisposable
               Object.defineProperty(window, marker, { configurable: false, enumerable: false, writable: false, value: true });
               return true;
             })();
-            """;
+            """);
     }
 
     private bool TryReadRequest(JsonElement root, out BridgeRequest request, out string error)
     {
         request = default;
         error = "The browser bridge envelope is invalid.";
+        var properties = root.ValueKind == JsonValueKind.Object
+            ? root.EnumerateObject().ToArray()
+            : [];
         if (root.ValueKind != JsonValueKind.Object
-            || root.EnumerateObject().Any(static property => property.Name is not
+            || properties.Length != 8
+            || properties.Select(static property => property.Name).Distinct(StringComparer.Ordinal).Count() != 8
+            || properties.Any(static property => property.Name is not
                 ("protocol" or "version" or "nonce" or "origin" or "requestId" or "method" or "deadlineUtc" or "payload"))
             || !root.TryGetProperty("protocol", out var protocol)
             || protocol.ValueKind != JsonValueKind.String
@@ -915,14 +1110,27 @@ internal sealed class AppWebBridge : IAsyncDisposable
         => value is { Length: > 0 and <= 128 }
            && value.All(static character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-');
 
-    private static void EnsureBounded(JsonElement value)
+    private void EnsureBounded(JsonElement value)
     {
-        if (Encoding.UTF8.GetByteCount(value.GetRawText()) > MaxMessageBytes || Depth(value) > MaxMessageDepth)
+        if (!IsBounded(value))
         {
-            throw new SunderRpcException(new SunderRpcError(
-                SunderRpcErrorKind.ResourceExhausted,
+            throw new SunderRpcException(ResourceLimit(
                 "rpc.bridge.payload-limit",
-                "The browser bridge RPC payload exceeds a limit."));
+                "The browser bridge RPC payload exceeds a negotiated resource limit."));
+        }
+    }
+
+    private bool IsBounded(JsonElement value)
+    {
+        try
+        {
+            return JsonSerializer.SerializeToUtf8Bytes(value, _boundedJsonOptions).Length
+                       <= _limits.EffectivePolicy.MaximumRpcValueBytes
+                   && Depth(value) <= _limits.EffectivePolicy.MaximumValueDepth;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 
@@ -961,17 +1169,32 @@ internal sealed class AppWebBridge : IAsyncDisposable
             code,
             message,
             error.DispatchState,
-            error.RetrySafety);
+            error.RetrySafety,
+            error.Details);
     }
 
     private static SunderRpcException WithDispatchMetadata(
         SunderRpcException exception,
         PendingRequest pending)
-        => new(exception.Error with
-        {
-            DispatchState = pending.DispatchState,
-            RetrySafety = pending.RetrySafety,
-        });
+        => new(new SunderRpcError(
+            exception.Error.Kind,
+            exception.Error.Code,
+            exception.Error.Message,
+            pending.DispatchState,
+            pending.RetrySafety,
+            exception.Error.Details));
+
+    private static object MapError(SunderRpcError error)
+    {
+        var kind = ErrorKind(error.Kind);
+        var dispatchState = error.DispatchState == SunderRpcDispatchState.NotDispatched
+            ? "not-dispatched"
+            : "possibly-dispatched";
+        var retrySafety = error.RetrySafety == SunderRpcRetrySafety.Safe ? "safe" : "unsafe";
+        return error.Details is { } details
+            ? new { kind, error.Code, error.Message, dispatchState, retrySafety, details }
+            : new { kind, error.Code, error.Message, dispatchState, retrySafety };
+    }
 
     private static SunderRpcError ResponseLimit(PendingRequest pending)
         => new(
@@ -980,6 +1203,124 @@ internal sealed class AppWebBridge : IAsyncDisposable
             "The browser bridge response exceeds its size limit.",
             pending.DispatchState,
             pending.RetrySafety);
+
+    private static SunderRpcError ResourceLimit(string code, string message)
+        => new(
+            SunderRpcErrorKind.ResourceExhausted,
+            code,
+            message);
+
+    private async Task RejectRecoveredAsync(
+        string? requestId,
+        SunderRpcError error,
+        string? logMessage = null)
+    {
+        RejectProtocol(logMessage ?? error.Message);
+        if (!IsId(requestId))
+        {
+            return;
+        }
+
+        string nonce;
+        lock (_gate)
+        {
+            if (!_trustedNavigation
+                || _currentUri is null
+                || Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+            nonce = _nonce;
+        }
+        var envelope = new
+        {
+            protocol = Protocol,
+            version = ProtocolVersion,
+            nonce,
+            requestId,
+            type = "error",
+            value = (object?)null,
+            error = new
+            {
+                kind = ErrorKind(error.Kind),
+                code = error.Code,
+                message = error.Message,
+                dispatchState = "not-dispatched",
+                retrySafety = "safe",
+            },
+        };
+        var utf8 = JsonSerializer.SerializeToUtf8Bytes(envelope, _boundedJsonOptions);
+        if (utf8.Length > _limits.MaximumJsonEnvelopeBytes)
+        {
+            return;
+        }
+        var json = Encoding.UTF8.GetString(utf8);
+        await _webView.InvokeScriptAsync(
+                $"window.__sunderReceive?.({JsonSerializer.Serialize(json)});")
+            .ConfigureAwait(false);
+    }
+
+    private static bool TryReadSafeRequestId(JsonElement root, out string? requestId)
+    {
+        requestId = null;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+        var matches = root.EnumerateObject()
+            .Where(static property => property.NameEquals("requestId"))
+            .ToArray();
+        if (matches.Length != 1
+            || matches[0].Value.ValueKind != JsonValueKind.String
+            || !IsId(matches[0].Value.GetString()))
+        {
+            return false;
+        }
+        requestId = matches[0].Value.GetString();
+        return true;
+    }
+
+    private static string? TryRecoverRequestId(string body)
+    {
+        const int maximumPrefixCharacters = 16 * 1024;
+        var prefix = body.AsSpan(0, Math.Min(body.Length, maximumPrefixCharacters));
+        byte[] utf8;
+        try
+        {
+            utf8 = Encoding.UTF8.GetBytes(prefix.ToString());
+        }
+        catch (EncoderFallbackException)
+        {
+            return null;
+        }
+
+        try
+        {
+            var reader = new Utf8JsonReader(utf8, isFinalBlock: false, new JsonReaderState(new JsonReaderOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = 8,
+            }));
+            while (reader.Read())
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName
+                    || reader.CurrentDepth != 1
+                    || !reader.ValueTextEquals("requestId"u8)
+                    || !reader.Read()
+                    || reader.TokenType != JsonTokenType.String)
+                {
+                    continue;
+                }
+                var value = reader.GetString();
+                return IsId(value) ? value : null;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+        return null;
+    }
 
     private static string ErrorKind(SunderRpcErrorKind kind)
         => kind switch

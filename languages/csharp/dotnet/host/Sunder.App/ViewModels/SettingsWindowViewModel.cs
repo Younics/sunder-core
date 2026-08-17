@@ -14,6 +14,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     private readonly IRuntimePackageSettingsClient _runtimeApiClient;
     private readonly SettingsCliViewModel _cli;
     private readonly SettingsUpdateViewModel _updates;
+    private readonly SettingsRuntimeResourcesViewModel _runtimeResources;
     private readonly SettingsPackageSectionsViewModel _packageSettings;
     private readonly SettingsPackageSectionRefreshCoordinator _packageSectionRefresh;
     private readonly PackageViewHostService _packageViewHostService;
@@ -32,13 +33,18 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         double backgroundProcessPopoverWidth = ShellState.DefaultBackgroundProcessPopoverWidth,
         double backgroundProcessPopoverHeight = ShellState.DefaultBackgroundProcessPopoverHeight,
-        Action<double, double>? persistBackgroundProcessPopoverSize = null)
+        Action<double, double>? persistBackgroundProcessPopoverSize = null,
+        AppRuntimeResourcePolicySettingsService? runtimeResourcePolicySettingsService = null,
+        IRuntimeResourcePolicyStatusSource? runtimeResourcePolicyStatusSource = null)
     {
         _runtimeApiClient = runtimeApiClient;
         _packageViewHostService = packageViewHostService;
         var resolvedUpdateService = updateService ?? new SunderUpdateService();
         _cli = new SettingsCliViewModel(new SettingsCliCoordinator(cliInstallationService));
         _updates = new SettingsUpdateViewModel(new SettingsUpdateCoordinator(resolvedUpdateService));
+        _runtimeResources = new SettingsRuntimeResourcesViewModel(new SettingsRuntimeResourcesCoordinator(
+            runtimeResourcePolicySettingsService ?? new AppRuntimeResourcePolicySettingsService(),
+            runtimeResourcePolicyStatusSource ?? new UnavailableRuntimeResourcePolicyStatusSource()));
         _packageSettings = new SettingsPackageSectionsViewModel(
             new SettingsPackageSectionLoader(runtimeApiClient, packageViewHostService),
             new SettingsPackageSelectionCoordinator(runtimeApiClient, packageViewHostService));
@@ -68,7 +74,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             new("updates", "Updates", "Package updates and future managed rollout behavior.", false),
             new("notifications", "Notifications", "Notification preferences and attention management.", false),
             new("privacy", "Privacy", "Local-first data handling and package trust decisions.", false),
-            new("advanced", "Advanced", "Diagnostic and power-user controls.", false),
+            new("advanced", "Advanced", "Runtime resource policy and power-user controls.", false),
         ];
 
         SelectedCoreLines = [];
@@ -86,6 +92,8 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public SettingsUpdateViewModel Updates => _updates;
 
+    public SettingsRuntimeResourcesViewModel RuntimeResources => _runtimeResources;
+
     public SettingsPackageSectionsViewModel PackageSettings => _packageSettings;
 
     public ObservableCollection<string> SelectedCoreLines { get; }
@@ -94,11 +102,16 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public bool IsCoreSelection => !IsPackageSelection;
 
-    public bool ShowPlainCoreSelection => IsCoreSelection && !IsCliSelection && !IsUpdatesSelection;
+    public bool ShowPlainCoreSelection => IsCoreSelection
+                                          && !IsCliSelection
+                                          && !IsUpdatesSelection
+                                          && !IsAdvancedSelection;
 
     public bool ShowCliSettings => IsCliSelection;
 
     public bool ShowUpdateSettings => IsUpdatesSelection;
+
+    public bool ShowAdvancedSettings => IsAdvancedSelection;
 
     public bool HasHostedSettingsView => HostedSettingsView is not null;
 
@@ -130,6 +143,9 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private bool _isUpdatesSelection;
+
+    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
+    private bool _isAdvancedSelection;
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private bool _isBusy;
@@ -197,6 +213,12 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(ShowUpdateSettings));
     }
 
+    partial void OnIsAdvancedSelectionChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowPlainCoreSelection));
+        OnPropertyChanged(nameof(ShowAdvancedSettings));
+    }
+
     public async Task<bool> ApplyAsync()
     {
         if (_disposed)
@@ -207,6 +229,10 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         if (IsUpdatesSelection)
         {
             return await SaveUpdateSettingsAsync();
+        }
+        if (IsAdvancedSelection)
+        {
+            return await SaveRuntimeResourceSettingsAsync();
         }
         var selectedSection = _selection.SelectedSection;
         if (!ShowGenericPackageSettings || selectedSection?.PackageId is null)
@@ -507,6 +533,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IsPackageSelection = false;
         IsCliSelection = string.Equals(item.Id, "cli", StringComparison.OrdinalIgnoreCase);
         IsUpdatesSelection = string.Equals(item.Id, "updates", StringComparison.OrdinalIgnoreCase);
+        IsAdvancedSelection = string.Equals(item.Id, "advanced", StringComparison.OrdinalIgnoreCase);
         SelectedTitle = item.Title;
         SelectedDescription = item.Description;
         DetailsTitle = item.Title;
@@ -519,6 +546,12 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         if (IsUpdatesSelection)
         {
             ApplyUpdateSettings();
+            return;
+        }
+
+        if (IsAdvancedSelection)
+        {
+            RuntimeResources.LoadSettings();
             return;
         }
 
@@ -574,8 +607,10 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
                 var context = new PackageViewNavigationContext(
                     $"settings:{item.PackageId}",
                     parameters);
-                if (!await candidateBoundary.PrepareNavigationAsync(context, request.Token)
-                    || candidateBoundary.IsFaulted)
+                var prepared = await candidateBoundary.PrepareNavigationAsync(
+                    context,
+                    request.Token);
+                if (!prepared && !candidateBoundary.IsFaulted)
                 {
                     throw new InvalidOperationException(
                         candidateBoundary.FaultMessage ?? "The package settings view rejected navigation.");
@@ -584,7 +619,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
                 {
                     return false;
                 }
-                if (!hosted.PromoteCandidate())
+                if (!hosted.PromoteCandidate() && !candidateBoundary.IsFaulted)
                 {
                     throw new InvalidOperationException("The package settings view changed while navigation was being prepared.");
                 }
@@ -596,13 +631,12 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
                 _packageSettings.ApplySelectionResult(result);
                 StatusText = result.StatusText;
                 committed = true;
-                await ((HostedPackageViewBoundary)HostedSettingsView!).OnNavigationPresentedAsync(
-                    context,
-                    request.Token);
-                if (HostedSettingsView is HostedPackageViewBoundary { IsFaulted: true } presentedBoundary)
+                var presentedBoundary = (HostedPackageViewBoundary)HostedSettingsView!;
+                if (!presentedBoundary.IsFaulted)
                 {
-                    throw new InvalidOperationException(
-                        presentedBoundary.FaultMessage ?? "The package settings view rejected presentation.");
+                    await presentedBoundary.OnNavigationPresentedAsync(
+                        context,
+                        request.Token);
                 }
             }
             else
@@ -625,7 +659,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             }
             return false;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             if (request.IsCurrent && IsCurrentSelection(item, selectionVersion))
             {
@@ -692,6 +726,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         DetailsText = $"Package id: {item.PackageId}";
         IsCliSelection = false;
         IsUpdatesSelection = false;
+        IsAdvancedSelection = false;
         IsPackageSelection = true;
     }
 

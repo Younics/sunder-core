@@ -25,7 +25,7 @@ internal sealed class SettingsPackageSelectionCoordinator(
                 navigationTarget?.View);
             return hostedSettingsView is null
                 ? new UnavailablePackageSettingsSelection("Package settings view is unavailable.")
-                : new HostedPackageSettingsSelection(hostedSettingsView, navigationTarget!.Candidate);
+                : new HostedPackageSettingsSelection(hostedSettingsView, navigationTarget?.Candidate);
         }
 
         if (schema is null)

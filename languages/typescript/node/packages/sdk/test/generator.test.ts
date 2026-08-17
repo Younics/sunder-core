@@ -173,6 +173,7 @@ const compileDescriptor: RpcContractDescriptor = {
 
 const v2Descriptor: RpcContractDescriptorV2 = {
   descriptorVersion: 2,
+  schemaProfile: "sunder.rpc.values.v1",
   contractId: "example.v2.bindings",
   version: "2.0.0",
   errors: {},
@@ -190,8 +191,8 @@ const v2Descriptor: RpcContractDescriptorV2 = {
     },
   },
   $defs: {
-    Uuid: { type: "string", logicalType: "uuid" },
-    Instant: { type: "string", logicalType: "utc-date-time" },
+    Uuid: { type: "string", format: "uuid" },
+    Instant: { type: "string", format: "date-time" },
     Content: { type: "object", logicalType: "content-reference" },
     Text: { type: "string", minLength: 0, maxLength: 128 },
     NullableText: {
@@ -215,6 +216,114 @@ const v2Descriptor: RpcContractDescriptorV2 = {
       type: "object",
       properties: { accepted: { type: "boolean" } },
       required: ["accepted"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const valueProfileDescriptor: RpcContractDescriptorV2 = {
+  descriptorVersion: 2,
+  schemaProfile: "sunder.rpc.values.v1",
+  contractId: "example.values",
+  version: "2.0.0",
+  errors: {
+    "example.details": { detailsSchema: { $ref: "#/$defs/Decimal" } },
+  },
+  services: {
+    values: {
+      methods: {
+        roundtrip: {
+          kind: "unary",
+          idempotency: "idempotent",
+          errors: ["example.details"],
+          requestSchema: { $ref: "#/$defs/Values" },
+          responseSchema: { $ref: "#/$defs/Values" },
+        },
+      },
+    },
+  },
+  $defs: {
+    Any: {},
+    Dynamic: { type: "object" },
+    BigInteger: { type: "string", format: "big-integer", maxDigits: 64 },
+    Decimal: { type: "string", format: "decimal", maxPrecision: 32, maxScale: 8 },
+    Float32: { type: "number", format: "float32", enum: [0.1, 3.5] },
+    Float64: { type: "number", format: "float64", const: 0.1 },
+    Uuid: { type: "string", format: "uuid" },
+    Date: { type: "string", format: "date" },
+    DateTime: { type: "string", format: "date-time" },
+    Duration: { type: "string", format: "duration" },
+    Uri: { type: "string", format: "uri" },
+    Bytes: { type: "string", contentEncoding: "base64", maxDecodedBytes: 64 },
+    Status: { type: "string", minLength: 4, maxLength: 6, enum: ["ready", "queued"] },
+    Text: { type: "string", minLength: 0, maxLength: 64 },
+    NullableText: { oneOf: [{ type: "null" }, { $ref: "#/$defs/Text" }] },
+    Node: { oneOf: [{ type: "null" }, { $ref: "#/$defs/NodeRecord" }] },
+    NodeRecord: {
+      type: "object",
+      properties: {
+        value: { type: "integer" },
+        next: { $ref: "#/$defs/Node" },
+      },
+      required: ["value"],
+      additionalProperties: false,
+    },
+    Added: {
+      type: "object",
+      properties: {
+        kind: { type: "string", minLength: 5, maxLength: 5, const: "added" },
+        value: { $ref: "#/$defs/BigInteger" },
+      },
+      required: ["kind", "value"],
+      additionalProperties: false,
+    },
+    Removed: {
+      type: "object",
+      properties: {
+        kind: { type: "string", minLength: 7, maxLength: 7, const: "removed" },
+        value: { $ref: "#/$defs/BigInteger" },
+      },
+      required: ["kind", "value"],
+      additionalProperties: false,
+    },
+    Event: { oneOf: [{ $ref: "#/$defs/Added" }, { $ref: "#/$defs/Removed" }] },
+    Values: {
+      type: "object",
+      properties: {
+        any: { $ref: "#/$defs/Any" },
+        bigInteger: { $ref: "#/$defs/BigInteger" },
+        bytes: { $ref: "#/$defs/Bytes" },
+        date: { $ref: "#/$defs/Date" },
+        dateTime: { $ref: "#/$defs/DateTime" },
+        decimal: { $ref: "#/$defs/Decimal" },
+        duration: { $ref: "#/$defs/Duration" },
+        dynamic: { $ref: "#/$defs/Dynamic" },
+        event: { $ref: "#/$defs/Event" },
+        float32: { $ref: "#/$defs/Float32" },
+        float64: { $ref: "#/$defs/Float64" },
+        node: { $ref: "#/$defs/Node" },
+        optionalNullable: { $ref: "#/$defs/NullableText" },
+        status: { $ref: "#/$defs/Status" },
+        uri: { $ref: "#/$defs/Uri" },
+        uuid: { $ref: "#/$defs/Uuid" },
+      },
+      required: [
+        "any",
+        "bigInteger",
+        "bytes",
+        "date",
+        "dateTime",
+        "decimal",
+        "duration",
+        "dynamic",
+        "event",
+        "float32",
+        "float64",
+        "node",
+        "status",
+        "uri",
+        "uuid",
+      ],
       additionalProperties: false,
     },
   },
@@ -571,6 +680,145 @@ void workerTransportAbiHash;
   assert.deepEqual(invocations, [["selected-provider-handle", "content", "put", request]]);
 });
 
+test("value-profile bindings deterministically compile and convert exact domain values", async () => {
+  const first = generateTypeScriptBindings(valueProfileDescriptor);
+  const second = generateTypeScriptBindings(valueProfileDescriptor);
+  assert.equal(first, second);
+  assert.match(first, /export type Any = JsonValue;/u);
+  assert.match(first, /export type Dynamic = JsonObject;/u);
+  assert.match(first, /export type BigInteger = bigint;/u);
+  assert.match(first, /export type Decimal = string;/u);
+  assert.match(first, /export type Float32 = number;/u);
+  assert.match(first, /export type Bytes = Uint8Array;/u);
+  assert.match(first, /export type Status = "ready" \| "queued";/u);
+  assert.match(first, /export type Event = Added \| Removed;/u);
+  assert.match(first, /Math\.fround/u);
+  assert.match(first, /\$toWireBase64/u);
+  assert.match(first, /\$fromWireBigInteger/u);
+  assert.match(first, /readonly optionalNullable\?: NullableText;/u);
+  assert.match(first, /import \{ RpcDomainError \} from "@sunder\/sdk";/u);
+  assert.match(first, /export function createExampleDetailsRpcError\(details: Decimal/u);
+  assert.match(first, /export function tryGetExampleDetailsRpcErrorDetails\(error: unknown\): Decimal \| undefined/u);
+
+  const generated = compileGeneratedModule(first, `
+import {
+  ExampleValuesRpcClient,
+  createExampleDetailsRpcError,
+  tryGetExampleDetailsRpcErrorDetails,
+  type Event,
+  type Values,
+} from "./bindings";
+import type { RpcClient } from "@sunder/sdk";
+import type { SunderBrowserRpc } from "@sunder/sdk/browser";
+
+const common: Values = {
+  any: { nested: [true, 1.25] },
+  bigInteger: 12345678901234567890n,
+  bytes: new Uint8Array([0, 1, 2, 255]),
+  date: "2030-01-02",
+  dateTime: "2030-01-02T03:04:05Z",
+  decimal: "123.456",
+  duration: "P1DT2H",
+  dynamic: { nested: [1, 2, 3] },
+  event: { kind: "added", value: 42n },
+  float32: Math.fround(0.1),
+  float64: 0.1,
+  node: { value: 1, next: { value: 2 } },
+  status: "ready",
+  uri: "https://example.test/value",
+  uuid: "00000000-0000-0000-0000-000000000000",
+};
+const presentNull: Values = { ...common, optionalNullable: null };
+// @ts-expect-error optional-nullable preserves absence rather than accepting undefined
+const presentUndefined: Values = { ...common, optionalNullable: undefined };
+const removed: Event = { kind: "removed", value: 1n };
+const detailError = createExampleDetailsRpcError("123.45");
+const detail: string | undefined = tryGetExampleDetailsRpcErrorDetails(detailError);
+declare const runtimeRpc: RpcClient;
+declare const browserRpc: SunderBrowserRpc;
+const runtimeClient = new ExampleValuesRpcClient(runtimeRpc, "endpoint-reference");
+const browserClient = new ExampleValuesRpcClient(browserRpc, "provider-handle");
+const runtimeResult: Promise<Values> = runtimeClient.Values.Roundtrip(common);
+const browserResult: Promise<Values> = browserClient.Values.Roundtrip(presentNull);
+void presentUndefined;
+void removed;
+void detail;
+void runtimeResult;
+void browserResult;
+`) as {
+    readonly ExampleValuesRpcClient: new <TTarget>(
+      invoker: RpcInvoker<TTarget>,
+      target: TTarget,
+    ) => { readonly Values: { Roundtrip(request: unknown): Promise<unknown> } };
+    readonly ExampleValuesRpcHandler: new (provider: {
+      Roundtrip(request: unknown, context: RpcInvocationContext): Promise<unknown>;
+    }) => RpcProviderHandler;
+    createExampleDetailsRpcError(details: string, message?: string): {
+      readonly error: { readonly kind: string; readonly code: string; readonly details?: JsonValue };
+    };
+    tryGetExampleDetailsRpcErrorDetails(error: unknown): string | undefined;
+  };
+
+  const typedError = generated.createExampleDetailsRpcError("123.45", "Rejected.");
+  assert.equal(typedError.error.kind, "domain");
+  assert.equal(typedError.error.code, "example.details");
+  assert.equal(typedError.error.details, "123.45");
+  assert.equal(generated.tryGetExampleDetailsRpcErrorDetails(typedError), "123.45");
+
+  const domain = {
+    any: { nested: [true, 1.25] },
+    bigInteger: 12345678901234567890n,
+    bytes: new Uint8Array([0, 1, 2, 255]),
+    date: "2030-01-02",
+    dateTime: "2030-01-02T03:04:05Z",
+    decimal: "123.456",
+    duration: "P1DT2H",
+    dynamic: { nested: [1, 2, 3] },
+    event: { kind: "added", value: 42n },
+    float32: 0.1,
+    float64: 0.1,
+    node: { value: 1, next: { value: 2 } },
+    status: "ready",
+    uri: "https://example.test/value",
+    uuid: "00000000-0000-0000-0000-000000000000",
+  };
+  let wireRequest: JsonValue | undefined;
+  const invoker: RpcInvoker<string> = {
+    async invoke<TRequest extends JsonValue, TResponse extends JsonValue>(_target: string, _serviceId: string, _methodId: string, request: TRequest) {
+      wireRequest = request;
+      return request as unknown as TResponse;
+    },
+    subscribe<TRequest extends JsonValue, TEvent extends JsonValue>(): AsyncIterable<TEvent> {
+      return (async function* empty(): AsyncIterable<TEvent> {})();
+    },
+  };
+  const client = new generated.ExampleValuesRpcClient(invoker, "endpoint");
+  const roundTripped = await client.Values.Roundtrip(domain) as typeof domain;
+  const wire = wireRequest as unknown as Record<string, unknown>;
+  assert.equal(wire.bigInteger, "12345678901234567890");
+  assert.equal(wire.bytes, "AAEC/w==");
+  assert.equal(wire.float32, Math.fround(0.1));
+  assert.equal((wire.event as Record<string, unknown>).value, "42");
+  assert.equal(roundTripped.bigInteger, domain.bigInteger);
+  assert.deepEqual([...roundTripped.bytes], [0, 1, 2, 255]);
+  assert.equal(roundTripped.float32, Math.fround(0.1));
+  assert.equal(roundTripped.event.value, 42n);
+
+  let providerRequest: unknown;
+  const context = {} as RpcInvocationContext;
+  const handler = new generated.ExampleValuesRpcHandler({
+    async Roundtrip(request: unknown, receivedContext: RpcInvocationContext) {
+      assert.equal(receivedContext, context);
+      providerRequest = request;
+      return request;
+    },
+  });
+  const wireResponse = await handler.invokeUnary(context, "values", "roundtrip", wireRequest!);
+  assert.equal((providerRequest as typeof domain).bigInteger, domain.bigInteger);
+  assert.deepEqual([...(providerRequest as typeof domain).bytes], [0, 1, 2, 255]);
+  assert.deepEqual(wireResponse, wireRequest);
+});
+
 test("new generated symbols remain deterministic and collision-safe", () => {
   const collisionDescriptor: RpcContractDescriptor = {
     descriptorVersion: 1,
@@ -825,9 +1073,13 @@ test("generator CLI preserves an existing output when descriptor planning fails"
   }
 });
 
-test("descriptor canonicalization sorts object keys and rejects non-safe descriptor numbers", () => {
+test("descriptor canonicalization sorts object keys and emits finite binary64 JCS numbers", () => {
   assert.equal(canonicalizeDescriptor({ z: 1, a: { y: true, x: false } }), '{"a":{"x":false,"y":true},"z":1}');
-  assert.throws(() => canonicalizeDescriptor({ value: 1.5 }), /safe integers/u);
+  assert.equal(
+    canonicalizeDescriptor({ zero: -0, small: 1e-7, normal: 1e-6, large: 1e21, fraction: 1.5 }),
+    '{"fraction":1.5,"large":1e+21,"normal":0.000001,"small":1e-7,"zero":0}',
+  );
+  assert.throws(() => canonicalizeDescriptor({ value: Number.POSITIVE_INFINITY }), /finite IEEE-754 binary64/u);
 });
 
 test("descriptor parser enforces strict JSON, identity, references, and schema bounds", () => {
@@ -849,7 +1101,10 @@ test("descriptor parser enforces strict JSON, identity, references, and schema b
     /existing local schema/u,
   );
   assert.throws(() => parseRpcContractDescriptor(`\uFEFF${source}`), /byte-order mark/u);
-  assert.throws(() => parseRpcContractDescriptor('{"value":1.5}'), /safe integer/u);
+  assert.throws(
+    () => parseRpcContractDescriptor(source.replace('"maxLength": 128', '"maxLength": 1.5')),
+    /safe integer/u,
+  );
 });
 
 function compileGeneratedBindings(source: string): GeneratedBindingsModule {

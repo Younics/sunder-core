@@ -1480,14 +1480,6 @@ internal sealed partial class ProcessRuntimeWorker
                 "worker.activation.unavailable",
                 "The process worker activation is stale or unavailable."));
         }
-        if (!lease.Session.OwnsPackageActivation(_package.PackageId, _activationId))
-        {
-            lease.Dispose();
-            throw new SunderRpcException(new SunderRpcError(
-                SunderRpcErrorKind.Unavailable,
-                "worker.activation.unavailable",
-                "The process worker activation is stale or unavailable."));
-        }
         return lease;
     }
 

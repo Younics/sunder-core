@@ -76,6 +76,7 @@ public sealed class PackageTemplateTests
                 using var descriptorDocument = JsonDocument.Parse(descriptorEntry.Open());
                 var descriptorRoot = descriptorDocument.RootElement;
                 Assert.Equal(2, descriptorRoot.GetProperty("descriptorVersion").GetInt32());
+                Assert.Equal("sunder.rpc.values.v1", descriptorRoot.GetProperty("schemaProfile").GetString());
                 Assert.Equal("2.0.0", descriptorRoot.GetProperty("version").GetString());
                 Assert.Equal(JsonValueKind.Object, descriptorRoot.GetProperty("errors").ValueKind);
                 var services = descriptorRoot.GetProperty("services");

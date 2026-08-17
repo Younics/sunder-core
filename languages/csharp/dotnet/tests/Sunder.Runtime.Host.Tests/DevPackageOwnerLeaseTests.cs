@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
@@ -86,6 +88,65 @@ public sealed class DevPackageOwnerLeaseTests
             Assert.Equal(first.MutationId, retry.MutationId);
             Assert.Equal(generation, fixture.Host.SessionGeneration);
             Assert.True(retry.ExpiresAtUtc >= first.ExpiresAtUtc);
+        }
+        finally
+        {
+            await fixture.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Replacement_EmitsStructuredTimingDiagnosticsWithoutSensitiveValues()
+    {
+        var logger = new CollectingLogger();
+        var fixture = CreateFixture(logger: logger);
+        var dev = CreatePackageLayout(fixture.Paths.RootPath, "timed-dev", "timed.package", "1.0.0").InstallPath;
+        const string token = "owner-token-timing-timing-timing";
+        const string mutationId = "timed-mutation-1";
+        try
+        {
+            await fixture.Host.LoadInstalledPackagesAsync();
+            logger.Clear();
+
+            await fixture.Host.ReplaceDevPackageOwnerAsync(
+                "timed-owner",
+                Mutation(fixture.Host.RuntimeInstanceId, token, mutationId, 1, dev, watch: true));
+
+            string[] expectedTemplates =
+            [
+                "Waited {ElapsedMilliseconds} ms for the dev package owner gate for mutation {MutationId}",
+                "Validated {PackageSourceKind} package {PackageId} in {ElapsedMilliseconds} ms",
+                "Materialized canonical shadow for package {PackageId} in {ElapsedMilliseconds} ms",
+                "Materialized Runtime target projection for package {PackageId} in {ElapsedMilliseconds} ms",
+                "Loaded {ContractCount} RPC contract(s) for package {PackageId} in {ElapsedMilliseconds} ms",
+                "Prepared merged package session from {InstalledPackageCount} installed package(s) and {DevPackageCount} dev overlay(s) with {SessionPackageCount} session package(s), {WarningCount} warning(s), and {ErrorCount} error(s) in {ElapsedMilliseconds} ms",
+                "Started package worker {PackageId} in {ElapsedMilliseconds} ms",
+                "Activated package Runtime generation {SessionGeneration} for {PackageWorkerCount} package worker(s) in {ElapsedMilliseconds} ms",
+                "Published package session snapshot for generation {SessionGeneration} in {ElapsedMilliseconds} ms",
+                "Published package session generation {SessionGeneration} with {ActivePackageCount} active package(s) in {ElapsedMilliseconds} ms",
+                "Synchronized {WatchTargetCount} dev package watcher target(s) in {ElapsedMilliseconds} ms after waiting {GateWaitMilliseconds} ms for the watcher transition gate",
+                "Dev package owner mutation {MutationId} for {OwnerId} completed with {MutationOutcome}, {PackageCount} package(s), and generation {SessionGeneration} in {ElapsedMilliseconds} ms",
+            ];
+            var entries = logger.Entries;
+            var timingEntries = expectedTemplates
+                .Select(template => Assert.Single(entries, entry => string.Equals(entry.Template, template, StringComparison.Ordinal)))
+                .ToArray();
+
+            Assert.All(timingEntries, entry =>
+            {
+                Assert.True(entry.Properties.TryGetValue("ElapsedMilliseconds", out var elapsed));
+                Assert.True(Assert.IsType<double>(elapsed) >= 0);
+            });
+            Assert.Contains(timingEntries, entry =>
+                entry.Properties.GetValueOrDefault("MutationId") as string == mutationId);
+            Assert.Contains(timingEntries, entry =>
+                entry.Properties.GetValueOrDefault("PackageId") as string == "timed.package");
+            var diagnostics = string.Join(
+                Environment.NewLine,
+                timingEntries.SelectMany(entry =>
+                    entry.Properties.Values.Select(value => value?.ToString() ?? string.Empty).Append(entry.Message)));
+            Assert.DoesNotContain(token, diagnostics, StringComparison.Ordinal);
+            Assert.DoesNotContain(dev, diagnostics, StringComparison.Ordinal);
         }
         finally
         {
@@ -443,7 +504,8 @@ public sealed class DevPackageOwnerLeaseTests
 
     private static TestFixture CreateFixture(
         RuntimeLifecyclePolicyOptions? policy = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<RuntimePackageSessionTestHost>? logger = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-dev-owner-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -451,7 +513,7 @@ public sealed class DevPackageOwnerLeaseTests
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
         var host = new RuntimePackageSessionTestHost(
-            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            logger ?? NullLogger<RuntimePackageSessionTestHost>.Instance,
             store,
             installer,
             lifecyclePolicy: policy,
@@ -485,6 +547,50 @@ public sealed class DevPackageOwnerLeaseTests
         public override DateTimeOffset GetUtcNow() => _now;
         public void Advance(TimeSpan amount) => _now += amount;
     }
+
+    private sealed class CollectingLogger : ILogger<RuntimePackageSessionTestHost>
+    {
+        private readonly ConcurrentQueue<LogEntry> _entries = new();
+
+        public IReadOnlyList<LogEntry> Entries => _entries.ToArray();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+            if (state is IEnumerable<KeyValuePair<string, object?>> values)
+            {
+                foreach (var value in values)
+                {
+                    properties[value.Key] = value.Value;
+                }
+            }
+            _entries.Enqueue(new LogEntry(
+                properties.GetValueOrDefault("{OriginalFormat}") as string ?? string.Empty,
+                formatter(state, exception),
+                properties));
+        }
+
+        public void Clear()
+        {
+            while (_entries.TryDequeue(out _))
+            {
+            }
+        }
+    }
+
+    private sealed record LogEntry(
+        string Template,
+        string Message,
+        IReadOnlyDictionary<string, object?> Properties);
 
     private sealed record TestFixture(
         RuntimePackagePaths Paths,

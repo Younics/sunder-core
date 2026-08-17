@@ -27,7 +27,7 @@ internal static class SunderRpcDescriptorParser
         }
         if (descriptorUtf8.StartsWith(Encoding.UTF8.Preamble))
         {
-            throw Error("An RPC descriptor must be UTF-8 without a byte-order mark.");
+            throw Error("An RPC descriptor must be UTF-8 without a byte-order mark.", "descriptor-json");
         }
 
         try
@@ -36,7 +36,10 @@ internal static class SunderRpcDescriptorParser
         }
         catch (DecoderFallbackException exception)
         {
-            throw Error($"The RPC descriptor is not strict UTF-8 JSON: {exception.Message}", exception);
+            throw Error(
+                $"The RPC descriptor is not strict UTF-8 JSON: {exception.Message}",
+                exception,
+                "descriptor-json");
         }
 
         JsonDocument document;
@@ -51,7 +54,7 @@ internal static class SunderRpcDescriptorParser
         }
         catch (JsonException exception)
         {
-            throw Error($"The RPC descriptor is invalid JSON: {exception.Message}", exception);
+            throw Error($"The RPC descriptor is invalid JSON: {exception.Message}", exception, "descriptor-json");
         }
 
         using (document)
@@ -64,7 +67,8 @@ internal static class SunderRpcDescriptorParser
                 || descriptorVersionValue is not (SunderRpcProtocol.DescriptorVersion or SunderRpcProtocol.DescriptorVersionV2))
             {
                 throw Error(
-                    $"$.descriptorVersion must be {SunderRpcProtocol.DescriptorVersion} or {SunderRpcProtocol.DescriptorVersionV2}.");
+                    $"$.descriptorVersion must be {SunderRpcProtocol.DescriptorVersion} or {SunderRpcProtocol.DescriptorVersionV2}.",
+                    "descriptor-version");
             }
 
             try
@@ -77,7 +81,10 @@ internal static class SunderRpcDescriptorParser
             }
             catch (Exception exception) when (exception is JsonException or InvalidOperationException)
             {
-                throw Error($"The RPC descriptor is not strict UTF-8 JSON: {exception.Message}", exception);
+                throw Error(
+                    $"The RPC descriptor is not strict UTF-8 JSON: {exception.Message}",
+                    exception,
+                    "descriptor-json");
             }
 
             var isV2 = descriptorVersionValue == SunderRpcProtocol.DescriptorVersionV2;
@@ -88,14 +95,40 @@ internal static class SunderRpcDescriptorParser
                     "$",
                     "$schema",
                     "descriptorVersion",
+                    "schemaProfile",
                     "contractId",
                     "version",
                     "errors",
                     "services",
                     "$defs");
             }
+
+            if (isV2)
+            {
+                if (!root.TryGetProperty("schemaProfile", out _))
+                {
+                    throw Error("$ is missing required property 'schemaProfile'.", "schema-profile");
+                }
+                var schemaProfile = RequiredString(root, "schemaProfile", "$", 128);
+                if (!string.Equals(
+                        schemaProfile,
+                        SunderRpcProtocol.ValueSchemaProfile,
+                        StringComparison.Ordinal))
+                {
+                    throw Error(
+                        $"$.schemaProfile must be '{SunderRpcProtocol.ValueSchemaProfile}'.",
+                        "schema-profile");
+                }
+            }
             else
             {
+                if (root.TryGetProperty("schemaProfile", out _)
+                    || root.TryGetProperty("errors", out _))
+                {
+                    throw Error(
+                        "A descriptor using V2 root fields must set descriptorVersion to 2.",
+                        "descriptor-version");
+                }
                 RequireOnlyProperties(
                     root,
                     "$",
@@ -145,16 +178,16 @@ internal static class SunderRpcDescriptorParser
             }
 
             SunderRpcSchemaProfile.ValidateDefinitions(definitions, descriptorVersionValue);
-            var errorDescriptions = isV2
-                ? ParseErrors(Required(root, "errors", "$", JsonValueKind.Object))
-                : new Dictionary<string, string?>(StringComparer.Ordinal);
+            var errorDeclarations = isV2
+                ? ParseErrors(Required(root, "errors", "$", JsonValueKind.Object), definitions)
+                : new Dictionary<string, SunderRpcErrorDeclaration>(StringComparer.Ordinal);
             var servicesElement = isV2
                 ? Required(root, "services", "$", JsonValueKind.Object)
                 : Required(root, "services", "$", JsonValueKind.Array, JsonValueKind.Object);
             var services = ParseServices(
                 servicesElement,
                 definitions,
-                errorDescriptions.Keys.ToHashSet(StringComparer.Ordinal),
+                errorDeclarations.Keys.ToHashSet(StringComparer.Ordinal),
                 descriptorVersionValue);
             var canonicalUtf8 = Canonicalize(root);
             var sha256 = Convert.ToHexString(SHA256.HashData(canonicalUtf8)).ToLowerInvariant();
@@ -166,9 +199,10 @@ internal static class SunderRpcDescriptorParser
                 : HashAbiV2(canonicalAbiProjectionUtf8);
             return new SunderRpcContractDescriptor(
                 descriptorVersionValue,
+                isV2 ? SunderRpcProtocol.ValueSchemaProfile : null,
                 contractId,
                 version,
-                errorDescriptions,
+                errorDeclarations.Values,
                 services,
                 definitions,
                 canonicalUtf8,
@@ -178,14 +212,16 @@ internal static class SunderRpcDescriptorParser
         }
     }
 
-    private static Dictionary<string, string?> ParseErrors(JsonElement element)
+    private static Dictionary<string, SunderRpcErrorDeclaration> ParseErrors(
+        JsonElement element,
+        IReadOnlyDictionary<string, JsonElement> definitions)
     {
         if (element.GetPropertyCount() > MaximumErrors)
         {
             throw Error($"$.errors may contain at most {MaximumErrors} declarations.");
         }
 
-        var errors = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var errors = new Dictionary<string, SunderRpcErrorDeclaration>(StringComparer.Ordinal);
         foreach (var declaration in element.EnumerateObject())
         {
             var path = "$.errors." + declaration.Name;
@@ -194,7 +230,7 @@ internal static class SunderRpcDescriptorParser
                 throw Error($"{path} has an invalid domain error code.");
             }
             RequireKind(declaration.Value, JsonValueKind.Object, path, "an object");
-            RequireOnlyProperties(declaration.Value, path, "description");
+            RequireOnlyProperties(declaration.Value, path, "description", "detailsSchema");
             string? description = null;
             if (declaration.Value.TryGetProperty("description", out var descriptionElement))
             {
@@ -205,7 +241,21 @@ internal static class SunderRpcDescriptorParser
                     throw Error($"{path}.description may contain at most {MaximumAnnotationCharacters} characters.");
                 }
             }
-            errors.Add(declaration.Name, description);
+            string? detailsSchemaReference = null;
+            if (declaration.Value.TryGetProperty("detailsSchema", out var detailsSchema))
+            {
+                detailsSchemaReference = ReadSchemaReference(
+                    detailsSchema,
+                    path + ".detailsSchema",
+                    definitions,
+                    SunderRpcProtocol.DescriptorVersionV2);
+            }
+            errors.Add(
+                declaration.Name,
+                new SunderRpcErrorDeclaration(
+                    declaration.Name,
+                    description,
+                    detailsSchemaReference));
         }
         return errors;
     }
@@ -423,7 +473,9 @@ internal static class SunderRpcDescriptorParser
         var unexpectedProperty = kind == SunderRpcMethodKind.Unary ? "eventSchema" : "responseSchema";
         if (element.TryGetProperty(unexpectedProperty, out _))
         {
-            throw Error($"{path}.{unexpectedProperty} is not valid for a {kindValue} method.");
+            throw Error(
+                $"{path}.{unexpectedProperty} is not valid for a {kindValue} method.",
+                "method-shape");
         }
         var outputReference = ReadSchemaReference(
             Required(element, outputProperty, path),
@@ -456,7 +508,9 @@ internal static class SunderRpcDescriptorParser
             }
             if (!declaredErrors.Contains(code))
             {
-                throw Error($"{path} references undeclared domain error '{code}'.");
+                throw Error(
+                    $"{path} references undeclared domain error '{code}'.",
+                    "domain-error-reference");
             }
             errors.Add(code);
         }
@@ -476,15 +530,35 @@ internal static class SunderRpcDescriptorParser
         }
         else
         {
-            RequireKind(element, JsonValueKind.Object, path, "a local $ref object");
-            RequireOnlyProperties(element, path, "$ref");
-            reference = RequiredString(element, "$ref", path, 256);
+            if (element.ValueKind != JsonValueKind.Object)
+            {
+                throw Error($"{path} must be a local $ref object.", "schema-reference-shape");
+            }
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.Name != "$ref")
+                {
+                    throw Error(
+                        $"{path} contains unsupported property '{property.Name}'.",
+                        "schema-reference-shape");
+                }
+            }
+            if (!element.TryGetProperty("$ref", out var referenceElement)
+                || referenceElement.ValueKind != JsonValueKind.String
+                || string.IsNullOrEmpty(referenceElement.GetString())
+                || referenceElement.GetString()!.Length > 256)
+            {
+                throw Error($"{path} must contain one string $ref.", "schema-reference-shape");
+            }
+            reference = referenceElement.GetString();
         }
 
         if (!TryGetReferenceName(reference, out var definitionName)
             || !definitions.ContainsKey(definitionName))
         {
-            throw Error($"{path} must reference an existing local schema with '#/$defs/&lt;name&gt;'.");
+            throw Error(
+                $"{path} must reference an existing local schema with '#/$defs/&lt;name&gt;'.",
+                "schema-reference-shape");
         }
         return reference!;
     }
@@ -537,11 +611,11 @@ internal static class SunderRpcDescriptorParser
                     ValidateUnicodeScalars(propertyName);
                     if (!names.Exact.Add(propertyName))
                     {
-                        throw Error($"Duplicate JSON property '{propertyName}' is not allowed.");
+                        throw Error($"Duplicate JSON property '{propertyName}' is not allowed.", "descriptor-json");
                     }
                     if (!names.IgnoreCase.Add(propertyName))
                     {
-                        throw Error($"Case-colliding JSON property '{propertyName}' is not allowed.");
+                        throw Error($"Case-colliding JSON property '{propertyName}' is not allowed.", "descriptor-json");
                     }
                     break;
                 case JsonTokenType.String:
@@ -550,12 +624,27 @@ internal static class SunderRpcDescriptorParser
                 case JsonTokenType.Number:
                     var token = reader.HasValueSequence ? reader.ValueSequence.ToArray() : reader.ValueSpan.ToArray();
                     var text = Encoding.ASCII.GetString(token);
-                    if (!IsCanonicalInteger(text)
-                        || !long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value)
-                        || value is < -MaximumSafeInteger or > MaximumSafeInteger)
+                    if (descriptorVersion == SunderRpcProtocol.DescriptorVersionV2)
+                    {
+                        if (!double.TryParse(
+                                text,
+                                NumberStyles.Float,
+                                CultureInfo.InvariantCulture,
+                                out var finiteNumber)
+                            || !double.IsFinite(finiteNumber))
+                        {
+                            throw Error(
+                                $"Descriptor number '{text}' is not a finite IEEE-754 binary64 value.",
+                                "descriptor-number");
+                        }
+                    }
+                    else if (!IsCanonicalInteger(text)
+                             || !long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value)
+                             || value is < -MaximumSafeInteger or > MaximumSafeInteger)
                     {
                         throw Error(
-                            $"Descriptor number '{text}' is unsupported; descriptor numbers must be canonical IEEE-754 safe integers.");
+                            $"Descriptor number '{text}' is unsupported; V1 descriptor numbers must be canonical IEEE-754 safe integers.",
+                            "descriptor-number");
                     }
                     break;
             }
@@ -579,7 +668,7 @@ internal static class SunderRpcDescriptorParser
                 || index + 1 >= value.Length
                 || !char.IsLowSurrogate(value[++index]))
             {
-                throw Error("JSON strings must contain only Unicode scalar values.");
+                throw Error("JSON strings must contain only Unicode scalar values.", "descriptor-json");
             }
         }
     }
@@ -626,7 +715,7 @@ internal static class SunderRpcDescriptorParser
                 WriteJsonString(output, element.GetString()!);
                 break;
             case JsonValueKind.Number:
-                WriteAscii(output, element.GetRawText());
+                WriteAscii(output, FormatCanonicalNumber(element));
                 break;
             case JsonValueKind.True:
                 WriteBytes(output, "true"u8);
@@ -712,6 +801,7 @@ internal static class SunderRpcDescriptorParser
             AbiContext.Root when property.Name == "services" => AbiContext.Services,
             AbiContext.Root when property.Name == "$defs" => AbiContext.Definitions,
             AbiContext.ErrorMap => AbiContext.ErrorDeclaration,
+            AbiContext.ErrorDeclaration when property.Name == "detailsSchema" => AbiContext.Schema,
             AbiContext.Services => AbiContext.Service,
             AbiContext.Service when property.Name == "methods" => AbiContext.Methods,
             AbiContext.Methods => AbiContext.Method,
@@ -860,9 +950,14 @@ internal static class SunderRpcDescriptorParser
         JsonElement schema,
         IReadOnlyDictionary<string, JsonElement> definitions)
     {
+        var visited = new HashSet<string>(StringComparer.Ordinal);
         while (schema.TryGetProperty("$ref", out var reference))
         {
             TryGetReferenceName(reference.GetString(), out var name);
+            if (!visited.Add(name))
+            {
+                throw Error("A schema reference cycle reached ABI normalization.", "schema-reference-cycle");
+            }
             schema = definitions[name];
         }
         return schema;
@@ -920,6 +1015,77 @@ internal static class SunderRpcDescriptorParser
             }
         }
         WriteByte(output, (byte)'"');
+    }
+
+    private static string FormatCanonicalNumber(JsonElement element)
+    {
+        var raw = element.GetRawText();
+        if (!double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            || !double.IsFinite(value))
+        {
+            throw Error($"Descriptor number '{raw}' is not finite.", "descriptor-number");
+        }
+        if (value == 0) return "0";
+
+        var roundTrip = value.ToString("R", CultureInfo.InvariantCulture);
+        var negative = roundTrip[0] == '-';
+        var offset = negative ? 1 : 0;
+        var exponentIndex = roundTrip.AsSpan(offset).IndexOfAny('E', 'e');
+        if (exponentIndex >= 0) exponentIndex += offset;
+        var mantissaEnd = exponentIndex >= 0 ? exponentIndex : roundTrip.Length;
+        var exponent = exponentIndex >= 0
+            ? int.Parse(roundTrip.AsSpan(exponentIndex + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture)
+            : 0;
+        var decimalIndex = roundTrip.AsSpan(offset, mantissaEnd - offset).IndexOf('.');
+        if (decimalIndex >= 0) decimalIndex += offset;
+        var integerDigits = decimalIndex >= 0 ? decimalIndex - offset : mantissaEnd - offset;
+
+        var digitsBuffer = new char[mantissaEnd - offset];
+        var digitCount = 0;
+        for (var index = offset; index < mantissaEnd; index++)
+        {
+            if (roundTrip[index] != '.') digitsBuffer[digitCount++] = roundTrip[index];
+        }
+        var firstNonZero = 0;
+        while (firstNonZero < digitCount && digitsBuffer[firstNonZero] == '0') firstNonZero++;
+        var lastNonZero = digitCount - 1;
+        while (lastNonZero > firstNonZero && digitsBuffer[lastNonZero] == '0') lastNonZero--;
+        var digits = new string(digitsBuffer[firstNonZero..(lastNonZero + 1)]);
+        var decimalPosition = integerDigits + exponent - firstNonZero;
+
+        var output = new StringBuilder(negative ? digits.Length + 8 : digits.Length + 7);
+        if (negative) output.Append('-');
+        if (digits.Length <= decimalPosition && decimalPosition <= 21)
+        {
+            output.Append(digits);
+            output.Append('0', decimalPosition - digits.Length);
+        }
+        else if (decimalPosition is > 0 and <= 21)
+        {
+            output.Append(digits.AsSpan(0, decimalPosition));
+            output.Append('.');
+            output.Append(digits.AsSpan(decimalPosition));
+        }
+        else if (decimalPosition is > -6 and <= 0)
+        {
+            output.Append("0.");
+            output.Append('0', -decimalPosition);
+            output.Append(digits);
+        }
+        else
+        {
+            output.Append(digits[0]);
+            if (digits.Length > 1)
+            {
+                output.Append('.');
+                output.Append(digits.AsSpan(1));
+            }
+            var scientificExponent = decimalPosition - 1;
+            output.Append('e');
+            if (scientificExponent >= 0) output.Append('+');
+            output.Append(scientificExponent.ToString(CultureInfo.InvariantCulture));
+        }
+        return output.ToString();
     }
 
     private static byte ToLowerHex(int value)
@@ -987,11 +1153,18 @@ internal static class SunderRpcDescriptorParser
         }
     }
 
-    internal static SunderRpcDescriptorException Error(string message)
-        => new(message.Replace("&lt;", "<", StringComparison.Ordinal).Replace("&gt;", ">", StringComparison.Ordinal));
+    internal static SunderRpcDescriptorException Error(
+        string message,
+        string errorCode = "descriptor-representation")
+        => new(
+            errorCode,
+            message.Replace("&lt;", "<", StringComparison.Ordinal).Replace("&gt;", ">", StringComparison.Ordinal));
 
-    private static SunderRpcDescriptorException Error(string message, Exception innerException)
-        => new(message, innerException);
+    private static SunderRpcDescriptorException Error(
+        string message,
+        Exception innerException,
+        string errorCode = "descriptor-representation")
+        => new(errorCode, message, innerException);
 
     private static bool IsMemberId(string value)
         => value.Length is > 0 and <= 128

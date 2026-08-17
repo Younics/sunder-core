@@ -61,6 +61,7 @@ static async Task RunDotNetToNodeInteropAsync(
         request,
         cancellationToken: cancellationToken);
     string? faultCode = null;
+    JsonElement? faultDetails = null;
     try
     {
         await context.Rpc.InvokeAsync(
@@ -73,11 +74,20 @@ static async Task RunDotNetToNodeInteropAsync(
     catch (SunderRpcException exception) when (exception.Error.Kind == SunderRpcErrorKind.Domain)
     {
         faultCode = exception.Error.Code;
+        faultDetails = exception.Error.Details;
     }
+    var faultReason = faultDetails is { } details
+        ? details.GetProperty("reason").GetString()
+        : null;
+    var faultRetryable = faultDetails is { } retryDetails
+        ? retryDetails.GetProperty("retryable").GetBoolean()
+        : (bool?)null;
     if (unary.GetProperty("message").GetString() != "native SEA unary"
         || !events.SequenceEqual(["native SEA stream 1", "native SEA stream 2"])
         || data.GetProperty("message").GetString() != "shared Worker V3 package data"
-        || faultCode != "example.rejected")
+        || faultCode != "example.rejected"
+        || faultReason != "conformance rejection"
+        || faultRetryable is not false)
     {
         throw new InvalidOperationException(".NET to Node Runtime Host RPC conformance failed.");
     }
@@ -89,6 +99,7 @@ static async Task RunDotNetToNodeInteropAsync(
             stream = events,
             data = data.GetProperty("message").GetString(),
             faultCode,
+            faultDetails,
         }),
         cancellationToken);
 }
@@ -123,7 +134,12 @@ sealed class InteropRpcHandler : ISunderRpcServiceHandler, ISunderRpcDeclaredErr
             return ValueTask.FromException<JsonElement>(new SunderRpcException(new SunderRpcError(
                 SunderRpcErrorKind.Domain,
                 "example.rejected",
-                "rejected")));
+                "rejected",
+                details: JsonSerializer.SerializeToElement(new
+                {
+                    reason = "conformance rejection",
+                    retryable = false,
+                }))));
         }
         return ValueTask.FromResult(JsonSerializer.SerializeToElement(new
         {

@@ -18,12 +18,13 @@ Transport framing, package archive format, registry resolution, user-consent UI,
 
 ## V2 Delta Boundary
 
-V2 intentionally retains V1's closed, bounded schema profile, local acyclic references, descriptor limits, and unary/server-stream shapes. The following rules are V2-only:
+V2 retains V1's descriptor limits and unary/server-stream shapes while selecting the normative `sunder.rpc.values.v1` value profile. The following rules are V2-only:
 
 - one descriptor representation: keyed services, keyed methods, keyed errors, and closed object references;
 - root error declarations and method `errors` and `idempotency` members;
-- the three `logicalType` forms and their canonical wire values;
-- finite binary64 runtime `number` semantics and safe runtime `integer` semantics;
+- asserted string and number formats, exact string numerics, bounded JSON escape hatches, base64 bytes, and the exact `content-reference` logical type;
+- finite binary32/binary64 runtime `number` semantics and safe runtime `integer` semantics;
+- controlled productive local recursion;
 - the annotation-stripped, domain-separated ABI hash in addition to the full descriptor hash;
 - exact role-scoped use locks, `package`/`public` exposure, `owner`/`public` audience, and ongoing required/optional readiness; and
 - the precise ASCII-only case-collision fold used by V2.
@@ -40,6 +41,7 @@ The root is closed and has these members:
 | --- | --- | --- |
 | `$schema` | No | If present, exactly `https://json-schema.org/draft/2020-12/schema`. |
 | `descriptorVersion` | Yes | Integer `2`. |
+| `schemaProfile` | Yes | Exactly `sunder.rpc.values.v1`. |
 | `contractId` | Yes | Lowercase dot-separated ASCII identifier, 1 through 128 characters. Every segment is non-empty and contains only `a-z` and `0-9`. |
 | `version` | Yes | Strict SemVer 2.0, at most 256 characters. Build metadata is part of exact version identity. |
 | `errors` | Yes | Object containing zero through 256 domain-error declarations keyed by error code. |
@@ -50,7 +52,7 @@ Unknown root members are invalid. Definition names are 1 through 128 ASCII lette
 
 `services` MUST be keyed by `serviceId`, and each service's required `methods` object MUST be keyed by `methodId`. A service value contains only `methods`. A method value does not repeat its key. List forms and repeated `serviceId` or `methodId` members are invalid. Each methods object is non-empty, and a descriptor has at most 512 methods in total.
 
-`errors` MUST be keyed by error code. Each value is a closed object with optional `description` and no repeated `code`; `{}` is valid. `description` is an annotation of at most 2048 Unicode scalar values.
+`errors` MUST be keyed by error code. Each value is a closed object with optional `description` and `detailsSchema`; `{}` is valid. `description` is an annotation of at most 2048 Unicode scalar values. `detailsSchema`, when present, is an exact closed local definition reference. It declares the optional machine-readable detail value carried by that domain error and is ABI material. Infrastructure-error detail semantics are outside the descriptor.
 
 A method is a closed object with:
 
@@ -67,52 +69,68 @@ A method schema reference MUST be the closed object `{ "$ref": "#/$defs/<name>" 
 
 ## Restricted Schema Profile
 
-Schemas use Draft 2020-12 vocabulary only through the closed profile below. This is not unrestricted JSON Schema. Unknown keywords, remote references, dynamic references, recursive references, open records, unbounded strings or collections, ambiguous unions, and unsupported formats are invalid.
+Every V2 root selects `sunder.rpc.values.v1`. Schemas use Draft 2020-12 vocabulary only through the closed forms below. This is not unrestricted JSON Schema. Unknown keywords, remote or dynamic references, open record forms, ambiguous unions, unsupported formats, and unbounded ordinary strings or collections are invalid.
 
-Every schema object MUST be exactly one of these forms. Non-reference forms MAY carry `title` and `description` annotations of at most 2048 scalar values; a reference has no siblings:
+Every schema object MUST be exactly one form. Non-reference forms MAY carry `title` and `description` annotations of at most 2048 Unicode scalar values; a reference has no siblings.
 
 | Form | Required members | Other allowed members |
 | --- | --- | --- |
 | Reference | Only `$ref` to an existing `#/$defs/<name>` | None |
-| Union | `oneOf` with 2 through 16 schemas | None |
-| Closed record | `type: "object"`, `properties`, `required`, `additionalProperties: false` | `minProperties`, `maxProperties` |
-| Bounded map | `type: "object"`, schema-valued `additionalProperties`, bounded string `propertyNames`, `minProperties`, `maxProperties` | Empty `properties`, empty `required` |
-| Array | `type: "array"`, `items`, `minItems`, `maxItems` | None |
-| String | `type: "string"`, `minLength`, `maxLength` | `enum` or `const` |
-| Integer or number | `type`, exactly one of `minimum` or `exclusiveMinimum`, and exactly one of `maximum` or `exclusiveMaximum` | `enum` or `const` |
-| Boolean or null | `type` | `enum` or `const` |
-| V2 logical value | One of the exact forms in [Logical Types](#logical-types) | None |
+| Union | `oneOf` with 2 through 16 schemas | Annotations |
+| JSON | No structural member: `{}` after annotations are removed | Annotations |
+| JSONObject | `type: "object"` and no record/map members | `maxProperties`, annotations |
+| Closed record | `type: "object"`, `properties`, `required`, `additionalProperties: false` | `minProperties`, `maxProperties`, annotations |
+| Bounded map | `type: "object"`, schema-valued `additionalProperties`, ordinary bounded-string `propertyNames`, `minProperties`, `maxProperties` | Empty `properties`, empty `required`, annotations |
+| Array | `type: "array"`, `items`, `minItems`, `maxItems` | Annotations |
+| Ordinary string | `type: "string"`, `minLength`, `maxLength` | `enum` or `const`, annotations |
+| Formatted string | `type: "string"`, one supported `format` | Format-specific limits and exact-value bounds, annotations |
+| Base64 bytes | `type: "string"`, `contentEncoding: "base64"`, `maxDecodedBytes` | Annotations |
+| Safe integer | `type: "integer"` | Numeric bounds, `enum` or `const`, annotations |
+| Floating point | `type: "number"`, `format: "float32"` or `format: "float64"` | Numeric bounds, `enum` or `const`, annotations |
+| Boolean or null | `type` | `enum` or `const`, annotations |
+| Content reference | `type: "object"`, `logicalType: "content-reference"` | Annotations |
 
-`enum` and `const` are mutually exclusive. An enum contains 1 through 256 unique primitive values compatible with its declared type. Record property names are non-empty, at most 128 scalar values, and MUST NOT duplicate or ASCII-case-collide. `required` contains unique declared property names. A map MUST NOT mix named properties with map entries.
+`enum` and `const` are mutually exclusive. An enum contains 1 through 256 semantically unique primitive values compatible with its declared type. Inclusive and exclusive bounds on the same side are mutually exclusive. All present lower bounds MUST be no greater than corresponding upper bounds. Length, collection, exact-digit, precision, scale, decoded-byte, and dynamic-property limits are integers from 0 through 1,000,000, except `maxDigits` and `maxPrecision`, which are at least 1. A closed record has at most 256 declared properties; its optional property-count bounds cannot exceed that count. The descriptor has a maximum non-repeating resolved schema depth of 64 and at most 4096 physical schema nodes.
 
-All lower bounds MUST be no greater than their corresponding upper bounds. Length and collection bounds are from 0 through 1,000,000. A closed record has at most 256 declared properties; its optional property-count bounds cannot exceed that count. The complete descriptor has a maximum schema depth of 64 and at most 4096 schema nodes.
+Record property names are non-empty, at most 128 scalar values, and MUST NOT duplicate or ASCII-case-collide in the descriptor. `required` contains unique declared names. A map MUST NOT mix named properties with map entries. A closed empty record is the ordinary unit value and validates only `{}`; JSONObject is a distinct dynamic object form.
+
+JSON validates any JSON value and JSONObject validates any JSON object. JSONObject's `maxProperties` defaults to 1,000,000. Values reached through either form remain bounded at runtime: nesting depth is at most 64, each string has at most 1,000,000 scalar values, each array or object has at most 1,000,000 entries, and every number must decode to a finite binary64 value.
 
 A `oneOf` is valid only when it is one of these forms:
 
-- A nullable union has exactly two variants, exactly one of which resolves to `{ "type": "null" }`.
+- A nullable union has exactly two variants, exactly one of which resolves to `{ "type": "null" }`, and exactly one branch accepts null.
 - A tagged union has only variants that resolve to closed records and exactly one common required property whose inline schema has `type: "string"` and a distinct string `const` in every resolved variant. That property is the discriminator.
 
-References MUST be local, acyclic, resolve through `$defs`, and contain no siblings. JSON Schema keywords not listed above, including `format`, `pattern`, `default`, `anyOf`, `allOf`, `not`, `if`, `then`, `else`, `unevaluatedProperties`, and tuple-array keywords, are outside the profile.
+References MUST be exact local references resolving through `$defs`. Recursion is permitted only when every reference cycle crosses at least one productive boundary: an optional closed-record property, an array with `minItems: 0`, or a map with `minProperties: 0`. Removing productive edges from the definition-reference graph MUST leave it acyclic. Thus a required self-property, a direct alias cycle, an array with a positive minimum containing itself, and a map with a positive minimum containing itself are invalid. Validation, resolution for union discrimination, and hashing MUST terminate for every valid recursive descriptor.
 
-[`descriptor.schema.json`](descriptor.schema.json) checks the machine-readable structural subset. Checks requiring raw token text or whole-document analysis remain normative prose: duplicate and case-colliding names, canonical number spelling, resolved local references, acyclicity, method totals, bound ordering, and union discrimination.
+Keywords not listed for a form, including `pattern`, `default`, `anyOf`, `allOf`, `not`, `if`, `then`, `else`, `unevaluatedProperties`, and tuple-array keywords, are outside the descriptor value profile. [`descriptor.schema.json`](descriptor.schema.json) checks the machine-readable structural subset. Checks requiring raw tokens, format algorithms, exact arithmetic, or whole-document graph analysis remain normative prose.
 
-## Logical Types
+## Asserted Formats
 
-Logical types are a V2 addition. Their schema forms are exact except for optional `title` and `description`:
+`format` is an assertion, not an annotation. It is allowed only on the exact string and number forms described here.
+
+- `uuid` is lowercase RFC 9562 hyphenated text `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`; braces, uppercase, compact forms, and whitespace are invalid.
+- `date` is a valid proleptic-Gregorian date from year 0001 through 9999 in `YYYY-MM-DD` form.
+- `date-time` has `YYYY-MM-DDTHH:mm:ss[.fraction](Z|+HH:MM|-HH:MM)` form and DateTimeOffset semantics. `T` and `Z` are uppercase, the offset is no greater than 14:00, seconds are `00` through `59`, leap seconds are invalid, and a present fraction has 1 through 9 digits. An offset is mandatory.
+- `duration` is canonical non-negative ISO 8601 `P[nY][nM][nD][T[nH][nM][n[.fraction]S]]` text with at least one component. Components have no leading zero unless zero, and a fractional second has no trailing zero. Week, sign, and fractional non-second forms are invalid.
+- `uri` is an absolute RFC 3986-style URI with an ASCII scheme, no controls, spaces, DEL, or reverse solidus, and only complete hexadecimal percent escapes.
+- `big-integer` is a canonical exact integer string and requires `maxDigits`.
+- `decimal` is a canonical exact decimal string and requires `maxPrecision` and `maxScale`.
+- `float32` and `float64` apply only to `type: "number"` and select IEEE-754 binary32 or binary64 decoding respectively. Bare `type: "number"` is invalid.
+
+A canonical big integer is `0` or `-?[1-9][0-9]*`. Its digit count excludes the sign. A canonical decimal is an optional `-`, an integer part that is `0` or has no leading zero, and an optional fraction whose last digit is nonzero. `-0`, exponent notation, a plus sign, leading integer zeroes, a bare decimal point, and trailing fractional zeroes are invalid. Decimal precision is the count of coefficient digits after leading zeroes are removed, with zero having precision 1; scale is the fraction length.
+
+Big-integer and decimal schemas MAY carry at most one of `valueMinimum` and `valueExclusiveMinimum`, and at most one of `valueMaximum` and `valueExclusiveMaximum`. Every bound is a canonical string fitting that schema's digit, precision, and scale limits. Values and bounds are ordered as mathematical integers or decimals using exact arithmetic, never binary floating point or locale rules.
+
+Base64 values use the standard RFC 4648 alphabet, required canonical padding, no whitespace, and zero unused trailing bits. `maxDecodedBytes` bounds decoded length; encoded length is not the resource measure.
+
+`logicalType` is reserved in this profile except for the exact content-reference schema:
 
 ```json
-{ "type": "string", "logicalType": "uuid" }
-{ "type": "string", "logicalType": "utc-date-time" }
 { "type": "object", "logicalType": "content-reference" }
 ```
 
-They do not also declare ordinary bounds, `enum`, `const`, properties, or another logical type.
-
-`uuid` is the lowercase RFC 9562 hyphenated text form `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, where each `x` is `0-9` or `a-f`. The nil UUID is valid unless the contract documents a stronger domain rule. Braces, uppercase hexadecimal, compact forms, and leading or trailing whitespace are invalid.
-
-`utc-date-time` is a valid proleptic-Gregorian UTC instant from year 0001 through 9999 in `YYYY-MM-DDTHH:mm:ss[.fraction]Z` form. `T` and `Z` are uppercase, seconds are `00` through `59`, and offsets and leap seconds are invalid. A nonzero fraction has 1 through 9 digits and MUST NOT end in `0`; a zero fraction is omitted. This gives every represented instant one text form.
-
-`content-reference` has this exact JSON value shape:
+It does not also declare properties, bounds, `enum`, `const`, `format`, or another logical type. A `content-reference` has this exact JSON value shape:
 
 ```json
 {
@@ -126,20 +144,20 @@ They do not also declare ordinary bounds, `enum`, `const`, properties, or anothe
 }
 ```
 
-All seven members are required and no others are allowed. `id` is non-empty and at most 256 scalar values. `length` is a safe integer from 0 through 9007199254740991. `mediaType` is non-empty and at most 256 ASCII characters. `fileName` is display-only, has no path semantics, and is at most 1024 scalar values. `expiresAtUtc` is `utc-date-time`. `repeatability` is `single-use` or `repeatable`.
+All seven members are required and no others are allowed. `id` is non-empty and at most 256 scalar values. `length` is a safe integer from 0 through 9007199254740991. `mediaType` is non-empty and at most 256 ASCII characters. `fileName` is display-only, has no path semantics, and is at most 1024 scalar values. `expiresAtUtc` retains canonical UTC `YYYY-MM-DDTHH:mm:ss[.fraction]Z`, where a present 1 through 9 digit nonzero fraction does not end in zero. `repeatability` is `single-use` or `repeatable`.
 
 A content reference is Host-issued capability metadata, not self-authenticating JSON. The Host MUST bind it to its owner, recipient audience, exact provider activation, invocation, Runtime generation, expiry, digest, and remaining-use policy. A receiver MUST NOT gain authority by constructing or modifying the object. Host policy MAY impose tighter byte, lifetime, and use limits.
 
 ## Values And Presence
 
-Descriptor numeric tokens, including schema bounds and enum values, MUST use the lexical grammar `0|-?[1-9][0-9]*`, MUST NOT be negative zero, and MUST be in the inclusive IEEE-754 safe-integer range -9007199254740991 through 9007199254740991. Fractions, exponents, and leading zeroes are invalid in a descriptor.
+Every descriptor JSON number MUST decode to a finite IEEE-754 binary64 value. Fractions and exponents are allowed where a number-valued profile keyword permits them. Integer-valued keywords, safe-integer bounds, and integer `enum` or `const` values MUST remain mathematical integers in the inclusive range -9007199254740991 through 9007199254740991. Infinity is invalid even when produced only by conversion of a syntactically valid JSON token.
 
 Runtime values have these cross-language semantics:
 
 - `integer` accepts only mathematical integers in the safe-integer range. It is not an arbitrary 64-bit integer type.
-- `number` is a finite IEEE-754 binary64 value. JSON NaN and infinities do not exist; a decimal token that converts to an infinity is invalid. Bounds are the exactly representable safe integers authored in the descriptor.
-- Binary64 negative zero compares equal to zero for bounds, `enum`, and `const`. Encoders SHOULD emit it as `0`.
-- Implementations MUST NOT silently use decimal or arbitrary-precision behavior that changes binary64 validation or equality.
+- `number` requires `float32` or `float64`. Incoming decimal JSON is decoded to the selected IEEE-754 format before bounds, `enum`, and `const` comparison. The decoded value MUST be finite.
+- Negative zero compares equal to zero for bounds, `enum`, and `const`. Encoders SHOULD emit it as `0`.
+- Implementations MUST NOT silently use decimal, binary64-for-binary32, or arbitrary-precision behavior that changes selected-format validation or equality.
 
 Canonical descriptor restrictions do not require incoming request, response, or event JSON to use canonical number text.
 
@@ -160,13 +178,13 @@ An RPC error envelope contains `kind`, `code`, sanitized `message`, `dispatchSta
 
 `domain`, `permission-denied`, `not-found`, `stale-endpoint`, `validation`, `deadline-exceeded`, `cancelled`, `resource-exhausted`, `unavailable`, `provider-faulted`, and `protocol`.
 
-A provider may emit only `domain`, and only with a code listed by that method. Domain errors have no structured payload; contracts needing machine-readable failure data SHOULD put a tagged result union in the normal response. All other kinds are Host-authenticated infrastructure failures. A forged infrastructure kind or undeclared domain code is a protocol violation. Messages are diagnostic, are not stable ABI, and MUST NOT contain secrets or private exception details.
+A provider may emit only `domain`, and only with a code listed by that method. A declared domain error MAY carry a detail value validated against its declaration's `detailsSchema`; without that member it carries no detail value. All other kinds are Host-authenticated infrastructure failures, and infrastructure detail semantics remain outside the descriptor. A forged infrastructure kind, undeclared domain code, missing required validation, or mismatched detail value is a protocol violation. Messages are diagnostic, are not stable ABI, and MUST NOT contain secrets or private exception details.
 
 The Host stamps `dispatchState` as `not-dispatched` only when the provider handler was not entered, and as `possibly-dispatched` once handler entry may have occurred. It stamps `retrySafety` as `safe` for a non-dispatched failure and, after possible dispatch, only for an `idempotent` unary method. A dispatched server stream is always `unsafe` because establishment idempotency does not make delivered events replayable. These fields describe duplicate-effect safety, not whether another attempt is likely to succeed.
 
 `idempotency: "none"` means repeating a dispatched call may repeat effects. `idempotency: "idempotent"` means that, for the same authenticated caller, exact provider, method, and semantically equal request, any number of completed invocations has the same externally visible effect as one invocation. It does not require byte-identical responses.
 
-The Host MUST NOT transparently retry a call after possible provider dispatch. A caller may retry only when method idempotency and the observed failure make that safe. A contract requiring deduplication across crashes or changing responses MUST carry an explicit idempotency key in its request and define key scope and retention as domain semantics. RPC V2 adds no hidden idempotency key; a logical `uuid` is the recommended key representation.
+The Host MUST NOT transparently retry a call after possible provider dispatch. A caller may retry only when method idempotency and the observed failure make that safe. A contract requiring deduplication across crashes or changing responses MUST carry an explicit idempotency key in its request and define key scope and retention as domain semantics. RPC V2 adds no hidden idempotency key; `format: "uuid"` is the recommended key representation.
 
 ## Server Streams
 
@@ -183,7 +201,7 @@ Source whitespace and object-member order are not significant. Source array orde
 1. Serialize UTF-8 with no BOM, indentation, trailing newline, or insignificant whitespace.
 2. Sort object member names by lexicographic UTF-16 code-unit order as required by RFC 8785. Preserve array order.
 3. Serialize strings with RFC 8785 JSON escaping: escape quotation mark, reverse solidus, and controls; use the short escapes for backspace, tab, newline, form feed, and carriage return; use lowercase `\u00xx` for other controls; and emit other scalar values as UTF-8.
-4. Serialize descriptor numbers as their accepted canonical integer text and literals as `true`, `false`, or `null`.
+4. Serialize descriptor numbers with the RFC 8785 finite binary64 number algorithm: shortest round-tripping decimal, lowercase `e`, no redundant exponent zeroes, and `0` for negative zero. Serialize literals as `true`, `false`, or `null`.
 
 `descriptorSha256` identifies the complete descriptor artifact:
 
@@ -195,7 +213,7 @@ It includes `$schema` when present, contract `version`, annotations, all definit
 
 `abiSha256` identifies the V2 structural ABI, not the source artifact. Construct the ABI projection from the validated descriptor model:
 
-1. Remove root `$schema` and `version`.
+1. Remove root `$schema` and `version`. Retain `schemaProfile`.
 2. Remove `description` from each value in the root `errors` object.
 3. Remove `title` and `description` only from recognized non-reference schema objects at every depth. Do not remove record property names that happen to be `title` or `description`.
 4. Sort every method `errors` list by error code using lexicographic UTF-16 code-unit order.
@@ -293,6 +311,7 @@ The initial corpus is indexed by [`conformance/expectations.json`](conformance/e
 | Member | Meaning |
 | --- | --- |
 | `descriptorVersion` | Descriptor version exercised by the corpus. |
+| `schemaProfile` | Exact value-schema profile exercised by the corpus. |
 | `hashes` | Hash names, algorithm, and ABI domain-separator bytes. |
 | `fixtures[].path` | POSIX path relative to the `conformance` directory. |
 | `fixtures[].valid` | Normative V2 validity. |

@@ -39,9 +39,13 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
                 async (candidate, activePackages, prepareCancellationToken) =>
                 {
                     var presentation = uiDispatcher.CheckAccess()
-                        ? packageLifecyclePresenter.PrepareLifecycleChanges(activePackages)
+                        ? packageLifecyclePresenter.PrepareLifecycleChanges(
+                            activePackages,
+                            snapshot.ActivePackages)
                         : await uiDispatcher.InvokeAsync(
-                            () => packageLifecyclePresenter.PrepareLifecycleChanges(activePackages));
+                            () => packageLifecyclePresenter.PrepareLifecycleChanges(
+                                activePackages,
+                                snapshot.ActivePackages));
                     var stabilizedViewIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var viewId in presentation.SelectedViewIds)
                     {
@@ -69,7 +73,20 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
                         }
                     };
                 },
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                async resetCancellationToken =>
+                {
+                    if (uiDispatcher.CheckAccess())
+                    {
+                        detachStagedCandidateViews();
+                    }
+                    else
+                    {
+                        await uiDispatcher.InvokeAsync(
+                            detachStagedCandidateViews,
+                            resetCancellationToken).ConfigureAwait(false);
+                    }
+                }).ConfigureAwait(false);
         }
         finally
         {

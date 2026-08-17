@@ -66,7 +66,10 @@ internal sealed class RuntimePackageSessionTestHost
             packageArchiveInstaller.Paths,
             rpcBroker: rpcBroker,
             packageSessionState: _owner.State);
-        var reconciler = new PackageSessionReconciler(installedPackageStore, loader);
+        var reconciler = new PackageSessionReconciler(
+            installedPackageStore,
+            loader,
+            new ForwardingLogger<PackageSessionReconciler>(logger));
         var publisher = new PackageSessionPublisher(
             _owner,
             new ForwardingLogger<PackageSessionPublisher>(logger),
@@ -80,13 +83,13 @@ internal sealed class RuntimePackageSessionTestHost
             installedPackageStore,
             publisher,
             new PackageLifecycleStageStore(),
-            NullLogger<PackageSessionLifecycleService>.Instance,
+            new ForwardingLogger<PackageSessionLifecycleService>(logger),
             lifecyclePolicy,
             timeProvider);
         _devWatcher = new DevPackageWatchService(
             _sessions,
             events,
-            NullLogger<DevPackageWatchService>.Instance);
+            new ForwardingLogger<DevPackageWatchService>(logger));
         _protocol = new RuntimeProtocolDescriptor();
         _devOwners = new DevPackageOwnerLeaseService(
             _sessions,
@@ -95,7 +98,7 @@ internal sealed class RuntimePackageSessionTestHost
             _protocol,
             lifecyclePolicy,
             timeProvider,
-            NullLogger<DevPackageOwnerLeaseService>.Instance);
+            new ForwardingLogger<DevPackageOwnerLeaseService>(logger));
         _installed = new InstalledPackageLifecycleService(
             _owner,
             gate,

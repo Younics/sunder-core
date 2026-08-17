@@ -27,7 +27,7 @@ V3 uses a standard-stream transport with fail-closed framing rules:
 - every frame has exactly one canonical `Content-Length` header followed by strict UTF-8 JSON;
 - unknown envelope types, unknown properties, duplicate or ASCII-case-colliding properties, invalid ordering, and reused ids are fatal;
 - the Host clears the inherited environment and supplies only explicit package, protocol, path, temporary-directory, and locale values;
-- malformed protocol, deadline failure, queue exhaustion, or unexpected process exit faults the exact package activation without automatic restart.
+- malformed protocol, lifecycle deadline failure, transport-queue exhaustion, or unexpected process exit faults the exact package activation without automatic restart; per-call stream-consumer exhaustion is isolated as described below.
 - The current Host allows up to two minutes for generation commit, migration preparation, and activation acknowledgement. The shorter process-handshake deadline does not bound package-owned generation startup work.
 
 Control frames stay bounded. Data that cannot safely fit after JSON encoding uses a Host-issued ephemeral payload
@@ -176,6 +176,14 @@ authenticated process activation and applies the active session lease. The imple
 
 Worker requests terminate with `host.result`, ordered `host.event` plus `host.complete`, or `host.error`.
 `worker.cancel` is subject to the same terminal-drain rule.
+
+Each received RPC stream has a nonblocking per-call queue bounded independently by message count and encoded JSON
+bytes. If a producer outruns its consumer, the receiver atomically classifies the rejection as `count`, `bytes`, or
+`count+bytes`, cancels only that call, and surfaces `rpc.worker.stream-queue-limit` as `resource-exhausted` with
+`possibly-dispatched` / `unsafe`. Healthy sibling calls and worker activations remain available. A bounded local
+message suffix may identify the limit, queue accounting, operation, and sanitized provider/service/method; it never
+includes request data, secrets, paths, call-scope ids, or raw endpoint references. This diagnostic is not
+`SunderRpcError.Details` and does not add a wire property.
 
 For V3, every authenticated `host.error.error` object contains exactly `kind`, `code`, `message`,
 `dispatchState`, and `retrySafety`. `dispatchState` is `not-dispatched` or `possibly-dispatched`, and

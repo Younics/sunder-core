@@ -282,9 +282,9 @@ public sealed class ShellStartupCoordinator
                     startupAttempt.EnterPhase(StartupPhase.RuntimePackages);
                     await SetProgressAsync(
                             loadingViewModel,
-                            startupOptions.DevPackageFolders.Count > 0
-                                ? "Loading dev packages..."
-                                : "Loading active packages...",
+                            CreateRuntimePackageLoadingStatus(
+                                startupOptions.DevPackageFolders.Count
+                            ),
                             248,
                             cancellationToken
                         )
@@ -695,6 +695,14 @@ public sealed class ShellStartupCoordinator
 
         throw new TimeoutException("Runtime package bootstrap did not become ready in time.");
     }
+
+    internal static string CreateRuntimePackageLoadingStatus(int devPackageCount) =>
+        devPackageCount switch
+        {
+            <= 0 => "Loading active packages...",
+            1 => "Loading 1 dev package. This may take several minutes...",
+            _ => $"Loading {devPackageCount} dev packages. This may take several minutes...",
+        };
 
     internal static async Task<RuntimePackageStartupResult> LoadRuntimePackagesForStartupAsync(
         IRuntimeSnapshotClient runtimeApiClient,

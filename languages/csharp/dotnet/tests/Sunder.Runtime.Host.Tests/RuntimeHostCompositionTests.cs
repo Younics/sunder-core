@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.LocalState;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -27,6 +29,7 @@ public sealed class RuntimeHostCompositionTests
             Assert.NotNull(provider.GetRequiredService<DevPackageWatchService>());
             Assert.NotNull(provider.GetRequiredService<PackageLogStreamService>());
             Assert.NotNull(provider.GetRequiredService<RuntimeEventStreamService>());
+            Assert.NotNull(provider.GetRequiredService<RuntimePackageRecoveryCoordinator>());
             Assert.NotNull(provider.GetRequiredService<RuntimeContentTransferService>());
             Assert.NotNull(provider.GetRequiredService<RuntimePackageUiService>());
             Assert.NotNull(provider.GetRequiredService<PackageSessionCommandService>());
@@ -108,6 +111,98 @@ public sealed class RuntimeHostCompositionTests
 
         Assert.Empty(Directory.EnumerateFiles(paths.TransferRootPath));
         Directory.Delete(root, recursive: true);
+    }
+
+    [Fact]
+    public async Task ResourcePolicy_ConfiguresBrokerTransportProcessAndHandshakeExactly()
+    {
+        var root = CreateTempDirectory();
+        var policy = new RuntimeResourcePolicy(
+            3 * 1024 * 1024,
+            23,
+            123_456,
+            1_234,
+            80 * 1024,
+            9 * 1024 * 1024);
+        try
+        {
+            var services = new ServiceCollection();
+            services.AddRuntimeHostServices(
+                new RuntimePackagePaths(root),
+                new RuntimeBearerTokenValidator("test-runtime-token"),
+                policy);
+            await using var provider = services.BuildServiceProvider();
+
+            var rpc = provider.GetRequiredService<RuntimeRpcPolicyOptions>();
+            var transport = provider.GetRequiredService<RuntimeTransportPolicyOptions>();
+            var process = provider.GetRequiredService<RuntimeProcessPolicyOptions>();
+            var handshake = provider.GetRequiredService<RuntimeProtocolDescriptor>().Handshake;
+            var httpJson = provider.GetRequiredService<
+                Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Http.Json.JsonOptions>>().Value;
+
+            Assert.Same(policy, provider.GetRequiredService<RuntimeResourcePolicy>());
+            Assert.Equal(policy.MaximumRpcValueBytes, rpc.MaxPayloadBytes);
+            Assert.Equal(policy.MaximumValueDepth, rpc.MaxPayloadDepth);
+            Assert.Equal(policy.MaximumValueNodes, rpc.MaxPayloadNodes);
+            Assert.Equal(policy.MaximumObjectMembers, rpc.MaxObjectMembers);
+            Assert.Equal(policy.MaximumContentReferenceBytes, transport.MaxRpcContentBytes);
+            Assert.Equal(36L * 1024 * 1024, transport.MaxRpcContentBytesPerCall);
+            Assert.Equal(144L * 1024 * 1024, transport.MaxRpcContentBytesPerPackage);
+            Assert.Equal(288L * 1024 * 1024, transport.MaxRpcContentBytesPerRuntime);
+            Assert.Same(policy, process.EffectiveResourcePolicy);
+            Assert.Equal(72, httpJson.SerializerOptions.MaxDepth);
+            Assert.Contains(RuntimeProtocolFeatures.RuntimeResourcePolicyV1, handshake.SupportedFeatures);
+            Assert.Contains(RuntimeProtocolFeatures.PackageRuntimeRecoveryV1, handshake.SupportedFeatures);
+            Assert.Equal(
+                RuntimeResourcePolicyContract.GetEffectiveProfileHash(policy),
+                handshake.ResourceProfile?.EffectiveProfileHash);
+            Assert.Equal(policy.MaximumRpcValueBytes, handshake.ResourceProfile?.MaximumRpcValueBytes);
+            Assert.Equal(
+                policy.MaximumContentReferenceBytes,
+                handshake.ResourceProfile?.MaximumContentReferenceBytes);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StandardAndLargePolicies_DeriveClosedRuntimeLimits()
+    {
+        var standardRpc = RuntimeRpcPolicyOptions.FromResourcePolicy(RuntimeResourcePolicies.Standard);
+        var standardTransport = RuntimeTransportPolicyOptions.FromResourcePolicy(RuntimeResourcePolicies.Standard);
+        var largeRpc = RuntimeRpcPolicyOptions.FromResourcePolicy(RuntimeResourcePolicies.Large);
+        var largeTransport = RuntimeTransportPolicyOptions.FromResourcePolicy(RuntimeResourcePolicies.Large);
+
+        Assert.Equal(8 * 1024 * 1024, standardRpc.MaxPayloadBytes);
+        Assert.Equal(524_288, standardRpc.MaxPayloadNodes);
+        Assert.Equal(4_096, standardRpc.MaxObjectMembers);
+        Assert.Equal(64L * 1024 * 1024, standardTransport.MaxRpcContentBytes);
+        Assert.Equal(256L * 1024 * 1024, standardTransport.MaxRpcContentBytesPerCall);
+        Assert.Equal(1024L * 1024 * 1024, standardTransport.MaxRpcContentBytesPerPackage);
+        Assert.Equal(2L * 1024 * 1024 * 1024, standardTransport.MaxRpcContentBytesPerRuntime);
+
+        Assert.Equal(16 * 1024 * 1024, largeRpc.MaxPayloadBytes);
+        Assert.Equal(2_097_152, largeRpc.MaxPayloadNodes);
+        Assert.Equal(16_384, largeRpc.MaxObjectMembers);
+        Assert.Equal(256L * 1024 * 1024, largeTransport.MaxRpcContentBytes);
+        Assert.Equal(RuntimeTransportPolicyOptions.MaximumRpcContentBytesPerCall, largeTransport.MaxRpcContentBytesPerCall);
+        Assert.Equal(RuntimeTransportPolicyOptions.MaximumRpcContentBytesPerPackage, largeTransport.MaxRpcContentBytesPerPackage);
+        Assert.Equal(RuntimeTransportPolicyOptions.MaximumRpcContentBytesPerRuntime, largeTransport.MaxRpcContentBytesPerRuntime);
+    }
+
+    [Fact]
+    public void PackageRecoveryPolicy_DefaultsAreBoundedAndEnabled()
+    {
+        var policy = new RuntimePackageRecoveryPolicyOptions();
+
+        Assert.True(policy.Enabled);
+        Assert.Equal(TimeSpan.FromMinutes(1), policy.FailureWindow);
+        Assert.Equal(
+            [250d, 500d, 1000d, 2000d, 4000d],
+            policy.RestartDelays.Select(delay => delay.TotalMilliseconds).ToArray());
+        Assert.Equal(6, policy.SuspensionFailureCount);
     }
 
     private static string CreateTempDirectory()

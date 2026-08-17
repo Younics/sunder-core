@@ -2,9 +2,24 @@ using System.Text.Json;
 
 namespace Sunder.Runtime.Client;
 
-public sealed class RuntimeHttpResponseReader(RuntimeClientPolicyOptions policy)
+public sealed class RuntimeHttpResponseReader
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions ErrorJsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly RuntimeClientPolicyOptions _policy;
+    private readonly Func<RuntimeClientResourceLimits> _getResourceLimits;
+
+    public RuntimeHttpResponseReader(RuntimeClientPolicyOptions policy)
+        : this(policy, static () => RuntimeClientResourceLimits.Standard)
+    {
+    }
+
+    internal RuntimeHttpResponseReader(
+        RuntimeClientPolicyOptions policy,
+        Func<RuntimeClientResourceLimits> getResourceLimits)
+    {
+        _policy = policy ?? throw new ArgumentNullException(nameof(policy));
+        _getResourceLimits = getResourceLimits ?? throw new ArgumentNullException(nameof(getResourceLimits));
+    }
 
     public async Task<T> ReadRequiredJsonAsync<T>(
         HttpResponseMessage response,
@@ -12,20 +27,34 @@ public sealed class RuntimeHttpResponseReader(RuntimeClientPolicyOptions policy)
     {
         if (response.IsSuccessStatusCode)
         {
-            var payload = await ReadBoundedAsync(response.Content, policy.MaxJsonResponseBytes, cancellationToken);
-            if (payload.Length > 0 && JsonSerializer.Deserialize<T>(payload, JsonOptions) is { } value) return value;
+            var limits = _getResourceLimits();
+            var payload = await ReadBoundedAsync(
+                response.Content,
+                Math.Min(_policy.MaxJsonResponseBytes, limits.MaximumJsonEnvelopeBytes),
+                cancellationToken);
+            if (payload.Length > 0
+                && JsonSerializer.Deserialize<T>(payload, limits.CreateJsonOptions()) is { } value)
+            {
+                return value;
+            }
         }
         throw await CreateExceptionAsync(response, cancellationToken);
     }
 
     public async Task<T?> ReadJsonAsync<T>(HttpResponseMessage response, CancellationToken cancellationToken)
     {
-        var payload = await ReadBoundedAsync(response.Content, policy.MaxJsonResponseBytes, cancellationToken);
-        return payload.Length == 0 ? default : JsonSerializer.Deserialize<T>(payload, JsonOptions);
+        var limits = _getResourceLimits();
+        var payload = await ReadBoundedAsync(
+            response.Content,
+            Math.Min(_policy.MaxJsonResponseBytes, limits.MaximumJsonEnvelopeBytes),
+            cancellationToken);
+        return payload.Length == 0
+            ? default
+            : JsonSerializer.Deserialize<T>(payload, limits.CreateJsonOptions());
     }
 
     public Task<byte[]> ReadBinaryAsync(HttpResponseMessage response, CancellationToken cancellationToken)
-        => ReadBoundedAsync(response.Content, policy.MaxBinaryResponseBytes, cancellationToken);
+        => ReadBoundedAsync(response.Content, _policy.MaxBinaryResponseBytes, cancellationToken);
 
     public Task<byte[]> ReadBinaryAsync(
         HttpResponseMessage response,
@@ -44,8 +73,11 @@ public sealed class RuntimeHttpResponseReader(RuntimeClientPolicyOptions policy)
         RuntimeProblemDetails? problem = null;
         try
         {
-            var payload = await ReadBoundedAsync(response.Content, policy.MaxErrorResponseBytes, cancellationToken);
-            if (payload.Length > 0) problem = JsonSerializer.Deserialize<RuntimeProblemDetails>(payload, JsonOptions);
+            var payload = await ReadBoundedAsync(response.Content, _policy.MaxErrorResponseBytes, cancellationToken);
+            if (payload.Length > 0)
+            {
+                problem = JsonSerializer.Deserialize<RuntimeProblemDetails>(payload, ErrorJsonOptions);
+            }
         }
         catch (Exception exception) when (exception is JsonException or InvalidDataException)
         {
@@ -66,7 +98,22 @@ public sealed class RuntimeHttpResponseReader(RuntimeClientPolicyOptions policy)
             innerException: null);
     }
 
-    private static async Task<byte[]> ReadBoundedAsync(HttpContent content, long maxBytes, CancellationToken cancellationToken)
+    internal async Task<byte[]> ReadRequiredPayloadAsync(
+        HttpResponseMessage response,
+        long maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        if (!response.IsSuccessStatusCode)
+        {
+            throw await CreateExceptionAsync(response, cancellationToken);
+        }
+        return await ReadBoundedAsync(response.Content, maximumBytes, cancellationToken);
+    }
+
+    internal static async Task<byte[]> ReadBoundedAsync(
+        HttpContent content,
+        long maxBytes,
+        CancellationToken cancellationToken)
     {
         if (content.Headers.ContentLength is long declaredLength && declaredLength > maxBytes)
         {

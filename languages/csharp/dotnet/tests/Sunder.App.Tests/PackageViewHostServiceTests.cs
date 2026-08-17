@@ -2,9 +2,12 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Microsoft.Extensions.DependencyInjection;
+using System.Collections.Specialized;
 using System.Net;
 using System.Reflection;
 using Sunder.App.Services;
+using Sunder.App.ViewModels;
+using Sunder.App.Views.Controls;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
@@ -96,7 +99,7 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
-    public async Task DisablePackageAsync_PublishesPackageDisabledNotification()
+    public async Task DisablePackageAsync_PublishesSanitizedDeduplicatedNotification()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(rootPath);
@@ -113,13 +116,16 @@ public sealed class PackageViewHostServiceTests
         try
         {
             await hostService.DisablePackageAsync("agent", "Hosted view failed.", PackageFailureOrigin.AppHostedView);
+            await hostService.DisablePackageAsync("agent", "Secret duplicate details.", PackageFailureOrigin.AppHostedView);
 
             var notification = Assert.Single(notificationCenter.ListNotifications());
             Assert.Equal("sunder.app", notification.SourcePackageId);
             Assert.Equal("Sunder", notification.SourceDisplayName);
-            Assert.Equal("Package disabled", notification.Title);
-            Assert.Contains("agent", notification.Message, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("Hosted view failed.", notification.Message, StringComparison.Ordinal);
+            Assert.Equal(AppPackageFaultNotifier.PackageNotificationTitle, notification.Title);
+            Assert.DoesNotContain("agent", notification.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Hosted view failed.", notification.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("Secret duplicate details.", notification.Message, StringComparison.Ordinal);
+            Assert.True(notification.Message.Length <= 160);
             Assert.Equal(PackageNotificationSeverity.Error, notification.Severity);
             Assert.True(notificationCenter.HasUnreadTrayNotifications());
         }
@@ -948,6 +954,290 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
+    public async Task InitialCandidateManagedFaultDuringStaging_IsAttributedAndRebuiltDisabled()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+        var initialGenerationId = hostService.CurrentGenerationId;
+        Control? faultingCandidateView = null;
+        var preparationCount = 0;
+        var handled = false;
+
+        try
+        {
+            var enabledPackages = await hostService.ApplyPackageGenerationAsync(
+                CreateRuntimeSnapshot(package, source, generation: 1),
+                [source],
+                retryDisabledPackageIds: null,
+                async (candidate, activePackages, cancellationToken) =>
+                {
+                    if (Interlocked.Increment(ref preparationCount) == 1)
+                    {
+                        Assert.Single(activePackages);
+                        await candidate.StabilizeViewAsync(
+                            "agent.chat",
+                            stageView: view => faultingCandidateView = view,
+                            cancellationToken: cancellationToken);
+                        var fault = await Assert.ThrowsAsync<FormatException>(() =>
+                            InvokePendingCandidateManagedFaultAsync(faultingCandidateView!));
+                        handled = hostService.TryHandleUnhandledException(fault);
+                    }
+                    return null;
+                },
+                CancellationToken.None);
+            await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(handled);
+            Assert.Equal(2, preparationCount);
+            Assert.Empty(enabledPackages);
+            Assert.NotEqual(initialGenerationId, hostService.CurrentGenerationId);
+            Assert.True(hostService.IsPackageAppUiQuarantined("agent"));
+            Assert.Null(hostService.GetOrCreateView("agent.chat"));
+            Assert.NotNull(faultingCandidateView);
+            Assert.True(GetIsDisposed(faultingCandidateView));
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ChangedContentCandidateManagedFaultDuringStaging_PreservesCurrentGeneration()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var currentSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+        Control? faultingCandidateView = null;
+        WeakReference? candidateLoadContext = null;
+        var handled = false;
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [currentSource]);
+            var currentGenerationId = hostService.CurrentGenerationId;
+            var currentView = Assert.IsAssignableFrom<Control>(
+                hostService.GetOrCreateView("agent.chat"));
+            File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
+            var replacementSource = RuntimeContractTestData.Snapshot(
+                "agent",
+                PackageSourceKind.Dev,
+                packageSourceFolder);
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                hostService.ApplyPackageGenerationAsync(
+                    CreateRuntimeSnapshot(package, replacementSource, generation: 2),
+                    [replacementSource],
+                    retryDisabledPackageIds: null,
+                    async (candidate, _, cancellationToken) =>
+                    {
+                        await candidate.StabilizeViewAsync(
+                            "agent.chat",
+                            stageView: view =>
+                            {
+                                faultingCandidateView = view;
+                                candidateLoadContext = new WeakReference(
+                                    System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(
+                                        view.GetType().Assembly)!);
+                            },
+                            cancellationToken: cancellationToken);
+                        var fault = await Assert.ThrowsAsync<FormatException>(() =>
+                            InvokePendingCandidateManagedFaultAsync(faultingCandidateView!));
+                        handled = hostService.TryHandleUnhandledException(fault);
+                        return null;
+                    },
+                    CancellationToken.None));
+            await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Contains("asynchronous managed fault", error.Message, StringComparison.Ordinal);
+            Assert.True(handled);
+            Assert.Equal(currentGenerationId, hostService.CurrentGenerationId);
+            Assert.Same(currentView, hostService.GetOrCreateView("agent.chat"));
+            Assert.False(GetIsDisposed(currentView));
+            Assert.False(hostService.IsPackageAppUiQuarantined("agent"));
+            Assert.Single(hostService.FilterEnabledPackages([package]));
+            Assert.NotNull(faultingCandidateView);
+            Assert.True(GetIsDisposed(faultingCandidateView));
+            Assert.NotNull(candidateLoadContext);
+            faultingCandidateView = null;
+            await WaitForCollectionAsync(candidateLoadContext);
+            Assert.False(candidateLoadContext.IsAlive);
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task RejectedCandidateLateFaultBeforeRetirementCompletes_RemainsContained()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var currentSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var rejectedRetirementStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRejectedRetirement = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var retirementCount = 0;
+
+        async ValueTask RetireAsync(AppPackageGeneration generation)
+        {
+            if (Interlocked.Increment(ref retirementCount) == 2)
+            {
+                rejectedRetirementStarted.TrySetResult();
+                await releaseRejectedRetirement.Task;
+            }
+            await generation.DisposeAsync();
+        }
+
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher,
+            retireGenerationAsync: RetireAsync);
+        Control? rejectedCandidateView = null;
+        var firstFaultHandled = false;
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [currentSource]);
+            await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            var currentGenerationId = hostService.CurrentGenerationId;
+            var currentView = Assert.IsAssignableFrom<Control>(
+                hostService.GetOrCreateView("agent.chat"));
+            File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
+            var replacementSource = RuntimeContractTestData.Snapshot(
+                "agent",
+                PackageSourceKind.Dev,
+                packageSourceFolder);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                hostService.ApplyPackageGenerationAsync(
+                    CreateRuntimeSnapshot(package, replacementSource, generation: 2),
+                    [replacementSource],
+                    retryDisabledPackageIds: null,
+                    async (candidate, _, cancellationToken) =>
+                    {
+                        await candidate.StabilizeViewAsync(
+                            "agent.chat",
+                            stageView: view => rejectedCandidateView = view,
+                            cancellationToken: cancellationToken);
+                        var firstFault = await Assert.ThrowsAsync<FormatException>(() =>
+                            InvokePendingCandidateManagedFaultAsync(rejectedCandidateView!));
+                        firstFaultHandled = hostService.TryHandleUnhandledException(firstFault);
+                        return null;
+                    },
+                    CancellationToken.None));
+            await rejectedRetirementStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var lateFault = await Assert.ThrowsAsync<FormatException>(() =>
+                InvokePendingCandidateManagedFaultAsync(rejectedCandidateView!));
+
+            Assert.True(firstFaultHandled);
+            Assert.True(hostService.TryHandleUnhandledException(lateFault));
+            Assert.Equal(currentGenerationId, hostService.CurrentGenerationId);
+            Assert.Same(currentView, hostService.GetOrCreateView("agent.chat"));
+            Assert.False(GetIsDisposed(currentView));
+            Assert.False(hostService.IsPackageAppUiQuarantined("agent"));
+
+            releaseRejectedRetirement.TrySetResult();
+            await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.False(hostService.TryHandleUnhandledException(lateFault));
+            Assert.Equal(currentGenerationId, hostService.CurrentGenerationId);
+        }
+        finally
+        {
+            releaseRejectedRetirement.TrySetResult();
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ChangedContentCandidateManagedFaultAcceptedAtCommit_RollsBackCandidate()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var currentSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+        Control? faultingCandidateView = null;
+        var handled = false;
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [currentSource]);
+            var currentGenerationId = hostService.CurrentGenerationId;
+            var currentView = Assert.IsAssignableFrom<Control>(
+                hostService.GetOrCreateView("agent.chat"));
+            File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
+            var replacementSource = RuntimeContractTestData.Snapshot(
+                "agent",
+                PackageSourceKind.Dev,
+                packageSourceFolder);
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                hostService.ApplyPackageGenerationAsync(
+                    [package],
+                    [replacementSource],
+                    retryDisabledPackageIds: null,
+                    _ =>
+                    {
+                        faultingCandidateView = Assert.IsAssignableFrom<Control>(
+                            hostService.GetOrCreateView("agent.chat"));
+                        var fault = Assert.Throws<FormatException>(() =>
+                            InvokePendingCandidateManagedFaultAsync(faultingCandidateView)
+                                .GetAwaiter()
+                                .GetResult());
+                        handled = hostService.TryHandleUnhandledException(fault);
+                    },
+                    CancellationToken.None));
+            await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Contains("asynchronous managed fault", error.Message, StringComparison.Ordinal);
+            Assert.True(handled);
+            Assert.Equal(currentGenerationId, hostService.CurrentGenerationId);
+            Assert.Same(currentView, hostService.GetOrCreateView("agent.chat"));
+            Assert.False(GetIsDisposed(currentView));
+            Assert.False(hostService.IsPackageAppUiQuarantined("agent"));
+            Assert.NotNull(faultingCandidateView);
+            Assert.True(GetIsDisposed(faultingCandidateView));
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task ApplyPackageGenerationAsync_CommitsReplacementBeforeRetiringDetachedGeneration()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
@@ -1118,12 +1408,15 @@ public sealed class PackageViewHostServiceTests
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var viewRegistry = new AppPackageViewRegistry();
+        var notificationCenter = new NotificationCenterService(
+            Path.Combine(rootPath, "notifications.json"));
         var hostService = new PackageViewHostService(
             viewRegistry,
             [],
             [],
             [],
             sessionFolder,
+            notificationCenter: notificationCenter,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
 
@@ -1132,6 +1425,12 @@ public sealed class PackageViewHostServiceTests
             await hostService.ApplyPackageDeltaAsync([package], [source]);
 
             Assert.Empty(viewRegistry.ListPackageViewIds("agent"));
+            var activationNotification = Assert.Single(notificationCenter.ListNotifications());
+            Assert.Equal(AppPackageFaultNotifier.PackageNotificationTitle, activationNotification.Title);
+            Assert.DoesNotContain(
+                "Test package requested activation failure",
+                activationNotification.Message,
+                StringComparison.Ordinal);
 
             File.Delete(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowAfterViewMarkerFileName));
             File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.SkipViewMarkerFileName), string.Empty);
@@ -1229,6 +1528,364 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
+    public async Task AttributedPackageFault_AutomaticRecoveryIsFreshOnceAndReplacementFaultIsTerminal()
+    {
+        var rootPath = Path.Combine(
+            Path.GetTempPath(),
+            "sunder-app-tests",
+            Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder);
+        var rpcHandler = new TargetLifetimeRpcHandler();
+        using var runtimeTransport = new RuntimeClientTransport(
+            () => new RuntimeConnectionInfo(
+                new Uri("http://127.0.0.1:5199"),
+                "test-token"),
+            rpcHandler);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            [],
+            [],
+            [],
+            sessionFolder,
+            getRuntimeConnectionInfo: runtimeTransport.GetConnectionInfo,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+        using var tasks = new OwnedTaskObserver(nameof(PackageViewHostServiceTests));
+        var releaseRecovery = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var recoveryStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var recoveryCandidateReady = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRecoveryCandidate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var recoveryCount = 0;
+        Control? originalView = null;
+        var cleanupProvenBeforeRecovery = false;
+        AppPackageUiRecoveryRequest? recoveryRequest = null;
+        hostService.PackageUiRecoveryRequested += request => recoveryRequest ??= request;
+        using var recoveryCoordinator = new AppPackageUiRecoveryCoordinator(
+            hostService,
+            async (_, _, cancellationToken) =>
+            {
+                Interlocked.Increment(ref recoveryCount);
+                cleanupProvenBeforeRecovery = originalView is not null
+                    && GetIsDisposed(originalView)
+                    && rpcHandler.CloseCount == 1;
+                recoveryStarted.TrySetResult();
+                await releaseRecovery.Task.WaitAsync(cancellationToken);
+                await hostService.ApplyPackageGenerationAsync(
+                    CreateRuntimeSnapshot(package, source, generation: 1),
+                    [source],
+                    AppPackageQuarantineRetryIntent.ForAutomaticPackageRecovery("agent"),
+                    async (_, _, prepareCancellationToken) =>
+                    {
+                        recoveryCandidateReady.TrySetResult();
+                        await releaseRecoveryCandidate.Task.WaitAsync(
+                            prepareCancellationToken);
+                        return null;
+                    },
+                    cancellationToken);
+                return AppPackageUiRecoveryPresentationOutcome.Applied;
+            },
+            tasks);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            var originalGenerationId = hostService.CurrentGenerationId;
+            originalView = Assert.IsAssignableFrom<Control>(
+                hostService.GetOrCreateView("agent.chat"));
+            var originalProvider = originalView.GetType()
+                .GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.ServiceProvider))!
+                .GetValue(originalView);
+            var originalTargetLifetime = originalView.GetType()
+                .GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.RuntimeClient))!
+                .GetValue(originalView);
+            var originalLoadContext = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(
+                originalView.GetType().Assembly);
+            var fault = await Assert.ThrowsAsync<FormatException>(() =>
+                InvokePendingCandidateManagedFaultAsync(originalView));
+
+            Assert.False(hostService.TryHandleUnhandledException(
+                new AggregateException(
+                    fault,
+                    new InvalidOperationException("unattributed branch"))));
+            Assert.False(hostService.TryHandleUnhandledException(
+                new AggregateException(fault, new OutOfMemoryException())));
+            Assert.Equal(0, recoveryCoordinator.AttemptedRecoveryCount);
+            Assert.True(hostService.TryHandleUnhandledException(fault));
+            Assert.True(hostService.TryHandleUnobservedTaskException(
+                new AggregateException(fault)));
+            Assert.NotNull(recoveryRequest);
+            Assert.Equal(
+                AppPackageUiCleanupOutcome.Proven,
+                await recoveryRequest.CleanupCompletion.WaitAsync(TimeSpan.FromSeconds(2)));
+            await recoveryStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.True(cleanupProvenBeforeRecovery);
+            Assert.Equal(1, Volatile.Read(ref recoveryCount));
+            Assert.Equal(1, recoveryCoordinator.AttemptedRecoveryCount);
+            releaseRecovery.SetResult();
+            await recoveryCandidateReady.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(hostService.TryHandleUnobservedTaskException(
+                new AggregateException(fault)));
+            releaseRecoveryCandidate.SetResult();
+            await recoveryCoordinator.WaitForRecoveryAsync("agent", source.ContentHash)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.NotEqual(originalGenerationId, hostService.CurrentGenerationId);
+            Assert.False(hostService.IsPackageAppUiQuarantined("agent"));
+            var replacementView = Assert.IsAssignableFrom<Control>(
+                hostService.GetOrCreateView("agent.chat"));
+            var replacementProvider = replacementView.GetType()
+                .GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.ServiceProvider))!
+                .GetValue(replacementView);
+            var replacementTargetLifetime = replacementView.GetType()
+                .GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.RuntimeClient))!
+                .GetValue(replacementView);
+            var replacementLoadContext = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(
+                replacementView.GetType().Assembly);
+            Assert.NotSame(originalView, replacementView);
+            Assert.NotSame(originalProvider, replacementProvider);
+            Assert.NotSame(originalTargetLifetime, replacementTargetLifetime);
+            Assert.NotSame(originalLoadContext, replacementLoadContext);
+            Assert.Equal(2, rpcHandler.OpenCount);
+            Assert.Equal(1, rpcHandler.CloseCount);
+
+            var replacementFault = await Assert.ThrowsAsync<FormatException>(() =>
+                InvokePendingCandidateManagedFaultAsync(replacementView));
+            Assert.True(hostService.TryHandleUnhandledException(replacementFault));
+            await TestSupport.AsyncAssert.WaitForConditionAsync(
+                () => hostService.IsPackageAppUiQuarantined("agent")
+                    && GetIsDisposed(replacementView));
+
+            Assert.Equal(1, Volatile.Read(ref recoveryCount));
+            Assert.Equal(1, recoveryCoordinator.AttemptedRecoveryCount);
+            Assert.Empty(hostService.FilterEnabledPackages([package]));
+            Assert.Equal(2, rpcHandler.CloseCount);
+        }
+        finally
+        {
+            releaseRecovery.TrySetResult();
+            releaseRecoveryCandidate.TrySetResult();
+            recoveryCoordinator.Dispose();
+            await tasks.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task AttributedPackageFault_WhenBoundaryDetachmentFails_DoesNotStartOverlappingRecovery()
+    {
+        var rootPath = Path.Combine(
+            Path.GetTempPath(),
+            "sunder-app-tests",
+            Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            [],
+            [],
+            [],
+            sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+        using var tasks = new OwnedTaskObserver(nameof(PackageViewHostServiceTests));
+        var recoveryCount = 0;
+        AppPackageUiRecoveryRequest? recoveryRequest = null;
+        hostService.PackageUiRecoveryRequested += request => recoveryRequest ??= request;
+        using var recoveryCoordinator = new AppPackageUiRecoveryCoordinator(
+            hostService,
+            (_, _, _) =>
+            {
+                Interlocked.Increment(ref recoveryCount);
+                return Task.FromResult(AppPackageUiRecoveryPresentationOutcome.Applied);
+            },
+            tasks);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            var view = Assert.IsAssignableFrom<Control>(
+                hostService.GetOrCreateView("agent.chat"));
+            var boundary = Assert.IsType<HostedPackageViewBoundary>(
+                hostService.CreateHostedViewBoundary(
+                    "agent",
+                    "agent.chat",
+                    view));
+            boundary.Measure(new Size(100, 100));
+            ((INotifyCollectionChanged)boundary.Children).CollectionChanged +=
+                static (_, _) => throw new InvalidOperationException(
+                    "boundary detach failed");
+            var fault = await Assert.ThrowsAsync<FormatException>(() =>
+                InvokePendingCandidateManagedFaultAsync(view));
+
+            Assert.True(hostService.TryHandleUnhandledException(fault));
+            Assert.NotNull(recoveryRequest);
+            Assert.Equal(
+                AppPackageUiCleanupOutcome.Unproven,
+                await recoveryRequest.CleanupCompletion.WaitAsync(
+                    TimeSpan.FromSeconds(2)));
+            await recoveryCoordinator.WaitForRecoveryAsync(
+                    "agent",
+                    source.ContentHash)
+                .WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Equal(0, Volatile.Read(ref recoveryCount));
+            Assert.True(hostService.IsPackageAppUiQuarantined("agent"));
+        }
+        finally
+        {
+            recoveryCoordinator.Dispose();
+            await tasks.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task AutomaticPackageRecovery_SnapshotLifecyclePreservesKnownViewQuarantineWhileRestoringSiblings()
+    {
+        var rootPath = Path.Combine(
+            Path.GetTempPath(),
+            "sunder-app-tests",
+            Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        File.WriteAllText(
+            Path.Combine(
+                packageSourceFolder,
+                ShellLifecycleTestPackageModule.ThrowNavigationMarkerFileName),
+            string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            [],
+            [],
+            [],
+            sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            await hostService.NotifyViewNavigatedAsync("agent.chat", parameters: null);
+            Assert.Null(hostService.GetOrCreateView("agent.chat"));
+            Assert.NotNull(hostService.GetOrCreateView("agent.workspaces"));
+
+            await hostService.DisablePackageAsync(
+                "agent",
+                "Package faulted.",
+                PackageFailureOrigin.AppUnhandledUi);
+            await new AppPackageLifecycleCoordinator(hostService).ApplyPackageSnapshotAsync(
+                CreateRuntimeSnapshot(package, source, generation: 2),
+                [source],
+                AppPackageQuarantineRetryIntent.ForAutomaticPackageRecovery("agent"));
+
+            Assert.False(hostService.IsPackageAppUiQuarantined("agent"));
+            Assert.Null(hostService.GetOrCreateView("agent.chat"));
+            Assert.NotNull(hostService.GetOrCreateView("agent.workspaces"));
+            Assert.Single(hostService.FilterEnabledPackages([package]));
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task AutomaticPackageRecovery_RetainsOpenSettingsModelAndReplacesHostedSettingsView()
+    {
+        var rootPath = Path.Combine(
+            Path.GetTempPath(),
+            "sunder-app-tests",
+            Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        File.WriteAllText(
+            Path.Combine(
+                packageSourceFolder,
+                ShellLifecycleTestPackageModule.RegisterSettingsViewMarkerFileName),
+            string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            [],
+            [],
+            [],
+            sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+        using var runtimeClient = new EmptyPackageSettingsClient();
+        using var settings = new SettingsWindowViewModel(
+            runtimeClient,
+            hostService,
+            new CliInstallationService());
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            await settings.RefreshPackageSectionsAsync();
+            Assert.True(await settings.SelectPackageSettingsAsync("agent"));
+            var originalBoundary = Assert.IsType<HostedPackageViewBoundary>(
+                settings.HostedSettingsView);
+            var originalView = originalBoundary.HostedView;
+            Assert.NotNull(originalView);
+
+            await hostService.DisablePackageAsync(
+                "agent",
+                "Package faulted.",
+                PackageFailureOrigin.AppUnhandledUi);
+            settings.DetachHostedPackageSettingsView();
+            await hostService.ApplyPackageDeltaAsync(
+                [package],
+                [source],
+                AppPackageQuarantineRetryIntent.ForAutomaticPackageRecovery("agent"));
+            await settings.RefreshPackageSectionsAsync();
+
+            Assert.True(settings.IsPackageSelection);
+            var replacementBoundary = Assert.IsType<HostedPackageViewBoundary>(
+                settings.HostedSettingsView);
+            Assert.NotSame(originalBoundary, replacementBoundary);
+            Assert.NotSame(originalView, replacementBoundary.HostedView);
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task ApplyPackageGenerationAsync_PreservesVisibleFaultForSamePackageContent()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
@@ -1248,11 +1905,125 @@ public sealed class PackageViewHostServiceTests
         var releaseCandidate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var packageFaulted = new TaskCompletionSource<PackageViewHostFaultEventArgs>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var stagedCandidateViews = 0;
         hostService.PackageFaulted += (_, fault) => packageFaulted.TrySetResult(fault);
 
         try
         {
             await hostService.ApplyPackageDeltaAsync([package], [source]);
+            var apply = hostService.ApplyPackageGenerationAsync(
+                CreateRuntimeSnapshot(package, source, generation: 2),
+                [source],
+                retryDisabledPackageIds: null,
+                async (candidate, _, cancellationToken) =>
+                {
+                    candidateReady.TrySetResult();
+                    await releaseCandidate.Task.WaitAsync(cancellationToken);
+                    await candidate.StabilizeViewAsync(
+                        "agent.chat",
+                        stageView: _ => Interlocked.Increment(ref stagedCandidateViews),
+                        cancellationToken: cancellationToken);
+                    return null;
+                },
+                CancellationToken.None);
+            await candidateReady.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            await hostService.NotifyViewNavigatedAsync("agent.chat", parameters: null);
+            releaseCandidate.TrySetResult();
+            await apply.WaitAsync(TimeSpan.FromSeconds(2));
+            var fault = await packageFaulted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Equal("agent", fault.PackageId);
+            Assert.Equal(PackageFailureOrigin.AppHostedView, fault.Origin);
+            Assert.Single(hostService.FilterEnabledPackages([package]));
+            Assert.Null(hostService.GetOrCreateView("agent.chat"));
+            Assert.Equal(0, stagedCandidateViews);
+        }
+        finally
+        {
+            releaseCandidate.TrySetResult();
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPackageGenerationAsync_WhenExplicitRetryIsRejected_PreservesViewQuarantineMemory()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        File.WriteAllText(
+            Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowNavigationMarkerFileName),
+            string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            await hostService.NotifyViewNavigatedAsync("agent.chat", parameters: null);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                hostService.ApplyPackageGenerationAsync(
+                    CreateRuntimeSnapshot(package, source, generation: 2),
+                    [source],
+                    retryDisabledPackageIds: ["agent"],
+                    (_, _, _) => throw new InvalidOperationException("presentation rejected"),
+                    CancellationToken.None));
+
+            var stagedCandidateViews = 0;
+            await hostService.ApplyPackageGenerationAsync(
+                CreateRuntimeSnapshot(package, source, generation: 3),
+                [source],
+                retryDisabledPackageIds: null,
+                async (candidate, _, cancellationToken) =>
+                {
+                    await candidate.StabilizeViewAsync(
+                        "agent.chat",
+                        stageView: _ => Interlocked.Increment(ref stagedCandidateViews),
+                        cancellationToken: cancellationToken);
+                    return null;
+                },
+                CancellationToken.None);
+
+            Assert.Equal(0, stagedCandidateViews);
+            Assert.Null(hostService.GetOrCreateView("agent.chat"));
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPackageGenerationAsync_WhenCurrentPackageFaultsDuringPreparation_QuarantinesCandidate()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+        var candidateReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCandidate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            hostService.RegisterPackageAssemblyForFaultAttribution(
+                "agent",
+                typeof(PackageStackFrame).Assembly);
             var apply = hostService.ApplyPackageGenerationAsync(
                 CreateRuntimeSnapshot(package, source, generation: 2),
                 [source],
@@ -1266,19 +2037,297 @@ public sealed class PackageViewHostServiceTests
                 CancellationToken.None);
             await candidateReady.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-            await hostService.NotifyViewNavigatedAsync("agent.chat", parameters: null);
+            var attributed = Assert.Throws<FormatException>(
+                PackageStackFrame.ThrowFrameworkException);
+            Assert.True(hostService.TryHandleUnhandledException(attributed));
             releaseCandidate.TrySetResult();
-            await apply.WaitAsync(TimeSpan.FromSeconds(2));
-            var fault = await packageFaulted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var enabledPackages = await apply.WaitAsync(TimeSpan.FromSeconds(2));
 
-            Assert.Equal("agent", fault.PackageId);
-            Assert.Equal(PackageFailureOrigin.AppHostedView, fault.Origin);
-            Assert.Empty(hostService.FilterEnabledPackages([package]));
+            Assert.Empty(enabledPackages);
+            Assert.True(hostService.IsPackageAppUiQuarantined("agent"));
             Assert.Null(hostService.GetOrCreateView("agent.chat"));
         }
         finally
         {
             releaseCandidate.TrySetResult();
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPackageGenerationAsync_WhenCurrentPackageFaultsAtCommitFence_DoesNotPublishEnabledCandidate()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var sideEffectPath = Path.Combine(rootPath, "candidate-side-effect");
+        File.WriteAllText(
+            Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.StageSideEffectsPathFileName),
+            sideEffectPath);
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var dispatcher = new GateNextUiDispatcher();
+        var notificationCenter = new NotificationCenterService(
+            Path.Combine(rootPath, "notifications.json"));
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(dispatcher), [], [], [], sessionFolder,
+            notificationCenter: notificationCenter,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: dispatcher);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            await WaitForFileAsync(sideEffectPath);
+            File.Delete(sideEffectPath);
+            notificationCenter.ClearAll();
+            hostService.RegisterPackageAssemblyForFaultAttribution(
+                "agent",
+                typeof(PackageStackFrame).Assembly);
+            dispatcher.BlockNextInvocation();
+            var apply = hostService.ApplyPackageGenerationAsync(
+                [package],
+                [source],
+                retryDisabledPackageIds: null,
+                commitPresentation: null,
+                CancellationToken.None);
+            await dispatcher.Blocked.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var attributed = Assert.Throws<FormatException>(
+                PackageStackFrame.ThrowFrameworkException);
+            Assert.True(hostService.TryHandleUnhandledException(attributed));
+            dispatcher.Release();
+            var enabledPackages = await apply.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Empty(enabledPackages);
+            Assert.True(hostService.IsPackageAppUiQuarantined("agent"));
+            Assert.Null(hostService.GetOrCreateView("agent.chat"));
+            Assert.False(File.Exists(sideEffectPath));
+            Assert.DoesNotContain(
+                notificationCenter.ListNotifications(),
+                notification => string.Equals(
+                    notification.SourcePackageId,
+                    "agent",
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            dispatcher.Release();
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPackageDeltaAsync_WhenQuarantinedPackageContentChanges_LoadsReplacement()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            await hostService.DisablePackageAsync(
+                "agent",
+                "Hosted view failed.",
+                PackageFailureOrigin.AppHostedView);
+            File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
+            var replacementSource = RuntimeContractTestData.Snapshot(
+                "agent",
+                PackageSourceKind.Dev,
+                packageSourceFolder);
+
+            await hostService.ApplyPackageDeltaAsync([package], [replacementSource]);
+
+            Assert.False(hostService.IsPackageAppUiQuarantined("agent"));
+            Assert.NotNull(hostService.GetOrCreateView("agent.chat"));
+            Assert.Single(hostService.FilterEnabledPackages([package]));
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RetiredViewFault_TransfersOnlyToSameContent(bool sameContent)
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        File.WriteAllText(
+            Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowNavigationMarkerFileName),
+            string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var oldRetirementStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseOldRetirement = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var retirementCount = 0;
+
+        async ValueTask RetireAsync(AppPackageGeneration generation)
+        {
+            if (Interlocked.Increment(ref retirementCount) == 2)
+            {
+                oldRetirementStarted.TrySetResult();
+                await releaseOldRetirement.Task;
+            }
+            await generation.DisposeAsync();
+        }
+
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher,
+            retireGenerationAsync: RetireAsync);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(2));
+            var retiredView = Assert.IsAssignableFrom<Control>(
+                hostService.GetOrCreateView("agent.chat"));
+            var retiredBoundary = Assert.IsType<HostedPackageViewBoundary>(
+                hostService.CreateHostedViewBoundary("agent", "agent.chat", retiredView));
+            var replacementSource = source;
+            if (!sameContent)
+            {
+                File.Delete(Path.Combine(
+                    packageSourceFolder,
+                    ShellLifecycleTestPackageModule.ThrowNavigationMarkerFileName));
+                File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
+                replacementSource = RuntimeContractTestData.Snapshot(
+                    "agent",
+                    PackageSourceKind.Dev,
+                    packageSourceFolder);
+            }
+
+            await hostService.ApplyPackageDeltaAsync([package], [replacementSource]);
+            await oldRetirementStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var lateNavigation = retiredBoundary.OnNavigatedToAsync(
+                new PackageViewNavigationContext(
+                    "agent.chat",
+                    new Dictionary<string, string?>())).AsTask();
+            if (sameContent)
+            {
+                await lateNavigation;
+            }
+            else
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(() => lateNavigation);
+            }
+
+            Assert.False(hostService.IsPackageAppUiQuarantined("agent"));
+            Assert.Single(hostService.FilterEnabledPackages([package]));
+            if (sameContent)
+            {
+                Assert.Null(hostService.GetOrCreateView("agent.chat"));
+            }
+            else
+            {
+                Assert.NotNull(hostService.GetOrCreateView("agent.chat"));
+            }
+            retiredBoundary.Dispose();
+        }
+        finally
+        {
+            releaseOldRetirement.TrySetResult();
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RetiredPackageException_TransfersOnlyToSameContent(bool sameContent)
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        File.WriteAllText(
+            Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowNavigationMarkerFileName),
+            string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var oldRetirementStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseOldRetirement = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var retirementCount = 0;
+
+        async ValueTask RetireAsync(AppPackageGeneration generation)
+        {
+            if (Interlocked.Increment(ref retirementCount) == 2)
+            {
+                oldRetirementStarted.TrySetResult();
+                await releaseOldRetirement.Task;
+            }
+            await generation.DisposeAsync();
+        }
+
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher,
+            retireGenerationAsync: RetireAsync);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(2));
+            var retiredView = Assert.IsAssignableFrom<IPackageViewNavigationTarget>(
+                hostService.GetOrCreateView("agent.chat"));
+            var replacementSource = source;
+            if (!sameContent)
+            {
+                File.Delete(Path.Combine(
+                    packageSourceFolder,
+                    ShellLifecycleTestPackageModule.ThrowNavigationMarkerFileName));
+                File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
+                replacementSource = RuntimeContractTestData.Snapshot(
+                    "agent",
+                    PackageSourceKind.Dev,
+                    packageSourceFolder);
+            }
+
+            await hostService.ApplyPackageDeltaAsync([package], [replacementSource]);
+            await oldRetirementStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                retiredView.OnNavigatedToAsync(new PackageViewNavigationContext(
+                    "agent.chat",
+                    new Dictionary<string, string?>())).AsTask());
+
+            Assert.Equal(
+                sameContent,
+                hostService.TryHandleUnhandledException(exception));
+            Assert.Equal(
+                sameContent,
+                hostService.IsPackageAppUiQuarantined("agent"));
+            Assert.Equal(
+                sameContent ? 0 : 1,
+                hostService.FilterEnabledPackages([package]).Count);
+        }
+        finally
+        {
+            releaseOldRetirement.TrySetResult();
             await hostService.DisposeAsync();
             TryDeleteDirectoryBestEffort(rootPath);
         }
@@ -1361,12 +2410,128 @@ public sealed class PackageViewHostServiceTests
                 hostService.ApplyPackageDeltaAsync([package], [rejectedSource], ["agent"]));
 
             await Task.Delay(100);
-            Assert.Empty(notificationCenter.ListNotifications());
+            var hostNotification = Assert.Single(notificationCenter.ListNotifications());
+            Assert.Equal("Package App UI update failed", hostNotification.Title);
             Assert.Empty(backgroundProcesses.ListProcesses());
             Assert.False(File.Exists(sideEffectPath));
         }
         finally
         {
+            await hostService.DisposeAsync();
+            await backgroundProcesses.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPackageGenerationAsync_WhenActivatedPackageIsQuarantined_RebuildPublishesOnlyHealthyPackageEffects()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        var notificationCenter = new NotificationCenterService(Path.Combine(rootPath, "notifications.json"));
+        var backgroundProcesses = new BackgroundProcessQueueService(maxParallelism: 1);
+        Directory.CreateDirectory(sessionFolder);
+        var agentSourceFolder = CreateAppPackageSource(Path.Combine(rootPath, "agent"), "agent");
+        var toolsSourceFolder = CreateAppPackageSource(Path.Combine(rootPath, "tools"), "tools");
+        File.WriteAllText(
+            Path.Combine(toolsSourceFolder, ShellLifecycleTestPackageModule.SkipViewMarkerFileName),
+            string.Empty);
+        var agentEffectPath = Path.Combine(rootPath, "agent-effect");
+        var toolsEffectPath = Path.Combine(rootPath, "tools-effect");
+        File.WriteAllText(
+            Path.Combine(agentSourceFolder, ShellLifecycleTestPackageModule.StageSideEffectsPathFileName),
+            agentEffectPath);
+        File.WriteAllText(
+            Path.Combine(toolsSourceFolder, ShellLifecycleTestPackageModule.StageSideEffectsPathFileName),
+            toolsEffectPath);
+        var agent = CreateActiveAgentPackage();
+        var tools = CreateActivePackage("tools");
+        var activePackages = new[] { agent, tools };
+        var sources = new[]
+        {
+            RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, agentSourceFolder),
+            RuntimeContractTestData.Snapshot("tools", PackageSourceKind.Dev, toolsSourceFolder),
+        };
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
+            notificationCenter: notificationCenter,
+            backgroundProcessQueue: backgroundProcesses,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+        var candidateReady = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCandidate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var preparationCount = 0;
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync(activePackages, sources);
+            await WaitForFileAsync(agentEffectPath);
+            await WaitForFileAsync(toolsEffectPath);
+            var initialProcessIds = backgroundProcesses.ListProcesses()
+                .Select(static process => process.ProcessId)
+                .ToHashSet();
+            notificationCenter.ClearAll();
+            File.Delete(agentEffectPath);
+            File.Delete(toolsEffectPath);
+            hostService.RegisterPackageAssemblyForFaultAttribution(
+                "agent",
+                typeof(PackageStackFrame).Assembly);
+            var snapshot = new RuntimePackageSnapshot(
+                Guid.Parse("33333333-3333-3333-3333-333333333333"),
+                2,
+                2,
+                RuntimeBootstrapState.Ready,
+                activePackages,
+                [],
+                [],
+                []);
+            var apply = hostService.ApplyPackageGenerationAsync(
+                snapshot,
+                sources,
+                retryDisabledPackageIds: null,
+                async (_, _, cancellationToken) =>
+                {
+                    if (Interlocked.Increment(ref preparationCount) == 1)
+                    {
+                        candidateReady.TrySetResult();
+                        await releaseCandidate.Task.WaitAsync(cancellationToken);
+                    }
+                    return null;
+                },
+                CancellationToken.None);
+            await candidateReady.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var attributed = Assert.Throws<FormatException>(
+                PackageStackFrame.ThrowFrameworkException);
+            Assert.True(hostService.TryHandleUnhandledException(attributed));
+            releaseCandidate.TrySetResult();
+            var enabledPackages = await apply.WaitAsync(TimeSpan.FromSeconds(5));
+            await WaitForFileAsync(toolsEffectPath);
+
+            Assert.Equal(2, preparationCount);
+            Assert.Equal("tools", Assert.Single(enabledPackages).PackageId);
+            Assert.False(File.Exists(agentEffectPath));
+            Assert.True(File.Exists(toolsEffectPath));
+            var newProcesses = backgroundProcesses.ListProcesses()
+                .Where(process => !initialProcessIds.Contains(process.ProcessId))
+                .ToArray();
+            var healthyProcess = Assert.Single(newProcesses);
+            Assert.True(PackageScopedBackgroundProcessMetadata.TryCreate(
+                healthyProcess.Metadata,
+                out var processMetadata));
+            Assert.Equal("tools", processMetadata.PackageId);
+            var notifications = notificationCenter.ListNotifications();
+            Assert.DoesNotContain(notifications, notification =>
+                string.Equals(notification.SourcePackageId, "agent", StringComparison.OrdinalIgnoreCase));
+            Assert.Single(notifications, notification =>
+                string.Equals(notification.SourcePackageId, "tools", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(notification.Title, "Candidate", StringComparison.Ordinal));
+        }
+        finally
+        {
+            releaseCandidate.TrySetResult();
             await hostService.DisposeAsync();
             await backgroundProcesses.DisposeAsync();
             TryDeleteDirectoryBestEffort(rootPath);
@@ -1589,6 +2754,80 @@ public sealed class PackageViewHostServiceTests
         TryDeleteDirectoryBestEffort(rootPath);
     }
 
+    [Fact]
+    public async Task GenerationRetirement_WhenPackageServiceDisposalIsUnproven_QuarantinesGeneration()
+    {
+        var rootPath = Path.Combine(
+            Path.GetTempPath(),
+            "sunder-app-tests",
+            Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var disposalMarker = Path.Combine(
+            packageSourceFolder,
+            ShellLifecycleTestPackageModule.ThrowServiceDisposalMarkerFileName);
+        File.WriteAllText(disposalMarker, string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            [],
+            [],
+            [],
+            sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            File.Delete(disposalMarker);
+            var replacementSource = RuntimeContractTestData.Snapshot(
+                "agent",
+                PackageSourceKind.Dev,
+                packageSourceFolder);
+
+            await hostService.ApplyPackageDeltaAsync(
+                [package],
+                [replacementSource]);
+            await hostService.WaitForRetirementsAsync()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(1, hostService.QuarantinedRetirementCount);
+            Assert.Equal(1, hostService.RetirementFailureCount);
+            Assert.Equal(1, hostService.LoadedPackageCount);
+            Assert.NotNull(hostService.GetOrCreateView("agent.chat"));
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WhenRemainingResourceDisposalIsUnproven_QuarantinesGeneration()
+    {
+        var resource = new ThrowingOwnedResource();
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            [],
+            [resource],
+            [],
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+
+        await hostService.DisposeAsync();
+
+        Assert.Equal(1, resource.DisposeCount);
+        Assert.Equal(1, hostService.QuarantinedRetirementCount);
+        Assert.Equal(1, hostService.RetirementFailureCount);
+    }
+
     private static async Task<AppPreparedPackageSource?> PrepareSnapshotAsync(
         AppPackageSourcePreparer preparer,
         string packageId,
@@ -1723,10 +2962,86 @@ public sealed class PackageViewHostServiceTests
         return packageSourceFolder;
     }
 
+    private static Task InvokePendingCandidateManagedFaultAsync(Control candidateView)
+    {
+        var moduleType = candidateView.GetType().Assembly.GetType(
+            typeof(ShellLifecycleTestPackageModule).FullName!,
+            throwOnError: true)!;
+        var method = moduleType.GetMethod(
+            nameof(ShellLifecycleTestPackageModule.ThrowManagedFaultAsync),
+            BindingFlags.Public | BindingFlags.Static)!;
+        return Assert.IsAssignableFrom<Task>(method.Invoke(null, parameters: null));
+    }
+
     private static class PackageStackFrame
     {
         public static void ThrowFrameworkException()
             => int.Parse("not an integer");
+    }
+
+    private sealed class EmptyPackageSettingsClient : IRuntimePackageSettingsClient
+    {
+        public Task<IReadOnlyList<PackageSettingsSchemaDescriptor>> GetPackageSettingsSchemasAsync(
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<PackageSettingsSchemaDescriptor>>([]);
+
+        public Task<PackageSettingsValuesResponse?> GetPackageSettingsValuesAsync(
+            string packageId,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<PackageSettingsValuesResponse?>(null);
+
+        public Task SavePackageSettingsValuesAsync(
+            string packageId,
+            IReadOnlyDictionary<string, string?> values,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class TargetLifetimeRpcHandler : HttpMessageHandler
+    {
+        private int _openCount;
+        private int _closeCount;
+
+        public int OpenCount => Volatile.Read(ref _openCount);
+
+        public int CloseCount => Volatile.Read(ref _closeCount);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.RequestUri?.AbsolutePath == "/api/handshake")
+            {
+                return JsonResponse(
+                    "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":8,\"minimumSupportedRevision\":8,\"maximumSupportedRevision\":8,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"app-web-rpc.v2\",\"rpc.v2\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}");
+            }
+            if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app-sessions/open")
+            {
+                var session = Interlocked.Increment(ref _openCount);
+                return JsonResponse($"{{\"sessionId\":\"test-app-session-{session}\"}}");
+            }
+            if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app-sessions/close")
+            {
+                Interlocked.Increment(ref _closeCount);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
+
+        private static Task<HttpResponseMessage> JsonResponse(string json)
+            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    json,
+                    System.Text.Encoding.UTF8,
+                    "application/json"),
+            });
     }
 
     private sealed class TrackedImage : IImage, IDisposable
@@ -1938,6 +3253,69 @@ public sealed class PackageViewHostServiceTests
         }
     }
 
+    private sealed class GateNextUiDispatcher : IUiDispatcher
+    {
+        private TaskCompletionSource _blocked = CompletedSource();
+        private TaskCompletionSource _release = CompletedSource();
+        private int _blockNext;
+
+        public TaskCompletionSource Blocked => _blocked;
+
+        public bool CheckAccess() => false;
+
+        public void BlockNextInvocation()
+        {
+            _blocked = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Interlocked.Exchange(ref _blockNext, 1);
+        }
+
+        public void Release() => _release.TrySetResult();
+
+        public Task InvokeAsync(Action action)
+            => InvokeAsync(() =>
+            {
+                action();
+                return Task.CompletedTask;
+            });
+
+        public async Task InvokeAsync(Func<Task> action)
+        {
+            await WaitForGateAsync();
+            await action();
+        }
+
+        public Task<T> InvokeAsync<T>(Func<T> action)
+            => InvokeAsync(() => Task.FromResult(action()));
+
+        public async Task<T> InvokeAsync<T>(Func<Task<T>> action)
+        {
+            await WaitForGateAsync();
+            return await action();
+        }
+
+        private async Task WaitForGateAsync()
+        {
+            if (Interlocked.Exchange(ref _blockNext, 0) == 0)
+            {
+                return;
+            }
+
+            _blocked.TrySetResult();
+            await _release.Task;
+        }
+
+        private static TaskCompletionSource CompletedSource()
+        {
+            var completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            completion.SetResult();
+            return completion;
+        }
+    }
+
     private sealed class ImmediateUiDispatcher : IUiDispatcher
     {
         public bool CheckAccess() => true;
@@ -1953,6 +3331,17 @@ public sealed class PackageViewHostServiceTests
         public Task<T> InvokeAsync<T>(Func<T> action) => Task.FromResult(action());
 
         public Task<T> InvokeAsync<T>(Func<Task<T>> action) => action();
+    }
+
+    private sealed class ThrowingOwnedResource : IDisposable
+    {
+        public int DisposeCount { get; private set; }
+
+        public void Dispose()
+        {
+            DisposeCount++;
+            throw new InvalidOperationException("Remaining resource disposal failed.");
+        }
     }
 
     private static NavigationDispatcherProbe RecordCreation(

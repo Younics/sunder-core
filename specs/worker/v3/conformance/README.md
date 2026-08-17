@@ -1,6 +1,6 @@
 # Worker V3 Conformance Corpus
 
-`corpus.json` is the language-neutral Worker V3 behavioral corpus. The .NET and Node SDK test suites guard the same complete category inventory: shutdown order, framing, strict JSON, safe integers, package data, logging, migration, callbacks, auth, content handles, caller scopes, and cancellation. They also execute the shared lifecycle, unary RPC, server-stream RPC, declared and undeclared domain-fault normalization, Host-authoritative state/secret migration plans, package-data, and shutdown values.
+`corpus.json` is the language-neutral Worker V3 behavioral corpus. The .NET and Node SDK test suites guard the same complete category inventory: shutdown order, framing, effective resource-profile negotiation, full-envelope and queue bounds, strict JSON, safe integers, package data, logging, migration, callbacks, auth, content handles, caller scopes, and cancellation. They also execute the shared lifecycle, unary RPC, server-stream RPC, declared and undeclared domain-fault normalization, Host-authoritative state/secret migration plans, package-data, and shutdown values.
 
 The normative shutdown order is worker-originated ordinary-call drain, scope/content-handle cleanup, `OnShutdown`, logging-lane close/drain, then flushed shutdown acknowledgement. A language binding cannot claim corpus conformance while omitting a category or reordering those steps.
 

@@ -168,6 +168,7 @@ public sealed class InstalledPackageStoreTests
             {
               "$schema": "https://json-schema.org/draft/2020-12/schema",
               "descriptorVersion": 2,
+              "schemaProfile": "sunder.rpc.values.v1",
               "contractId": "dev.sunder.execution",
               "version": "1.0.0",
               "errors": {},

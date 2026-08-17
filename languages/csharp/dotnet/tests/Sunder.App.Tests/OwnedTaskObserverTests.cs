@@ -60,4 +60,24 @@ public sealed class OwnedTaskObserverTests
 
         Assert.True(observer.Token.IsCancellationRequested);
     }
+
+    [Fact]
+    public async Task Run_WhenOperationThrowsFatalFault_ForwardsToInjectedHandler()
+    {
+        var propagated = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var observer = new OwnedTaskObserver(
+            "test",
+            exception => propagated.TrySetResult(exception));
+        var fatal = new OutOfMemoryException("fatal owned task fault");
+
+        observer.Run(
+            _ => Task.FromException(fatal),
+            "failing fatally");
+
+        Assert.Same(
+            fatal,
+            await propagated.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        await observer.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
+    }
 }

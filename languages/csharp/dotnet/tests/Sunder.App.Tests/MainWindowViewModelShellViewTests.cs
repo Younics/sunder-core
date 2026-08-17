@@ -7,6 +7,7 @@ using Sunder.App.Features.Shell.Layout;
 using Sunder.App.Features.Shell.Lifecycle;
 using Sunder.App.Features.Shell.Menus;
 using Sunder.App.Features.Shell.Panels;
+using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
@@ -1388,7 +1389,7 @@ public sealed class MainWindowViewModelShellViewTests
         var hostedBoundary = Assert.IsType<HostedPackageViewBoundary>(
             harness.ViewModel.MiddlePanel.HostedView
         );
-        var hostedView = hostedBoundary.HostedView;
+        var hostedView = Assert.IsAssignableFrom<Control>(hostedBoundary.HostedView);
 
         await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([], []), []);
         await packageViewHostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -1426,7 +1427,7 @@ public sealed class MainWindowViewModelShellViewTests
         var originalBoundary = Assert.IsType<HostedPackageViewBoundary>(
             harness.ViewModel.MiddlePanel.HostedView
         );
-        var originalView = originalBoundary.HostedView;
+        var originalView = Assert.IsAssignableFrom<Control>(originalBoundary.HostedView);
         File.WriteAllText(
             Path.Combine(
                 packageSourceFolder,
@@ -1705,7 +1706,7 @@ public sealed class MainWindowViewModelShellViewTests
         var originalBoundary = Assert.IsType<HostedPackageViewBoundary>(
             harness.ViewModel.MiddlePanel.HostedView
         );
-        var originalView = originalBoundary.HostedView;
+        var originalView = Assert.IsAssignableFrom<Control>(originalBoundary.HostedView);
         File.WriteAllText(
             Path.Combine(
                 packageSourceFolder,
@@ -1780,7 +1781,7 @@ public sealed class MainWindowViewModelShellViewTests
         var originalBoundary = Assert.IsType<HostedPackageViewBoundary>(
             harness.ViewModel.MiddlePanel.HostedView
         );
-        var originalView = originalBoundary.HostedView;
+        var originalView = Assert.IsAssignableFrom<Control>(originalBoundary.HostedView);
         File.WriteAllText(
             Path.Combine(
                 packageSourceFolder,
@@ -1835,7 +1836,7 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
-    public async Task ApplyPackageLifecycleChangesAsync_WhenImpactedPackageRemainsActive_PreservesShellLayout()
+    public async Task AutomaticPackageRecoveryLifecycle_PreservesLayoutAndSelectedViews()
     {
         using var harness = CreateActivePackageHarness();
         harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.LeftTop, 0);
@@ -1847,7 +1848,7 @@ public sealed class MainWindowViewModelShellViewTests
         await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
             harness.RuntimeSnapshot!,
             harness.PackageSources!,
-            ["agent"]
+            AppPackageQuarantineRetryIntent.ForAutomaticPackageRecovery("agent")
         );
 
         var hotbarViews = harness.ViewModel.ListHotbarViews();
@@ -2185,7 +2186,7 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
-    public async Task PackageFaulted_RemovesPackageViewsFromShell()
+    public async Task PackageFaulted_PreservesPackageViewsAndLayoutForSessionQuarantine()
     {
         var rootPath = CreateTempDirectory();
         var packageViewHostService = CreateRegisteredPackageViewHostService(
@@ -2205,9 +2206,73 @@ public sealed class MainWindowViewModelShellViewTests
             PackageFailureOrigin.AppHostedView
         );
 
-        Assert.Empty(GetPackageMenuGroups(harness.ViewModel));
-        Assert.Empty(harness.ViewModel.ListHotbarViews());
-        Assert.False(harness.ViewModel.HasMiddleSelection);
+        Assert.Single(GetPackageMenuGroups(harness.ViewModel));
+        Assert.Equal(2, harness.ViewModel.ListHotbarViews().Count);
+        Assert.True(harness.ViewModel.HasMiddleSelection);
+        Assert.True(Assert.IsType<HostedPackageViewBoundary>(
+            harness.ViewModel.MiddlePanel.HostedView).IsFaulted);
+    }
+
+    [Fact]
+    public void LifecycleProjection_PreservesQuarantinedLayoutOnlyWhilePackageRemainsRuntimeActive()
+    {
+        var package = CreateActiveAgentPackage();
+        var state = new ShellState
+        {
+            HasInitializedLayout = true,
+            SelectedMiddleViewId = "agent.chat",
+            ViewPlacements = new Dictionary<string, RailPlacement>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent.chat"] = RailPlacement.Middle,
+            },
+            ViewOrder = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent.chat"] = 3,
+            },
+        };
+        var composition = new ShellCompositionService();
+        var initial = composition.Compose(
+            [package],
+            state,
+            systemStatus: null,
+            warnings: [],
+            errors: [],
+            ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
+        var views = initial.PackageViews.ToDictionary(
+            view => view.ViewId,
+            StringComparer.OrdinalIgnoreCase);
+        var presenter = new ShellPackageLifecyclePresenter(
+            composition,
+            views,
+            state,
+            [],
+            [],
+            _ => { },
+            (_, _) => { },
+            () => { },
+            isPackageAppUiQuarantined: packageId => packageId == "agent");
+
+        var quarantined = presenter.PrepareLifecycleChanges(
+            activePackages: [],
+            runtimeActivePackages: [package]);
+
+        Assert.Equal(initial.PackageViews.Count, quarantined.Snapshot.PackageViews.Count);
+        Assert.Contains(
+            quarantined.Snapshot.PackageViews,
+            view => view.ViewId == "agent.chat");
+        Assert.Equal("agent.chat", quarantined.Snapshot.State.SelectedMiddleViewId);
+        Assert.Equal(RailPlacement.Middle, quarantined.Snapshot.State.ViewPlacements["agent.chat"]);
+        Assert.Equal(3, quarantined.Snapshot.State.ViewOrder["agent.chat"]);
+        Assert.Empty(quarantined.SelectedViewIds);
+
+        var uninstalled = presenter.PrepareLifecycleChanges(
+            activePackages: [],
+            runtimeActivePackages: []);
+
+        Assert.Empty(uninstalled.Snapshot.PackageViews);
+        Assert.Null(uninstalled.Snapshot.State.SelectedMiddleViewId);
+        Assert.Empty(uninstalled.Snapshot.State.ViewPlacements);
+        Assert.Empty(uninstalled.Snapshot.State.ViewOrder);
     }
 
     [Fact]
@@ -3144,7 +3209,9 @@ public sealed class MainWindowViewModelShellViewTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Assert.Equal(Context?.ViewId, context.ViewId);
-            Assert.Equal(Context?.Parameters["target"], context.Parameters["target"]);
+            Assert.Equal(
+                Context?.Parameters.GetValueOrDefault("target"),
+                context.Parameters.GetValueOrDefault("target"));
             Events.Add("presented");
             return ValueTask.CompletedTask;
         }
@@ -3468,8 +3535,12 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
 
     public const string ThrowAfterViewMarkerFileName = "throw-after-view";
 
+    public const string ThrowServiceDisposalMarkerFileName = "throw-service-disposal";
+
     public const string RegisterReservedHostCapabilityMarkerFileName =
         "register-reserved-host-capability";
+
+    public const string RegisterSettingsViewMarkerFileName = "register-settings-view";
 
     public const string StageSideEffectsPathFileName = "stage-side-effects-path";
 
@@ -3478,9 +3549,19 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
 
     private string? _packageFolder;
 
+    public static async Task ThrowManagedFaultAsync()
+    {
+        await Task.Delay(10).ConfigureAwait(false);
+        _ = int.Parse("candidate managed fault");
+    }
+
     public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
         _packageFolder = context.ContentRootPath;
+        if (HasMarker(ThrowServiceDisposalMarkerFileName))
+        {
+            services.AddSingleton<ShellLifecycleThrowingOwnedService>();
+        }
         if (HasMarker(RegisterReservedHostCapabilityMarkerFileName))
         {
             services.AddSingleton<IPackageContext>(context);
@@ -3492,6 +3573,10 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
         IServiceProvider services
     )
     {
+        if (HasMarker(ThrowServiceDisposalMarkerFileName))
+        {
+            _ = services.GetRequiredService<ShellLifecycleThrowingOwnedService>();
+        }
         if (!HasMarker(SkipViewMarkerFileName))
         {
             registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(
@@ -3512,6 +3597,10 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
                     showInHotbarByDefault: false
                 )
             );
+        }
+        if (HasMarker(RegisterSettingsViewMarkerFileName))
+        {
+            registry.RegisterSettingsView<ShellLifecycleThreadAffinedPackageView>();
         }
 
         var sideEffectsPathDescriptor = Path.Combine(_packageFolder!, StageSideEffectsPathFileName);
@@ -3565,6 +3654,12 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
         && File.Exists(Path.Combine(_packageFolder, fileName));
 }
 
+public sealed class ShellLifecycleThrowingOwnedService : IDisposable
+{
+    public void Dispose()
+        => throw new InvalidOperationException("Test package service disposal failed.");
+}
+
 public sealed class ShellLifecycleThreadAffinedPackageView
     : Control,
         IDisposable,
@@ -3576,12 +3671,19 @@ public sealed class ShellLifecycleThreadAffinedPackageView
     );
     private readonly ISunderRpcClient _runtime;
 
-    public ShellLifecycleThreadAffinedPackageView(ISunderRpcClient runtime)
+    public ShellLifecycleThreadAffinedPackageView(
+        ISunderRpcClient runtime,
+        IServiceProvider serviceProvider)
     {
         _runtime = runtime;
+        ServiceProvider = serviceProvider;
         AttachedToVisualTree += (_, _) => RecordAttachment("attached");
         Loaded += (_, _) => RecordAttachment("loaded");
     }
+
+    public IServiceProvider ServiceProvider { get; }
+
+    public ISunderRpcClient RuntimeClient => _runtime;
 
     public int OwnerThreadId { get; } = Environment.CurrentManagedThreadId;
 

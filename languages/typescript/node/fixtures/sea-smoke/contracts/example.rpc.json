@@ -1,10 +1,12 @@
 {
   "descriptorVersion": 2,
+  "schemaProfile": "sunder.rpc.values.v1",
   "contractId": "example.messages",
   "version": "2.0.0",
   "errors": {
     "example.rejected": {
-      "description": "The conformance request was rejected."
+      "description": "The conformance request was rejected.",
+      "detailsSchema": { "$ref": "#/$defs/ErrorDetails" }
     }
   },
   "services": {
@@ -42,6 +44,15 @@
     }
   },
   "$defs": {
+    "ErrorDetails": {
+      "type": "object",
+      "properties": {
+        "reason": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "retryable": { "type": "boolean" }
+      },
+      "required": ["reason", "retryable"],
+      "additionalProperties": false
+    },
     "Request": {
       "type": "object",
       "properties": {

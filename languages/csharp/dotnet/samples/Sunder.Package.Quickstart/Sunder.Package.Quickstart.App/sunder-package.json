@@ -33,8 +33,8 @@
       "contractId": "docs.sunder.quickstart.greeting",
       "version": "2.0.0",
       "descriptorPath": "contracts/greeting.rpc.json",
-      "descriptorSha256": "44a84acd4c920dc7fcd79eae635982fa69b74e73882eaaff06b502163b76fbb5",
-      "abiSha256": "a7c26658461e54591aa56e433ba05d1b91542ac7d7013320094772f1f716284d",
+      "descriptorSha256": "2870d51f60305a38d8fd8e16333afba03d13712cc46a6288547fc9088a4c9393",
+      "abiSha256": "330c5e5325f05611fb3800ff181f05c762dd1444cd908c7a1051afd94754798f",
       "exposure": "package"
     }
   ],
@@ -43,7 +43,7 @@
       "role": "app",
       "contractId": "docs.sunder.quickstart.greeting",
       "contractVersion": "2.0.0",
-      "abiSha256": "a7c26658461e54591aa56e433ba05d1b91542ac7d7013320094772f1f716284d",
+      "abiSha256": "330c5e5325f05611fb3800ff181f05c762dd1444cd908c7a1051afd94754798f",
       "required": true,
       "actions": [
         "discover",

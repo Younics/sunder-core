@@ -11,7 +11,6 @@ import type {
   RpcSchemaReference,
 } from "./types";
 
-const MAXIMUM_SCHEMA_DEPTH = 64;
 const REFERENCE_PREFIX = "#/$defs/";
 const UTF8 = new TextEncoder();
 
@@ -35,7 +34,13 @@ export function canonicalRpcDescriptorBytes(descriptor: RpcContractDescriptor): 
 export function rpcAbiV2Projection(descriptor: RpcContractDescriptorV2): JsonValue {
   requireV2Descriptor(descriptor);
   const errors = jsonRecord();
-  for (const code of Object.keys(descriptor.errors)) errors[code] = {};
+  for (const [code, declaration] of Object.entries(descriptor.errors)) {
+    const projected = jsonRecord();
+    if (declaration.detailsSchema !== undefined) {
+      projected.detailsSchema = cloneJsonValue(declaration.detailsSchema as unknown as JsonValue);
+    }
+    errors[code] = projected;
+  }
 
   const services = jsonRecord();
   for (const [serviceId, service] of Object.entries(descriptor.services)) {
@@ -64,6 +69,7 @@ export function rpcAbiV2Projection(descriptor: RpcContractDescriptorV2): JsonVal
 
   return {
     descriptorVersion: 2,
+    schemaProfile: descriptor.schemaProfile,
     contractId: descriptor.contractId,
     errors,
     services,
@@ -330,7 +336,6 @@ function instanceError(
   version: DescriptorVersion,
   depth: number,
 ): string | undefined {
-  if (depth > MAXIMUM_SCHEMA_DEPTH) return `${path} exceeds the RPC value depth limit.`;
   if (typeof schema.$ref === "string") {
     const target = definitions[referenceName(schema.$ref)];
     return target === undefined
@@ -350,28 +355,41 @@ function instanceError(
   }
   if (typeof schema.logicalType === "string") return logicalInstanceError(schema.logicalType, value, path);
 
+  const structuralNames = Object.keys(schema).filter((name) => name !== "title" && name !== "description");
+  if (structuralNames.length === 0) return undefined;
+
   const type = schema.type;
   if (!matchesType(value, type)) return `${path} must be of type '${String(type)}'.`;
-  if (has(schema, "const") && !literalEquals(value, schema.const)) return `${path} does not match its const value.`;
-  if (Array.isArray(schema.enum) && !schema.enum.some((item) => literalEquals(value, item))) {
+  if (has(schema, "const") && !literalEquals(value, schema.const, schema)) return `${path} does not match its const value.`;
+  if (Array.isArray(schema.enum) && !schema.enum.some((item) => literalEquals(value, item, schema))) {
     return `${path} is not an allowed enum value.`;
   }
 
   switch (type) {
     case "object":
+      if (structuralNames.every((name) => name === "type" || name === "maxProperties")) {
+        return typeof schema.maxProperties === "number" && Object.keys(value as object).length > schema.maxProperties
+          ? `${path} exceeds maxProperties ${schema.maxProperties}.`
+          : undefined;
+      }
       return objectInstanceError(schema, value as Record<string, unknown>, path, definitions, version, depth);
     case "array":
       return arrayInstanceError(schema, value as readonly unknown[], path, definitions, version, depth);
     case "string": {
       const text = value as string;
       if (!hasUnicodeScalars(text)) return `${path} contains an unpaired UTF-16 surrogate.`;
-      const length = [...text].length;
-      if (length < Number(schema.minLength) || length > Number(schema.maxLength)) {
-        return `${path} has ${length} Unicode scalar values; expected ${String(schema.minLength)} through ${String(schema.maxLength)}.`;
+      if (typeof schema.contentEncoding === "string") return base64InstanceError(schema, text, path);
+      if (typeof schema.format === "string") return formatInstanceError(schema, text, path);
+      const minimum = typeof schema.minLength === "number" ? schema.minLength : 0;
+      const maximum = typeof schema.maxLength === "number" ? schema.maxLength : Number.POSITIVE_INFINITY;
+      const length = scalarLength(text);
+      if (length < minimum || length > maximum) {
+        return `${path} has ${length} Unicode scalar values; expected ${minimum} through ${maximum}.`;
       }
       return undefined;
     }
     case "integer":
+      return numberInstanceError(schema, value as number, path);
     case "number":
       return numberInstanceError(schema, value as number, path);
     default:
@@ -388,12 +406,13 @@ function objectInstanceError(
   depth: number,
 ): string | undefined {
   const entries = Object.entries(value);
-  const folded = new Set<string>();
-  for (const [name] of entries) {
-    if (!hasUnicodeScalars(name)) return `${path} contains a property name with an unpaired UTF-16 surrogate.`;
-    const key = version === 2 ? asciiCaseFold(name) : v1CaseFold(name);
-    if (folded.has(key)) return `${path} contains duplicate or case-colliding property '${name}'.`;
-    folded.add(key);
+  if (version === 1) {
+    const folded = new Set<string>();
+    for (const [name] of entries) {
+      const key = v1CaseFold(name);
+      if (folded.has(key)) return `${path} contains duplicate or case-colliding property '${name}'.`;
+      folded.add(key);
+    }
   }
   const minimum = typeof schema.minProperties === "number" ? schema.minProperties : 0;
   const properties = isObject(schema.properties) ? schema.properties : {};
@@ -448,26 +467,94 @@ function arrayInstanceError(
 }
 
 function numberInstanceError(schema: JsonSchema, value: number, path: string): string | undefined {
-  if (typeof schema.minimum === "number" && value < schema.minimum
-    || typeof schema.exclusiveMinimum === "number" && value <= schema.exclusiveMinimum
-    || typeof schema.maximum === "number" && value > schema.maximum
-    || typeof schema.exclusiveMaximum === "number" && value >= schema.exclusiveMaximum) {
+  const format = schema.format === "float32" ? "float32" : "float64";
+  const number = schema.type === "number" && format === "float32" ? Math.fround(value) : value;
+  if (!Number.isFinite(number)) return `${path} must be a finite ${format} value.`;
+  const bound = (name: string): number | undefined => typeof schema[name] !== "number"
+    ? undefined
+    : schema.type === "number" && format === "float32"
+      ? Math.fround(schema[name])
+      : schema[name];
+  const minimum = bound("minimum");
+  const exclusiveMinimum = bound("exclusiveMinimum");
+  const maximum = bound("maximum");
+  const exclusiveMaximum = bound("exclusiveMaximum");
+  if (minimum !== undefined && number < minimum
+    || exclusiveMinimum !== undefined && number <= exclusiveMinimum
+    || maximum !== undefined && number > maximum
+    || exclusiveMaximum !== undefined && number >= exclusiveMaximum) {
     return `${path} is outside its numeric bounds.`;
   }
   return undefined;
 }
 
+function formatInstanceError(schema: JsonSchema, value: string, path: string): string | undefined {
+  switch (schema.format) {
+    case "uuid":
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value)
+        ? undefined
+        : `${path} must be a canonical lowercase UUID.`;
+    case "date":
+      return isDate(value) ? undefined : `${path} must be a canonical Gregorian date.`;
+    case "date-time":
+      return isOffsetDateTime(value) ? undefined : `${path} must be an asserted RFC 3339 date-time.`;
+    case "duration":
+      return isDuration(value) ? undefined : `${path} must be a canonical ISO 8601 duration.`;
+    case "uri":
+      return isUri(value) ? undefined : `${path} must be an absolute URI.`;
+    case "big-integer":
+      return exactNumericInstanceError(schema, value, path, false);
+    case "decimal":
+      return exactNumericInstanceError(schema, value, path, true);
+    default:
+      return `${path} uses unsupported asserted format '${String(schema.format)}'.`;
+  }
+}
+
+function exactNumericInstanceError(
+  schema: JsonSchema,
+  value: string,
+  path: string,
+  decimal: boolean,
+): string | undefined {
+  const parsed = decimal ? parseCanonicalDecimal(value) : parseCanonicalBigInteger(value);
+  if (parsed === undefined) return `${path} must be a canonical ${decimal ? "decimal" : "big-integer"} string.`;
+  const maximumPrecision = Number(decimal ? schema.maxPrecision : schema.maxDigits);
+  const maximumScale = decimal ? Number(schema.maxScale) : 0;
+  if (parsed.precision > maximumPrecision || parsed.scale > maximumScale) {
+    return `${path} exceeds its declared ${decimal ? "precision or scale" : "digit"} limit.`;
+  }
+
+  for (const [name, exclusive, lower] of [
+    ["valueMinimum", false, true],
+    ["valueExclusiveMinimum", true, true],
+    ["valueMaximum", false, false],
+    ["valueExclusiveMaximum", true, false],
+  ] as const) {
+    const boundValue = schema[name];
+    if (typeof boundValue !== "string") continue;
+    const bound = decimal ? parseCanonicalDecimal(boundValue) : parseCanonicalBigInteger(boundValue);
+    if (bound === undefined) return `${path} has an invalid schema value bound.`;
+    const comparison = compareExactDecimals(parsed, bound);
+    if (lower ? comparison < 0 || exclusive && comparison === 0 : comparison > 0 || exclusive && comparison === 0) {
+      return `${path} is outside its exact numeric value bounds.`;
+    }
+  }
+  return undefined;
+}
+
+function base64InstanceError(schema: JsonSchema, value: string, path: string): string | undefined {
+  if (schema.contentEncoding !== "base64" || !isCanonicalBase64(value)) {
+    return `${path} must be canonical padded RFC 4648 base64.`;
+  }
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const decodedBytes = value.length / 4 * 3 - padding;
+  return decodedBytes <= Number(schema.maxDecodedBytes)
+    ? undefined
+    : `${path} decodes to ${decodedBytes} bytes, exceeding maxDecodedBytes ${String(schema.maxDecodedBytes)}.`;
+}
+
 function logicalInstanceError(logicalType: string, value: unknown, path: string): string | undefined {
-  if (logicalType === "uuid") {
-    return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value)
-      ? undefined
-      : `${path} must be a canonical lowercase UUID.`;
-  }
-  if (logicalType === "utc-date-time") {
-    return typeof value === "string" && isUtcDateTime(value)
-      ? undefined
-      : `${path} must be a canonical UTC date-time.`;
-  }
   if (logicalType === "content-reference") return contentReferenceError(value, path);
   return `${path} uses unsupported logical type '${logicalType}'.`;
 }
@@ -519,7 +606,10 @@ function matchesType(value: unknown, type: JsonValue | undefined): boolean {
   }
 }
 
-function literalEquals(value: unknown, literal: JsonValue | undefined): boolean {
+function literalEquals(value: unknown, literal: JsonValue | undefined, schema: JsonSchema): boolean {
+  if (typeof value === "number" && typeof literal === "number" && schema.format === "float32") {
+    return Math.fround(value) === Math.fround(literal);
+  }
   return value === literal;
 }
 
@@ -535,6 +625,153 @@ function isUtcDateTime(value: string): boolean {
   if (year < 1 || year > 9999 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
   const days = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   return day >= 1 && day <= (days[month - 1] ?? 0);
+}
+
+function isDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+  if (match === null) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1 || year > 9999 || month < 1 || month > 12) return false;
+  const days = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day >= 1 && day <= (days[month - 1] ?? 0);
+}
+
+function isOffsetDateTime(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.([0-9]{1,9}))?(Z|[+-]\d{2}:\d{2})$/u.exec(value);
+  if (match === null || !isDate(`${match[1]}-${match[2]}-${match[3]}`)) return false;
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  const zone = match[8] ?? "";
+  let offsetMinutes = 0;
+  if (zone !== "Z") {
+    const offsetHours = Number(zone.slice(1, 3));
+    const minuteOffset = Number(zone.slice(4, 6));
+    if (offsetHours > 14 || minuteOffset > 59 || offsetHours === 14 && minuteOffset !== 0) return false;
+    offsetMinutes = (offsetHours * 60 + minuteOffset) * (zone[0] === "-" ? -1 : 1);
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const localMinutes = (daysBeforeYear(year) + daysBeforeMonth(year, month) + day - 1) * 1440
+    + hour * 60
+    + minute;
+  const utcMinutes = localMinutes - offsetMinutes;
+  return utcMinutes >= 0 && utcMinutes < daysBeforeYear(10_000) * 1440;
+}
+
+function daysBeforeYear(year: number): number {
+  const previous = year - 1;
+  return previous * 365 + Math.floor(previous / 4) - Math.floor(previous / 100) + Math.floor(previous / 400);
+}
+
+function daysBeforeMonth(year: number, month: number): number {
+  const days = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+  return (days[month - 1] ?? 0) + (month > 2 && isLeapYear(year) ? 1 : 0);
+}
+
+function isDuration(value: string): boolean {
+  const component = "(?:0|[1-9][0-9]*)";
+  const seconds = `(?:${component})(?:\\.[0-9]*[1-9])?`;
+  const expression = new RegExp(
+    `^P(?=.+)(?:${component}Y)?(?:${component}M)?(?:${component}D)?(?:T(?=.+)(?:${component}H)?(?:${component}M)?(?:${seconds}S)?)?$`,
+    "u",
+  );
+  return expression.test(value) && value !== "P" && !value.endsWith("T");
+}
+
+function isUri(value: string): boolean {
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:/u.test(value)
+    || /[^\x21-\x7e]/u.test(value)
+    || value.includes("\\")
+    || /%(?![0-9A-Fa-f]{2})/u.test(value)) return false;
+  try {
+    void new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isCanonicalBase64(value: string): boolean {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) return false;
+  if (value.endsWith("==")) return base64Sextet(value[value.length - 3]) % 16 === 0;
+  if (value.endsWith("=")) return base64Sextet(value[value.length - 2]) % 4 === 0;
+  return true;
+}
+
+function base64Sextet(character: string | undefined): number {
+  if (character === undefined) return -1;
+  const code = character.charCodeAt(0);
+  if (code >= 0x41 && code <= 0x5a) return code - 0x41;
+  if (code >= 0x61 && code <= 0x7a) return code - 0x61 + 26;
+  if (code >= 0x30 && code <= 0x39) return code - 0x30 + 52;
+  return character === "+" ? 62 : character === "/" ? 63 : -1;
+}
+
+interface ExactDecimal {
+  readonly negative: boolean;
+  readonly integerPart: string;
+  readonly fractionPart: string;
+  readonly precision: number;
+  readonly scale: number;
+}
+
+function parseCanonicalBigInteger(value: string): ExactDecimal | undefined {
+  if (!/^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$/u.test(value)) return undefined;
+  const digits = value[0] === "-" ? value.slice(1) : value;
+  return {
+    negative: value[0] === "-",
+    integerPart: digits,
+    fractionPart: "",
+    precision: digits.length,
+    scale: 0,
+  };
+}
+
+function parseCanonicalDecimal(value: string): ExactDecimal | undefined {
+  if (!/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?$/u.test(value) || value === "-0") return undefined;
+  const negative = value[0] === "-";
+  const unsigned = negative ? value.slice(1) : value;
+  const [integer = "", fraction = ""] = unsigned.split(".");
+  const digits = `${integer}${fraction}`;
+  const significant = digits.replace(/^0+/u, "");
+  return {
+    negative,
+    integerPart: integer,
+    fractionPart: fraction,
+    precision: significant.length === 0 ? 1 : significant.length,
+    scale: fraction.length,
+  };
+}
+
+function compareExactDecimals(left: ExactDecimal, right: ExactDecimal): number {
+  const leftZero = left.integerPart === "0" && /^0*$/u.test(left.fractionPart);
+  const rightZero = right.integerPart === "0" && /^0*$/u.test(right.fractionPart);
+  if (leftZero && rightZero) return 0;
+  if (left.negative !== right.negative) return left.negative ? -1 : 1;
+  const magnitude = compareExactMagnitude(left, right);
+  return left.negative ? -magnitude : magnitude;
+}
+
+function compareExactMagnitude(left: ExactDecimal, right: ExactDecimal): number {
+  const leftIntegerLength = left.integerPart === "0" ? 0 : left.integerPart.length;
+  const rightIntegerLength = right.integerPart === "0" ? 0 : right.integerPart.length;
+  if (leftIntegerLength !== rightIntegerLength) return leftIntegerLength < rightIntegerLength ? -1 : 1;
+  if (leftIntegerLength > 0) {
+    const integerComparison = ordinal(left.integerPart, right.integerPart);
+    if (integerComparison !== 0) return integerComparison;
+  }
+  const fractionLength = Math.max(left.fractionPart.length, right.fractionPart.length);
+  for (let index = 0; index < fractionLength; index++) {
+    const leftDigit = left.fractionPart[index] ?? "0";
+    const rightDigit = right.fractionPart[index] ?? "0";
+    if (leftDigit !== rightDigit) return leftDigit < rightDigit ? -1 : 1;
+  }
+  return 0;
 }
 
 function isLeapYear(year: number): boolean {
@@ -611,10 +848,6 @@ function has(object: object, name: string): boolean {
 
 function propertyPath(path: string, name: string): string {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(name) ? `${path}.${name}` : `${path}[${JSON.stringify(name)}]`;
-}
-
-function asciiCaseFold(value: string): string {
-  return value.replace(/[A-Z]/gu, (character) => String.fromCharCode(character.charCodeAt(0) + 0x20));
 }
 
 function v1CaseFold(value: string): string {

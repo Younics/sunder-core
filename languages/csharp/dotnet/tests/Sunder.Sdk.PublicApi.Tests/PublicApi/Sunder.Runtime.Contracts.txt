@@ -784,6 +784,9 @@ type enum Sunder.Runtime.Contracts.RuntimeEventKind : System.IComparable, System
   field static Sunder.Runtime.Contracts.RuntimeEventKind BootstrapStateChanged = 4
   field static Sunder.Runtime.Contracts.RuntimeEventKind DevReloadCompleted = 3
   field static Sunder.Runtime.Contracts.RuntimeEventKind OperationPhaseChanged = 2
+  field static Sunder.Runtime.Contracts.RuntimeEventKind PackageRecoveryStarted = 7
+  field static Sunder.Runtime.Contracts.RuntimeEventKind PackageRecoverySucceeded = 8
+  field static Sunder.Runtime.Contracts.RuntimeEventKind PackageRecoverySuspended = 9
   field static Sunder.Runtime.Contracts.RuntimeEventKind SessionGenerationChanged = 1
   field static Sunder.Runtime.Contracts.RuntimeEventKind Snapshot = 0
   field static Sunder.Runtime.Contracts.RuntimeEventKind SnapshotDiagnosticsChanged = 5
@@ -806,16 +809,17 @@ type sealed class Sunder.Runtime.Contracts.RuntimeEventSnapshot : System.IEquata
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeHandshakeResponse : System.IEquatable<Sunder.Runtime.Contracts.RuntimeHandshakeResponse>
-  method .ctor(System.String ProtocolIdentity, System.Int32 ProtocolRevision, System.Int32 MinimumSupportedRevision, System.Int32 MaximumSupportedRevision, System.Guid RuntimeInstanceId, System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures, Sunder.Runtime.Contracts.RuntimeProductVersionDiagnostics Product)
+  method .ctor(System.String ProtocolIdentity, System.Int32 ProtocolRevision, System.Int32 MinimumSupportedRevision, System.Int32 MaximumSupportedRevision, System.Guid RuntimeInstanceId, System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures, Sunder.Runtime.Contracts.RuntimeProductVersionDiagnostics Product, Sunder.Runtime.Contracts.RuntimeResourceProfileDescriptor? ResourceProfile = null)
   property System.Int32 MaximumSupportedRevision { get; init; }
   property System.Int32 MinimumSupportedRevision { get; init; }
   property Sunder.Runtime.Contracts.RuntimeProductVersionDiagnostics Product { get; init; }
   property System.String ProtocolIdentity { get; init; }
   property System.Int32 ProtocolRevision { get; init; }
+  property Sunder.Runtime.Contracts.RuntimeResourceProfileDescriptor? ResourceProfile { get; init; }
   property System.Guid RuntimeInstanceId { get; init; }
   property System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures { get; init; }
   method Sunder.Runtime.Contracts.RuntimeHandshakeResponse <Clone>$()
-  method System.Void Deconstruct(out System.String ProtocolIdentity, out System.Int32 ProtocolRevision, out System.Int32 MinimumSupportedRevision, out System.Int32 MaximumSupportedRevision, out System.Guid RuntimeInstanceId, out System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures, out Sunder.Runtime.Contracts.RuntimeProductVersionDiagnostics Product)
+  method System.Void Deconstruct(out System.String ProtocolIdentity, out System.Int32 ProtocolRevision, out System.Int32 MinimumSupportedRevision, out System.Int32 MaximumSupportedRevision, out System.Guid RuntimeInstanceId, out System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures, out Sunder.Runtime.Contracts.RuntimeProductVersionDiagnostics Product, out Sunder.Runtime.Contracts.RuntimeResourceProfileDescriptor? ResourceProfile)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeHandshakeResponse? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -911,9 +915,11 @@ type sealed class Sunder.Runtime.Contracts.RuntimeProtocolFeatures
   field static System.String AppWebRpcV2 = "app-web-rpc.v2"
   field static System.String AtomicPackageSnapshotV1 = "atomic-package-snapshot.v1"
   field static System.String DevPackageOwnerLeasesV1 = "dev-package-owner-leases.v1"
+  field static System.String PackageRuntimeRecoveryV1 = "package-runtime-recovery.v1"
   field static System.String PackageSessionDrainingV1 = "package-session-draining.v1"
   field static System.String PackageStageStatusV1 = "package-stage-status.v1"
   field static System.String RpcPermissionsV2 = "rpc-permissions.v2"
+  field static System.String RuntimeResourcePolicyV1 = "runtime-resource-policy.v1"
   field static System.String SchemaFirstRpcV2 = "schema-first-rpc.v2"
   field static System.String StartupDiagnosticsV1 = "startup-diagnostics.v1"
   field static System.String TargetAwarePackageSnapshotsV1 = "target-aware-package-snapshots.v1"
@@ -1330,6 +1336,21 @@ type sealed class Sunder.Runtime.Contracts.RuntimeResetDrainResponse : System.IE
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.RuntimeResourceProfileDescriptor : System.IEquatable<Sunder.Runtime.Contracts.RuntimeResourceProfileDescriptor>
+  method .ctor(System.String EffectiveProfileHash, System.Int32 MaximumRpcValueBytes, System.Int32 MaximumValueDepth, System.Int32 MaximumValueNodes, System.Int32 MaximumObjectMembers, System.Int32 MaximumInlineDecodedBytes, System.Int32 MaximumContentReferenceBytes)
+  property System.String EffectiveProfileHash { get; init; }
+  property System.Int32 MaximumContentReferenceBytes { get; init; }
+  property System.Int32 MaximumInlineDecodedBytes { get; init; }
+  property System.Int32 MaximumObjectMembers { get; init; }
+  property System.Int32 MaximumRpcValueBytes { get; init; }
+  property System.Int32 MaximumValueDepth { get; init; }
+  property System.Int32 MaximumValueNodes { get; init; }
+  method Sunder.Runtime.Contracts.RuntimeResourceProfileDescriptor <Clone>$()
+  method System.Void Deconstruct(out System.String EffectiveProfileHash, out System.Int32 MaximumRpcValueBytes, out System.Int32 MaximumValueDepth, out System.Int32 MaximumValueNodes, out System.Int32 MaximumObjectMembers, out System.Int32 MaximumInlineDecodedBytes, out System.Int32 MaximumContentReferenceBytes)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeResourceProfileDescriptor? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeCloseRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeCloseRequest>
   method .ctor(System.String SessionId, System.String CallScopeId)
   property System.String CallScopeId { get; init; }
@@ -1625,14 +1646,14 @@ type enum Sunder.Runtime.Contracts.RuntimeRpcDispatchState : System.IComparable,
   field static Sunder.Runtime.Contracts.RuntimeRpcDispatchState PossiblyDispatched = 1
   field System.Int32 value__
 type sealed class Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor>
-  method .ctor(Sunder.Runtime.Contracts.RuntimeRpcErrorKind Kind, System.String Code, System.String Message, Sunder.Runtime.Contracts.RuntimeRpcDispatchState DispatchState = NotDispatched, Sunder.Runtime.Contracts.RuntimeRpcRetrySafety RetrySafety = Safe)
-  property System.String Code { get; init; }
-  property Sunder.Runtime.Contracts.RuntimeRpcDispatchState DispatchState { get; init; }
-  property Sunder.Runtime.Contracts.RuntimeRpcErrorKind Kind { get; init; }
-  property System.String Message { get; init; }
-  property Sunder.Runtime.Contracts.RuntimeRpcRetrySafety RetrySafety { get; init; }
+  method .ctor(Sunder.Runtime.Contracts.RuntimeRpcErrorKind kind, System.String code, System.String message, Sunder.Runtime.Contracts.RuntimeRpcDispatchState dispatchState = NotDispatched, Sunder.Runtime.Contracts.RuntimeRpcRetrySafety retrySafety = Safe, System.Text.Json.JsonElement? details = null)
+  property System.String Code { get; }
+  property System.Text.Json.JsonElement? Details { get; }
+  property Sunder.Runtime.Contracts.RuntimeRpcDispatchState DispatchState { get; }
+  property Sunder.Runtime.Contracts.RuntimeRpcErrorKind Kind { get; }
+  property System.String Message { get; }
+  property Sunder.Runtime.Contracts.RuntimeRpcRetrySafety RetrySafety { get; }
   method Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor <Clone>$()
-  method System.Void Deconstruct(out Sunder.Runtime.Contracts.RuntimeRpcErrorKind Kind, out System.String Code, out System.String Message, out Sunder.Runtime.Contracts.RuntimeRpcDispatchState DispatchState, out Sunder.Runtime.Contracts.RuntimeRpcRetrySafety RetrySafety)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()

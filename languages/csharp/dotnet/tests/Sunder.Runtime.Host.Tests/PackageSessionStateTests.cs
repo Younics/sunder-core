@@ -18,6 +18,7 @@ public sealed class PackageSessionStateTests
         var releaseRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var requestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource leaseRetired = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource generationRetired = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         try
         {
@@ -28,7 +29,8 @@ public sealed class PackageSessionStateTests
             await requestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             var replacement = state.PublishSessionAsync(newSession);
-            await leaseRetired.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await Task.WhenAll(leaseRetired.Task, generationRetired.Task)
+                .WaitAsync(TimeSpan.FromSeconds(2));
 
             Assert.False(replacement.IsCompleted);
             Assert.True(Directory.Exists(oldFolder));
@@ -61,6 +63,7 @@ public sealed class PackageSessionStateTests
             Assert.Equal(1, lease.Generation);
             requestStarted.TrySetResult();
             lease.RetirementToken.Register(() => leaseRetired.TrySetResult());
+            lease.GenerationRetirementToken.Register(() => generationRetired.TrySetResult());
             await releaseRequest.Task;
             Assert.True(Directory.Exists(oldFolder));
             Assert.Empty(lease.Session.GetActivePackages());
@@ -113,6 +116,7 @@ public sealed class PackageSessionStateTests
         var newSession = CreateSession(newFolder);
         await state.PublishSessionAsync(oldSession);
         var ignoredLease = state.AcquireLease();
+        var ignoredGenerationIdentity = ignoredLease.GenerationIdentity;
 
         try
         {
@@ -121,11 +125,13 @@ public sealed class PackageSessionStateTests
 
             Assert.Contains("reload was not applied", exception.Message, StringComparison.Ordinal);
             Assert.True(ignoredLease.RetirementToken.IsCancellationRequested);
+            Assert.True(ignoredLease.GenerationRetirementToken.IsCancellationRequested);
             Assert.True(Directory.Exists(oldFolder));
             using (var admitted = state.AcquireLease())
             {
                 Assert.Same(oldSession, admitted.Session);
                 Assert.Equal(1, admitted.Generation);
+                Assert.NotSame(ignoredGenerationIdentity, admitted.GenerationIdentity);
             }
         }
         finally

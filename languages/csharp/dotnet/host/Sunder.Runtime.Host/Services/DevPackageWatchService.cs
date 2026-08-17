@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
 
@@ -59,7 +60,11 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(targets);
+        var synchronizationStarted = Stopwatch.GetTimestamp();
+        var gateWaitStarted = Stopwatch.GetTimestamp();
         await _transitionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var gateWaitMilliseconds = Stopwatch.GetElapsedTime(gateWaitStarted).TotalMilliseconds;
+        var synchronized = false;
         try
         {
             lock (_gate)
@@ -73,10 +78,27 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
                     _changedPackageIds.Clear();
                 }
             }
+            synchronized = true;
         }
         finally
         {
             _transitionGate.Release();
+            if (synchronized)
+            {
+                _logger.LogInformation(
+                    "Synchronized {WatchTargetCount} dev package watcher target(s) in {ElapsedMilliseconds} ms after waiting {GateWaitMilliseconds} ms for the watcher transition gate",
+                    targets.Count,
+                    Stopwatch.GetElapsedTime(synchronizationStarted).TotalMilliseconds,
+                    gateWaitMilliseconds);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Dev package watcher synchronization for {WatchTargetCount} target(s) failed after {ElapsedMilliseconds} ms and a {GateWaitMilliseconds} ms transition gate wait",
+                    targets.Count,
+                    Stopwatch.GetElapsedTime(synchronizationStarted).TotalMilliseconds,
+                    gateWaitMilliseconds);
+            }
         }
     }
 

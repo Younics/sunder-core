@@ -1,6 +1,9 @@
-import { RpcDomainError, RpcError, runWorker, type JsonValue, type WorkerContext } from "@sunder/sdk";
+import { RpcError, runWorker, type JsonValue, type WorkerContext } from "@sunder/sdk";
 import {
+  createExampleRejectedRpcError,
   createExampleMessagesRpcProviderRegistration,
+  tryGetExampleRejectedRpcErrorDetails,
+  type ErrorDetails,
   type IMessagesProvider,
 } from "../.sunder/generated/rpc/example-messages.g";
 
@@ -26,7 +29,10 @@ void runWorker((workerContext) => {
     },
     async Fault(_request, context) {
       context.signal.throwIfAborted();
-      throw new RpcDomainError("example.rejected", "rejected");
+      throw createExampleRejectedRpcError(
+        { reason: "conformance rejection", retryable: false },
+        "rejected",
+      );
     },
     async *Watch(_request, context) {
       context.signal.throwIfAborted();
@@ -81,6 +87,7 @@ async function runNodeToDotNetInterop(context: WorkerContext, signal: AbortSigna
     { signal },
   );
   let faultCode: string | null = null;
+  let faultDetails: ErrorDetails | null = null;
   try {
     await context.rpc.invoke<typeof request, JsonValue>(
       provider.endpointReference,
@@ -92,11 +99,14 @@ async function runNodeToDotNetInterop(context: WorkerContext, signal: AbortSigna
   } catch (error) {
     if (!(error instanceof RpcError) || error.error.kind !== "domain") throw error;
     faultCode = error.error.code;
+    faultDetails = tryGetExampleRejectedRpcErrorDetails(error) ?? null;
   }
   if (unary.message !== "native .NET unary"
     || stream.join(",") !== "native .NET stream 1,native .NET stream 2"
     || data.message !== PACKAGE_DATA_VALUE
-    || faultCode !== "example.rejected") {
+    || faultCode !== "example.rejected"
+    || faultDetails?.reason !== "conformance rejection"
+    || faultDetails.retryable) {
     throw new Error("Node to .NET Runtime Host RPC conformance failed.");
   }
   await context.state.set(NODE_TO_DOTNET_STATE_KEY, JSON.stringify({
@@ -104,5 +114,6 @@ async function runNodeToDotNetInterop(context: WorkerContext, signal: AbortSigna
     stream,
     data: data.message,
     faultCode,
+    faultDetails,
   }), { signal });
 }

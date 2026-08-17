@@ -22,12 +22,23 @@ public static class RuntimeProtocolFeatures
     public const string SchemaFirstRpcV2 = "schema-first-rpc.v2";
     public const string RpcPermissionsV2 = "rpc-permissions.v2";
     public const string AppWebRpcV2 = "app-web-rpc.v2";
+    public const string RuntimeResourcePolicyV1 = "runtime-resource-policy.v1";
+    public const string PackageRuntimeRecoveryV1 = "package-runtime-recovery.v1";
 }
 
 public sealed record RuntimeProductVersionDiagnostics(
     string ProductName,
     string ProductVersion,
     string InformationalVersion);
+
+public sealed record RuntimeResourceProfileDescriptor(
+    string EffectiveProfileHash,
+    int MaximumRpcValueBytes,
+    int MaximumValueDepth,
+    int MaximumValueNodes,
+    int MaximumObjectMembers,
+    int MaximumInlineDecodedBytes,
+    int MaximumContentReferenceBytes);
 
 public sealed record RuntimeHandshakeResponse(
     string ProtocolIdentity,
@@ -36,7 +47,9 @@ public sealed record RuntimeHandshakeResponse(
     int MaximumSupportedRevision,
     Guid RuntimeInstanceId,
     IReadOnlyList<string> SupportedFeatures,
-    [property: JsonPropertyOrder(2)] RuntimeProductVersionDiagnostics Product)
+    [property: JsonPropertyOrder(2)] RuntimeProductVersionDiagnostics Product,
+    [property: JsonPropertyOrder(3), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    RuntimeResourceProfileDescriptor? ResourceProfile = null)
 {
     private IReadOnlyList<string> _supportedFeatures = RuntimeContractCollections.Freeze(SupportedFeatures);
 

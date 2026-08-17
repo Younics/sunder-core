@@ -1,14 +1,63 @@
+using Sunder.Runtime.LocalState;
+using Sunder.Sdk.Callbacks;
+
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed record RuntimeTransportPolicyOptions
 {
+    internal const long MaximumRpcContentBytesPerCall = 1024L * 1024 * 1024;
+    internal const long MaximumRpcContentBytesPerPackage = 4L * 1024 * 1024 * 1024;
+    internal const long MaximumRpcContentBytesPerRuntime = 8L * 1024 * 1024 * 1024;
+    internal const int MaximumRpcContentReferencesPerCall = 256;
+    internal const int MaximumRpcContentReferencesPerPackage = 1024;
+    internal const int MaximumRpcContentReferencesPerRuntime = 2048;
+
     public TimeSpan RegistryRequestTimeout { get; init; } = TimeSpan.FromMinutes(10);
     public long MaxRegistryJsonBytes { get; init; } = 1024 * 1024;
     public long MaxRegistryErrorBytes { get; init; } = 64 * 1024;
     public TimeSpan ContentTransferLifetime { get; init; } = TimeSpan.FromMinutes(30);
     public TimeSpan ContentTransferSweepInterval { get; init; } = TimeSpan.FromMinutes(1);
-    public long MaxRpcContentBytes { get; init; } = 64L * 1024 * 1024;
+    public long MaxRpcContentBytes { get; init; } = RuntimeResourcePolicies.Standard.MaximumContentReferenceBytes;
+    public long MaxRpcContentBytesPerCall { get; init; } = 256L * 1024 * 1024;
+    public long MaxRpcContentBytesPerPackage { get; init; } = 1024L * 1024 * 1024;
+    public long MaxRpcContentBytesPerRuntime { get; init; } = 2L * 1024 * 1024 * 1024;
+    public int MaxRpcContentReferencesPerCall { get; init; } = 64;
+    public int MaxRpcContentReferencesPerPackage { get; init; } = 256;
+    public int MaxRpcContentReferencesPerRuntime { get; init; } = 512;
     public int MaxRpcContentUses { get; init; } = 32;
+
+    internal static RuntimeTransportPolicyOptions FromResourcePolicy(RuntimeResourcePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        var contentBytes = (long)policy.MaximumContentReferenceBytes;
+        return new RuntimeTransportPolicyOptions
+        {
+            MaxRpcContentBytes = contentBytes,
+            MaxRpcContentBytesPerCall = Math.Min(MaximumRpcContentBytesPerCall, checked(contentBytes * 4)),
+            MaxRpcContentBytesPerPackage = Math.Min(MaximumRpcContentBytesPerPackage, checked(contentBytes * 16)),
+            MaxRpcContentBytesPerRuntime = Math.Min(MaximumRpcContentBytesPerRuntime, checked(contentBytes * 32)),
+            MaxRpcContentReferencesPerCall = ScaleReferenceLimit(
+                64,
+                policy.MaximumContentReferenceBytes,
+                MaximumRpcContentReferencesPerCall),
+            MaxRpcContentReferencesPerPackage = ScaleReferenceLimit(
+                256,
+                policy.MaximumContentReferenceBytes,
+                MaximumRpcContentReferencesPerPackage),
+            MaxRpcContentReferencesPerRuntime = ScaleReferenceLimit(
+                512,
+                policy.MaximumContentReferenceBytes,
+                MaximumRpcContentReferencesPerRuntime),
+        };
+    }
+
+    private static int ScaleReferenceLimit(int standard, int contentBytes, int ceiling)
+    {
+        var scaled = ((long)standard * contentBytes
+                      + RuntimeResourcePolicies.Standard.MaximumContentReferenceBytes - 1)
+                     / RuntimeResourcePolicies.Standard.MaximumContentReferenceBytes;
+        return (int)Math.Clamp(scaled, 1, ceiling);
+    }
 }
 
 internal sealed record RuntimeAuthPolicyOptions
@@ -25,10 +74,10 @@ internal sealed record RuntimeAuthPolicyOptions
     public int PackageCallbackFallbackPort { get; init; } = 1457;
     public int MaxConcurrentPackageCallbacks { get; init; } = 16;
     public int MaxPackageCallbackSessions { get; init; } = 32;
-    public int MaxPackageCallbackQueryValues { get; init; } = 32;
-    public int MaxPackageCallbackQueryKeyLength { get; init; } = 128;
-    public int MaxPackageCallbackQueryValueLength { get; init; } = 4096;
-    public int MaxPackageCallbackQueryCharacters { get; init; } = 16384;
+    public int MaxPackageCallbackQueryValues { get; init; } = PackageCallbackParameters.MaximumCount;
+    public int MaxPackageCallbackQueryKeyLength { get; init; } = PackageCallbackParameters.MaximumKeyLength;
+    public int MaxPackageCallbackQueryValueLength { get; init; } = PackageCallbackParameters.MaximumValueLength;
+    public int MaxPackageCallbackQueryCharacters { get; init; } = PackageCallbackParameters.MaximumTotalLength;
     public TimeSpan PackageCallbackStartTimeout { get; init; } = TimeSpan.FromMinutes(2);
     public TimeSpan PackageCallbackCompletionTimeout { get; init; } = TimeSpan.FromMinutes(2);
     public TimeSpan PackageCallbackCancellationTimeout { get; init; } = TimeSpan.FromSeconds(5);
@@ -45,8 +94,10 @@ internal sealed record RuntimeStackPolicyOptions
 
 internal sealed record RuntimeRpcPolicyOptions
 {
-    public int MaxPayloadBytes { get; init; } = 1024 * 1024;
-    public int MaxPayloadDepth { get; init; } = 64;
+    public int MaxPayloadBytes { get; init; } = RuntimeResourcePolicies.Standard.MaximumRpcValueBytes;
+    public int MaxPayloadDepth { get; init; } = RuntimeResourcePolicies.Standard.MaximumValueDepth;
+    public int MaxPayloadNodes { get; init; } = RuntimeResourcePolicies.Standard.MaximumValueNodes;
+    public int MaxObjectMembers { get; init; } = RuntimeResourcePolicies.Standard.MaximumObjectMembers;
     public int MaxConcurrentCallsPerCaller { get; init; } = 32;
     public int MaxConcurrentCallsPerCallee { get; init; } = 64;
     public int MaxNestedCallDepth { get; init; } = 8;
@@ -55,13 +106,24 @@ internal sealed record RuntimeRpcPolicyOptions
     public int MaxAppCallerSessions { get; init; } = 128;
     public int MaxCallScopesPerCaller { get; init; } = 64;
     public TimeSpan DefaultDeadline { get; init; } = TimeSpan.FromMinutes(10);
+
+    internal static RuntimeRpcPolicyOptions FromResourcePolicy(RuntimeResourcePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        return new RuntimeRpcPolicyOptions
+        {
+            MaxPayloadBytes = policy.MaximumRpcValueBytes,
+            MaxPayloadDepth = policy.MaximumValueDepth,
+            MaxPayloadNodes = policy.MaximumValueNodes,
+            MaxObjectMembers = policy.MaximumObjectMembers,
+        };
+    }
 }
 
 internal sealed record RuntimeProcessPolicyOptions
 {
-    public int MaxFrameBytes { get; init; } = 1024 * 1024;
     public int MaxHeaderBytes { get; init; } = 8 * 1024;
-    public int MaxMessageDepth { get; init; } = 64;
+    public RuntimeResourcePolicy? EffectiveResourcePolicy { get; init; }
     public int MaxOutstandingHostCalls { get; init; } = 64;
     public int MaxOutstandingWorkerCalls { get; init; } = 32;
     public int MaxOutstandingWorkerLoggingCalls { get; init; } = 32;
@@ -96,4 +158,26 @@ internal sealed record RuntimeLifecyclePolicyOptions
     public TimeSpan ShutdownTimeout { get; init; } = RuntimeShutdownDeadline.DefaultTimeout;
     public TimeSpan DevPackageOwnerLeaseLifetime { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan DevPackageOwnerSweepInterval { get; init; } = TimeSpan.FromSeconds(5);
+}
+
+internal sealed record RuntimePackageRecoveryPolicyOptions
+{
+    private static readonly IReadOnlyList<TimeSpan> DefaultRestartDelays = Array.AsReadOnly(new[]
+    {
+        TimeSpan.FromMilliseconds(250),
+        TimeSpan.FromMilliseconds(500),
+        TimeSpan.FromMilliseconds(1000),
+        TimeSpan.FromMilliseconds(2000),
+        TimeSpan.FromMilliseconds(4000),
+    });
+
+    public bool Enabled { get; init; } = true;
+
+    public TimeSpan FailureWindow { get; init; } = TimeSpan.FromMinutes(1);
+
+    public IReadOnlyList<TimeSpan> RestartDelays { get; init; } = DefaultRestartDelays;
+
+    public int SuspensionFailureCount { get; init; } = 6;
+
+    public TimeSpan DependencyRetryDelay { get; init; } = TimeSpan.FromMilliseconds(250);
 }

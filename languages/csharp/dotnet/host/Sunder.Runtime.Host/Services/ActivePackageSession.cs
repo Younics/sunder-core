@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Settings;
 using Sunder.Package.Format;
@@ -41,6 +43,11 @@ internal sealed record ActiveLoadedPackage(
     public IPackageCallbackHandler? GetCallbackHandler(string callbackHandlerId)
         => Worker.GetCallbackHandler(callbackHandlerId);
 }
+
+internal sealed record DrainingPackageRecoveryCandidate(
+    DrainingPackageFault Fault,
+    ActiveLoadedPackage FailedPackage,
+    DateTimeOffset FailedAtUtc);
 
 internal sealed class ActivePackageSession
 {
@@ -104,6 +111,7 @@ internal sealed class ActivePackageSession
             return;
         }
 
+        var startupStarted = Stopwatch.GetTimestamp();
         var attemptedWorkers = new List<(string PackageId, IRuntimePackageWorker Worker)>();
         Task? startTask = null;
         try
@@ -112,6 +120,7 @@ internal sealed class ActivePackageSession
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 attemptedWorkers.Add((package.Descriptor.PackageId, package.Worker));
+                var workerStarted = Stopwatch.GetTimestamp();
                 using var startupTimeoutCancellation = new CancellationTokenSource(startupTimeout);
                 using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(
                     cancellationToken,
@@ -128,15 +137,35 @@ internal sealed class ActivePackageSession
                     startupTimeoutCancellation.IsCancellationRequested
                     && !cancellationToken.IsCancellationRequested)
                 {
+                    logger.LogWarning(
+                        "Package worker {PackageId} startup timed out after {ElapsedMilliseconds} ms",
+                        package.Descriptor.PackageId,
+                        Stopwatch.GetElapsedTime(workerStarted).TotalMilliseconds);
                     throw new TimeoutException(
                         $"Package worker '{package.Descriptor.PackageId}' did not start within {startupTimeout.TotalSeconds:0.###} seconds.",
                         exception);
                 }
+                catch
+                {
+                    logger.LogWarning(
+                        "Package worker {PackageId} startup failed after {ElapsedMilliseconds} ms",
+                        package.Descriptor.PackageId,
+                        Stopwatch.GetElapsedTime(workerStarted).TotalMilliseconds);
+                    throw;
+                }
                 startTask = null;
                 RefreshWorkerMetadata(package.Descriptor.PackageId, package);
+                logger.LogInformation(
+                    "Started package worker {PackageId} in {ElapsedMilliseconds} ms",
+                    package.Descriptor.PackageId,
+                    Stopwatch.GetElapsedTime(workerStarted).TotalMilliseconds);
             }
 
             _workersStarted = true;
+            logger.LogInformation(
+                "Started {PackageWorkerCount} package worker(s) in {ElapsedMilliseconds} ms",
+                attemptedWorkers.Count,
+                Stopwatch.GetElapsedTime(startupStarted).TotalMilliseconds);
         }
         catch
         {
@@ -144,6 +173,10 @@ internal sealed class ActivePackageSession
             {
                 _ = ObserveAsync(startTask);
             }
+            logger.LogWarning(
+                "Package worker startup failed after {ElapsedMilliseconds} ms; stopping {AttemptedWorkerCount} attempted worker(s)",
+                Stopwatch.GetElapsedTime(startupStarted).TotalMilliseconds,
+                attemptedWorkers.Count);
             await RuntimeWorkerLifecycle.StopWorkersStrictAsync(
                 attemptedWorkers.AsEnumerable().Reverse().ToArray(),
                 logger,
@@ -347,18 +380,20 @@ internal sealed class ActivePackageSession
         }
     }
 
-    public async Task ApplyDrainingFaultsAsync(
+    public async Task<IReadOnlyList<DrainingPackageRecoveryCandidate>> ApplyDrainingFaultsAsync(
         IReadOnlyList<DrainingPackageFault> faults,
         ILogger logger,
         TimeSpan cleanupTimeout)
     {
+        var recoveries = new List<DrainingPackageRecoveryCandidate>();
         foreach (var fault in faults)
         {
             if (!MarkPackageFailedInternal(
                     fault.PackageId,
                     fault.Origin,
                     fault.Exception.Message,
-                    out var package)
+                    out var package,
+                    fault.FailedAtUtc)
                 || package is null)
             {
                 continue;
@@ -373,7 +408,12 @@ internal sealed class ActivePackageSession
                 package.Worker,
                 logger,
                 cleanupTimeout).ConfigureAwait(false);
+            if (package.RecoveryFactory is not null)
+            {
+                recoveries.Add(new DrainingPackageRecoveryCandidate(fault, package, fault.FailedAtUtc));
+            }
         }
+        return recoveries;
     }
 
     public async Task RebuildQuiescedWorkersAsync(
@@ -399,7 +439,10 @@ internal sealed class ActivePackageSession
                 current.Worker,
                 logger,
                 cleanupTimeout).ConfigureAwait(false);
-            _loadedPackageMap[packageId] = current.RecoveryFactory();
+            _loadedPackageMap[packageId] = current.RecoveryFactory() with
+            {
+                Source = current.Source,
+            };
         }
 
         lock (_lifecycleSync)
@@ -608,7 +651,8 @@ internal sealed class ActivePackageSession
         string packageId,
         PackageFailureOrigin origin,
         string message,
-        out ActiveLoadedPackage? packageToDeactivate)
+        out ActiveLoadedPackage? packageToDeactivate,
+        DateTimeOffset? failedAtUtc = null)
     {
         packageToDeactivate = null;
         if (!_sessionPackageMap.TryGetValue(packageId, out var package))
@@ -622,7 +666,7 @@ internal sealed class ActivePackageSession
             Readiness = PackageReadinessState.Failed,
             FailureOrigin = origin,
             LastError = message,
-            LastFailureAtUtc = DateTimeOffset.UtcNow,
+            LastFailureAtUtc = failedAtUtc ?? DateTimeOffset.UtcNow,
             FailureCount = package.FailureCount + 1,
         };
 
@@ -630,6 +674,178 @@ internal sealed class ActivePackageSession
         _loadedPackageMap.Remove(packageId, out packageToDeactivate);
 
         return true;
+    }
+
+    internal bool IsExactFailedPackage(
+        string packageId,
+        RuntimePackageSource source)
+        => _sessionPackageMap.TryGetValue(packageId, out var package)
+           && !package.IsEnabled
+           && package.Readiness == PackageReadinessState.Failed
+           && !_loadedPackageMap.ContainsKey(packageId)
+           && _packageSourceMap.TryGetValue(packageId, out var currentSource)
+           && ReferenceEquals(currentSource, source);
+
+    internal bool AreRecoveryDependenciesAvailable(string packageId)
+    {
+        if (!_packageSourceMap.TryGetValue(packageId, out var source))
+        {
+            return false;
+        }
+
+        foreach (var dependency in source.PackageDependencies)
+        {
+            if (!_sessionPackageMap.TryGetValue(dependency.PackageId, out var package)
+                || !package.IsEnabled
+                || package.Readiness is not (PackageReadinessState.Ready or PackageReadinessState.Degraded)
+                || !PackageVersionRange.IsSatisfiedBy(package.Version, dependency.VersionRange))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    internal bool RecordRecoveryFailure(
+        string packageId,
+        RuntimePackageSource source,
+        PackageFailureOrigin origin,
+        string message,
+        DateTimeOffset failedAtUtc)
+    {
+        if (!IsExactFailedPackage(packageId, source)
+            || !_sessionPackageMap.TryGetValue(packageId, out var package))
+        {
+            return false;
+        }
+
+        _sessionPackageMap[packageId] = package with
+        {
+            FailureOrigin = origin,
+            LastError = message,
+            LastFailureAtUtc = failedAtUtc,
+            FailureCount = package.FailureCount + 1,
+        };
+        return true;
+    }
+
+    internal ActiveLoadedPackage RefreshRecoveryWorkerMetadata(ActiveLoadedPackage package)
+        => WithWorkerMetadata(package);
+
+    internal bool PublishRecoveredPackage(
+        string packageId,
+        RuntimePackageSource source,
+        ActiveLoadedPackage replacement,
+        long activationGeneration)
+    {
+        lock (_lifecycleSync)
+        {
+            if (!_workersStarted
+                || !_runtimeGenerationCommitted
+                || _committedSessionGeneration != activationGeneration
+                || !IsExactFailedPackage(packageId, source)
+                || replacement.RuntimeActivationId == Guid.Empty
+                || !string.Equals(replacement.Descriptor.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+                || !_sessionPackageMap.TryGetValue(packageId, out var failedPackage)
+                || !string.Equals(replacement.Descriptor.Version, failedPackage.Version, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var completion = replacement.Worker.GenerationCompletion
+                             ?? throw new InvalidOperationException(
+                                 "A recovered package worker returned a null generation completion task.");
+            if (completion.IsFaulted || completion.IsCanceled)
+            {
+                completion.GetAwaiter().GetResult();
+            }
+
+            replacement = replacement with
+            {
+                Source = source,
+                Descriptor = ToActiveDescriptor(failedPackage with
+                {
+                    IsEnabled = true,
+                    Readiness = PackageReadinessState.Ready,
+                    FailureOrigin = null,
+                    LastError = null,
+                }),
+            };
+            _loadedPackageMap.Add(packageId, replacement);
+            _sessionPackageMap[packageId] = failedPackage with
+            {
+                IsEnabled = true,
+                Readiness = PackageReadinessState.Ready,
+                FailureOrigin = null,
+                LastError = null,
+            };
+            _committedRuntimeWorkers.Add(replacement.Worker);
+            return true;
+        }
+    }
+
+    internal bool StartRecoveredRuntimeGenerationMonitoring(
+        string packageId,
+        Guid runtimeActivationId,
+        long activationGeneration,
+        Action<string, RuntimePackageGeneration, Exception> generationFaulted)
+    {
+        ArgumentNullException.ThrowIfNull(generationFaulted);
+        Task completion;
+        lock (_lifecycleSync)
+        {
+            if (!_loadedPackageMap.TryGetValue(packageId, out var package)
+                || package.RuntimeActivationId != runtimeActivationId
+                || !_committedRuntimeWorkers.Contains(package.Worker))
+            {
+                return false;
+            }
+            completion = package.Worker.GenerationCompletion
+                         ?? throw new InvalidOperationException(
+                             "A recovered package worker returned a null generation completion task.");
+        }
+
+        var generation = new RuntimePackageGeneration(runtimeActivationId, activationGeneration);
+        var monitor = MonitorRuntimeGenerationAsync(
+            completion,
+            packageId,
+            generation,
+            generationFaulted);
+        lock (_lifecycleSync)
+        {
+            _lifecycleOperations.Add(monitor);
+        }
+        return true;
+    }
+
+    internal void RollbackRecoveredPackage(
+        string packageId,
+        RuntimePackageSource source,
+        Guid runtimeActivationId,
+        PackageFailureOrigin origin,
+        string message,
+        DateTimeOffset failedAtUtc)
+    {
+        lock (_lifecycleSync)
+        {
+            if (!_loadedPackageMap.TryGetValue(packageId, out var package)
+                || package.RuntimeActivationId != runtimeActivationId
+                || !ReferenceEquals(package.Source, source)
+                || !_sessionPackageMap.TryGetValue(packageId, out var descriptor))
+            {
+                return;
+            }
+            _loadedPackageMap.Remove(packageId);
+            _committedRuntimeWorkers.Remove(package.Worker);
+            _sessionPackageMap[packageId] = descriptor with
+            {
+                IsEnabled = false,
+                Readiness = PackageReadinessState.Failed,
+                FailureOrigin = origin,
+                LastError = message,
+                LastFailureAtUtc = failedAtUtc,
+            };
+        }
     }
 
     public bool DisableInstalledPackage(string packageId, out ActiveLoadedPackage? packageToDeactivate)
@@ -815,12 +1031,17 @@ internal sealed class ActivePackageSession
 
     private void RefreshWorkerMetadata(string packageId, ActiveLoadedPackage package)
     {
+        _loadedPackageMap[packageId] = WithWorkerMetadata(package);
+    }
+
+    private static ActiveLoadedPackage WithWorkerMetadata(ActiveLoadedPackage package)
+    {
         var schema = package.Worker.SettingsSchema;
         if (package.Settings is PackageSettings settings)
         {
             settings.Schema = schema;
         }
-        _loadedPackageMap[packageId] = package with
+        return package with
         {
             SettingsSchema = PackageProtocolMapper.ToProtocolSettingsSchema(
                 package.Descriptor.PackageId,

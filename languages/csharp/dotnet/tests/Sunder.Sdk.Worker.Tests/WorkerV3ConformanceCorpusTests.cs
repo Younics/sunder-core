@@ -16,7 +16,7 @@ public sealed class WorkerV3ConformanceCorpusTests
         using var corpus = JsonDocument.Parse(File.ReadAllBytes(
             Path.Combine(AppContext.BaseDirectory, "WorkerV3Conformance", "corpus.json")));
         var root = corpus.RootElement;
-        Assert.Equal(2, root.GetProperty("formatVersion").GetInt32());
+        Assert.Equal(3, root.GetProperty("formatVersion").GetInt32());
         Assert.Equal(WorkerProtocol.Name, root.GetProperty("protocol").GetProperty("identity").GetString());
         Assert.Equal(WorkerProtocol.Version, root.GetProperty("protocol").GetProperty("version").GetInt32());
         var categories = root.GetProperty("categories");
@@ -24,6 +24,8 @@ public sealed class WorkerV3ConformanceCorpusTests
             [
                 "shutdown-order",
                 "framing",
+                "resource-profile",
+                "transport-bounds",
                 "json",
                 "safe-integers",
                 "data",
@@ -82,7 +84,8 @@ public sealed class WorkerV3ConformanceCorpusTests
                     return ValueTask.FromException<JsonElement>(new SunderRpcException(new SunderRpcError(
                         SunderRpcErrorKind.Domain,
                         expected.GetProperty("code").GetString()!,
-                        expected.GetProperty("message").GetString()!)));
+                        expected.GetProperty("message").GetString()!,
+                        details: expected.GetProperty("details"))));
                 }
                 if (methodId == undeclaredDomainFault.GetProperty("methodId").GetString())
                 {
@@ -184,6 +187,9 @@ public sealed class WorkerV3ConformanceCorpusTests
             Assert.Equal(expected.GetProperty("kind").GetString(), actual.GetProperty("kind").GetString());
             Assert.Equal(expected.GetProperty("code").GetString(), actual.GetProperty("code").GetString());
             Assert.Equal(expected.GetProperty("message").GetString(), actual.GetProperty("message").GetString());
+            Assert.True(JsonElement.DeepEquals(
+                expected.GetProperty("details"),
+                actual.GetProperty("details")));
         }
 
         await worker.SendInvocationAsync(

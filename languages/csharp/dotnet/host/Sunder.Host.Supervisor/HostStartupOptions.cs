@@ -1,3 +1,5 @@
+using Sunder.Runtime.LocalState;
+
 namespace Sunder.Host.Supervisor;
 
 internal sealed record HostStartupOptions(
@@ -5,7 +7,8 @@ internal sealed record HostStartupOptions(
     TimeSpan WorkerStartupTimeout,
     string? HostStateRoot,
     string? RuntimeStateRoot,
-    string? DeploymentIdentity)
+    string? DeploymentIdentity,
+    string? RuntimeResourcePolicyFilePath)
 {
     internal const string RuntimeHostPathEnvironmentVariable = "SUNDER_HOST_RUNTIME_PATH";
     internal const string HostStateRootEnvironmentVariable = "SUNDER_HOST_STATE_ROOT";
@@ -20,6 +23,8 @@ internal sealed record HostStartupOptions(
         string? configuredRuntimePath = getEnvironmentVariable(RuntimeHostPathEnvironmentVariable);
         string? hostStateRoot = getEnvironmentVariable(HostStateRootEnvironmentVariable);
         string? runtimeStateRoot = getEnvironmentVariable(RuntimeStateRootEnvironmentVariable);
+        string? runtimeResourcePolicyFilePath = getEnvironmentVariable(
+            RuntimeResourcePolicyEnvironment.PolicyFilePathVariable);
         string? deploymentIdentity = null;
         var startupTimeout = TimeSpan.FromSeconds(30);
         for (var index = 0; index < args.Count; index++)
@@ -67,6 +72,7 @@ internal sealed record HostStartupOptions(
 
         hostStateRoot = NormalizeOptionalPath(hostStateRoot);
         runtimeStateRoot = NormalizeOptionalPath(runtimeStateRoot);
+        runtimeResourcePolicyFilePath = NormalizeOptionalPath(runtimeResourcePolicyFilePath);
         if (deploymentIdentity is not null
             && !Sunder.Host.Contracts.HostDeploymentIdentity.IsValid(deploymentIdentity))
         {
@@ -81,7 +87,8 @@ internal sealed record HostStartupOptions(
             startupTimeout,
             hostStateRoot,
             runtimeStateRoot,
-            deploymentIdentity);
+            deploymentIdentity,
+            runtimeResourcePolicyFilePath);
     }
 
     internal static string? ResolveRuntimeHostPath(string? configuredPath, string? baseDirectory = null)

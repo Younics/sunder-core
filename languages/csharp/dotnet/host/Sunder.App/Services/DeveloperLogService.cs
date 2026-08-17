@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Logging;
 
@@ -225,7 +227,18 @@ public sealed class DeveloperLogService : IDisposable
             }
             catch (Exception ex)
             {
-                AppSessionLog.WriteError("Runtime package-log stream disconnected.", ex, visibleInDeveloperLog: false);
+                if (ex is IOException
+                    or HttpRequestException
+                    or RuntimeClientException { StatusCode: HttpStatusCode.ServiceUnavailable })
+                {
+                    AppSessionLog.WriteInfo(
+                        $"Runtime package-log stream disconnected: {ex.Message}",
+                        visibleInDeveloperLog: false);
+                }
+                else
+                {
+                    AppSessionLog.WriteError("Runtime package-log stream disconnected.", ex, visibleInDeveloperLog: false);
+                }
                 reconnectFailures = ResetBackoffAfterStableConnection(connectedAt, reconnectFailures);
                 await Task.Delay(
                     RuntimeReconnectBackoff.GetDelay(reconnectFailures++),

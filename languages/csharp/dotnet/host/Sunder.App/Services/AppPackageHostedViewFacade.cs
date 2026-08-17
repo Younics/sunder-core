@@ -6,8 +6,26 @@ namespace Sunder.App.Services;
 internal sealed class AppPackageHostedViewFacade(
     AppPackageViewRegistry viewRegistry,
     Func<string, bool> isPackageDisabled,
-    Action<string, string, Exception> reportHostedViewFailure)
+    Func<string, string, Exception, bool> reportHostedViewFailure)
 {
+    public AppPackageHostedViewFacade(
+        AppPackageViewRegistry viewRegistry,
+        Func<string, bool> isPackageDisabled,
+        Action<string, string, Exception> reportHostedViewFailure)
+        : this(
+            viewRegistry,
+            isPackageDisabled,
+            (packageId, viewId, exception) =>
+            {
+                reportHostedViewFailure(
+                    packageId,
+                    $"Package view '{viewId}' failed: {exception.Message}",
+                    exception);
+                return true;
+            })
+    {
+    }
+
     private readonly object _operationSyncRoot = new();
     private readonly Dictionary<string, CancellationTokenSource> _navigationCancellations = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, SemaphoreSlim> _viewOperationGates = new(StringComparer.OrdinalIgnoreCase);
@@ -48,18 +66,21 @@ internal sealed class AppPackageHostedViewFacade(
             async (_, operationCancellation) =>
             {
                 operationCancellation.ThrowIfCancellationRequested();
+                bool alreadyPrepared;
                 lock (_operationSyncRoot)
                 {
-                    if (_warmedViewIds.Contains(viewId) || _presentedViewIds.Contains(viewId))
-                    {
-                        operationCancellation.ThrowIfCancellationRequested();
-                        var retainedView = GetOrCreateView(viewId);
-                        operationCancellation.ThrowIfCancellationRequested();
-                        return retainedView is not null
-                            && (retainView is null || retainView(retainedView))
-                                ? retainedView
-                                : null;
-                    }
+                    alreadyPrepared = _warmedViewIds.Contains(viewId)
+                        || _presentedViewIds.Contains(viewId);
+                }
+                if (alreadyPrepared)
+                {
+                    operationCancellation.ThrowIfCancellationRequested();
+                    var retainedView = GetOrCreateView(viewId);
+                    operationCancellation.ThrowIfCancellationRequested();
+                    return retainedView is not null
+                        && (retainView is null || retainView(retainedView))
+                            ? retainedView
+                            : null;
                 }
 
                 operationCancellation.ThrowIfCancellationRequested();
@@ -90,7 +111,10 @@ internal sealed class AppPackageHostedViewFacade(
                 }
                 catch (Exception ex)
                 {
-                    ReportViewFailure(viewId, $"warmup failed: {ex.Message}", "warmup failed", ex);
+                    if (!ReportViewFailure(viewId, "warmup failed", ex))
+                    {
+                        throw;
+                    }
                     return null;
                 }
             });
@@ -138,12 +162,11 @@ internal sealed class AppPackageHostedViewFacade(
                     }
                     catch (Exception ex)
                     {
-                        ReportViewFailure(
-                            viewId,
-                            $"warmup failed: {ex.Message}",
-                            "warmup failed",
-                            ex);
-                        return false;
+                        if (!ReportViewFailure(viewId, "warmup failed", ex))
+                        {
+                            throw;
+                        }
+                        return presentView(null);
                     }
                 }
 
@@ -246,11 +269,11 @@ internal sealed class AppPackageHostedViewFacade(
                     }
                     catch (Exception ex)
                     {
-                        ReportViewFailure(
-                            viewId,
-                            $"navigation failed: {ex.Message}",
-                            "navigation failed",
-                            ex);
+                        if (!ReportViewFailure(viewId, "navigation failed", ex))
+                        {
+                            throw;
+                        }
+                        return false;
                     }
 
                     return true;
@@ -334,11 +357,13 @@ internal sealed class AppPackageHostedViewFacade(
                         }
                         catch (Exception ex)
                         {
-                            ReportViewFailure(
-                                viewId,
-                                $"navigation preparation failed: {ex.Message}",
-                                "navigation preparation failed",
-                                ex);
+                            if (!ReportViewFailure(
+                                    viewId,
+                                    "navigation preparation failed",
+                                    ex))
+                            {
+                                throw;
+                            }
                             return false;
                         }
 
@@ -375,11 +400,14 @@ internal sealed class AppPackageHostedViewFacade(
                         }
                         catch (Exception ex)
                         {
-                            ReportViewFailure(
-                                viewId,
-                                $"presentation acknowledgment failed: {ex.Message}",
-                                "presentation acknowledgment failed",
-                                ex);
+                            if (!ReportViewFailure(
+                                    viewId,
+                                    "presentation acknowledgment failed",
+                                    ex))
+                            {
+                                throw;
+                            }
+                            return false;
                         }
 
                         return true;
@@ -482,6 +510,35 @@ internal sealed class AppPackageHostedViewFacade(
 
     public async Task CancelAllViewOperationsAsync()
         => await BeginCancelAllViewOperations().ConfigureAwait(false);
+
+    public async Task CancelViewOperationsAsync(string viewId)
+        => await BeginCancelViewOperations(viewId).ConfigureAwait(false);
+
+    internal Task BeginCancelViewOperations(string viewId)
+    {
+        ActiveViewOperation[] operations;
+        CancellationTokenSource? navigationCancellation;
+        lock (_operationSyncRoot)
+        {
+            _viewEpochs[viewId] = _viewEpochs.GetValueOrDefault(viewId) + 1;
+            _warmedViewIds.Remove(viewId);
+            _presentedViewIds.Remove(viewId);
+            _navigationCancellations.Remove(viewId, out navigationCancellation);
+            operations = _activeOperations
+                .Where(operation => string.Equals(
+                    operation.ViewId,
+                    viewId,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+        }
+
+        var cancellationSignals = operations
+            .Select(static operation => operation.Cancellation)
+            .Prepend(navigationCancellation)
+            .Select(TryCancelAsync)
+            .ToArray();
+        return DrainAllViewOperationsAsync(cancellationSignals, operations);
+    }
 
     internal Task BeginCancelAllViewOperations()
     {
@@ -611,7 +668,7 @@ internal sealed class AppPackageHostedViewFacade(
         {
             cancellation?.Cancel();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             AppSessionLog.WriteError("Package view navigation cancellation callback failed.", ex);
         }
@@ -626,7 +683,7 @@ internal sealed class AppPackageHostedViewFacade(
                 await cancellation.CancelAsync().ConfigureAwait(false);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
         {
             AppSessionLog.WriteError("Package view navigation cancellation callback failed.", ex);
         }
@@ -765,23 +822,24 @@ internal sealed class AppPackageHostedViewFacade(
         }
     }
 
-    private void ReportViewFailure(
+    private bool ReportViewFailure(
         string viewId,
-        string packageMessage,
         string logMessage,
         Exception exception)
     {
+        if (!AppPackageUiFaultPolicy.IsRecoverable(exception))
+        {
+            return false;
+        }
+
         var packageId = viewRegistry.GetPackageId(viewId);
         if (packageId is not null)
         {
-            reportHostedViewFailure(
-                packageId,
-                $"Package view '{viewId}' {packageMessage}",
-                exception);
-            return;
+            return reportHostedViewFailure(packageId, viewId, exception);
         }
 
         AppSessionLog.WriteError($"Package view '{viewId}' {logMessage}.", exception);
+        return false;
     }
 
     private enum ViewOperationKind
@@ -853,6 +911,9 @@ internal sealed class AppPackageHostedViewFacade(
 
     public Control? GetOrCreateSettingsView(string packageId)
         => viewRegistry.GetOrCreateSettingsView(packageId, isPackageDisabled, reportHostedViewFailure);
+
+    public bool IsViewQuarantined(string packageId, string viewId)
+        => viewRegistry.IsViewQuarantined(packageId, viewId);
 
     public AppPackageSettingsViewNavigationTarget? GetSettingsViewForNavigation(
         string packageId,

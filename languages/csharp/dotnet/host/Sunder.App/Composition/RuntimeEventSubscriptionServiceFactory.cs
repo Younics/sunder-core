@@ -4,8 +4,9 @@ namespace Sunder.App.Composition;
 
 public sealed class RuntimeEventSubscriptionServiceFactory(
     IRuntimeApiClientFactory runtimeApiClientFactory,
-    DeveloperLogService developerLog)
+    DeveloperLogService developerLog,
+    RuntimePackageRecoveryNotificationService? recoveryNotifications = null)
 {
     public RuntimeEventSubscriptionService Create()
-        => new(runtimeApiClientFactory, developerLog);
+        => new(runtimeApiClientFactory, developerLog, recoveryNotifications);
 }

@@ -1,7 +1,9 @@
 using System.Buffers;
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace Sunder.Sdk.Worker.Internal;
 
@@ -10,6 +12,7 @@ internal static class WorkerProtocol
     public const string Name = "sunder.worker.v3";
     public const int Version = 3;
     public const long MaximumSafeInteger = 9_007_199_254_740_991;
+    public const int EnvelopeReserveBytes = 64 * 1024;
 
 }
 
@@ -21,6 +24,19 @@ internal sealed class WorkerProtocolException : Exception
     }
 
     public WorkerProtocolException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+internal sealed class WorkerTransportResourceException : Exception
+{
+    public WorkerTransportResourceException(string message)
+        : base(message)
+    {
+    }
+
+    public WorkerTransportResourceException(string message, Exception innerException)
         : base(message, innerException)
     {
     }
@@ -124,12 +140,24 @@ internal sealed class WorkerFrameReader
 
             _ = StrictUtf8.GetCharCount(body);
             ValidateJsonTokens(body, _limits.MaximumMessageDepth);
-            return JsonDocument.Parse(body.AsMemory(), new JsonDocumentOptions
+            var document = JsonDocument.Parse(body.AsMemory(), new JsonDocumentOptions
             {
                 AllowTrailingCommas = false,
                 CommentHandling = JsonCommentHandling.Disallow,
                 MaxDepth = _limits.MaximumMessageDepth,
             });
+            try
+            {
+                WorkerJson.ValidateEnvelopeBounds(document.RootElement, body.Length, _limits);
+                return document;
+            }
+            catch (WorkerTransportResourceException exception)
+            {
+                document.Dispose();
+                throw new WorkerProtocolException(
+                    "Host envelope exceeds the negotiated worker transport limits.",
+                    exception);
+            }
         }
         catch (WorkerProtocolException)
         {
@@ -203,7 +231,9 @@ internal sealed class WorkerProtocolOutput
     private readonly WorkerLimits _limits;
     private readonly CancellationToken _stopping;
     private readonly SemaphoreSlim _writer = new(1, 1);
-    private int _pendingWrites;
+    private readonly object _queueGate = new();
+    private int _queuedWrites;
+    private long _queuedBytes;
 
     public WorkerProtocolOutput(Stream stream, WorkerLimits limits, CancellationToken stopping)
     {
@@ -212,22 +242,35 @@ internal sealed class WorkerProtocolOutput
         _stopping = stopping;
     }
 
-    public async ValueTask WriteAsync(byte[] body)
+    public ValueTask WriteAsync(byte[] body)
     {
         if (body.Length == 0 || body.Length > _limits.MaximumFrameBytes)
         {
-            throw new WorkerProtocolException("Worker protocol frame exceeded the configured limit.");
+            throw new WorkerTransportResourceException("Worker protocol frame exceeded the configured limit.");
         }
 
-        if (Interlocked.Increment(ref _pendingWrites) > _limits.MaximumWriteQueueMessages)
+        lock (_queueGate)
         {
-            Interlocked.Decrement(ref _pendingWrites);
-            throw new WorkerProtocolException("Worker protocol write queue exceeded its bound.");
+            if (_queuedWrites >= _limits.MaximumWriteQueueMessages
+                || body.Length > _limits.MaximumWriteQueueBytes - _queuedBytes)
+            {
+                throw new WorkerTransportResourceException(
+                    "Worker protocol write queue exceeded its count or byte bound.");
+            }
+            _queuedWrites++;
+            _queuedBytes += body.Length;
         }
+        return WriteReservedAsync(body);
+    }
 
+    private async ValueTask WriteReservedAsync(byte[] body)
+    {
+        var dequeued = false;
         try
         {
             await _writer.WaitAsync(_stopping).ConfigureAwait(false);
+            ReleaseQueueReservation(body.Length);
+            dequeued = true;
             try
             {
                 var header = Encoding.ASCII.GetBytes(
@@ -251,13 +294,126 @@ internal sealed class WorkerProtocolOutput
         }
         finally
         {
-            Interlocked.Decrement(ref _pendingWrites);
+            if (!dequeued) ReleaseQueueReservation(body.Length);
+        }
+    }
+
+    private void ReleaseQueueReservation(int bodyBytes)
+    {
+        lock (_queueGate)
+        {
+            _queuedWrites--;
+            _queuedBytes -= bodyBytes;
+            if (_queuedWrites < 0 || _queuedBytes < 0)
+            {
+                throw new InvalidOperationException("Worker write-queue accounting underflowed.");
+            }
         }
     }
 }
 
+internal sealed class WorkerJsonEventQueue
+{
+    private readonly Channel<QueuedValue> _channel;
+    private readonly int _maximumMessages;
+    private readonly long _maximumBytes;
+    private readonly object _gate = new();
+    private int _queuedMessages;
+    private long _queuedBytes;
+
+    public WorkerJsonEventQueue(int maximumMessages, long maximumBytes)
+    {
+        _maximumMessages = maximumMessages;
+        _maximumBytes = maximumBytes;
+        _channel = Channel.CreateBounded<QueuedValue>(new BoundedChannelOptions(maximumMessages)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = false,
+            SingleWriter = true,
+            AllowSynchronousContinuations = false,
+        });
+    }
+
+    public WorkerJsonEventQueueRejection? TryWrite(JsonElement value, int bytes)
+    {
+        lock (_gate)
+        {
+            var exceededLimit = WorkerJsonEventQueueLimit.None;
+            if (_queuedMessages >= _maximumMessages) exceededLimit |= WorkerJsonEventQueueLimit.Count;
+            if (bytes > _maximumBytes - _queuedBytes) exceededLimit |= WorkerJsonEventQueueLimit.Bytes;
+            if (exceededLimit != WorkerJsonEventQueueLimit.None)
+            {
+                return new WorkerJsonEventQueueRejection(
+                    exceededLimit,
+                    _queuedMessages,
+                    _queuedBytes,
+                    _maximumMessages,
+                    _maximumBytes,
+                    bytes);
+            }
+            _queuedMessages++;
+            _queuedBytes += bytes;
+        }
+        if (_channel.Writer.TryWrite(new QueuedValue(value, bytes))) return null;
+        Release(bytes);
+        throw new InvalidOperationException("Worker event queue rejected an admitted value.");
+    }
+
+    public async IAsyncEnumerable<JsonElement> ReadAllAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var item in _channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            Release(item.Bytes);
+            yield return item.Value;
+        }
+    }
+
+    public void Complete() => _channel.Writer.TryComplete();
+
+    public void Fail(Exception exception)
+    {
+        _channel.Writer.TryComplete(exception);
+        while (_channel.Reader.TryRead(out var item)) Release(item.Bytes);
+    }
+
+    private void Release(int bytes)
+    {
+        lock (_gate)
+        {
+            _queuedMessages--;
+            _queuedBytes -= bytes;
+            if (_queuedMessages < 0 || _queuedBytes < 0)
+            {
+                throw new InvalidOperationException("Worker event-queue accounting underflowed.");
+            }
+        }
+    }
+
+    private sealed record QueuedValue(JsonElement Value, int Bytes);
+}
+
+[Flags]
+internal enum WorkerJsonEventQueueLimit
+{
+    None = 0,
+    Count = 1,
+    Bytes = 2,
+}
+
+internal readonly record struct WorkerJsonEventQueueRejection(
+    WorkerJsonEventQueueLimit Limit,
+    int QueuedMessages,
+    long QueuedBytes,
+    int MaximumMessages,
+    long MaximumBytes,
+    int IncomingBytes);
+
 internal static class WorkerJson
 {
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    public static JavaScriptEncoder Encoder { get; } = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+
     public static byte[] Serialize(WorkerLimits limits, Action<Utf8JsonWriter> write)
     {
         using var buffer = new FixedPooledBufferWriter(limits.MaximumFrameBytes);
@@ -268,6 +424,7 @@ internal static class WorkerJson
                 Indented = false,
                 SkipValidation = false,
                 MaxDepth = limits.MaximumMessageDepth,
+                Encoder = Encoder,
             }))
             {
                 write(writer);
@@ -277,7 +434,19 @@ internal static class WorkerJson
             {
                 throw new WorkerProtocolException("Worker protocol envelope serialized to an empty frame.");
             }
-            return buffer.WrittenSpan.ToArray();
+            var body = buffer.WrittenSpan.ToArray();
+            using var document = JsonDocument.Parse(body, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = limits.MaximumMessageDepth,
+            });
+            ValidateEnvelopeBounds(document.RootElement, body.Length, limits);
+            return body;
+        }
+        catch (WorkerTransportResourceException)
+        {
+            throw;
         }
         catch (WorkerProtocolException)
         {
@@ -287,6 +456,92 @@ internal static class WorkerJson
         {
             throw new WorkerProtocolException("Worker could not serialize a protocol envelope.", exception);
         }
+    }
+
+    public static int GetSerializedValueByteCount(JsonElement value, WorkerLimits limits)
+        => SerializeValue(value, limits).Length;
+
+    public static JsonElement CloneValueForQueue(
+        JsonElement value,
+        WorkerLimits limits,
+        out int serializedBytes)
+    {
+        var body = SerializeValue(value, limits);
+        serializedBytes = body.Length;
+        using var document = JsonDocument.Parse(body, new JsonDocumentOptions
+        {
+            AllowTrailingCommas = false,
+            CommentHandling = JsonCommentHandling.Disallow,
+            MaxDepth = limits.MaximumValueDepth,
+        });
+        return document.RootElement.Clone();
+    }
+
+    private static byte[] SerializeValue(JsonElement value, WorkerLimits limits)
+    {
+        using var buffer = new FixedPooledBufferWriter(limits.MaximumRpcValueBytes);
+        try
+        {
+            using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions
+            {
+                Encoder = Encoder,
+                Indented = false,
+                SkipValidation = false,
+                MaxDepth = limits.MaximumValueDepth,
+            }))
+            {
+                WriteJsonValue(writer, value);
+                writer.Flush();
+            }
+            return buffer.WrittenSpan.ToArray();
+        }
+        catch (WorkerTransportResourceException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
+        {
+            throw new WorkerTransportResourceException(
+                "RPC value exceeds the negotiated worker transport limits.",
+                exception);
+        }
+    }
+
+    public static void ValidateEnvelopeBounds(JsonElement root, int bodyBytes, WorkerLimits limits)
+    {
+        RequireObject(root, "protocol envelope");
+        JsonElement rpcValue = default;
+        var hasRpcValue = root.TryGetProperty("request", out rpcValue)
+                          || root.TryGetProperty("value", out rpcValue)
+                          || TryGetErrorDetails(root, out rpcValue);
+        var valueBytes = hasRpcValue ? StrictUtf8.GetByteCount(rpcValue.GetRawText()) : 0;
+        if (valueBytes > limits.MaximumRpcValueBytes)
+        {
+            throw new WorkerTransportResourceException(
+                "RPC value exceeded the negotiated byte limit.");
+        }
+        if (bodyBytes - valueBytes > WorkerProtocol.EnvelopeReserveBytes)
+        {
+            throw new WorkerTransportResourceException(
+                "Protocol envelope metadata exceeded its reserved byte limit.");
+        }
+        if (hasRpcValue && GetValueDepth(rpcValue) > limits.MaximumValueDepth)
+        {
+            throw new WorkerTransportResourceException(
+                "RPC value exceeded the negotiated depth limit.");
+        }
+    }
+
+    private static bool TryGetErrorDetails(JsonElement root, out JsonElement details)
+    {
+        if (root.TryGetProperty("error", out var error)
+            && error.ValueKind == JsonValueKind.Object
+            && error.TryGetProperty("details", out details))
+        {
+            return true;
+        }
+        details = default;
+        return false;
     }
 
     public static string ReadEnvelopeType(JsonElement root)
@@ -451,6 +706,29 @@ internal static class WorkerJson
     public static string FormatUtc(DateTimeOffset value)
         => value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
 
+    private static int GetValueDepth(JsonElement value)
+    {
+        var maximum = 0;
+        var pending = new Stack<(JsonElement Value, int Depth)>();
+        pending.Push((value, 1));
+        while (pending.TryPop(out var item))
+        {
+            maximum = Math.Max(maximum, item.Depth);
+            if (item.Value.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var child in item.Value.EnumerateArray()) pending.Push((child, item.Depth + 1));
+            }
+            else if (item.Value.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in item.Value.EnumerateObject())
+                {
+                    pending.Push((property.Value, item.Depth + 1));
+                }
+            }
+        }
+        return maximum;
+    }
+
     private sealed class FixedPooledBufferWriter : IBufferWriter<byte>, IDisposable
     {
         private byte[]? _buffer;
@@ -459,7 +737,7 @@ internal static class WorkerJson
         public FixedPooledBufferWriter(int capacity)
         {
             _capacity = capacity;
-            _buffer = ArrayPool<byte>.Shared.Rent(capacity);
+            _buffer = ArrayPool<byte>.Shared.Rent(checked(capacity + WorkerProtocol.EnvelopeReserveBytes));
         }
 
         public int WrittenCount { get; private set; }
@@ -469,7 +747,7 @@ internal static class WorkerJson
         {
             if (count < 0 || count > _capacity - WrittenCount)
             {
-                throw new WorkerProtocolException("Worker protocol frame exceeded the configured limit.");
+                throw new WorkerTransportResourceException("Worker protocol frame exceeded the configured limit.");
             }
             WrittenCount += count;
         }
@@ -477,13 +755,13 @@ internal static class WorkerJson
         public Memory<byte> GetMemory(int sizeHint = 0)
         {
             EnsureCapacity(sizeHint);
-            return _buffer.AsMemory(WrittenCount, _capacity - WrittenCount);
+            return _buffer.AsMemory(WrittenCount);
         }
 
         public Span<byte> GetSpan(int sizeHint = 0)
         {
             EnsureCapacity(sizeHint);
-            return _buffer.AsSpan(WrittenCount, _capacity - WrittenCount);
+            return _buffer.AsSpan(WrittenCount);
         }
 
         public void Dispose()
@@ -497,9 +775,9 @@ internal static class WorkerJson
         {
             if (sizeHint < 0) throw new ArgumentOutOfRangeException(nameof(sizeHint));
             if (sizeHint == 0) sizeHint = 1;
-            if (_buffer is null || sizeHint > _capacity - WrittenCount)
+            if (_buffer is null || sizeHint > _buffer.Length - WrittenCount)
             {
-                throw new WorkerProtocolException("Worker protocol frame exceeded the configured limit.");
+                throw new WorkerTransportResourceException("Worker protocol frame exceeded the configured limit.");
             }
         }
     }

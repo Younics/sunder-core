@@ -47,6 +47,7 @@ public sealed class AppPackageLifecycleCoordinator
             commitPresentation is null
                 ? null
                 : (_, activePackages, _) => Task.FromResult<Action?>(() => commitPresentation(activePackages)),
+            resetPresentation: null,
             cancellationToken);
 
     internal Task<IReadOnlyList<ActivePackageDescriptor>> ApplyPackageSnapshotAsync(
@@ -54,12 +55,14 @@ public sealed class AppPackageLifecycleCoordinator
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds,
         Func<PackageViewHostService.AppPackagePresentationCandidate, IReadOnlyList<ActivePackageDescriptor>, CancellationToken, Task<Action?>>? preparePresentation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? resetPresentation = null)
         => Target.ApplyPackageSnapshotCoreAsync(
             snapshot,
             packageSources,
             retryDisabledPackageIds,
             preparePresentation,
+            resetPresentation,
             cancellationToken);
 
     internal Task<IReadOnlyList<ActivePackageDescriptor>> ApplyPackageGenerationAsync(
@@ -76,6 +79,7 @@ public sealed class AppPackageLifecycleCoordinator
             commitPresentation is null
                 ? null
                 : (_, enabledPackages, _) => Task.FromResult<Action?>(() => commitPresentation(enabledPackages)),
+            resetPresentation: null,
             cancellationToken);
 
     internal async Task PrewarmCurrentPackageIconsAsync(
@@ -105,18 +109,23 @@ public sealed class AppPackageLifecycleCoordinator
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds,
         Func<PackageViewHostService.AppPackagePresentationCandidate, IReadOnlyList<ActivePackageDescriptor>, CancellationToken, Task<Action?>>? preparePresentation,
+        Func<CancellationToken, Task>? resetPresentation,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var retryDisabledPackages = retryDisabledPackageIds is null
-            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            : new HashSet<string>(retryDisabledPackageIds, StringComparer.OrdinalIgnoreCase);
+        IReadOnlyCollection<string> retryDisabledPackages = retryDisabledPackageIds switch
+        {
+            AppPackageQuarantineRetryIntent retryIntent => retryIntent.Snapshot(),
+            null => new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            _ => new HashSet<string>(retryDisabledPackageIds, StringComparer.OrdinalIgnoreCase),
+        };
         return ApplyGenerationCoreAsync(
             snapshot.ActivePackages,
             packageSources,
             retryDisabledPackages,
             snapshot,
             preparePresentation,
+            resetPresentation,
             cancellationToken);
     }
 
@@ -126,55 +135,102 @@ public sealed class AppPackageLifecycleCoordinator
         IReadOnlyCollection<string>? retryDisabledPackageIds,
         RuntimePackageSnapshot? snapshot,
         Func<PackageViewHostService.AppPackagePresentationCandidate, IReadOnlyList<ActivePackageDescriptor>, CancellationToken, Task<Action?>>? preparePresentation,
+        Func<CancellationToken, Task>? resetPresentation,
         CancellationToken cancellationToken)
     {
         _packageViewHostService.ThrowIfDisposedForLifecycle();
         using var transaction = Publisher.BeginTransaction(cancellationToken);
         using var lifecycle = await Gate.EnterAsync(cancellationToken).ConfigureAwait(false);
-        AppPackageGeneration? candidate = null;
-        var committed = false;
-        try
+        var effectiveRetryPackageIds = retryDisabledPackageIds is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(retryDisabledPackageIds, StringComparer.OrdinalIgnoreCase);
+        var forceDisabledPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var quarantineContext = _packageViewHostService.CaptureCandidateQuarantineContext(
+            retryDisabledPackageIds);
+        while (true)
         {
-            candidate = await Builder.BuildAsync(
-                Publisher.CurrentGeneration,
-                activePackages,
-                packageSources,
-                retryDisabledPackageIds,
-                Publisher.HasCommittedGeneration,
-                RejectCandidate,
-                cancellationToken).ConfigureAwait(false);
-            var enabledPackages = AppPackageGenerationBuilder.FilterEnabledPackages(candidate, activePackages);
-            if (snapshot is not null)
+            AppPackageGeneration? candidate = null;
+            var committed = false;
+            var presentationStarted = false;
+            try
             {
-                var iconGeneration = await Icons.PrepareAsync(
+                candidate = await Builder.BuildAsync(
+                    Publisher.CurrentGeneration,
+                    activePackages,
+                    packageSources,
+                    effectiveRetryPackageIds,
+                    forceDisabledPackageIds,
+                    Publisher.HasCommittedGeneration,
+                    RejectCandidate,
+                    cancellationToken).ConfigureAwait(false);
+                candidate.QuarantineContext = quarantineContext;
+                await _packageViewHostService.ApplyInheritedQuarantinesAsync(
                     candidate,
-                    snapshot,
-                    enabledPackages,
                     cancellationToken).ConfigureAwait(false);
-                candidate.ReplaceIconGeneration(iconGeneration).Dispose();
-            }
+                var enabledPackages = AppPackageGenerationBuilder.FilterEnabledPackages(candidate, activePackages);
+                if (snapshot is not null)
+                {
+                    var iconGeneration = await Icons.PrepareAsync(
+                        candidate,
+                        snapshot,
+                        enabledPackages,
+                        cancellationToken).ConfigureAwait(false);
+                    candidate.ReplaceIconGeneration(iconGeneration).Dispose();
+                }
 
-            var commitPresentation = preparePresentation is null
-                ? null
-                : await preparePresentation(
-                    new PackageViewHostService.AppPackagePresentationCandidate(_packageViewHostService, candidate),
-                    enabledPackages,
+                await _packageViewHostService.ApplyInheritedQuarantinesAsync(
+                    candidate,
                     cancellationToken).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            var retiredGeneration = await Publisher.CommitAsync(
-                transaction,
-                candidate,
-                commitPresentation,
-                cancellationToken).ConfigureAwait(false);
-            committed = true;
-            Retirement.Enqueue(retiredGeneration);
-            return enabledPackages;
-        }
-        finally
-        {
-            if (!committed && candidate is not null)
+                enabledPackages = AppPackageGenerationBuilder.FilterEnabledPackages(candidate, activePackages);
+                Action? commitPresentation = null;
+                if (preparePresentation is not null)
+                {
+                    presentationStarted = true;
+                    commitPresentation = await preparePresentation(
+                        new PackageViewHostService.AppPackagePresentationCandidate(_packageViewHostService, candidate),
+                        enabledPackages,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                await _packageViewHostService.ApplyInheritedQuarantinesAsync(
+                    candidate,
+                    cancellationToken).ConfigureAwait(false);
+                enabledPackages = AppPackageGenerationBuilder.FilterEnabledPackages(candidate, activePackages);
+                cancellationToken.ThrowIfCancellationRequested();
+                var retiredGeneration = await Publisher.CommitAsync(
+                    transaction,
+                    candidate,
+                    commitPresentation,
+                    cancellationToken).ConfigureAwait(false);
+                committed = true;
+                Retirement.Enqueue(retiredGeneration);
+                _packageViewHostService.QueueCommittedQuarantineCleanup(candidate);
+                return AppPackageGenerationBuilder.FilterEnabledPackages(candidate, activePackages);
+            }
+            catch (AppPackageCandidateRebuildRequiredException exception)
             {
-                RejectCandidate(candidate);
+                var addedPackage = false;
+                foreach (var packageId in exception.PackageIds)
+                {
+                    addedPackage |= forceDisabledPackageIds.Add(packageId);
+                    effectiveRetryPackageIds.Remove(packageId);
+                }
+                if (!addedPackage)
+                {
+                    throw new InvalidOperationException(
+                        "An App package candidate remained active after it was selected for quarantine.",
+                        exception);
+                }
+                if (presentationStarted && resetPresentation is not null)
+                {
+                    await resetPresentation(cancellationToken).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                if (!committed && candidate is not null)
+                {
+                    RejectCandidate(candidate);
+                }
             }
         }
     }

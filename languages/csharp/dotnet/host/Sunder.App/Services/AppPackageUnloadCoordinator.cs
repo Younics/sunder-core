@@ -11,7 +11,7 @@ internal sealed class AppPackageUnloadCoordinator(
     Action<AppPackageLoadContext> removeLoadContext,
     Action<string>? removePackageResourceAssemblies = null)
 {
-    public async Task RollBackActivationAsync(
+    public async Task<AppPackageUiCleanupOutcome> RollBackActivationAsync(
         string packageId,
         AppLoadedPackageInfo? packageInfo,
         ServiceProvider? serviceProvider,
@@ -19,9 +19,13 @@ internal sealed class AppPackageUnloadCoordinator(
         IAsyncDisposable? targetLifetime = null,
         bool stopRuntimeWork = true)
     {
+        var cleanupProven = true;
         if (packageInfo is not null || targetLifetime is not null)
         {
-            await viewRegistry.UnregisterPackageAsync(packageId, CancellationToken.None);
+            var viewCleanup = await viewRegistry.UnregisterPackageWithOutcomeAsync(
+                packageId,
+                CancellationToken.None);
+            cleanupProven &= viewCleanup.CleanupProven;
             if (stopRuntimeWork)
             {
                 await runtimeWorkStopper.StopPackageWorkAsync(packageId, CancellationToken.None);
@@ -37,7 +41,7 @@ internal sealed class AppPackageUnloadCoordinator(
             removeLoadContext(loadContext);
         }
 
-        await RunBoundedOwnerCleanupAsync(
+        cleanupProven &= await RunBoundedOwnerCleanupAsync(
             packageId,
             CleanupRetiredPackageAsync(
                 packageId,
@@ -47,14 +51,17 @@ internal sealed class AppPackageUnloadCoordinator(
                 loadContext,
                 targetLifetime,
                 removeWholePackageTracking: packageInfo is not null || targetLifetime is not null));
+        return ToCleanupOutcome(cleanupProven);
     }
 
-    public async Task UnloadPackageAsync(
+    public async Task<AppPackageUiCleanupOutcome> UnloadPackageAsync(
         string packageId,
         AppLoadedPackageHandle handle,
         bool useRetirementDeadline = true)
     {
-        await viewRegistry.UnregisterPackageAsync(packageId, CancellationToken.None);
+        var viewCleanup = await viewRegistry.UnregisterPackageWithOutcomeAsync(
+            packageId,
+            CancellationToken.None);
         await runtimeWorkStopper.StopPackageWorkAsync(packageId, CancellationToken.None);
 
         if (handle.ServiceProvider is not null)
@@ -75,34 +82,54 @@ internal sealed class AppPackageUnloadCoordinator(
             removeWholePackageTracking: true);
         if (useRetirementDeadline)
         {
-            await RunBoundedOwnerCleanupAsync(packageId, cleanup);
+            return ToCleanupOutcome(
+                viewCleanup.CleanupProven
+                && await RunBoundedOwnerCleanupAsync(packageId, cleanup));
         }
-        else
-        {
-            await cleanup;
-        }
+
+        return ToCleanupOutcome(viewCleanup.CleanupProven && await cleanup);
     }
 
     public Task StopAllOwnedRuntimeWorkAsync()
         => runtimeWorkStopper.StopAllOwnedWorkAsync(CancellationToken.None);
 
-    public async Task DisposeOwnedResourcesAsync(
+    public async Task<AppPackageUiCleanupOutcome> DisposeOwnedResourcesAsync(
         IReadOnlyList<object> ownedDisposables,
         IReadOnlyList<AppPackageLoadContext> loadContexts)
     {
+        var cleanupProven = true;
         foreach (var disposable in ownedDisposables)
         {
-            await Task.Run(
-                async () => await AppPackageResourceDisposer.TryDisposeOwnedInstanceAsync(disposable, "Failed to dispose an app-side package service container."));
+            var disposed = await Task.Run(
+                async () => await AppPackageResourceDisposer.TryDisposeOwnedInstanceAsync(
+                    disposable,
+                    "Failed to dispose an app-side package service container."));
+            cleanupProven &= disposed;
+            if (!disposed)
+            {
+                AppCleanupQuarantine.Retain(
+                    disposable,
+                    "disposing an app-side package service container");
+            }
         }
 
         foreach (var loadContext in loadContexts)
         {
-            AppPackageResourceDisposer.TryUnloadLoadContext(loadContext, packageId: null);
+            var unloaded = AppPackageResourceDisposer.TryUnloadLoadContext(
+                loadContext,
+                packageId: null);
+            cleanupProven &= unloaded;
+            if (!unloaded)
+            {
+                AppCleanupQuarantine.Retain(
+                    loadContext,
+                    "unloading an app-side package load context");
+            }
         }
+        return ToCleanupOutcome(cleanupProven);
     }
 
-    private async Task CleanupRetiredPackageAsync(
+    private async Task<bool> CleanupRetiredPackageAsync(
         string packageId,
         string? packageFolder,
         string? libraryFolder,
@@ -111,6 +138,7 @@ internal sealed class AppPackageUnloadCoordinator(
         IAsyncDisposable? targetLifetime,
         bool removeWholePackageTracking)
     {
+        var cleanupProven = true;
         if (removeWholePackageTracking)
         {
             assemblyTracker.RemovePackage(packageId);
@@ -125,11 +153,18 @@ internal sealed class AppPackageUnloadCoordinator(
 
         if (serviceProvider is not null)
         {
-            await Task.Run(
+            var disposed = await Task.Run(
                 async () => await AppPackageResourceDisposer.TryDisposeOwnedInstanceAsync(
                     serviceProvider,
                     $"Failed to dispose app-side services for package '{packageId}'."),
                 CancellationToken.None);
+            cleanupProven &= disposed;
+            if (!disposed)
+            {
+                AppCleanupQuarantine.Retain(
+                    serviceProvider,
+                    $"disposing app-side services for package '{packageId}'");
+            }
         }
 
         if (targetLifetime is not null)
@@ -138,8 +173,13 @@ internal sealed class AppPackageUnloadCoordinator(
             {
                 await targetLifetime.DisposeAsync().ConfigureAwait(false);
             }
-            catch (Exception exception)
+            catch (Exception exception) when (
+                AppPackageUiFaultPolicy.IsRecoverable(exception))
             {
+                cleanupProven = false;
+                AppCleanupQuarantine.Retain(
+                    targetLifetime,
+                    $"disposing app-side target resources for package '{packageId}'");
                 AppSessionLog.WriteError(
                     $"Failed to dispose app-side target resources for package '{packageId}'.",
                     exception);
@@ -148,19 +188,32 @@ internal sealed class AppPackageUnloadCoordinator(
 
         if (loadContext is not null)
         {
-            AppPackageResourceDisposer.TryUnloadLoadContext(loadContext, packageId);
+            var unloaded = AppPackageResourceDisposer.TryUnloadLoadContext(
+                loadContext,
+                packageId);
+            cleanupProven &= unloaded;
+            if (!unloaded)
+            {
+                AppCleanupQuarantine.Retain(
+                    loadContext,
+                    $"unloading app-side package load context for '{packageId}'");
+            }
         }
         if (packageFolder is not null && canDeletePackageFolder)
         {
             AppPackageSourcePreparer.TryDeleteDirectory(packageFolder);
         }
+        return cleanupProven;
     }
 
-    private static async Task RunBoundedOwnerCleanupAsync(string packageId, Task cleanup)
+    private static async Task<bool> RunBoundedOwnerCleanupAsync(
+        string packageId,
+        Task<bool> cleanup)
     {
         try
         {
-            await cleanup.WaitAsync(AppShutdownBudgets.GenerationRetirement).ConfigureAwait(false);
+            return await cleanup.WaitAsync(AppShutdownBudgets.GenerationRetirement)
+                .ConfigureAwait(false);
         }
         catch (TimeoutException exception)
         {
@@ -168,7 +221,13 @@ internal sealed class AppPackageUnloadCoordinator(
                 $"App package '{packageId}' retirement exceeded its {AppShutdownBudgets.GenerationRetirement.TotalSeconds:0.###} second budget; its provider and load context were quarantined without forced disposal.",
                 exception);
             AppCleanupQuarantine.Retain(cleanup, $"retiring App package '{packageId}'");
+            return false;
         }
     }
+
+    private static AppPackageUiCleanupOutcome ToCleanupOutcome(bool cleanupProven)
+        => cleanupProven
+            ? AppPackageUiCleanupOutcome.Proven
+            : AppPackageUiCleanupOutcome.Unproven;
 
 }

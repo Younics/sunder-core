@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "descriptorVersion": 2,
+  "schemaProfile": "sunder.rpc.values.v1",
   "contractId": "sunder.stack.contributor",
   "version": "2.0.0",
   "errors": {

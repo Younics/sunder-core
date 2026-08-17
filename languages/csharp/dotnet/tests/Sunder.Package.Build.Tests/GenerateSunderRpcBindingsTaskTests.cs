@@ -540,6 +540,7 @@ public sealed class GenerateSunderRpcBindingsTaskTests
     private const string Descriptor = """
         {
           "descriptorVersion": 2,
+          "schemaProfile": "sunder.rpc.values.v1",
           "contractId": "CONTRACT_ID",
           "version": "1.0.0",
           "errors": {},

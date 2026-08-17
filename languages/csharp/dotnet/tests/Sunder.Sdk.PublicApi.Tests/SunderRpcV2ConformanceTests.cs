@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
@@ -18,6 +19,8 @@ public sealed class SunderRpcV2ConformanceTests
             [
                 fixture.GetProperty("path").GetString()!,
                 fixture.GetProperty("valid").GetBoolean(),
+                fixture.GetProperty("schemaValid").GetBoolean(),
+                OptionalString(fixture, "errorCode"),
                 OptionalString(fixture, "descriptorSha256"),
                 OptionalString(fixture, "abiSha256"),
                 OptionalInt32(fixture, "canonicalDescriptorBytes"),
@@ -31,6 +34,8 @@ public sealed class SunderRpcV2ConformanceTests
     public void V2ConformanceCorpus_MatchesValidityHashesAndCanonicalLengths(
         string relativePath,
         bool valid,
+        bool schemaValid,
+        string? errorCode,
         string? descriptorSha256,
         string? abiSha256,
         int? canonicalDescriptorBytes,
@@ -41,9 +46,19 @@ public sealed class SunderRpcV2ConformanceTests
             "RpcV2Conformance",
             relativePath.Replace('/', Path.DirectorySeparatorChar));
         var descriptorUtf8 = File.ReadAllBytes(path);
+        using var descriptorDocument = JsonDocument.Parse(descriptorUtf8);
+        using var schemaDocument = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+            AppContext.BaseDirectory,
+            "RpcV2Conformance",
+            "descriptor.schema.json")));
+        Assert.Equal(
+            schemaValid,
+            IsJsonSchemaValid(schemaDocument.RootElement, descriptorDocument.RootElement, schemaDocument.RootElement));
         if (!valid)
         {
-            Assert.Throws<SunderRpcDescriptorException>(() => SunderRpcContractDescriptor.Parse(descriptorUtf8));
+            var exception = Assert.Throws<SunderRpcDescriptorException>(() =>
+                SunderRpcContractDescriptor.Parse(descriptorUtf8));
+            Assert.Equal(errorCode, exception.ErrorCode);
             return;
         }
 
@@ -51,6 +66,7 @@ public sealed class SunderRpcV2ConformanceTests
         var abiProjection = descriptor.GetCanonicalAbiProjectionUtf8();
 
         Assert.Equal(SunderRpcProtocol.DescriptorVersionV2, descriptor.DescriptorVersion);
+        Assert.Equal(SunderRpcProtocol.ValueSchemaProfile, descriptor.SchemaProfile);
         Assert.Equal(descriptorSha256, descriptor.Sha256);
         Assert.Equal(abiSha256, descriptor.AbiSha256);
         Assert.Equal(canonicalDescriptorBytes, descriptor.GetCanonicalUtf8().Length);
@@ -59,7 +75,7 @@ public sealed class SunderRpcV2ConformanceTests
     }
 
     [Fact]
-    public void V2RuntimeValues_UseLogicalSafeIntegerAndBinary64Semantics()
+    public void V2RuntimeValues_UseAssertedExactAndSelectedFloatSemantics()
     {
         var descriptor = SunderRpcContractDescriptor.Parse(RuntimeValueDescriptor());
         (string Schema, string Json, bool Valid)[] cases =
@@ -68,22 +84,54 @@ public sealed class SunderRpcV2ConformanceTests
             ("Uuid", "\"0192c4f0-8d3c-7a61-9b3f-6a9b89f4b8d2\"", true),
             ("Uuid", "\"0192C4F0-8D3C-7A61-9B3F-6A9B89F4B8D2\"", false),
             ("Uuid", "\"{0192c4f0-8d3c-7a61-9b3f-6a9b89f4b8d2}\"", false),
+            ("Date", "\"2000-02-29\"", true),
+            ("Date", "\"1900-02-29\"", false),
             ("Instant", "\"0001-01-01T00:00:00Z\"", true),
             ("Instant", "\"2000-02-29T23:59:59.000000001Z\"", true),
+            ("Instant", "\"2030-01-02T03:04:05.10+05:30\"", true),
+            ("Instant", "\"2030-01-02T03:04:05+14:01\"", false),
+            ("Instant", "\"2030-01-02T03:04:05.1234567890Z\"", false),
             ("Instant", "\"1900-02-29T00:00:00Z\"", false),
-            ("Instant", "\"2030-01-02T03:04:05.10Z\"", false),
+            ("Instant", "\"2030-01-02T03:04:05\"", false),
             ("Instant", "\"2030-01-02T03:04:60Z\"", false),
+            ("Duration", "\"P1Y2M3DT4H5M6.7S\"", true),
+            ("Duration", "\"P01D\"", false),
+            ("Duration", "\"PT1.20S\"", false),
+            ("Uri", "\"https://example.test/a%20b\"", true),
+            ("Uri", "\"relative/path\"", false),
+            ("Uri", "\"https://example.test/%ZZ\"", false),
+            ("Uri", "\"https://example.test/\\u007f\"", false),
+            ("BigInteger", "\"9999999999999999999999999999999999999999\"", true),
+            ("BigInteger", "\"01\"", false),
+            ("BigInteger", "\"-0\"", false),
+            ("BigInteger", "\"10000000000000000000000000000000000000000\"", false),
+            ("Decimal", "\"-999.00000001\"", true),
+            ("Decimal", "\"1.20\"", false),
+            ("Decimal", "\"1000.125\"", false),
+            ("Decimal", "\"0.000000001\"", false),
+            ("Bytes", "\"AQI=\"", true),
+            ("Bytes", "\"AR==\"", false),
+            ("Bytes", "\"AQ\"", false),
+            ("Bytes", "\"AQIDBAUGBwgJ\"", false),
             ("Integer", "9007199254740991.0", true),
             ("Integer", "1e0", true),
             ("Integer", "9007199254740991.1", false),
             ("Integer", "9007199254740992", false),
             ("Integer", "1e-9999", false),
-            ("Number", "1.5", true),
-            ("Number", "-0", true),
-            ("Number", "1e-9999", true),
-            ("Number", "1e309", false),
-            ("NumberEnum", "1.0000000000000001", true),
-            ("NumberEnum", "1.0000000000000002", false),
+            ("Float32", "1.5", true),
+            ("Float32", "1e-9999", true),
+            ("Float32", "1e39", false),
+            ("Float32Enum", "1.00000005", true),
+            ("Float32Enum", "1.0000001", false),
+            ("Float64", "1.5", true),
+            ("Float64", "-0", true),
+            ("Float64", "1e309", false),
+            ("Float64Enum", "1.0000000000000001", true),
+            ("Float64Enum", "1.0000000000000002", false),
+            ("JSON", "[null,true,\"text\",1.5]", true),
+            ("JSON", "1e400", false),
+            ("JSONObject", "{\"A\":1,\"a\":2}", true),
+            ("JSONObject", "{\"a\":1,\"b\":2,\"c\":3}", false),
             ("Content", ValidContentReference(), true),
             ("Content", ValidContentReference().Replace("}", ",\"extra\":true}", StringComparison.Ordinal), false),
             ("Content", ValidContentReference().Replace(new string('0', 64), new string('A', 64), StringComparison.Ordinal), false),
@@ -104,6 +152,7 @@ public sealed class SunderRpcV2ConformanceTests
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.rpc.v2.casefold",
               "version":"2.0.0",
               "errors":{},
@@ -157,6 +206,7 @@ public sealed class SunderRpcV2ConformanceTests
         var descriptor = Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.rpc.v2.nestednullable",
               "version":"2.0.0",
               "errors":{},
@@ -185,11 +235,263 @@ public sealed class SunderRpcV2ConformanceTests
         Assert.True(descriptor.IsValid("#/$defs/LargeArray", value, out var error), error);
     }
 
+    [Fact]
+    public void V2Canonicalization_UsesRfc8785FiniteNumberForms()
+    {
+        var source = """
+            {
+              "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
+              "contractId":"example.rpc.v2.canonicalnumbers",
+              "version":"2.0.0",
+              "errors":{},
+              "services":{"numbers":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Unit"},"responseSchema":{"$ref":"#/$defs/Unit"}}}}},
+              "$defs":{
+                "Unit":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "Fixed":{"type":"number","format":"float64","minimum":1.0,"maximum":1e20},
+                "Scientific":{"type":"number","format":"float64","minimum":1e-7,"maximum":0.000001},
+                "Rounded":{"type":"number","format":"float64","const":333333333.33333329},
+                "Large":{"type":"number","format":"float64","const":1e30},
+                "Zero":{"type":"number","format":"float32","const":-0.0}
+              }
+            }
+            """;
+        var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes(source));
+        var canonical = Encoding.UTF8.GetString(descriptor.GetCanonicalUtf8());
+
+        Assert.Contains("\"maximum\":100000000000000000000", canonical, StringComparison.Ordinal);
+        Assert.Contains("\"minimum\":1", canonical, StringComparison.Ordinal);
+        Assert.Contains("\"minimum\":1e-7", canonical, StringComparison.Ordinal);
+        Assert.Contains("\"maximum\":0.000001", canonical, StringComparison.Ordinal);
+        Assert.Contains("\"const\":333333333.3333333", canonical, StringComparison.Ordinal);
+        Assert.Contains("\"const\":1e+30", canonical, StringComparison.Ordinal);
+        Assert.Contains("\"const\":0", canonical, StringComparison.Ordinal);
+
+        var canonicalSource = source
+            .Replace("\"minimum\":1.0", "\"minimum\":1", StringComparison.Ordinal)
+            .Replace("\"maximum\":1e20", "\"maximum\":100000000000000000000", StringComparison.Ordinal)
+            .Replace("333333333.33333329", "333333333.3333333", StringComparison.Ordinal)
+            .Replace("-0.0", "0", StringComparison.Ordinal);
+        var equivalent = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes(canonicalSource));
+        Assert.Equal(descriptor.Sha256, equivalent.Sha256);
+        Assert.Equal(descriptor.GetCanonicalUtf8(), equivalent.GetCanonicalUtf8());
+    }
+
+    [Fact]
+    public void V2AbiProjection_RetainsSchemaProfileAndErrorDetailsReference()
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            "RpcV2Conformance",
+            "valid",
+            "complete.rpc.json");
+        var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(path));
+        var projection = Encoding.UTF8.GetString(descriptor.GetCanonicalAbiProjectionUtf8()!);
+
+        Assert.Equal(SunderRpcProtocol.ValueSchemaProfile, descriptor.SchemaProfile);
+        Assert.Contains("\"schemaProfile\":\"sunder.rpc.values.v1\"", projection, StringComparison.Ordinal);
+        Assert.Contains(
+            "\"detailsSchema\":{\"$ref\":\"#/$defs/ErrorDetails\"}",
+            projection,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("\"description\"", projection, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void V2ProductiveRecursion_ValidatesFiniteValues()
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            "RpcV2Conformance",
+            "valid",
+            "productive-recursion.rpc.json");
+        var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(path));
+        using var node = JsonDocument.Parse(
+            """{"value":"root","children":[{"value":"leaf","children":[]}]}""");
+        using var emptyMap = JsonDocument.Parse("{}");
+
+        Assert.True(descriptor.IsValid("#/$defs/Node", node.RootElement, out var nodeError), nodeError);
+        Assert.True(descriptor.IsValid("#/$defs/NodeMap", emptyMap.RootElement, out var mapError), mapError);
+    }
+
     private static string? OptionalString(JsonElement element, string propertyName)
         => element.TryGetProperty(propertyName, out var property) ? property.GetString() : null;
 
     private static int? OptionalInt32(JsonElement element, string propertyName)
         => element.TryGetProperty(propertyName, out var property) ? property.GetInt32() : null;
+
+    private static bool IsJsonSchemaValid(JsonElement schema, JsonElement instance, JsonElement rootSchema)
+    {
+        if (schema.ValueKind == JsonValueKind.True) return true;
+        if (schema.ValueKind == JsonValueKind.False) return false;
+        if (schema.TryGetProperty("$ref", out var reference))
+        {
+            const string prefix = "#/$defs/";
+            var value = reference.GetString()!;
+            return value.StartsWith(prefix, StringComparison.Ordinal)
+                   && rootSchema.GetProperty("$defs").TryGetProperty(value[prefix.Length..], out var target)
+                   && IsJsonSchemaValid(target, instance, rootSchema);
+        }
+        if (schema.TryGetProperty("type", out var type) && !MatchesJsonSchemaType(type.GetString()!, instance))
+        {
+            return false;
+        }
+        if (schema.TryGetProperty("const", out var constant)
+            && !JsonElement.DeepEquals(constant, instance))
+        {
+            return false;
+        }
+        if (schema.TryGetProperty("enum", out var enumValues)
+            && !enumValues.EnumerateArray().Any(value => JsonElement.DeepEquals(value, instance)))
+        {
+            return false;
+        }
+        if (schema.TryGetProperty("allOf", out var allOf)
+            && allOf.EnumerateArray().Any(item => !IsJsonSchemaValid(item, instance, rootSchema)))
+        {
+            return false;
+        }
+        if (schema.TryGetProperty("oneOf", out var oneOf)
+            && oneOf.EnumerateArray().Count(item => IsJsonSchemaValid(item, instance, rootSchema)) != 1)
+        {
+            return false;
+        }
+        if (schema.TryGetProperty("not", out var not)
+            && IsJsonSchemaValid(not, instance, rootSchema))
+        {
+            return false;
+        }
+        if (schema.TryGetProperty("if", out var condition)
+            && IsJsonSchemaValid(condition, instance, rootSchema)
+            && schema.TryGetProperty("then", out var consequence)
+            && !IsJsonSchemaValid(consequence, instance, rootSchema))
+        {
+            return false;
+        }
+
+        return instance.ValueKind switch
+        {
+            JsonValueKind.Object => IsJsonSchemaObjectValid(schema, instance, rootSchema),
+            JsonValueKind.Array => IsJsonSchemaArrayValid(schema, instance, rootSchema),
+            JsonValueKind.String => IsJsonSchemaStringValid(schema, instance),
+            JsonValueKind.Number => IsJsonSchemaNumberValid(schema, instance),
+            _ => true,
+        };
+    }
+
+    private static bool IsJsonSchemaObjectValid(
+        JsonElement schema,
+        JsonElement instance,
+        JsonElement rootSchema)
+    {
+        var properties = instance.EnumerateObject().ToArray();
+        if (schema.TryGetProperty("minProperties", out var minimum)
+            && properties.Length < minimum.GetInt32()
+            || schema.TryGetProperty("maxProperties", out var maximum)
+            && properties.Length > maximum.GetInt32())
+        {
+            return false;
+        }
+        if (schema.TryGetProperty("required", out var required)
+            && required.EnumerateArray().Any(name => !instance.TryGetProperty(name.GetString()!, out _)))
+        {
+            return false;
+        }
+
+        var hasDeclaredProperties = schema.TryGetProperty("properties", out var declaredProperties);
+        foreach (var property in properties)
+        {
+            if (schema.TryGetProperty("propertyNames", out var propertyNameSchema))
+            {
+                using var propertyName = JsonDocument.Parse(JsonSerializer.Serialize(property.Name));
+                if (!IsJsonSchemaValid(propertyNameSchema, propertyName.RootElement, rootSchema)) return false;
+            }
+            if (hasDeclaredProperties && declaredProperties.TryGetProperty(property.Name, out var propertySchema))
+            {
+                if (!IsJsonSchemaValid(propertySchema, property.Value, rootSchema)) return false;
+                continue;
+            }
+            if (!schema.TryGetProperty("additionalProperties", out var additional)) continue;
+            if (additional.ValueKind == JsonValueKind.False
+                || additional.ValueKind == JsonValueKind.Object
+                && !IsJsonSchemaValid(additional, property.Value, rootSchema))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool IsJsonSchemaArrayValid(
+        JsonElement schema,
+        JsonElement instance,
+        JsonElement rootSchema)
+    {
+        var length = instance.GetArrayLength();
+        if (schema.TryGetProperty("minItems", out var minimum) && length < minimum.GetInt32()
+            || schema.TryGetProperty("maxItems", out var maximum) && length > maximum.GetInt32())
+        {
+            return false;
+        }
+        if (schema.TryGetProperty("uniqueItems", out var unique)
+            && unique.ValueKind == JsonValueKind.True)
+        {
+            var values = instance.EnumerateArray().ToArray();
+            for (var left = 0; left < values.Length; left++)
+            {
+                for (var right = left + 1; right < values.Length; right++)
+                {
+                    if (JsonElement.DeepEquals(values[left], values[right])) return false;
+                }
+            }
+        }
+        return !schema.TryGetProperty("items", out var items)
+               || instance.EnumerateArray().All(item => IsJsonSchemaValid(items, item, rootSchema));
+    }
+
+    private static bool IsJsonSchemaStringValid(JsonElement schema, JsonElement instance)
+    {
+        var value = instance.GetString()!;
+        var length = value.EnumerateRunes().Count();
+        return (!schema.TryGetProperty("minLength", out var minimum) || length >= minimum.GetInt32())
+               && (!schema.TryGetProperty("maxLength", out var maximum) || length <= maximum.GetInt32())
+               && (!schema.TryGetProperty("pattern", out var pattern)
+                   || Regex.IsMatch(value, pattern.GetString()!, RegexOptions.CultureInvariant));
+    }
+
+    private static bool IsJsonSchemaNumberValid(JsonElement schema, JsonElement instance)
+    {
+        if (!decimal.TryParse(
+                instance.GetRawText(),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var value))
+        {
+            return !schema.TryGetProperty("minimum", out _)
+                   && !schema.TryGetProperty("maximum", out _);
+        }
+        return (!schema.TryGetProperty("minimum", out var minimum) || value >= minimum.GetDecimal())
+               && (!schema.TryGetProperty("maximum", out var maximum) || value <= maximum.GetDecimal());
+    }
+
+    private static bool MatchesJsonSchemaType(string type, JsonElement value)
+        => type switch
+        {
+            "object" => value.ValueKind == JsonValueKind.Object,
+            "array" => value.ValueKind == JsonValueKind.Array,
+            "string" => value.ValueKind == JsonValueKind.String,
+            "integer" => value.ValueKind == JsonValueKind.Number
+                         && decimal.TryParse(
+                             value.GetRawText(),
+                             System.Globalization.NumberStyles.Float,
+                             System.Globalization.CultureInfo.InvariantCulture,
+                             out var integer)
+                         && decimal.Truncate(integer) == integer,
+            "number" => value.ValueKind == JsonValueKind.Number,
+            "boolean" => value.ValueKind is JsonValueKind.True or JsonValueKind.False,
+            "null" => value.ValueKind == JsonValueKind.Null,
+            _ => false,
+        };
 
     private static string ValidContentReference()
         => """
@@ -200,18 +502,29 @@ public sealed class SunderRpcV2ConformanceTests
         => Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.rpc.v2.values",
               "version":"2.0.0",
               "errors":{},
               "services":{"example":{"methods":{"check":{"kind":"unary","idempotency":"idempotent","errors":[],"requestSchema":{"$ref":"#/$defs/Empty"},"responseSchema":{"$ref":"#/$defs/Empty"}}}}},
               "$defs":{
                 "Empty":{"type":"object","properties":{},"required":[],"additionalProperties":false},
-                "Uuid":{"type":"string","logicalType":"uuid"},
-                "Instant":{"type":"string","logicalType":"utc-date-time"},
+                "Uuid":{"type":"string","format":"uuid"},
+                "Date":{"type":"string","format":"date"},
+                "Instant":{"type":"string","format":"date-time"},
+                "Duration":{"type":"string","format":"duration"},
+                "Uri":{"type":"string","format":"uri"},
+                "BigInteger":{"type":"string","format":"big-integer","maxDigits":40,"valueMinimum":"-9999999999999999999999999999999999999999","valueMaximum":"9999999999999999999999999999999999999999"},
+                "Decimal":{"type":"string","format":"decimal","maxPrecision":20,"maxScale":8,"valueMinimum":"-1000.125","valueExclusiveMaximum":"1000.125"},
+                "Bytes":{"type":"string","contentEncoding":"base64","maxDecodedBytes":8},
+                "JSON":{},
+                "JSONObject":{"type":"object","maxProperties":2},
                 "Content":{"type":"object","logicalType":"content-reference"},
                 "Integer":{"type":"integer","minimum":-9007199254740991,"maximum":9007199254740991},
-                "Number":{"type":"number","minimum":-9007199254740991,"maximum":9007199254740991},
-                "NumberEnum":{"type":"number","minimum":0,"maximum":2,"enum":[1]},
+                "Float32":{"type":"number","format":"float32","minimum":-1000.5,"maximum":1000.5},
+                "Float32Enum":{"type":"number","format":"float32","enum":[1]},
+                "Float64":{"type":"number","format":"float64","minimum":-9007199254740991.5,"maximum":9007199254740991.5},
+                "Float64Enum":{"type":"number","format":"float64","enum":[1]},
                 "LargeArray":{"type":"array","items":{"type":"boolean"},"minItems":0,"maxItems":1000000}
               }
             }
@@ -232,6 +545,7 @@ public sealed class SunderRpcV2ConformanceTests
         var descriptor = """
             {
               "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.rpc.v2.depth",
               "version":"2.0.0",
               "errors":{},
@@ -255,6 +569,7 @@ public sealed class SunderRpcV2ConformanceTests
         var descriptor = """
             {
               "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.rpc.v2.nodes",
               "version":"2.0.0",
               "errors":{},

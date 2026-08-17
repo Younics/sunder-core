@@ -6,6 +6,7 @@ internal sealed class AppPackageGenerationRetirementQueue : IAsyncDisposable
     private readonly Func<AppPackageGeneration, ValueTask> _retireGenerationAsync;
     private readonly TimeSpan _retirementBudget;
     private readonly TimeSpan _drainBudget;
+    private readonly Action<Exception> _propagateFatalCleanupFault;
     private readonly List<Exception> _failures = [];
     private readonly List<AppPackageGeneration> _quarantinedGenerations = [];
     private Task _tail = Task.CompletedTask;
@@ -16,11 +17,14 @@ internal sealed class AppPackageGenerationRetirementQueue : IAsyncDisposable
     public AppPackageGenerationRetirementQueue(
         Func<AppPackageGeneration, ValueTask>? retireGenerationAsync = null,
         TimeSpan? retirementBudget = null,
-        TimeSpan? drainBudget = null)
+        TimeSpan? drainBudget = null,
+        Action<Exception>? fatalCleanupFaultHandler = null)
     {
         _retireGenerationAsync = retireGenerationAsync ?? (generation => generation.DisposeAsync());
         _retirementBudget = retirementBudget ?? AppShutdownBudgets.GenerationRetirement;
         _drainBudget = drainBudget ?? AppShutdownBudgets.RetirementDrain;
+        _propagateFatalCleanupFault = fatalCleanupFaultHandler
+            ?? AppPackageFatalCleanupPropagation.PostToDispatcher;
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_retirementBudget, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_drainBudget, TimeSpan.Zero);
     }
@@ -100,10 +104,15 @@ internal sealed class AppPackageGenerationRetirementQueue : IAsyncDisposable
             {
                 retirementTask = _retireGenerationAsync(generation).AsTask();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
             {
                 RecordRetirementFailure(generation, ex);
                 return;
+            }
+            catch (Exception ex)
+            {
+                _propagateFatalCleanupFault(ex);
+                throw;
             }
 
             try
@@ -118,9 +127,14 @@ internal sealed class AppPackageGenerationRetirementQueue : IAsyncDisposable
                     ex);
                 AppCleanupQuarantine.Retain(retirementTask, $"retiring App package generation '{generation.Id}'");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
             {
                 RecordRetirementFailure(generation, ex);
+            }
+            catch (Exception ex)
+            {
+                _propagateFatalCleanupFault(ex);
+                throw;
             }
         }
         finally

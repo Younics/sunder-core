@@ -10,6 +10,8 @@ internal sealed class AppPackageGenerationPublisher
     private readonly AppPackageResourceAssemblyRegistry? _resourceAssemblyRegistry;
     private readonly Action<AppPackageGeneration> _attachGeneration;
     private readonly Action<AppPackageGeneration> _detachGeneration;
+    private readonly Action<AppPackageGeneration, Action> _commitFence;
+    private readonly Action<AppPackageGeneration> _validateCandidateForPublication;
     private AppPackageGeneration _currentGeneration;
     private long _latestCandidateRequestId;
 
@@ -19,7 +21,9 @@ internal sealed class AppPackageGenerationPublisher
         PackageIconGenerationCoordinator iconCoordinator,
         AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry,
         Action<AppPackageGeneration> attachGeneration,
-        Action<AppPackageGeneration> detachGeneration)
+        Action<AppPackageGeneration> detachGeneration,
+        Action<AppPackageGeneration, Action> commitFence,
+        Action<AppPackageGeneration> validateCandidateForPublication)
     {
         _currentGeneration = initialGeneration;
         _uiDispatcher = uiDispatcher;
@@ -27,6 +31,8 @@ internal sealed class AppPackageGenerationPublisher
         _resourceAssemblyRegistry = resourceAssemblyRegistry;
         _attachGeneration = attachGeneration;
         _detachGeneration = detachGeneration;
+        _commitFence = commitFence;
+        _validateCandidateForPublication = validateCandidateForPublication;
         _attachGeneration(initialGeneration);
     }
 
@@ -65,34 +71,38 @@ internal sealed class AppPackageGenerationPublisher
                         cancellationToken);
                 }
 
-                var previousGeneration = CurrentGeneration;
-                _detachGeneration(previousGeneration);
-                Volatile.Write(ref _currentGeneration, candidate);
-                _attachGeneration(candidate);
-                try
+                _commitFence(candidate, () =>
                 {
-                    previousIcons = _iconCoordinator.Publish(candidate.IconGeneration);
-                    PublishResourceAssemblies(candidate.SnapshotPackageAssemblies());
-                    commitPresentation?.Invoke();
-                }
-                catch
-                {
-                    candidate.Composition.UnpublishServices();
-                    _detachGeneration(candidate);
-                    Volatile.Write(ref _currentGeneration, previousGeneration);
-                    _attachGeneration(previousGeneration);
-                    if (previousIcons is not null)
+                    var previousGeneration = CurrentGeneration;
+                    _detachGeneration(previousGeneration);
+                    Volatile.Write(ref _currentGeneration, candidate);
+                    _attachGeneration(candidate);
+                    try
                     {
-                        _iconCoordinator.Restore(previousIcons);
+                        previousIcons = _iconCoordinator.Publish(candidate.IconGeneration);
+                        PublishResourceAssemblies(candidate.SnapshotPackageAssemblies());
+                        commitPresentation?.Invoke();
+                        _validateCandidateForPublication(candidate);
                     }
-                    PublishResourceAssemblies(previousGeneration.SnapshotPackageAssemblies());
-                    throw;
-                }
+                    catch
+                    {
+                        candidate.Composition.UnpublishServices();
+                        _detachGeneration(candidate);
+                        Volatile.Write(ref _currentGeneration, previousGeneration);
+                        _attachGeneration(previousGeneration);
+                        if (previousIcons is not null)
+                        {
+                            _iconCoordinator.Restore(previousIcons);
+                        }
+                        PublishResourceAssemblies(previousGeneration.SnapshotPackageAssemblies());
+                        throw;
+                    }
 
-                previousGeneration.Composition.UnpublishServices();
-                candidate.Composition.PublishServices();
-                retiredGeneration = previousGeneration;
-                HasCommittedGeneration = true;
+                    previousGeneration.Composition.UnpublishServices();
+                    candidate.Composition.PublishServices();
+                    retiredGeneration = previousGeneration;
+                    HasCommittedGeneration = true;
+                });
             }
         }).ConfigureAwait(false);
 

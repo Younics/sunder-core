@@ -6,6 +6,7 @@ public sealed class RuntimeClientTransport : IDisposable
 {
     private readonly Func<RuntimeConnectionInfo?> _getConnectionInfo;
     private readonly RuntimeProtocolNegotiationCache _negotiations = new();
+    private readonly RuntimeClientResourceProfileStore _resourceProfiles = new();
     private readonly HttpClient _httpClient;
     private int _disposed;
 
@@ -20,12 +21,14 @@ public sealed class RuntimeClientTransport : IDisposable
             getConnectionInfo,
             innerHandler ?? new HttpClientHandler { AllowAutoRedirect = false },
             Policy,
-            _negotiations);
+            _negotiations,
+            _resourceProfiles);
         _httpClient = new HttpClient(AuthenticatedHandler)
         {
             Timeout = Timeout.InfiniteTimeSpan,
+            MaxResponseContentBufferSize = RuntimeClientResourceLimits.MaximumProtocolEnvelopeBytes,
         };
-        Responses = new RuntimeHttpResponseReader(Policy);
+        Responses = new RuntimeHttpResponseReader(Policy, GetResourceLimits);
     }
 
     public RuntimeClientTransport(Uri runtimeUrl, RuntimeClientPolicyOptions? policy = null)
@@ -38,6 +41,18 @@ public sealed class RuntimeClientTransport : IDisposable
     public RuntimeClientPolicyOptions Policy { get; }
 
     internal RuntimeHttpResponseReader Responses { get; }
+
+    public RuntimeClientResourceProfile? CurrentResourceProfile
+    {
+        get
+        {
+            var connection = _getConnectionInfo();
+            return connection is null ? null : _resourceProfiles.Get(connection);
+        }
+    }
+
+    public RuntimeClientResourceLimits ResourceLimits
+        => new(CurrentResourceProfile);
 
     public RuntimeConnectionInfo? GetConnectionInfo() => _getConnectionInfo();
 
@@ -95,6 +110,8 @@ public sealed class RuntimeClientTransport : IDisposable
     }
 
     internal HttpClient HttpClient => _httpClient;
+
+    private RuntimeClientResourceLimits GetResourceLimits() => ResourceLimits;
 
     public void Dispose()
     {

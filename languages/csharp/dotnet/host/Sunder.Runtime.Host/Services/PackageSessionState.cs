@@ -8,21 +8,27 @@ internal sealed record DrainingPackageFault(
     string PackageId,
     RuntimePackageGeneration RuntimeGeneration,
     PackageFailureOrigin Origin,
-    Exception Exception);
+    Exception Exception,
+    DateTimeOffset FailedAtUtc);
 
 internal sealed class PackageSessionState(
     ILogger logger,
     Action clearAuthSessions,
     Action<string> removePackageAuthSessions,
-    TimeSpan? sessionDrainTimeout = null)
+    TimeSpan? sessionDrainTimeout = null,
+    TimeProvider? timeProvider = null)
 {
     private readonly object _syncRoot = new();
     private SessionEntry _activeEntry = new(ActivePackageSession.CreateEmpty(), generation: 0);
     private SessionPublication? _pendingPublication;
     private SessionPublication? _rejectedPublication;
     private SessionPublication? _recoveryPublication;
+    private PackageRecoveryActivation? _packageRecoveryActivation;
+    private PackageRecoveryCommit? _packageRecoveryCommit;
+    private readonly List<PackageDeactivationWork> _quarantinedPackageCleanups = [];
     private long _generation;
     private readonly TimeSpan _sessionDrainTimeout = sessionDrainTimeout ?? TimeSpan.FromSeconds(10);
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     public PackageSessionLease AcquireLease()
     {
@@ -32,6 +38,12 @@ internal sealed class PackageSessionState(
             if (entry.Draining)
             {
                 throw new RuntimeUnavailableException("The active package session is draining and is not accepting new requests.");
+            }
+            if (_packageRecoveryCommit is { SessionEntry: var committingEntry }
+                && ReferenceEquals(entry, committingEntry))
+            {
+                throw new RuntimeUnavailableException(
+                    "The active package session is publishing a recovered generation and is not accepting new requests.");
             }
             if (!entry.AcceptingLeases)
             {
@@ -47,6 +59,12 @@ internal sealed class PackageSessionState(
     {
         lock (_syncRoot)
         {
+            if (_packageRecoveryCommit is { SessionEntry: var committingEntry }
+                && ReferenceEquals(_activeEntry, committingEntry))
+            {
+                throw new RuntimeUnavailableException(
+                    "The active package session is publishing a recovered generation and is not accepting package-owned work.");
+            }
             SessionEntry? entry = null;
             if (!_activeEntry.Draining
                 && _activeEntry.AcceptingLeases
@@ -69,12 +87,24 @@ internal sealed class PackageSessionState(
             {
                 entry = _activeEntry;
             }
+            else if (_packageRecoveryActivation is { } packageRecovery
+                     && ReferenceEquals(_activeEntry, packageRecovery.SessionEntry)
+                     && !_activeEntry.Draining
+                     && _activeEntry.AcceptingLeases
+                     && string.Equals(packageRecovery.Request.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+                     && packageRecovery.Replacement.RuntimeActivationId == generation.ActivationId
+                     && packageRecovery.Request.ActivationGeneration == generation.SessionGeneration)
+            {
+                entry = _activeEntry;
+            }
             if (entry is null)
             {
                 throw new RuntimeUnavailableException(
                     "The package Runtime generation is stale or no longer accepting package-owned work.");
             }
-            return CreateLeaseUnderLock(entry);
+            var lease = CreateLeaseUnderLock(entry);
+            MarkPackageLeaseUnderLock(lease, packageId);
+            return lease;
         }
     }
 
@@ -85,8 +115,11 @@ internal sealed class PackageSessionState(
         return new PackageSessionLease(
             entry.Session,
             entry.Generation,
+            leaseId,
             entry,
+            entry.GenerationEpoch,
             entry.Retirement.Token,
+            entry.GenerationEpoch.RetirementToken,
             () => ReleaseLease(entry, leaseId));
     }
 
@@ -134,9 +167,14 @@ internal sealed class PackageSessionState(
     {
         lock (_syncRoot)
         {
-            return lease.Session.LoadedPackageMap.Values
+            var packages = lease.Session.LoadedPackageMap.Values
                 .Where(package => lease.Session.IsPackageEnabled(package.Descriptor.PackageId))
                 .ToArray();
+            foreach (var package in packages)
+            {
+                MarkPackageLeaseUnderLock(lease, package.Descriptor.PackageId);
+            }
+            return packages;
         }
     }
 
@@ -148,6 +186,12 @@ internal sealed class PackageSessionState(
         lock (_syncRoot)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (_packageRecoveryCommit is { SessionEntry: var committingEntry }
+                && ReferenceEquals(_activeEntry, committingEntry))
+            {
+                throw new RuntimeUnavailableException(
+                    "The active package session is publishing a recovered generation and cannot be cleared.");
+            }
             if (_activeEntry.Draining)
             {
                 throw new RuntimeUnavailableException("The active package session is already draining.");
@@ -227,9 +271,16 @@ internal sealed class PackageSessionState(
         cancellationToken.ThrowIfCancellationRequested();
         SessionEntry previousEntry;
         CancellationTokenSource retirement;
+        SessionGenerationEpoch generationEpoch;
         lock (_syncRoot)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (_packageRecoveryCommit is { SessionEntry: var committingEntry }
+                && ReferenceEquals(_activeEntry, committingEntry))
+            {
+                throw new RuntimeUnavailableException(
+                    "The active package session is publishing a recovered generation and cannot be replaced.");
+            }
             if (ReferenceEquals(session, _activeEntry.Session))
             {
                 throw new InvalidOperationException("The active package session cannot be published again.");
@@ -246,15 +297,22 @@ internal sealed class PackageSessionState(
             }
             previousEntry.Draining = true;
             retirement = previousEntry.Retirement;
+            generationEpoch = AdvanceGenerationUnderLock(
+                previousEntry,
+                previousEntry.Generation);
             SignalRetirementIfDrained(previousEntry);
         }
 
+        var generationRetirement = RetireGenerationEpochAsync(
+            previousEntry,
+            generationEpoch);
         previousEntry.RetirementCallbacks = CombineRetirementCallbacks(
             previousEntry.RetirementCallbacks,
             RuntimeCancellation.Signal(retirement));
         try
         {
-            await previousEntry.Drained.Task.WaitAsync(_sessionDrainTimeout, cancellationToken);
+            await Task.WhenAll(previousEntry.Drained.Task, generationRetirement)
+                .WaitAsync(_sessionDrainTimeout, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             lock (_syncRoot)
             {
@@ -300,6 +358,7 @@ internal sealed class PackageSessionState(
         SessionPublication publication,
         Action<long>? committed = null)
     {
+        await publication.PreviousEntry.RetirementCallbacks.ConfigureAwait(false);
         long generation;
         Exception? publicationException = null;
         lock (_syncRoot)
@@ -488,7 +547,8 @@ internal sealed class PackageSessionState(
                     packageId,
                     runtimeGeneration,
                     origin,
-                    exception));
+                    exception,
+                    _timeProvider.GetUtcNow()));
             }
             return true;
         }
@@ -541,8 +601,9 @@ internal sealed class PackageSessionState(
         SessionPublication publication,
         Action<long>? committed = null)
     {
-        Exception? publicationException = null;
         long generation;
+        SessionGenerationEpoch retiredEpoch;
+        int drainingFaultCount;
         lock (_syncRoot)
         {
             if (!ReferenceEquals(_recoveryPublication, publication)
@@ -559,10 +620,31 @@ internal sealed class PackageSessionState(
                 throw new RuntimeStaleGenerationException(
                     "The recovery Runtime generation changed before publication.");
             }
-            _generation = generation;
-            publication.PreviousEntry.Generation = generation;
-            publication.PreviousEntry.Draining = false;
+            retiredEpoch = AdvanceGenerationUnderLock(publication.PreviousEntry, generation);
             publication.PreviousEntry.AcceptingLeases = false;
+            drainingFaultCount = publication.DrainingFaults.Count;
+        }
+
+        _ = RetireGenerationEpochAsync(publication.PreviousEntry, retiredEpoch);
+        Exception? publicationException = null;
+        lock (_syncRoot)
+        {
+            if (!ReferenceEquals(_recoveryPublication, publication)
+                || !publication.Recovering
+                || !ReferenceEquals(_activeEntry, publication.PreviousEntry)
+                || !publication.PreviousEntry.Draining
+                || generation != checked(_generation + 1))
+            {
+                throw new RuntimeStaleGenerationException(
+                    "The recovery Runtime generation changed while old calls were retiring.");
+            }
+            if (publication.DrainingFaults.Count != drainingFaultCount)
+            {
+                throw new InvalidOperationException(
+                    "A recovered package Runtime generation faulted while old calls were retiring.");
+            }
+            _generation = generation;
+            publication.PreviousEntry.Draining = false;
             publication.Recovering = false;
             publication.RecoveryCommitted = true;
             _recoveryPublication = null;
@@ -592,8 +674,9 @@ internal sealed class PackageSessionState(
         Action<long>? committed = null)
     {
         SessionEntry abandoned;
+        SessionGenerationEpoch abandonedEpoch;
+        SessionEntry unavailableEntry;
         long generation;
-        Exception? publicationException = null;
         lock (_syncRoot)
         {
             if (!ReferenceEquals(_activeEntry, publication.PreviousEntry))
@@ -607,6 +690,7 @@ internal sealed class PackageSessionState(
                     "The unavailable Runtime recovery generation changed before publication.");
             }
             abandoned = publication.PreviousEntry;
+            abandonedEpoch = abandoned.GenerationEpoch;
             abandoned.Retired = true;
             abandoned.Draining = true;
             SignalRetirementIfDrained(abandoned);
@@ -617,12 +701,28 @@ internal sealed class PackageSessionState(
                 _rejectedPublication = null;
             }
             _generation = generation;
-            _activeEntry = new SessionEntry(
+            unavailableEntry = new SessionEntry(
                 ActivePackageSession.CreateEmpty(),
                 generation,
                 acceptingLeases: false,
                 activationGeneration: generation);
+            _activeEntry = unavailableEntry;
             publication.Abandoned = true;
+        }
+        abandoned.RetirementCallbacks = CombineRetirementCallbacks(
+            abandoned.RetirementCallbacks,
+            RuntimeCancellation.Signal(abandoned.Retirement));
+        _ = RetireGenerationEpochAsync(abandoned, abandonedEpoch);
+        Exception? publicationException = null;
+        lock (_syncRoot)
+        {
+            if (!ReferenceEquals(_activeEntry, unavailableEntry)
+                || _generation != generation
+                || unavailableEntry.Generation != generation)
+            {
+                throw new RuntimeStaleGenerationException(
+                    "The unavailable Runtime recovery generation changed before publication completed.");
+            }
             try
             {
                 committed?.Invoke(generation);
@@ -633,9 +733,6 @@ internal sealed class PackageSessionState(
                 publicationException = exception;
             }
         }
-        abandoned.RetirementCallbacks = CombineRetirementCallbacks(
-            abandoned.RetirementCallbacks,
-            RuntimeCancellation.Signal(abandoned.Retirement));
         if (publicationException is not null)
         {
             throw publicationException;
@@ -692,13 +789,38 @@ internal sealed class PackageSessionState(
         Exception exception,
         string action,
         Func<long, Task>? committed = null)
+        => HandlePackageFault(
+            packageId,
+            activationIdentity,
+            expectedGeneration,
+            origin,
+            exception,
+            action,
+            committed,
+            out _);
+
+    internal bool HandlePackageFault(
+        string packageId,
+        PackageActivationIdentity activationIdentity,
+        long expectedGeneration,
+        PackageFailureOrigin origin,
+        Exception exception,
+        string action,
+        Func<long, Task>? committed,
+        out RuntimePackageRecoveryRequest? recoveryRequest)
     {
         ActiveLoadedPackage? packageToDeactivate;
         PackageDeactivationWork? deactivation;
+        SessionEntry sessionEntry;
+        SessionGenerationEpoch retiredEpoch;
+        SessionGenerationEpoch publishedEpoch;
         long committedGeneration;
+        recoveryRequest = null;
         lock (_syncRoot)
         {
-            if (expectedGeneration != _generation
+            var failedAtUtc = _timeProvider.GetUtcNow();
+            if (_packageRecoveryCommit is not null
+                || expectedGeneration != _generation
                 || !ReferenceEquals(activationIdentity.SessionIdentity, _activeEntry)
                 || !_activeEntry.AcceptingLeases
                 || _activeEntry.Draining
@@ -709,29 +831,74 @@ internal sealed class PackageSessionState(
                     packageId,
                     origin,
                     exception.Message,
-                    out packageToDeactivate))
+                    out packageToDeactivate,
+                    failedAtUtc))
             {
                 return false;
             }
 
-            _generation = checked(_generation + 1);
-            _activeEntry.Generation = _generation;
-            committedGeneration = _generation;
+            sessionEntry = _activeEntry;
+            committedGeneration = checked(_generation + 1);
+            _generation = committedGeneration;
+            retiredEpoch = AdvanceGenerationUnderLock(sessionEntry, committedGeneration);
+            publishedEpoch = sessionEntry.GenerationEpoch;
             deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
+            recoveryRequest = CreateRecoveryRequestLocked(
+                packageId,
+                packageToDeactivate,
+                deactivation,
+                origin,
+                exception,
+                failedAtUtc);
         }
 
+        var generationRetirement = RetireGenerationEpochAsync(sessionEntry, retiredEpoch);
         if (deactivation is not null)
         {
-            deactivation.RpcRetirementCallbacks = committed?.Invoke(committedGeneration) ?? Task.CompletedTask;
+            deactivation.GenerationRetirementCallbacks = generationRetirement;
         }
-        else if (committed is not null)
+
+        Exception? publicationException = null;
+        bool publicationCurrent;
+        lock (_syncRoot)
         {
-            _ = committed(committedGeneration);
+            publicationCurrent = IsCurrentGenerationPublicationLocked(
+                sessionEntry,
+                publishedEpoch,
+                committedGeneration);
+            if (!publicationCurrent)
+            {
+                recoveryRequest = null;
+            }
+        }
+        if (publicationCurrent && committed is not null)
+        {
+            try
+            {
+                var retirementCallbacks = committed(committedGeneration) ?? Task.CompletedTask;
+                if (deactivation is not null)
+                {
+                    deactivation.RpcRetirementCallbacks = retirementCallbacks;
+                }
+                else
+                {
+                    _ = retirementCallbacks;
+                }
+            }
+            catch (Exception commitException)
+            {
+                recoveryRequest = null;
+                publicationException = commitException;
+            }
         }
         removePackageAuthSessions(packageId);
         QueuePackageDeactivation(deactivation);
         logger.LogError(exception, "Failed to {Action} for package {PackageId}; package disabled for current session", action, packageId);
-        return true;
+        if (publicationException is not null)
+        {
+            throw publicationException;
+        }
+        return publicationCurrent;
     }
 
     public bool HandleRuntimeGenerationFault(
@@ -742,13 +909,38 @@ internal sealed class PackageSessionState(
         Exception exception,
         string action,
         Func<long, Task>? committed = null)
+        => HandleRuntimeGenerationFault(
+            packageId,
+            runtimeGeneration,
+            expectedGeneration,
+            origin,
+            exception,
+            action,
+            committed,
+            out _);
+
+    internal bool HandleRuntimeGenerationFault(
+        string packageId,
+        RuntimePackageGeneration runtimeGeneration,
+        long expectedGeneration,
+        PackageFailureOrigin origin,
+        Exception exception,
+        string action,
+        Func<long, Task>? committed,
+        out RuntimePackageRecoveryRequest? recoveryRequest)
     {
         ActiveLoadedPackage? packageToDeactivate;
         PackageDeactivationWork? deactivation;
+        SessionEntry sessionEntry;
+        SessionGenerationEpoch retiredEpoch;
+        SessionGenerationEpoch publishedEpoch;
         long committedGeneration;
+        recoveryRequest = null;
         lock (_syncRoot)
         {
-            if (expectedGeneration != _generation
+            var failedAtUtc = _timeProvider.GetUtcNow();
+            if (_packageRecoveryCommit is not null
+                || expectedGeneration != _generation
                 || !_activeEntry.AcceptingLeases
                 || _activeEntry.Draining
                 || !_activeEntry.Session.OwnsRuntimeGeneration(packageId, runtimeGeneration)
@@ -756,24 +948,65 @@ internal sealed class PackageSessionState(
                     packageId,
                     origin,
                     exception.Message,
-                    out packageToDeactivate))
+                    out packageToDeactivate,
+                    failedAtUtc))
             {
                 return false;
             }
 
-            _generation = checked(_generation + 1);
-            _activeEntry.Generation = _generation;
-            committedGeneration = _generation;
+            sessionEntry = _activeEntry;
+            committedGeneration = checked(_generation + 1);
+            _generation = committedGeneration;
+            retiredEpoch = AdvanceGenerationUnderLock(sessionEntry, committedGeneration);
+            publishedEpoch = sessionEntry.GenerationEpoch;
             deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
+            recoveryRequest = CreateRecoveryRequestLocked(
+                packageId,
+                packageToDeactivate,
+                deactivation,
+                origin,
+                exception,
+                failedAtUtc);
         }
 
+        var generationRetirement = RetireGenerationEpochAsync(sessionEntry, retiredEpoch);
         if (deactivation is not null)
         {
-            deactivation.RpcRetirementCallbacks = committed?.Invoke(committedGeneration) ?? Task.CompletedTask;
+            deactivation.GenerationRetirementCallbacks = generationRetirement;
         }
-        else if (committed is not null)
+
+        Exception? publicationException = null;
+        bool publicationCurrent;
+        lock (_syncRoot)
         {
-            _ = committed(committedGeneration);
+            publicationCurrent = IsCurrentGenerationPublicationLocked(
+                sessionEntry,
+                publishedEpoch,
+                committedGeneration);
+            if (!publicationCurrent)
+            {
+                recoveryRequest = null;
+            }
+        }
+        if (publicationCurrent && committed is not null)
+        {
+            try
+            {
+                var retirementCallbacks = committed(committedGeneration) ?? Task.CompletedTask;
+                if (deactivation is not null)
+                {
+                    deactivation.RpcRetirementCallbacks = retirementCallbacks;
+                }
+                else
+                {
+                    _ = retirementCallbacks;
+                }
+            }
+            catch (Exception commitException)
+            {
+                recoveryRequest = null;
+                publicationException = commitException;
+            }
         }
         removePackageAuthSessions(packageId);
         QueuePackageDeactivation(deactivation);
@@ -783,14 +1016,300 @@ internal sealed class PackageSessionState(
             action,
             runtimeGeneration.ActivationId,
             packageId);
-        return true;
+        if (publicationException is not null)
+        {
+            throw publicationException;
+        }
+        return publicationCurrent;
+    }
+
+    internal RuntimePackageRecoveryValidation ValidatePackageRecovery(
+        RuntimePackageRecoveryRequest request)
+    {
+        lock (_syncRoot)
+        {
+            return ValidatePackageRecoveryLocked(request);
+        }
+    }
+
+    internal bool TryEnqueueCurrentPackageRecovery(
+        RuntimePackageRecoveryRequest request,
+        Action<RuntimePackageRecoveryRequest> enqueue)
+    {
+        ArgumentNullException.ThrowIfNull(enqueue);
+        lock (_syncRoot)
+        {
+            if (ValidatePackageRecoveryLocked(request) == RuntimePackageRecoveryValidation.Stale)
+            {
+                return false;
+            }
+            enqueue(request);
+            return true;
+        }
+    }
+
+    internal RuntimePackageRecoveryValidation BeginPackageRecoveryActivation(
+        RuntimePackageRecoveryRequest request,
+        ActiveLoadedPackage replacement)
+    {
+        lock (_syncRoot)
+        {
+            var validation = ValidatePackageRecoveryLocked(request);
+            if (validation != RuntimePackageRecoveryValidation.Ready)
+            {
+                return validation;
+            }
+            if (_packageRecoveryActivation is not null)
+            {
+                throw new InvalidOperationException(
+                    "Another exact package recovery activation is already being prepared.");
+            }
+            if (replacement.RuntimeActivationId == Guid.Empty
+                || replacement.RuntimeActivationId == request.FailedActivationId
+                || !string.Equals(
+                    replacement.Descriptor.PackageId,
+                    request.PackageId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "The package recovery candidate does not identify a fresh exact activation.");
+            }
+            _packageRecoveryActivation = new PackageRecoveryActivation(
+                request,
+                replacement,
+                _activeEntry);
+            return RuntimePackageRecoveryValidation.Ready;
+        }
+    }
+
+    internal Task AbandonPackageRecoveryActivation(
+        RuntimePackageRecoveryRequest request,
+        Guid runtimeActivationId)
+    {
+        lock (_syncRoot)
+        {
+            if (_packageRecoveryActivation is { } candidate
+                && ReferenceEquals(candidate.Request, request)
+                && candidate.Replacement.RuntimeActivationId == runtimeActivationId)
+            {
+                _packageRecoveryActivation = null;
+                return CapturePackageLeaseBarrier(
+                    candidate.SessionEntry,
+                    request.PackageId).Completion.Task;
+            }
+            return Task.CompletedTask;
+        }
+    }
+
+    internal bool TryPublishCurrentRecoverySuccess(
+        RuntimePackageRecoveryRequest request,
+        ActiveLoadedPackage replacement,
+        long committedGeneration,
+        Func<bool> publish)
+    {
+        ArgumentNullException.ThrowIfNull(publish);
+        lock (_syncRoot)
+        {
+            if (!ReferenceEquals(request.SessionIdentity, _activeEntry)
+                || !ReferenceEquals(request.Session, _activeEntry.Session)
+                || _packageRecoveryCommit is not null
+                || _activeEntry.Retired
+                || _activeEntry.Draining
+                || !_activeEntry.AcceptingLeases
+                || _generation != committedGeneration
+                || _activeEntry.Generation != committedGeneration
+                || _activeEntry.ActivationGeneration != request.ActivationGeneration
+                || !request.Session.OwnsRuntimeGeneration(
+                    request.PackageId,
+                    new RuntimePackageGeneration(
+                        replacement.RuntimeActivationId,
+                        request.ActivationGeneration)))
+            {
+                return false;
+            }
+            return publish();
+        }
+    }
+
+    internal bool RecordPackageRecoveryFailure(
+        RuntimePackageRecoveryRequest request,
+        PackageFailureOrigin origin,
+        Exception exception,
+        DateTimeOffset failedAtUtc)
+    {
+        lock (_syncRoot)
+        {
+            return ValidatePackageRecoveryLocked(request) != RuntimePackageRecoveryValidation.Stale
+                   && request.Session.RecordRecoveryFailure(
+                       request.PackageId,
+                       request.Source,
+                       origin,
+                       exception.Message,
+                       failedAtUtc);
+        }
+    }
+
+    internal RuntimePackageRecoveryValidation CommitPackageRecovery(
+        RuntimePackageRecoveryRequest request,
+        ActiveLoadedPackage replacement,
+        Action<long>? committed,
+        CancellationToken cancellationToken,
+        out long committedGeneration)
+    {
+        SessionEntry sessionEntry;
+        SessionGenerationEpoch retiredEpoch;
+        PackageRecoveryCommit recoveryCommit;
+        SessionPackageDescriptor failedDescriptor;
+        lock (_syncRoot)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            committedGeneration = _generation;
+            var validation = ValidatePackageRecoveryLocked(request);
+            if (validation != RuntimePackageRecoveryValidation.Ready)
+            {
+                return validation;
+            }
+            if (_packageRecoveryActivation is not { } candidate
+                || !ReferenceEquals(candidate.Request, request)
+                || candidate.Replacement.RuntimeActivationId != replacement.RuntimeActivationId
+                || !ReferenceEquals(candidate.Replacement.Worker, replacement.Worker)
+                || !ReferenceEquals(candidate.SessionEntry, _activeEntry))
+            {
+                return RuntimePackageRecoveryValidation.Stale;
+            }
+            failedDescriptor = request.Session.SessionPackageMap[request.PackageId];
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!request.Session.PublishRecoveredPackage(
+                    request.PackageId,
+                    request.Source,
+                    replacement,
+                    request.ActivationGeneration))
+            {
+                return RuntimePackageRecoveryValidation.Stale;
+            }
+
+            var previousGeneration = _generation;
+            committedGeneration = checked(previousGeneration + 1);
+            _generation = committedGeneration;
+            sessionEntry = _activeEntry;
+            retiredEpoch = AdvanceGenerationUnderLock(sessionEntry, committedGeneration);
+            recoveryCommit = new PackageRecoveryCommit(
+                sessionEntry,
+                previousGeneration,
+                sessionEntry.GenerationEpoch);
+            _packageRecoveryCommit = recoveryCommit;
+        }
+
+        _ = RetireGenerationEpochAsync(sessionEntry, retiredEpoch);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_syncRoot)
+            {
+                if (!ReferenceEquals(_packageRecoveryCommit, recoveryCommit)
+                    || !ReferenceEquals(_activeEntry, sessionEntry)
+                    || _generation != committedGeneration
+                    || !ReferenceEquals(sessionEntry.GenerationEpoch, recoveryCommit.PublishedEpoch))
+                {
+                    throw new RuntimeStaleGenerationException(
+                        "The exact package recovery generation changed before publication completed.");
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            committed?.Invoke(committedGeneration);
+            lock (_syncRoot)
+            {
+                if (!ReferenceEquals(_packageRecoveryCommit, recoveryCommit)
+                    || !ReferenceEquals(_activeEntry, sessionEntry)
+                    || _generation != committedGeneration
+                    || !ReferenceEquals(sessionEntry.GenerationEpoch, recoveryCommit.PublishedEpoch))
+                {
+                    throw new RuntimeStaleGenerationException(
+                        "The exact package recovery generation changed during publication.");
+                }
+                _packageRecoveryActivation = null;
+                _packageRecoveryCommit = null;
+            }
+            return RuntimePackageRecoveryValidation.Ready;
+        }
+        catch
+        {
+            SessionGenerationEpoch? rejectedEpoch = null;
+            lock (_syncRoot)
+            {
+                if (ReferenceEquals(_packageRecoveryCommit, recoveryCommit))
+                {
+                    if (ReferenceEquals(_activeEntry, sessionEntry)
+                        && _generation == committedGeneration
+                        && ReferenceEquals(sessionEntry.GenerationEpoch, recoveryCommit.PublishedEpoch))
+                    {
+                        request.Session.RollbackRecoveredPackage(
+                            request.PackageId,
+                            request.Source,
+                            replacement.RuntimeActivationId,
+                            failedDescriptor.FailureOrigin ?? request.FailureOrigin,
+                            failedDescriptor.LastError ?? request.Failure.Message,
+                            failedDescriptor.LastFailureAtUtc ?? request.FailedAtUtc);
+                        _generation = recoveryCommit.PreviousGeneration;
+                        rejectedEpoch = AdvanceGenerationUnderLock(
+                            sessionEntry,
+                            recoveryCommit.PreviousGeneration);
+                    }
+                    _packageRecoveryCommit = null;
+                }
+            }
+            if (rejectedEpoch is not null)
+            {
+                _ = RetireGenerationEpochAsync(sessionEntry, rejectedEpoch);
+            }
+            throw;
+        }
+    }
+
+    internal RuntimePackageRecoveryRequest? CreateRestoredRecoveryRequest(
+        SessionPublication publication,
+        DrainingPackageRecoveryCandidate candidate)
+    {
+        lock (_syncRoot)
+        {
+            if (!publication.RecoveryCommitted
+                || !ReferenceEquals(_activeEntry, publication.PreviousEntry)
+                || _activeEntry.Draining
+                || !_activeEntry.AcceptingLeases
+                || !ReferenceEquals(_activeEntry.Session, publication.PreviousEntry.Session)
+                || candidate.FailedPackage.RecoveryFactory is null
+                || !_activeEntry.Session.IsExactFailedPackage(
+                    candidate.Fault.PackageId,
+                    candidate.FailedPackage.Source))
+            {
+                return null;
+            }
+
+            return new RuntimePackageRecoveryRequest(
+                _activeEntry,
+                _activeEntry.Session,
+                candidate.Fault.PackageId,
+                candidate.FailedPackage.RuntimeActivationId,
+                _activeEntry.ActivationGeneration,
+                candidate.FailedPackage.Source,
+                candidate.FailedPackage,
+                Task.CompletedTask,
+                candidate.Fault.Origin,
+                candidate.Fault.Exception,
+                candidate.FailedAtUtc);
+        }
     }
 
     public ActiveLoadedPackage? GetLoadedPackage(PackageSessionLease lease, string packageId)
     {
         lock (_syncRoot)
         {
-            return lease.Session.TryGetLoadedPackage(packageId, out var loadedPackage) ? loadedPackage : null;
+            if (!lease.Session.TryGetLoadedPackage(packageId, out var loadedPackage))
+            {
+                return null;
+            }
+            MarkPackageLeaseUnderLock(lease, packageId);
+            return loadedPackage;
         }
     }
 
@@ -799,8 +1318,12 @@ internal sealed class PackageSessionState(
         lock (_syncRoot)
         {
             if (!ReferenceEquals(lease.Identity, _activeEntry)
+                || !ReferenceEquals(lease.GenerationIdentity, _activeEntry.GenerationEpoch)
                 || lease.Generation != _activeEntry.Generation
-                || _activeEntry.Draining)
+                || lease.RetirementToken.IsCancellationRequested
+                || lease.GenerationRetirementToken.IsCancellationRequested
+                || _activeEntry.Draining
+                || _packageRecoveryCommit is not null)
             {
                 return false;
             }
@@ -873,7 +1396,7 @@ internal sealed class PackageSessionState(
             return null;
         }
 
-        var barrier = CaptureLeaseBarrier(_activeEntry);
+        var barrier = CapturePackageLeaseBarrier(_activeEntry, packageId);
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _activeEntry.PendingCleanups.Add(completion.Task);
         return new PackageDeactivationWork(
@@ -882,6 +1405,64 @@ internal sealed class PackageSessionState(
             barrier.Completion.Task,
             completion);
     }
+
+    private RuntimePackageRecoveryRequest? CreateRecoveryRequestLocked(
+        string packageId,
+        ActiveLoadedPackage? loadedPackage,
+        PackageDeactivationWork? deactivation,
+        PackageFailureOrigin origin,
+        Exception exception,
+        DateTimeOffset failedAtUtc)
+    {
+        if (loadedPackage?.RecoveryFactory is null || deactivation is null)
+        {
+            return null;
+        }
+        return new RuntimePackageRecoveryRequest(
+            _activeEntry,
+            _activeEntry.Session,
+            packageId,
+            loadedPackage.RuntimeActivationId,
+            _activeEntry.ActivationGeneration,
+            loadedPackage.Source,
+            loadedPackage,
+            deactivation.Completion.Task,
+            origin,
+            exception,
+            failedAtUtc);
+    }
+
+    private RuntimePackageRecoveryValidation ValidatePackageRecoveryLocked(
+        RuntimePackageRecoveryRequest request)
+    {
+        if (_packageRecoveryCommit is not null
+            || !ReferenceEquals(request.SessionIdentity, _activeEntry)
+            || !ReferenceEquals(request.Session, _activeEntry.Session)
+            || _activeEntry.Retired
+            || _activeEntry.Draining
+            || !_activeEntry.AcceptingLeases
+            || _activeEntry.ActivationGeneration != request.ActivationGeneration
+            || !request.Session.IsExactFailedPackage(request.PackageId, request.Source))
+        {
+            return RuntimePackageRecoveryValidation.Stale;
+        }
+        return request.Session.AreRecoveryDependenciesAvailable(request.PackageId)
+            ? RuntimePackageRecoveryValidation.Ready
+            : RuntimePackageRecoveryValidation.DependencyUnavailable;
+    }
+
+    private bool IsCurrentGenerationPublicationLocked(
+        SessionEntry sessionEntry,
+        SessionGenerationEpoch generationEpoch,
+        long generation)
+        => ReferenceEquals(_activeEntry, sessionEntry)
+           && !sessionEntry.Retired
+           && !sessionEntry.Draining
+           && sessionEntry.AcceptingLeases
+           && _packageRecoveryCommit is null
+           && _generation == generation
+           && sessionEntry.Generation == generation
+           && ReferenceEquals(sessionEntry.GenerationEpoch, generationEpoch);
 
     private void QueuePackageDeactivation(PackageDeactivationWork? work)
     {
@@ -899,28 +1480,80 @@ internal sealed class PackageSessionState(
         {
             var retirementBarriers = Task.WhenAll(
                 work.SessionLeasesDrained,
+                work.GenerationRetirementCallbacks,
                 work.RpcRetirementCallbacks);
             try
             {
-                await retirementBarriers.WaitAsync(_sessionDrainTimeout);
+                await retirementBarriers.WaitAsync(_sessionDrainTimeout).ConfigureAwait(false);
             }
             catch (TimeoutException exception)
             {
                 logger.LogWarning(
                     exception,
-                    "Package {PackageId} session retirement exceeded the drain deadline; its provider and load context remain quarantined",
+                    "Package {PackageId} authority callback drain exceeded the deadline; its provider and load context remain quarantined",
                     work.PackageId);
-                await retirementBarriers;
+                var deferredCleanup = CompleteDeferredPackageDeactivationAsync(
+                    work,
+                    retirementBarriers);
+                throw new RuntimeWorkerCleanupUnprovenException(
+                    $"Package authority cleanup for '{work.PackageId}' could not be proven within {_sessionDrainTimeout.TotalSeconds:0.###} seconds.",
+                    ProveDeferredPackageCleanupAsync(deferredCleanup),
+                    exception);
             }
             await DeactivateLoadedPackageAsync(work.PackageId, work.LoadedPackage);
+            work.Completion.TrySetResult();
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to deactivate package {PackageId} after a package fault", work.PackageId);
+            lock (_syncRoot)
+            {
+                _quarantinedPackageCleanups.Add(work);
+            }
+            if (ex is RuntimeWorkerCleanupUnprovenException cleanupFailure)
+            {
+                _ = ReleaseQuarantinedPackageCleanupAsync(work, cleanupFailure.CleanupCompletion);
+            }
+            work.Completion.TrySetException(ex);
         }
-        finally
+    }
+
+    private async Task CompleteDeferredPackageDeactivationAsync(
+        PackageDeactivationWork work,
+        Task retirementBarriers)
+    {
+        await retirementBarriers.ConfigureAwait(false);
+        await DeactivateLoadedPackageAsync(work.PackageId, work.LoadedPackage)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task ProveDeferredPackageCleanupAsync(Task cleanup)
+    {
+        try
         {
-            work.Completion.TrySetResult();
+            await cleanup.ConfigureAwait(false);
+        }
+        catch (RuntimeWorkerCleanupUnprovenException exception)
+        {
+            await exception.CleanupCompletion.ConfigureAwait(false);
+        }
+    }
+
+    private async Task ReleaseQuarantinedPackageCleanupAsync(
+        PackageDeactivationWork work,
+        Task cleanupCompletion)
+    {
+        try
+        {
+            await cleanupCompletion.ConfigureAwait(false);
+            lock (_syncRoot)
+            {
+                _quarantinedPackageCleanups.Remove(work);
+            }
+        }
+        catch
+        {
+            // Keep the package resources rooted when cleanup cannot ever be proven.
         }
     }
 
@@ -950,21 +1583,48 @@ internal sealed class PackageSessionState(
     private async Task<IReadOnlyList<string>> CleanupRetiredSessionAsync(SessionEntry entry)
     {
         var started = Stopwatch.GetTimestamp();
+        var warnings = new List<string>();
         Task[] pendingCleanups;
         lock (_syncRoot)
         {
             pendingCleanups = entry.PendingCleanups.ToArray();
         }
-        await Task.WhenAll(pendingCleanups);
-        await entry.RetirementCallbacks.ConfigureAwait(false);
+        try
+        {
+            await Task.WhenAll(pendingCleanups).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "One or more faulted package cleanups remain quarantined during session retirement");
+            warnings.Add($"Faulted package cleanup remains quarantined: {exception.Message}");
+        }
+        try
+        {
+            await entry.RetirementCallbacks.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "One or more package retirement callbacks failed during session retirement");
+            warnings.Add($"Package retirement callbacks failed: {exception.Message}");
+        }
+
+        SessionGenerationEpoch[] generationEpochs;
+        lock (_syncRoot)
+        {
+            generationEpochs = entry.RetiredGenerationEpochs
+                .Append(entry.GenerationEpoch)
+                .Distinct()
+                .ToArray();
+        }
+        await Task.WhenAll(generationEpochs.Select(static epoch => epoch.RetireAsync()))
+            .ConfigureAwait(false);
 
         if (entry.Session.IsEmpty)
         {
             RuntimeCancellation.DisposeAfterCallbacks(entry.Retirement, entry.RetirementCallbacks);
-            return [];
+            return warnings;
         }
 
-        var warnings = new List<string>();
         try
         {
             var stopStarted = Stopwatch.GetTimestamp();
@@ -1035,6 +1695,49 @@ internal sealed class PackageSessionState(
             ? current
             : Task.WhenAll(existing, current);
 
+    private static SessionGenerationEpoch AdvanceGenerationUnderLock(
+        SessionEntry entry,
+        long generation)
+    {
+        var retiredEpoch = entry.GenerationEpoch;
+        entry.RetiredGenerationEpochs.Add(retiredEpoch);
+        entry.GenerationEpoch = new SessionGenerationEpoch(generation);
+        entry.Generation = generation;
+        return retiredEpoch;
+    }
+
+    private Task RetireGenerationEpochAsync(
+        SessionEntry entry,
+        SessionGenerationEpoch epoch)
+    {
+        var retirement = epoch.RetireAsync();
+        _ = RemoveRetiredGenerationEpochAsync(entry, epoch, retirement);
+        return retirement;
+    }
+
+    private async Task RemoveRetiredGenerationEpochAsync(
+        SessionEntry entry,
+        SessionGenerationEpoch epoch,
+        Task retirement)
+    {
+        try
+        {
+            await retirement.WaitAsync(_sessionDrainTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Runtime generation {SessionGeneration} callback drain exceeded the deadline and remains quarantined",
+                epoch.Generation);
+            await retirement.ConfigureAwait(false);
+        }
+        lock (_syncRoot)
+        {
+            entry.RetiredGenerationEpochs.Remove(epoch);
+        }
+    }
+
     private void ReleaseLease(SessionEntry entry, long leaseId)
     {
         List<TaskCompletionSource>? completedBarriers = null;
@@ -1044,6 +1747,10 @@ internal sealed class PackageSessionState(
             if (!entry.ActiveLeaseIds.Remove(leaseId))
             {
                 return;
+            }
+            foreach (var packageLeases in entry.PackageLeaseIds.Values)
+            {
+                packageLeases.Remove(leaseId);
             }
 
             foreach (var barrier in entry.LeaseBarriers.ToArray())
@@ -1086,6 +1793,36 @@ internal sealed class PackageSessionState(
         return barrier;
     }
 
+    private static LeaseBarrier CapturePackageLeaseBarrier(SessionEntry entry, string packageId)
+    {
+        var barrier = new LeaseBarrier(
+            entry.PackageLeaseIds.GetValueOrDefault(packageId) ?? []);
+        if (barrier.PendingLeaseIds.Count == 0)
+        {
+            barrier.Completion.TrySetResult();
+        }
+        else
+        {
+            entry.LeaseBarriers.Add(barrier);
+        }
+        return barrier;
+    }
+
+    private static void MarkPackageLeaseUnderLock(PackageSessionLease lease, string packageId)
+    {
+        if (lease.Identity is not SessionEntry entry
+            || !entry.ActiveLeaseIds.Contains(lease.LeaseId))
+        {
+            return;
+        }
+        if (!entry.PackageLeaseIds.TryGetValue(packageId, out var leaseIds))
+        {
+            leaseIds = [];
+            entry.PackageLeaseIds.Add(packageId, leaseIds);
+        }
+        leaseIds.Add(lease.LeaseId);
+    }
+
     private static void SignalRetirementIfDrained(SessionEntry entry)
     {
         if (entry.ActiveLeaseIds.Count == 0)
@@ -1096,21 +1833,11 @@ internal sealed class PackageSessionState(
 
     private async Task DeactivateLoadedPackageAsync(string packageId, ActiveLoadedPackage loadedPackage)
     {
-        var lifecycleOperations = new List<Task>();
-        await RuntimeWorkerLifecycle.StopWorkersAsync(
-            [loadedPackage.Worker],
+        await RuntimeWorkerLifecycle.ProveStoppedAndDisposedAsync(
+            loadedPackage.Worker,
             packageId,
             logger,
-            operationStarted: lifecycleOperations.Add);
-        try
-        {
-            await Task.WhenAll(lifecycleOperations);
-        }
-        catch
-        {
-            // Stop failures were logged above; disposal must still wait until the worker exits.
-        }
-        await loadedPackage.Worker.DisposeAsync();
+            _sessionDrainTimeout).ConfigureAwait(false);
     }
 
     internal sealed class SessionEntry(
@@ -1121,8 +1848,12 @@ internal sealed class PackageSessionState(
     {
         public ActivePackageSession Session { get; } = session;
         public long Generation { get; set; } = generation;
+        public SessionGenerationEpoch GenerationEpoch { get; set; } = new(generation);
+        public HashSet<SessionGenerationEpoch> RetiredGenerationEpochs { get; } = [];
         public long ActivationGeneration { get; set; } = activationGeneration ?? generation;
         public HashSet<long> ActiveLeaseIds { get; } = [];
+        public Dictionary<string, HashSet<long>> PackageLeaseIds { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
         public List<LeaseBarrier> LeaseBarriers { get; } = [];
         public List<Task> PendingCleanups { get; } = [];
         public TaskCompletionSource Drained { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1188,6 +1919,7 @@ internal sealed class PackageSessionState(
         public string PackageId { get; } = packageId;
         public ActiveLoadedPackage LoadedPackage { get; } = loadedPackage;
         public Task SessionLeasesDrained { get; } = sessionLeasesDrained;
+        public Task GenerationRetirementCallbacks { get; set; } = Task.CompletedTask;
         public Task RpcRetirementCallbacks { get; set; } = Task.CompletedTask;
         public TaskCompletionSource Completion { get; } = completion;
         public Task? StartedTask { get; set; }
@@ -1198,4 +1930,59 @@ internal sealed class PackageSessionState(
         IReadOnlyList<ActivePackageDescriptor> ActivePackages,
         IReadOnlyList<SessionPackageDescriptor> SessionPackages,
         IReadOnlyList<string> ChangedPackageIds);
+
+    private sealed record PackageRecoveryActivation(
+        RuntimePackageRecoveryRequest Request,
+        ActiveLoadedPackage Replacement,
+        SessionEntry SessionEntry);
+
+    private sealed record PackageRecoveryCommit(
+        SessionEntry SessionEntry,
+        long PreviousGeneration,
+        SessionGenerationEpoch PublishedEpoch);
+
+    internal sealed class SessionGenerationEpoch(long generation)
+    {
+        private readonly object _gate = new();
+        private readonly CancellationTokenSource _retirement = new();
+        private Task? _retirementTask;
+
+        public long Generation { get; } = generation;
+        public CancellationToken RetirementToken => _retirement.Token;
+
+        public Task RetireAsync()
+        {
+            TaskCompletionSource completion;
+            Task callbacks;
+            lock (_gate)
+            {
+                if (_retirementTask is not null)
+                {
+                    return _retirementTask;
+                }
+                completion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _retirementTask = completion.Task;
+                callbacks = RuntimeCancellation.Signal(_retirement);
+            }
+            _ = RetireCoreAsync(completion, callbacks);
+            return completion.Task;
+        }
+
+        private async Task RetireCoreAsync(
+            TaskCompletionSource completion,
+            Task callbacks)
+        {
+            try
+            {
+                await callbacks.ConfigureAwait(false);
+                _retirement.Dispose();
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        }
+    }
 }

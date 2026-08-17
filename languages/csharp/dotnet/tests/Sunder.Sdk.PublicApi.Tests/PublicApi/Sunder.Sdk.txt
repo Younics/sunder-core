@@ -562,6 +562,7 @@ type interface Sunder.Sdk.Rpc.ISunderRpcCallScope : Sunder.Sdk.Rpc.ISunderRpcCli
   method abstract System.Threading.Tasks.ValueTask<System.IO.Stream> OpenContentAsync(Sunder.Sdk.Rpc.SunderRpcContentReference reference, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type interface Sunder.Sdk.Rpc.ISunderRpcClient
+  property Sunder.Sdk.Rpc.SunderRpcResourceProfile? ResourceProfile { get; }
   method abstract System.Collections.Generic.IAsyncEnumerable<Sunder.Sdk.Rpc.SunderRpcCatalogEvent> WatchAsync(System.Int64 afterRevision, System.Int64 afterSequence, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Collections.Generic.IAsyncEnumerable<System.Text.Json.JsonElement> SubscribeAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcCatalogSnapshot> DiscoverAsync(System.String contractId, System.Threading.CancellationToken cancellationToken = null)
@@ -666,24 +667,47 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcContractDescriptor
   property System.String ContractId { get; }
   property System.Collections.Generic.IReadOnlyDictionary<System.String, System.Text.Json.JsonElement> Definitions { get; }
   property System.Int32 DescriptorVersion { get; }
-  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String?> Errors { get; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, Sunder.Sdk.Rpc.SunderRpcErrorDeclaration> Errors { get; }
+  property System.String? SchemaProfile { get; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Rpc.SunderRpcServiceDescriptor> Services { get; }
   property System.String Sha256 { get; }
   property System.String Version { get; }
+  method Sunder.Sdk.Rpc.SunderRpcErrorDeclaration? FindError(System.String code)
   method Sunder.Sdk.Rpc.SunderRpcServiceDescriptor? FindService(System.String serviceId)
   method System.Boolean IsValid(System.String schemaReference, System.Text.Json.JsonElement value, out System.String? error)
   method System.Byte[] GetCanonicalUtf8()
   method System.Byte[]? GetCanonicalAbiProjectionUtf8()
   method static Sunder.Sdk.Rpc.SunderRpcContractDescriptor Parse(System.ReadOnlySpan<System.Byte> descriptorUtf8)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type struct Sunder.Sdk.Rpc.SunderRpcDecimal : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcDecimal>
+  method .ctor(System.String value)
+  property System.String Value { get; }
+  method static Sunder.Sdk.Rpc.SunderRpcDecimal Parse(System.String value)
+  method static System.Boolean TryParse(System.String? value, out Sunder.Sdk.Rpc.SunderRpcDecimal result)
+  method virtual System.Boolean Equals(Sunder.Sdk.Rpc.SunderRpcDecimal other)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcDescriptorException : System.FormatException, System.Runtime.Serialization.ISerializable
   method .ctor(System.String message)
   method .ctor(System.String message, System.Exception innerException)
+  property System.String ErrorCode { get; }
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type enum Sunder.Sdk.Rpc.SunderRpcDispatchState : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field static Sunder.Sdk.Rpc.SunderRpcDispatchState NotDispatched = 0
   field static Sunder.Sdk.Rpc.SunderRpcDispatchState PossiblyDispatched = 1
   field System.Int32 value__
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type struct Sunder.Sdk.Rpc.SunderRpcDuration : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcDuration>
+  method .ctor(System.String value)
+  property System.String Value { get; }
+  method static Sunder.Sdk.Rpc.SunderRpcDuration Parse(System.String value)
+  method static System.Boolean TryParse(System.String? value, out Sunder.Sdk.Rpc.SunderRpcDuration result)
+  method virtual System.Boolean Equals(Sunder.Sdk.Rpc.SunderRpcDuration other)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcEndpointReference : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcEndpointReference>
   method .ctor(System.String value)
@@ -695,18 +719,23 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcEndpointReference : System.IEquatable<
   method virtual System.String ToString()
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcError : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcError>
-  method .ctor(Sunder.Sdk.Rpc.SunderRpcErrorKind Kind, System.String Code, System.String Message, Sunder.Sdk.Rpc.SunderRpcDispatchState DispatchState = NotDispatched, Sunder.Sdk.Rpc.SunderRpcRetrySafety RetrySafety = Safe)
-  property System.String Code { get; init; }
-  property Sunder.Sdk.Rpc.SunderRpcDispatchState DispatchState { get; init; }
-  property Sunder.Sdk.Rpc.SunderRpcErrorKind Kind { get; init; }
-  property System.String Message { get; init; }
-  property Sunder.Sdk.Rpc.SunderRpcRetrySafety RetrySafety { get; init; }
+  method .ctor(Sunder.Sdk.Rpc.SunderRpcErrorKind kind, System.String code, System.String message, Sunder.Sdk.Rpc.SunderRpcDispatchState dispatchState = NotDispatched, Sunder.Sdk.Rpc.SunderRpcRetrySafety retrySafety = Safe, System.Text.Json.JsonElement? details = null)
+  property System.String Code { get; }
+  property System.Text.Json.JsonElement? Details { get; }
+  property Sunder.Sdk.Rpc.SunderRpcDispatchState DispatchState { get; }
+  property Sunder.Sdk.Rpc.SunderRpcErrorKind Kind { get; }
+  property System.String Message { get; }
+  property Sunder.Sdk.Rpc.SunderRpcRetrySafety RetrySafety { get; }
   method Sunder.Sdk.Rpc.SunderRpcError <Clone>$()
-  method System.Void Deconstruct(out Sunder.Sdk.Rpc.SunderRpcErrorKind Kind, out System.String Code, out System.String Message, out Sunder.Sdk.Rpc.SunderRpcDispatchState DispatchState, out Sunder.Sdk.Rpc.SunderRpcRetrySafety RetrySafety)
   method virtual System.Boolean Equals(Sunder.Sdk.Rpc.SunderRpcError? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type sealed class Sunder.Sdk.Rpc.SunderRpcErrorDeclaration
+  property System.String Code { get; }
+  property System.String? Description { get; }
+  property System.String? DetailsSchema { get; }
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type enum Sunder.Sdk.Rpc.SunderRpcErrorKind : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field static Sunder.Sdk.Rpc.SunderRpcErrorKind Cancelled = 6
@@ -755,6 +784,17 @@ type enum Sunder.Sdk.Rpc.SunderRpcMethodKind : System.IComparable, System.IConve
   field static Sunder.Sdk.Rpc.SunderRpcMethodKind Unary = 0
   field System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type struct Sunder.Sdk.Rpc.SunderRpcOffsetDateTime : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcOffsetDateTime>
+  method .ctor(System.String value)
+  property System.String Value { get; }
+  method System.Boolean TryGetDateTimeOffset(out System.DateTimeOffset value)
+  method static Sunder.Sdk.Rpc.SunderRpcOffsetDateTime Parse(System.String value)
+  method static System.Boolean TryParse(System.String? value, out Sunder.Sdk.Rpc.SunderRpcOffsetDateTime result)
+  method virtual System.Boolean Equals(Sunder.Sdk.Rpc.SunderRpcOffsetDateTime other)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type struct Sunder.Sdk.Rpc.SunderRpcOptional<T>
   method .ctor(T? value)
   property System.Boolean IsPresent { get; }
@@ -769,6 +809,7 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcProtocol
   field static System.String JsonSchemaDialect = "https://json-schema.org/draft/2020-12/schema"
   field static System.Int32 MaximumDescriptorBytes = 4194304
   field static System.String SubscribeAction = "subscribe"
+  field static System.String ValueSchemaProfile = "sunder.rpc.values.v1"
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcProviderSnapshot : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcProviderSnapshot>
   method .ctor(System.String PackageId, System.String PackageVersion, System.String ProviderId, System.String ContractId, System.String ContractVersion, System.String DescriptorSha256, System.String? AbiSha256, System.Guid ActivationId, System.Int64 ActivationEpoch, System.Int64 SessionGeneration, Sunder.Sdk.Rpc.SunderRpcEndpointReference Endpoint, System.Int64 CatalogRevision, Sunder.Sdk.Rpc.SunderRpcProviderState State, System.String? FaultCode = null)
@@ -799,6 +840,22 @@ type enum Sunder.Sdk.Rpc.SunderRpcProviderState : System.IComparable, System.ICo
   field static Sunder.Sdk.Rpc.SunderRpcProviderState Inactive = 1
   field System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type sealed class Sunder.Sdk.Rpc.SunderRpcResourceProfile : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcResourceProfile>
+  method .ctor(System.String EffectiveProfileHash, System.Int32 MaximumRpcValueBytes, System.Int32 MaximumValueDepth, System.Int32 MaximumValueNodes, System.Int32 MaximumObjectMembers, System.Int32 MaximumInlineDecodedBytes, System.Int32 MaximumContentReferenceBytes)
+  property System.String EffectiveProfileHash { get; init; }
+  property System.Int32 MaximumContentReferenceBytes { get; init; }
+  property System.Int32 MaximumInlineDecodedBytes { get; init; }
+  property System.Int32 MaximumObjectMembers { get; init; }
+  property System.Int32 MaximumRpcValueBytes { get; init; }
+  property System.Int32 MaximumValueDepth { get; init; }
+  property System.Int32 MaximumValueNodes { get; init; }
+  method Sunder.Sdk.Rpc.SunderRpcResourceProfile <Clone>$()
+  method System.Void Deconstruct(out System.String EffectiveProfileHash, out System.Int32 MaximumRpcValueBytes, out System.Int32 MaximumValueDepth, out System.Int32 MaximumValueNodes, out System.Int32 MaximumObjectMembers, out System.Int32 MaximumInlineDecodedBytes, out System.Int32 MaximumContentReferenceBytes)
+  method virtual System.Boolean Equals(Sunder.Sdk.Rpc.SunderRpcResourceProfile? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type enum Sunder.Sdk.Rpc.SunderRpcRetrySafety : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field static Sunder.Sdk.Rpc.SunderRpcRetrySafety Safe = 0
   field static Sunder.Sdk.Rpc.SunderRpcRetrySafety Unsafe = 1
@@ -808,6 +865,16 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcServiceDescriptor
   property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Rpc.SunderRpcMethodDescriptor> Methods { get; }
   property System.String ServiceId { get; }
   method Sunder.Sdk.Rpc.SunderRpcMethodDescriptor? FindMethod(System.String methodId)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type struct Sunder.Sdk.Rpc.SunderRpcUri : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcUri>
+  method .ctor(System.String value)
+  property System.String Value { get; }
+  method static Sunder.Sdk.Rpc.SunderRpcUri Parse(System.String value)
+  method static System.Boolean TryParse(System.String? value, out Sunder.Sdk.Rpc.SunderRpcUri result)
+  method virtual System.Boolean Equals(Sunder.Sdk.Rpc.SunderRpcUri other)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcV2JsonConverterFactory : System.Text.Json.Serialization.JsonConverterFactory
   method .ctor()

@@ -20,6 +20,9 @@ public static class SunderRpcProtocol
     /// <summary>The Draft 2020-12 metaschema URI accepted on descriptors.</summary>
     public const string JsonSchemaDialect = "https://json-schema.org/draft/2020-12/schema";
 
+    /// <summary>The normative value-schema profile required by Sunder RPC V2 descriptors.</summary>
+    public const string ValueSchemaProfile = "sunder.rpc.values.v1";
+
     /// <summary>The maximum accepted descriptor size in bytes.</summary>
     public const int MaximumDescriptorBytes = 4 * 1024 * 1024;
 
@@ -96,6 +99,30 @@ public sealed class SunderRpcMethodDescriptor
     public IReadOnlyList<string> Errors => _errors;
 }
 
+/// <summary>Describes one contract-wide domain error declaration.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+public sealed class SunderRpcErrorDeclaration
+{
+    internal SunderRpcErrorDeclaration(
+        string code,
+        string? description,
+        string? detailsSchema)
+    {
+        Code = code;
+        Description = description;
+        DetailsSchema = detailsSchema;
+    }
+
+    /// <summary>Gets the stable domain error code.</summary>
+    public string Code { get; }
+
+    /// <summary>Gets the optional human-readable declaration annotation.</summary>
+    public string? Description { get; }
+
+    /// <summary>Gets the optional local schema reference for machine-readable error details.</summary>
+    public string? DetailsSchema { get; }
+}
+
 /// <summary>Describes one service in a schema-first RPC contract.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed class SunderRpcServiceDescriptor
@@ -125,25 +152,25 @@ public sealed class SunderRpcServiceDescriptor
 
 /// <summary>Represents a validated, immutable Sunder RPC contract descriptor.</summary>
 /// <remarks>
-/// Descriptor numeric tokens are restricted to canonical safe integers in the range
-/// -9007199254740991 through 9007199254740991. This makes canonical hashing deterministic across
-/// implementations. A schema whose type is <c>number</c> may still validate fractional instance values.
+/// V1 descriptor numeric tokens are restricted to canonical safe integers. V2 accepts finite binary64
+/// descriptor numbers and canonicalizes them using the RFC 8785 number representation.
 /// </remarks>
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed class SunderRpcContractDescriptor
 {
     private readonly IReadOnlyList<SunderRpcServiceDescriptor> _services;
     private readonly IReadOnlyDictionary<string, SunderRpcServiceDescriptor> _serviceMap;
-    private readonly IReadOnlyDictionary<string, string?> _errors;
+    private readonly IReadOnlyDictionary<string, SunderRpcErrorDeclaration> _errors;
     private readonly IReadOnlyDictionary<string, JsonElement> _definitions;
     private readonly byte[] _canonicalUtf8;
     private readonly byte[]? _canonicalAbiProjectionUtf8;
 
     internal SunderRpcContractDescriptor(
         int descriptorVersion,
+        string? schemaProfile,
         string contractId,
         string version,
-        IEnumerable<KeyValuePair<string, string?>> errors,
+        IEnumerable<SunderRpcErrorDeclaration> errors,
         IEnumerable<SunderRpcServiceDescriptor> services,
         IEnumerable<KeyValuePair<string, JsonElement>> definitions,
         byte[] canonicalUtf8,
@@ -152,14 +179,15 @@ public sealed class SunderRpcContractDescriptor
         string? abiSha256)
     {
         DescriptorVersion = descriptorVersion;
+        SchemaProfile = schemaProfile;
         ContractId = contractId;
         Version = version;
         var serviceSnapshot = services.ToArray();
         _services = Array.AsReadOnly(serviceSnapshot);
         _serviceMap = new ReadOnlyDictionary<string, SunderRpcServiceDescriptor>(
             serviceSnapshot.ToDictionary(static service => service.ServiceId, StringComparer.Ordinal));
-        _errors = new ReadOnlyDictionary<string, string?>(
-            errors.ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal));
+        _errors = new ReadOnlyDictionary<string, SunderRpcErrorDeclaration>(
+            errors.ToDictionary(static declaration => declaration.Code, StringComparer.Ordinal));
         _definitions = new ReadOnlyDictionary<string, JsonElement>(
             definitions.ToDictionary(static pair => pair.Key, static pair => pair.Value.Clone(), StringComparer.Ordinal));
         _canonicalUtf8 = canonicalUtf8.ToArray();
@@ -170,6 +198,9 @@ public sealed class SunderRpcContractDescriptor
 
     /// <summary>Gets the parsed descriptor version.</summary>
     public int DescriptorVersion { get; }
+
+    /// <summary>Gets the selected V2 value-schema profile, or <see langword="null"/> for V1.</summary>
+    public string? SchemaProfile { get; }
 
     /// <summary>Gets the stable contract identifier.</summary>
     public string ContractId { get; }
@@ -186,8 +217,8 @@ public sealed class SunderRpcContractDescriptor
     /// <summary>Gets the immutable service list in descriptor order.</summary>
     public IReadOnlyList<SunderRpcServiceDescriptor> Services => _services;
 
-    /// <summary>Gets V2 domain error descriptions keyed by code; V1 descriptors return an empty map.</summary>
-    public IReadOnlyDictionary<string, string?> Errors => _errors;
+    /// <summary>Gets immutable V2 domain error declarations keyed by code; V1 descriptors return an empty map.</summary>
+    public IReadOnlyDictionary<string, SunderRpcErrorDeclaration> Errors => _errors;
 
     /// <summary>Gets immutable clones of the validated schemas keyed by definition name.</summary>
     public IReadOnlyDictionary<string, JsonElement> Definitions => _definitions;
@@ -207,6 +238,10 @@ public sealed class SunderRpcContractDescriptor
     public SunderRpcServiceDescriptor? FindService(string serviceId)
         => serviceId is not null && _serviceMap.TryGetValue(serviceId, out var service) ? service : null;
 
+    /// <summary>Gets a domain error declaration by its case-sensitive code.</summary>
+    public SunderRpcErrorDeclaration? FindError(string code)
+        => code is not null && _errors.TryGetValue(code, out var declaration) ? declaration : null;
+
     /// <summary>Validates a JSON value against a local definition reference.</summary>
     public bool IsValid(string schemaReference, JsonElement value, out string? error)
         => SunderRpcSchemaProfile.IsInstanceValid(this, schemaReference, value, out error);
@@ -223,13 +258,30 @@ public sealed class SunderRpcDescriptorException : FormatException
     public SunderRpcDescriptorException(string message)
         : base(message)
     {
+        ErrorCode = "descriptor-invalid";
     }
 
     /// <summary>Creates a descriptor validation exception with an inner parse failure.</summary>
     public SunderRpcDescriptorException(string message, Exception innerException)
         : base(message, innerException)
     {
+        ErrorCode = "descriptor-invalid";
     }
+
+    internal SunderRpcDescriptorException(string errorCode, string message)
+        : base(message)
+    {
+        ErrorCode = errorCode;
+    }
+
+    internal SunderRpcDescriptorException(string errorCode, string message, Exception innerException)
+        : base(message, innerException)
+    {
+        ErrorCode = errorCode;
+    }
+
+    /// <summary>Gets the stable broad conformance rejection category.</summary>
+    public string ErrorCode { get; }
 }
 
 /// <summary>An opaque reference to one exact provider activation.</summary>
@@ -397,12 +449,55 @@ public enum SunderRpcRetrySafety
 
 /// <summary>Contains a sanitized typed RPC failure safe to return across package boundaries.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
-public sealed record SunderRpcError(
-    SunderRpcErrorKind Kind,
-    string Code,
-    string Message,
-    SunderRpcDispatchState DispatchState = SunderRpcDispatchState.NotDispatched,
-    SunderRpcRetrySafety RetrySafety = SunderRpcRetrySafety.Safe);
+public sealed record SunderRpcError
+{
+    /// <summary>Creates a sanitized typed RPC failure.</summary>
+    public SunderRpcError(
+        SunderRpcErrorKind kind,
+        string code,
+        string message,
+        SunderRpcDispatchState dispatchState = SunderRpcDispatchState.NotDispatched,
+        SunderRpcRetrySafety retrySafety = SunderRpcRetrySafety.Safe,
+        JsonElement? details = null)
+    {
+        if (details is { } detail)
+        {
+            if (kind != SunderRpcErrorKind.Domain)
+            {
+                throw new ArgumentException("Only domain RPC errors may carry details.", nameof(details));
+            }
+            if (detail.ValueKind == JsonValueKind.Undefined)
+            {
+                throw new ArgumentException("RPC error details must be a defined JSON value.", nameof(details));
+            }
+        }
+
+        Kind = kind;
+        Code = code;
+        Message = message;
+        DispatchState = dispatchState;
+        RetrySafety = retrySafety;
+        Details = details is { } value ? value.Clone() : null;
+    }
+
+    /// <summary>Gets the error kind.</summary>
+    public SunderRpcErrorKind Kind { get; }
+
+    /// <summary>Gets the stable error code.</summary>
+    public string Code { get; }
+
+    /// <summary>Gets the sanitized diagnostic message.</summary>
+    public string Message { get; }
+
+    /// <summary>Gets whether provider dispatch may have occurred.</summary>
+    public SunderRpcDispatchState DispatchState { get; }
+
+    /// <summary>Gets whether retrying may duplicate externally visible effects.</summary>
+    public SunderRpcRetrySafety RetrySafety { get; }
+
+    /// <summary>Gets optional immutable machine-readable domain error details.</summary>
+    public JsonElement? Details { get; }
+}
 
 /// <summary>Represents a typed RPC failure.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
@@ -434,7 +529,13 @@ public sealed class SunderRpcException : Exception
         => Error.DispatchState == dispatchState && Error.RetrySafety == retrySafety
             ? this
             : new SunderRpcException(
-                Error with { DispatchState = dispatchState, RetrySafety = retrySafety },
+                new SunderRpcError(
+                    Error.Kind,
+                    Error.Code,
+                    Error.Message,
+                    dispatchState,
+                    retrySafety,
+                    Error.Details),
                 _hostAuthenticated);
 
     internal static SunderRpcException Infrastructure(
@@ -619,6 +720,17 @@ internal sealed class UnavailableSunderRpcInvocationAuthority : ISunderRpcInvoca
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed record SunderRpcCallOptions(DateTimeOffset? DeadlineUtc = null);
 
+/// <summary>Describes the validated Host resource limits effective for RPC calls.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+public sealed record SunderRpcResourceProfile(
+    string EffectiveProfileHash,
+    int MaximumRpcValueBytes,
+    int MaximumValueDepth,
+    int MaximumValueNodes,
+    int MaximumObjectMembers,
+    int MaximumInlineDecodedBytes,
+    int MaximumContentReferenceBytes);
+
 /// <summary>Handles validated JSON RPC requests for one declared provider.</summary>
 /// <remarks>Handlers are activation-scoped and may be called concurrently. They must observe cancellation.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
@@ -653,6 +765,9 @@ public interface ISunderRpcDeclaredErrorMetadata
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public interface ISunderRpcClient
 {
+    /// <summary>Gets the validated Host resource profile, or <see langword="null"/> when none was reported.</summary>
+    SunderRpcResourceProfile? ResourceProfile => null;
+
     /// <summary>Creates caller-owned authority for calls and Host-mediated request or response content.</summary>
     /// <remarks>Dispose the scope to cancel its work and revoke all remaining content references.</remarks>
     ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(

@@ -461,6 +461,7 @@ public sealed class RegistryPackageArtifactDownloaderTests
         => Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion": 2,
+              "schemaProfile": "sunder.rpc.values.v1",
               "contractId": "example.projection",
               "version": "1.0.0",
               "errors": {},

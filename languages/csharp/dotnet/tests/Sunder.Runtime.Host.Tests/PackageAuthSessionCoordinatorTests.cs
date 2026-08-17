@@ -92,7 +92,7 @@ public sealed class PackageAuthSessionCoordinatorTests
     }
 
     [Fact]
-    public async Task GetPackageAuthStatusAsync_BlockedFailuresFromTwoPackagesDisableBothActivations()
+    public async Task GetPackageAuthStatusAsync_GenerationAdvanceCancelsSiblingOldCallBeforeFreshRetry()
     {
         var firstAuthHandler = new TestPackageAuthHandler(
             "first.package",
@@ -132,9 +132,22 @@ public sealed class PackageAuthSessionCoordinatorTests
             Assert.False(owner.State.GetSessionPackage("first.package")!.IsEnabled);
             Assert.True(owner.State.GetSessionPackage("second.package")!.IsEnabled);
             Assert.Equal(initialGeneration, secondLease.Generation);
+            Assert.True(secondLease.GenerationRetirementToken.IsCancellationRequested);
 
             secondAuthHandler.ReleaseStatus();
-            var secondStatus = await secondStatusTask.WaitAsync(TimeSpan.FromSeconds(5));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                secondStatusTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+            Assert.Equal(initialGeneration + 1, owner.Generation);
+            Assert.True(owner.State.GetSessionPackage("second.package")!.IsEnabled);
+            PackageAuthStatusResponse? secondStatus;
+            using (var freshLease = owner.State.AcquireLease())
+            {
+                Assert.Equal(initialGeneration + 1, freshLease.Generation);
+                secondStatus = await owner.Auth.GetPackageAuthStatusAsync(
+                    freshLease,
+                    "second.package");
+            }
 
             Assert.Equal(Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed, secondStatus?.Status);
             Assert.Equal(initialGeneration + 2, owner.Generation);

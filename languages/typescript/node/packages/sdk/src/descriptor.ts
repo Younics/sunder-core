@@ -9,6 +9,8 @@ const MAXIMUM_JSON_DEPTH = MAXIMUM_DEPTH * 4 + 16;
 const MAXIMUM_SCHEMA_NODES = 4096;
 const MAXIMUM_COLLECTION_ITEMS = 1_000_000;
 
+export const SUNDER_RPC_VALUE_SCHEMA_PROFILE = "sunder.rpc.values.v1" as const;
+
 type JsonObject = { readonly [key: string]: JsonValue };
 type DescriptorVersion = 1 | 2;
 
@@ -38,7 +40,9 @@ export function parseRpcContractDescriptor(input: string | Uint8Array): RpcContr
   const text = typeof input === "string"
     ? checkedDescriptorText(input)
     : decodeDescriptor(input);
-  const value = new StrictJsonParser(text).parse();
+  const parser = new StrictJsonParser(text);
+  const value = parser.parse();
+  parser.validateNumberTokens(descriptorVersionOf(value));
   validateRpcContractDescriptor(value);
   return value;
 }
@@ -50,14 +54,18 @@ export function validateRpcContractDescriptor(value: unknown): asserts value is 
   if (descriptorVersion !== 1 && descriptorVersion !== 2) {
     fail("$.descriptorVersion must be 1 or 2.", "descriptor-version");
   }
+  if (descriptorVersion === 1) validateV1DescriptorNumbers(value as JsonValue, "$", 0);
   validateObjectNameCollisions(root, "$", descriptorVersion);
   if (descriptorVersion === 1) {
-    if (has(root, "errors")) {
+    if (has(root, "errors") || has(root, "schemaProfile")) {
       fail("A descriptor using V2 root fields must set descriptorVersion to 2.", "descriptor-version");
     }
     only(root, "$", "$schema", "descriptorVersion", "contractId", "version", "services", "$defs");
   } else {
-    only(root, "$", "$schema", "descriptorVersion", "contractId", "version", "errors", "services", "$defs");
+    only(root, "$", "$schema", "descriptorVersion", "schemaProfile", "contractId", "version", "errors", "services", "$defs");
+    if (!has(root, "schemaProfile") || root.schemaProfile !== SUNDER_RPC_VALUE_SCHEMA_PROFILE) {
+      fail(`$.schemaProfile must be exactly '${SUNDER_RPC_VALUE_SCHEMA_PROFILE}'.`, "schema-profile");
+    }
   }
   if (has(root, "$schema") && root.$schema !== "https://json-schema.org/draft/2020-12/schema") {
     fail("$.$schema must be the JSON Schema Draft 2020-12 URI.");
@@ -77,14 +85,15 @@ export function validateRpcContractDescriptor(value: unknown): asserts value is 
   }
 
   const declaredErrors = descriptorVersion === 2
-    ? validateErrors(required(root, "errors", "$"))
+    ? validateErrors(required(root, "errors", "$"), definitions)
     : new Set<string>();
   validateServices(required(root, "services", "$"), definitions, descriptorVersion, declaredErrors);
   const schemaState: SchemaState = { definitions, nodes: 0, version: descriptorVersion };
   for (const name of definitionNames) {
     validateSchema(objectValue(definitions[name], `$.$defs.${name}`, "a schema object"), `$.$defs.${name}`, schemaState, 1);
   }
-  validateReferenceDepths(definitionNames, definitions);
+  if (descriptorVersion === 2) validateProductiveReferences(definitionNames, definitions);
+  else validateReferenceDepths(definitionNames, definitions);
 }
 
 function validateJsonValue(
@@ -99,9 +108,7 @@ function validateJsonValue(
     return;
   }
   if (typeof value === "number") {
-    if (!Number.isSafeInteger(value) || Object.is(value, -0)) {
-      fail(`${path} contains a number that is not a canonical IEEE-754 safe integer.`, "descriptor-number");
-    }
+    if (!Number.isFinite(value)) fail(`${path} contains a number that is not finite.`, "descriptor-number");
     return;
   }
   if (Array.isArray(value)) {
@@ -112,6 +119,32 @@ function validateJsonValue(
   for (const [name, item] of Object.entries(value)) {
     validateUnicodeScalars(name, `${path} property name`);
     validateJsonValue(item, `${path}.${name}`, depth + 1);
+  }
+}
+
+function descriptorVersionOf(value: JsonValue): DescriptorVersion | undefined {
+  if (!isObjectValue(value)) return undefined;
+  const version = value.descriptorVersion;
+  return version === 1 || version === 2
+    ? version
+    : undefined;
+}
+
+function validateV1DescriptorNumbers(value: JsonValue, path: string, depth: number): void {
+  if (depth > MAXIMUM_JSON_DEPTH) fail("The RPC descriptor exceeds its derived JSON traversal depth limit.");
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || Object.is(value, -0)) {
+      fail(`${path} contains a number that is not a canonical IEEE-754 safe integer.`, "descriptor-number");
+    }
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateV1DescriptorNumbers(item, `${path}[${index}]`, depth + 1));
+    return;
+  }
+  for (const [name, item] of Object.entries(value)) {
+    validateV1DescriptorNumbers(item, `${path}.${name}`, depth + 1);
   }
 }
 
@@ -138,10 +171,8 @@ export function canonicalizeDescriptor(value: JsonValue): string {
       return JSON.stringify(item);
     }
     if (typeof item === "number") {
-      if (!Number.isSafeInteger(item) || Object.is(item, -0)) {
-        throw new TypeError("Descriptor numbers must be canonical IEEE-754 safe integers.");
-      }
-      return String(item);
+      if (!Number.isFinite(item)) throw new TypeError("Descriptor numbers must be finite IEEE-754 binary64 values.");
+      return JSON.stringify(item);
     }
     if (Array.isArray(item)) return `[${item.map(write).join(",")}]`;
     const object = item as JsonObject;
@@ -150,7 +181,7 @@ export function canonicalizeDescriptor(value: JsonValue): string {
   return write(value);
 }
 
-function validateErrors(value: JsonValue): ReadonlySet<string> {
+function validateErrors(value: JsonValue, definitions: JsonObject): ReadonlySet<string> {
   if (Array.isArray(value)) fail("$.errors must be a keyed object.", "descriptor-representation");
   const errors = objectValue(value, "$.errors", "a keyed object");
   const codes = Object.keys(errors);
@@ -158,12 +189,20 @@ function validateErrors(value: JsonValue): ReadonlySet<string> {
   for (const code of codes) {
     if (!isMemberId(code)) fail(`$.errors contains invalid error code '${code}'.`, "descriptor-representation");
     const declaration = objectValue(errors[code], `$.errors.${code}`, "an object");
-    only(declaration, `$.errors.${code}`, "description");
+    onlyWithCode(declaration, `$.errors.${code}`, "descriptor-representation", "description", "detailsSchema");
     if (has(declaration, "description")) {
       const description = declaration.description;
       if (typeof description !== "string" || scalarLength(description) > 2048) {
         fail(`$.errors.${code}.description must be a string of at most 2048 Unicode scalar values.`);
       }
+    }
+    if (has(declaration, "detailsSchema")) {
+      readSchemaReference(
+        declaration.detailsSchema ?? null,
+        `$.errors.${code}.detailsSchema`,
+        definitions,
+        true,
+      );
     }
   }
   return new Set(codes);
@@ -287,9 +326,12 @@ function validateSchema(
 ): void {
   if (depth > MAXIMUM_DEPTH || ++state.nodes > MAXIMUM_SCHEMA_NODES) fail(`${path} exceeds the RPC schema depth or node-count limit.`);
   validateAnnotations(schema, path);
+  if (state.version === 2) {
+    validateValueProfileSchema(schema, path, state, depth);
+    return;
+  }
   if (has(schema, "$ref")) {
-    if (state.version === 2) onlyWithCode(schema, path, "schema-reference-shape", "$ref");
-    else only(schema, path, "$ref", "title", "description");
+    only(schema, path, "$ref", "title", "description");
     referenceNameValue(schema.$ref, path, state.definitions);
     return;
   }
@@ -308,9 +350,7 @@ function validateSchema(
   }
 
   if (has(schema, "logicalType")) {
-    if (state.version !== 2) fail(`${path}.logicalType is outside descriptor version 1.`, "schema-profile");
-    validateLogicalSchema(schema, path);
-    return;
+    fail(`${path}.logicalType is outside descriptor version 1.`, "schema-profile");
   }
 
   if (typeof schema.type !== "string" || schema.type.length === 0 || schema.type.length > 16) {
@@ -322,18 +362,14 @@ function validateSchema(
       validateObjectSchema(schema, path, state, depth);
       break;
     case "array":
-      if (state.version === 2) {
-        onlyWithCode(schema, path, "schema-profile", "type", "items", "minItems", "maxItems", "title", "description");
-      } else {
-        only(schema, path, "type", "items", "minItems", "maxItems", "enum", "const", "title", "description");
-      }
+      only(schema, path, "type", "items", "minItems", "maxItems", "enum", "const", "title", "description");
       validateOrderedBounds(schema, path, "minItems", "maxItems", MAXIMUM_COLLECTION_ITEMS);
       validateSchema(objectValue(required(schema, "items", path), `${path}.items`, "a schema object"), `${path}.items`, state, depth + 1);
       break;
     case "string":
       only(schema, path, "type", "minLength", "maxLength", "enum", "const", "title", "description");
       if (!has(schema, "minLength") || !has(schema, "maxLength")) {
-        fail(`${path} must declare minLength and maxLength.`, state.version === 2 ? "schema-profile" : "descriptor-invalid");
+        fail(`${path} must declare minLength and maxLength.`, "descriptor-invalid");
       }
       validateOrderedBounds(schema, path, "minLength", "maxLength", MAXIMUM_COLLECTION_ITEMS);
       break;
@@ -351,19 +387,231 @@ function validateSchema(
   validateEnumAndConst(schema, path, type);
 }
 
-function validateLogicalSchema(schema: JsonObject, path: string): void {
-  const logicalType = stringValue(schema, "logicalType", path, 32);
-  if (logicalType === "uuid" || logicalType === "utc-date-time") {
-    onlyWithCode(schema, path, "schema-profile", "type", "logicalType", "title", "description");
-    if (schema.type !== "string") fail(`${path}.type must be 'string' for logical type '${logicalType}'.`, "schema-profile");
+function validateValueProfileSchema(
+  schema: JsonObject,
+  path: string,
+  state: SchemaState,
+  depth: number,
+): void {
+  if (has(schema, "$ref")) {
+    onlyWithCode(schema, path, "schema-reference-shape", "$ref");
+    referenceNameValue(schema.$ref, path, state.definitions, "schema-reference-shape");
     return;
   }
+  if (has(schema, "oneOf")) {
+    onlyWithCode(schema, path, "schema-profile", "oneOf", "title", "description");
+    const variants = arrayValue(schema.oneOf, `${path}.oneOf`);
+    if (variants.length < 2 || variants.length > 16) fail(`${path}.oneOf must contain between 2 and 16 variants.`);
+    variants.forEach((variant, index) => validateSchema(
+      objectValue(variant, `${path}.oneOf[${index}]`, "a schema object"),
+      `${path}.oneOf[${index}]`,
+      state,
+      depth + 1,
+    ));
+    validateUnion(variants, path, state.definitions);
+    return;
+  }
+
+  const structuralNames = Object.keys(schema).filter((name) => name !== "title" && name !== "description");
+  if (structuralNames.length === 0) return;
+
+  if (has(schema, "logicalType")) {
+    validateLogicalSchema(schema, path);
+    return;
+  }
+  if (typeof schema.type !== "string" || schema.type.length === 0 || schema.type.length > 16) {
+    fail(`${path}.type must be a supported schema type string.`, "schema-profile");
+  }
+
+  switch (schema.type) {
+    case "object":
+      if (structuralNames.every((name) => name === "type" || name === "maxProperties")) {
+        onlyWithCode(schema, path, "schema-profile", "type", "maxProperties", "title", "description");
+        if (has(schema, "maxProperties")) {
+          integerBound(schema.maxProperties, `${path}.maxProperties`, 0, MAXIMUM_COLLECTION_ITEMS);
+        }
+      } else {
+        validateObjectSchema(schema, path, state, depth);
+      }
+      break;
+    case "array":
+      onlyWithCode(schema, path, "schema-profile", "type", "items", "minItems", "maxItems", "title", "description");
+      validateOrderedBounds(schema, path, "minItems", "maxItems", MAXIMUM_COLLECTION_ITEMS);
+      validateSchema(
+        objectValue(required(schema, "items", path), `${path}.items`, "a schema object"),
+        `${path}.items`,
+        state,
+        depth + 1,
+      );
+      break;
+    case "string":
+      validateValueProfileStringSchema(schema, path);
+      break;
+    case "integer":
+      validateValueProfileNumberSchema(schema, path, false);
+      break;
+    case "number":
+      validateValueProfileNumberSchema(schema, path, true);
+      break;
+    case "boolean":
+    case "null":
+      onlyWithCode(schema, path, "schema-profile", "type", "enum", "const", "title", "description");
+      validateEnumAndConst(schema, path, schema.type);
+      break;
+    default:
+      fail(`${path}.type '${schema.type}' is outside the RPC schema profile.`, "schema-profile");
+  }
+}
+
+function validateLogicalSchema(schema: JsonObject, path: string): void {
+  const logicalType = stringValue(schema, "logicalType", path, 32);
   if (logicalType === "content-reference") {
     onlyWithCode(schema, path, "schema-profile", "type", "logicalType", "title", "description");
     if (schema.type !== "object") fail(`${path}.type must be 'object' for logical type 'content-reference'.`, "schema-profile");
     return;
   }
   fail(`${path}.logicalType '${logicalType}' is outside the RPC schema profile.`, "schema-profile");
+}
+
+function validateValueProfileStringSchema(schema: JsonObject, path: string): void {
+  if (has(schema, "contentEncoding")) {
+    onlyWithCode(
+      schema,
+      path,
+      "schema-profile",
+      "type",
+      "contentEncoding",
+      "maxDecodedBytes",
+      "title",
+      "description",
+    );
+    if (schema.contentEncoding !== "base64") fail(`${path}.contentEncoding must be exactly 'base64'.`, "schema-profile");
+    if (!has(schema, "maxDecodedBytes")) fail(`${path}.maxDecodedBytes is required.`, "schema-profile");
+    integerBound(schema.maxDecodedBytes, `${path}.maxDecodedBytes`, 0, MAXIMUM_COLLECTION_ITEMS);
+    return;
+  }
+
+  if (has(schema, "format")) {
+    const format = stringValue(schema, "format", path, 32);
+    if (["uuid", "date", "date-time", "duration", "uri"].includes(format)) {
+      onlyWithCode(schema, path, "schema-profile", "type", "format", "title", "description");
+      return;
+    }
+    if (format === "big-integer") {
+      onlyWithCode(
+        schema,
+        path,
+        "schema-profile",
+        "type",
+        "format",
+        "maxDigits",
+        "valueMinimum",
+        "valueExclusiveMinimum",
+        "valueMaximum",
+        "valueExclusiveMaximum",
+        "title",
+        "description",
+      );
+      const maxDigits = integerBound(required(schema, "maxDigits", path), `${path}.maxDigits`, 1, MAXIMUM_COLLECTION_ITEMS);
+      validateExactNumericValueBounds(schema, path, maxDigits, undefined);
+      return;
+    }
+    if (format === "decimal") {
+      onlyWithCode(
+        schema,
+        path,
+        "schema-profile",
+        "type",
+        "format",
+        "maxPrecision",
+        "maxScale",
+        "valueMinimum",
+        "valueExclusiveMinimum",
+        "valueMaximum",
+        "valueExclusiveMaximum",
+        "title",
+        "description",
+      );
+      const maxPrecision = integerBound(required(schema, "maxPrecision", path), `${path}.maxPrecision`, 1, MAXIMUM_COLLECTION_ITEMS);
+      const maxScale = integerBound(required(schema, "maxScale", path), `${path}.maxScale`, 0, MAXIMUM_COLLECTION_ITEMS);
+      validateExactNumericValueBounds(schema, path, maxPrecision, maxScale);
+      return;
+    }
+    fail(`${path}.format '${format}' is outside the RPC schema profile.`, "schema-profile");
+  }
+
+  onlyWithCode(schema, path, "schema-profile", "type", "minLength", "maxLength", "enum", "const", "title", "description");
+  if (!has(schema, "minLength") || !has(schema, "maxLength")) {
+    fail(`${path} must declare minLength and maxLength.`, "schema-profile");
+  }
+  validateOrderedBounds(schema, path, "minLength", "maxLength", MAXIMUM_COLLECTION_ITEMS);
+  validateEnumAndConst(schema, path, "string");
+}
+
+function validateValueProfileNumberSchema(schema: JsonObject, path: string, requiresFormat: boolean): void {
+  onlyWithCode(
+    schema,
+    path,
+    "schema-profile",
+    "type",
+    "format",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "enum",
+    "const",
+    "title",
+    "description",
+  );
+  let format: "float32" | "float64" | undefined;
+  if (requiresFormat) {
+    if (schema.format !== "float32" && schema.format !== "float64") {
+      fail(`${path}.format must be exactly 'float32' or 'float64'.`, "schema-profile");
+    }
+    format = schema.format;
+  } else if (has(schema, "format")) {
+    fail(`${path}.format is not supported for safe integers.`, "schema-profile");
+  }
+
+  const lowerNames = ["minimum", "exclusiveMinimum"].filter((name) => has(schema, name));
+  const upperNames = ["maximum", "exclusiveMaximum"].filter((name) => has(schema, name));
+  if (lowerNames.length > 1 || upperNames.length > 1) fail(`${path} cannot mix inclusive and exclusive bounds on one side.`);
+  const readNumber = format === undefined
+    ? (value: JsonValue | undefined, valuePath: string): number => numberValue(value, valuePath, "descriptor-number")
+    : (value: JsonValue | undefined, valuePath: string): number => formattedNumberValue(value, valuePath, format);
+  const lower = lowerNames.length === 0 ? undefined : readNumber(schema[lowerNames[0] ?? ""], `${path}.${lowerNames[0] ?? "minimum"}`);
+  const upper = upperNames.length === 0 ? undefined : readNumber(schema[upperNames[0] ?? ""], `${path}.${upperNames[0] ?? "maximum"}`);
+  if (lower !== undefined && upper !== undefined && lower > upper) fail(`${path}'s lower numeric bound must not exceed its upper bound.`);
+  validateEnumAndConst(schema, path, requiresFormat ? "number" : "integer");
+}
+
+function validateExactNumericValueBounds(
+  schema: JsonObject,
+  path: string,
+  maximumDigitsOrPrecision: number,
+  maximumScale: number | undefined,
+): void {
+  const lowerNames = ["valueMinimum", "valueExclusiveMinimum"].filter((name) => has(schema, name));
+  const upperNames = ["valueMaximum", "valueExclusiveMaximum"].filter((name) => has(schema, name));
+  if (lowerNames.length > 1 || upperNames.length > 1) fail(`${path} cannot mix inclusive and exclusive value bounds on one side.`, "schema-profile");
+
+  const parsed = new Map<string, ExactDecimal>();
+  for (const name of [...lowerNames, ...upperNames]) {
+    const value = schema[name];
+    if (typeof value !== "string") fail(`${path}.${name} must be a canonical numeric string.`, "schema-profile");
+    const number = maximumScale === undefined ? parseCanonicalBigInteger(value) : parseCanonicalDecimal(value);
+    if (number === undefined) fail(`${path}.${name} must be a canonical numeric string.`, "schema-profile");
+    if (number.precision > maximumDigitsOrPrecision || maximumScale !== undefined && number.scale > maximumScale) {
+      fail(`${path}.${name} exceeds the schema's declared digit limits.`, "schema-profile");
+    }
+    parsed.set(name, number);
+  }
+  const lower = lowerNames[0] === undefined ? undefined : parsed.get(lowerNames[0]);
+  const upper = upperNames[0] === undefined ? undefined : parsed.get(upperNames[0]);
+  if (lower !== undefined && upper !== undefined && compareExactDecimals(lower, upper) > 0) {
+    fail(`${path}'s lower value bound must not exceed its upper bound.`, "schema-profile");
+  }
 }
 
 function validateObjectSchema(
@@ -443,6 +691,127 @@ function validateNumberSchema(schema: JsonObject, path: string, type: string): v
   const upper = numberValue(schema[upperNames[0] ?? ""], `${path}.${upperNames[0] ?? "maximum"}`);
   if (lower > upper) fail(`${path}'s lower numeric bound must not exceed its upper bound.`);
   if (type === "integer" && (!Number.isInteger(lower) || !Number.isInteger(upper))) fail(`${path} integer bounds must be integers.`);
+}
+
+function validateProductiveReferences(definitionNames: readonly string[], definitions: JsonObject): void {
+  const edges = new Map<string, Set<string>>();
+  for (const name of definitionNames) {
+    edges.set(name, new Set());
+  }
+  for (const name of definitionNames) {
+    collectRequiredReferenceEdges(
+      objectValue(definitions[name], `$.$defs.${name}`, "a schema object"),
+      name,
+      definitions,
+      edges,
+      false,
+    );
+  }
+
+  const completed = new Set<string>();
+  const visiting = new Set<string>();
+  const visit = (name: string): void => {
+    if (completed.has(name)) return;
+    if (visiting.has(name)) {
+      fail(`$.$defs.${name} contains a non-productive local reference cycle.`, "schema-reference-cycle");
+    }
+    visiting.add(name);
+    for (const target of edges.get(name) ?? []) visit(target);
+    visiting.delete(name);
+    completed.add(name);
+  };
+  for (const name of definitionNames) visit(name);
+
+  for (const name of [...definitionNames].sort(ordinal)) {
+    const height = valueProfileSchemaHeight(
+      objectValue(definitions[name], `$.$defs.${name}`, "a schema object"),
+      definitions,
+      new Set([name]),
+    );
+    if (height > MAXIMUM_DEPTH) fail(`$.$defs.${name} exceeds the resolved RPC schema depth limit.`, "schema-profile");
+  }
+}
+
+function collectRequiredReferenceEdges(
+  schema: JsonObject,
+  source: string,
+  definitions: JsonObject,
+  edges: ReadonlyMap<string, Set<string>>,
+  hasProductiveBoundary: boolean,
+): void {
+  if (has(schema, "$ref")) {
+    if (!hasProductiveBoundary) {
+      edges.get(source)?.add(referenceNameValue(schema.$ref, "$ref", definitions));
+    }
+    return;
+  }
+  if (has(schema, "oneOf")) {
+    for (const variant of arrayValue(schema.oneOf, "oneOf")) {
+      collectRequiredReferenceEdges(
+        objectValue(variant, "oneOf[]", "a schema object"),
+        source,
+        definitions,
+        edges,
+        hasProductiveBoundary,
+      );
+    }
+  }
+  if (isObjectValue(schema.properties)) {
+    const required = new Set(asStringValues(schema.required));
+    for (const [name, property] of Object.entries(schema.properties)) {
+      collectRequiredReferenceEdges(
+        objectValue(property, "properties[]", "a schema object"),
+        source,
+        definitions,
+        edges,
+        hasProductiveBoundary || !required.has(name),
+      );
+    }
+  }
+  if (isObjectValue(schema.items)) {
+    collectRequiredReferenceEdges(
+      schema.items,
+      source,
+      definitions,
+      edges,
+      hasProductiveBoundary || schema.minItems === 0,
+    );
+  }
+  if (isObjectValue(schema.additionalProperties)) {
+    collectRequiredReferenceEdges(
+      schema.additionalProperties,
+      source,
+      definitions,
+      edges,
+      hasProductiveBoundary || schema.minProperties === 0,
+    );
+  }
+}
+
+function valueProfileSchemaHeight(
+  schema: JsonObject,
+  definitions: JsonObject,
+  references: Set<string>,
+): number {
+  if (has(schema, "$ref")) {
+    const name = referenceNameValue(schema.$ref, "$ref", definitions);
+    if (references.has(name)) return 1;
+    references.add(name);
+    const height = 1 + valueProfileSchemaHeight(
+      objectValue(definitions[name], `$.$defs.${name}`, "a schema object"),
+      definitions,
+      references,
+    );
+    references.delete(name);
+    return height;
+  }
+  const children: JsonObject[] = [];
+  if (Array.isArray(schema.oneOf)) children.push(...schema.oneOf.map((value) => objectValue(value, "oneOf[]", "a schema object")));
+  if (isObjectValue(schema.properties)) children.push(...Object.values(schema.properties).map((value) => objectValue(value, "properties[]", "a schema object")));
+  if (isObjectValue(schema.items)) children.push(schema.items);
+  if (isObjectValue(schema.propertyNames)) children.push(schema.propertyNames);
+  if (isObjectValue(schema.additionalProperties)) children.push(schema.additionalProperties);
+  return 1 + Math.max(0, ...children.map((child) => valueProfileSchemaHeight(child, definitions, references)));
 }
 
 function validateReferenceDepths(definitionNames: readonly string[], definitions: JsonObject): void {
@@ -575,7 +944,8 @@ function schemaAcceptsNull(
     }
     return nullAcceptingBranches === 1;
   }
-  return schema.type === "null";
+  return schema.type === "null"
+    || Object.keys(schema).every((name) => name === "title" || name === "description");
 }
 
 function resolveSchema(schema: JsonObject, definitions: JsonObject): JsonObject {
@@ -597,21 +967,61 @@ function validateEnumAndConst(schema: JsonObject, path: string, type: string): v
     const seen = new Set<string>();
     for (const value of values) {
       validateLiteralType(value, type, `${path}.enum`);
-      const key = canonicalizeDescriptor(value);
+      validateLiteralConstraints(schema, value, type, `${path}.enum`);
+      const key = primitiveLiteralKey(schema, value);
       if (seen.has(key)) fail(`${path}.enum contains a duplicate value.`);
       seen.add(key);
     }
   }
-  if (has(schema, "const")) validateLiteralType(schema.const ?? null, type, `${path}.const`);
+  if (has(schema, "const")) {
+    const value = schema.const ?? null;
+    validateLiteralType(value, type, `${path}.const`);
+    validateLiteralConstraints(schema, value, type, `${path}.const`);
+  }
 }
 
 function validateLiteralType(value: JsonValue, type: string, path: string): void {
   const valid = type === "null" ? value === null
-    : type === "integer" ? typeof value === "number" && Number.isInteger(value)
-      : type === "number" ? typeof value === "number"
+    : type === "integer" ? typeof value === "number" && Number.isSafeInteger(value)
+      : type === "number" ? typeof value === "number" && Number.isFinite(value)
         : type === "string" || type === "boolean" ? typeof value === type
           : false;
   if (!valid) fail(`${path} contains a value incompatible with schema type '${type}'.`);
+}
+
+function validateLiteralConstraints(schema: JsonObject, value: JsonValue, type: string, path: string): void {
+  if (type === "string" && typeof value === "string") {
+    const length = scalarLength(value);
+    if (typeof schema.minLength === "number" && length < schema.minLength
+      || typeof schema.maxLength === "number" && length > schema.maxLength) {
+      fail(`${path} is outside the schema's string length bounds.`);
+    }
+    return;
+  }
+  if ((type !== "integer" && type !== "number") || typeof value !== "number") return;
+  const format = schema.format === "float32" || schema.format === "float64" ? schema.format : undefined;
+  const number = format === undefined ? value : formattedNumberValue(value, path, format);
+  const bound = (name: string): number | undefined => typeof schema[name] !== "number"
+    ? undefined
+    : format === undefined
+      ? schema[name] as number
+      : formattedNumberValue(schema[name], `${path}.${name}`, format);
+  const minimum = bound("minimum");
+  const exclusiveMinimum = bound("exclusiveMinimum");
+  const maximum = bound("maximum");
+  const exclusiveMaximum = bound("exclusiveMaximum");
+  if (minimum !== undefined && number < minimum
+    || exclusiveMinimum !== undefined && number <= exclusiveMinimum
+    || maximum !== undefined && number > maximum
+    || exclusiveMaximum !== undefined && number >= exclusiveMaximum) {
+    fail(`${path} is outside the schema's numeric bounds.`);
+  }
+}
+
+function primitiveLiteralKey(schema: JsonObject, value: JsonValue): string {
+  if (typeof value !== "number") return canonicalizeDescriptor(value);
+  const number = schema.format === "float32" ? Math.fround(value) : value;
+  return `number:${number === 0 ? 0 : number}`;
 }
 
 function validateAnnotations(schema: JsonObject, path: string): void {
@@ -641,14 +1051,19 @@ function readSchemaReference(value: JsonValue, path: string, definitions: JsonOb
     else only(object, path, "$ref");
     reference = stringValue(object, "$ref", path, 256);
   }
-  referenceNameValue(reference, path, definitions);
+  referenceNameValue(reference, path, definitions, closedObjectOnly ? "schema-reference-shape" : "descriptor-invalid");
   return reference;
 }
 
-function referenceNameValue(value: JsonValue | undefined, path: string, definitions: JsonObject): string {
-  if (typeof value !== "string" || !value.startsWith("#/$defs/")) fail(`${path} must reference an existing local schema.`);
+function referenceNameValue(
+  value: JsonValue | undefined,
+  path: string,
+  definitions: JsonObject,
+  errorCode: RpcDescriptorErrorCode = "descriptor-invalid",
+): string {
+  if (typeof value !== "string" || !value.startsWith("#/$defs/")) fail(`${path} must reference an existing local schema.`, errorCode);
   const name = value.slice("#/$defs/".length);
-  if (!isDefinitionName(name) || !has(definitions, name)) fail(`${path} must reference an existing local schema.`);
+  if (!isDefinitionName(name) || !has(definitions, name)) fail(`${path} must reference an existing local schema.`, errorCode);
   return name;
 }
 
@@ -675,6 +1090,7 @@ function decodeDescriptor(bytes: Uint8Array): string {
 
 class StrictJsonParser {
   readonly #text: string;
+  readonly #numberTokens: string[] = [];
   #index = 0;
 
   public constructor(text: string) {
@@ -687,6 +1103,18 @@ class StrictJsonParser {
     this.skipWhitespace();
     if (this.#index !== this.#text.length) fail(`Unexpected JSON token at character ${this.#index}.`);
     return value;
+  }
+
+  public validateNumberTokens(version: DescriptorVersion | undefined): void {
+    if (version !== 1) return;
+    for (const token of this.#numberTokens) {
+      const value = Number(token);
+      if (!/^-?(?:0|[1-9][0-9]*)$/u.test(token)
+        || token === "-0"
+        || !Number.isSafeInteger(value)) {
+        fail(`Descriptor number '${token}' must be a canonical IEEE-754 safe integer.`, "descriptor-number");
+      }
+    }
   }
 
   private parseValue(depth: number): JsonValue {
@@ -778,13 +1206,9 @@ class StrictJsonParser {
     if (match === null) fail(`Unexpected JSON token at character ${this.#index}.`);
     const token = match[0];
     this.#index += token.length;
-    if (!/^-?(?:0|[1-9][0-9]*)$/u.test(token) || token === "-0") {
-      fail(`Descriptor number '${token}' must be a canonical IEEE-754 safe integer.`, "descriptor-number");
-    }
     const value = Number(token);
-    if (!Number.isSafeInteger(value)) {
-      fail(`Descriptor number '${token}' must be a canonical IEEE-754 safe integer.`, "descriptor-number");
-    }
+    if (!Number.isFinite(value)) fail(`Descriptor number '${token}' must be finite IEEE-754 binary64.`, "descriptor-number");
+    this.#numberTokens.push(token);
     return value;
   }
 
@@ -824,6 +1248,14 @@ function objectValue(value: unknown, path: string, description: string): JsonObj
   return value as JsonObject;
 }
 
+function isObjectValue(value: JsonValue | undefined): value is JsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function asStringValues(value: JsonValue | undefined): readonly string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
 function objectWithOnly(value: JsonValue, path: string, ...properties: readonly string[]): JsonObject {
   const object = objectValue(value, path, "an object");
   only(object, path, ...properties);
@@ -835,9 +1267,24 @@ function arrayValue(value: JsonValue | undefined, path: string): readonly JsonVa
   return value;
 }
 
-function numberValue(value: JsonValue | undefined, path: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value)) fail(`${path} must be a safe integer.`);
+function numberValue(
+  value: JsonValue | undefined,
+  path: string,
+  errorCode: RpcDescriptorErrorCode = "descriptor-invalid",
+): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) fail(`${path} must be a safe integer.`, errorCode);
   return value;
+}
+
+function formattedNumberValue(
+  value: JsonValue | undefined,
+  path: string,
+  format: "float32" | "float64",
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) fail(`${path} must be a finite ${format} value.`, "descriptor-number");
+  const formatted = format === "float32" ? Math.fround(value) : value;
+  if (!Number.isFinite(formatted)) fail(`${path} must be a finite ${format} value.`, "descriptor-number");
+  return formatted;
 }
 
 function integerBound(value: JsonValue | undefined, path: string, minimum: number, maximum: number): number {
@@ -890,6 +1337,68 @@ function v1CaseFold(value: string): string {
 function scalarLength(value: string): number {
   validateUnicodeScalars(value, "A JSON string");
   return [...value].length;
+}
+
+interface ExactDecimal {
+  readonly negative: boolean;
+  readonly integerPart: string;
+  readonly fractionPart: string;
+  readonly precision: number;
+  readonly scale: number;
+}
+
+function parseCanonicalBigInteger(value: string): ExactDecimal | undefined {
+  if (!/^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$/u.test(value)) return undefined;
+  const digits = value[0] === "-" ? value.slice(1) : value;
+  return {
+    negative: value[0] === "-",
+    integerPart: digits,
+    fractionPart: "",
+    precision: digits.length,
+    scale: 0,
+  };
+}
+
+function parseCanonicalDecimal(value: string): ExactDecimal | undefined {
+  if (!/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?$/u.test(value) || value === "-0") return undefined;
+  const negative = value[0] === "-";
+  const unsigned = negative ? value.slice(1) : value;
+  const [integer = "", fraction = ""] = unsigned.split(".");
+  const digits = `${integer}${fraction}`;
+  const significant = digits.replace(/^0+/u, "");
+  return {
+    negative,
+    integerPart: integer,
+    fractionPart: fraction,
+    precision: significant.length === 0 ? 1 : significant.length,
+    scale: fraction.length,
+  };
+}
+
+function compareExactDecimals(left: ExactDecimal, right: ExactDecimal): number {
+  const leftZero = left.integerPart === "0" && /^0*$/u.test(left.fractionPart);
+  const rightZero = right.integerPart === "0" && /^0*$/u.test(right.fractionPart);
+  if (leftZero && rightZero) return 0;
+  if (left.negative !== right.negative) return left.negative ? -1 : 1;
+  const magnitude = compareExactMagnitude(left, right);
+  return left.negative ? -magnitude : magnitude;
+}
+
+function compareExactMagnitude(left: ExactDecimal, right: ExactDecimal): number {
+  const leftIntegerLength = left.integerPart === "0" ? 0 : left.integerPart.length;
+  const rightIntegerLength = right.integerPart === "0" ? 0 : right.integerPart.length;
+  if (leftIntegerLength !== rightIntegerLength) return leftIntegerLength < rightIntegerLength ? -1 : 1;
+  if (leftIntegerLength > 0) {
+    const integerComparison = ordinal(left.integerPart, right.integerPart);
+    if (integerComparison !== 0) return integerComparison;
+  }
+  const fractionLength = Math.max(left.fractionPart.length, right.fractionPart.length);
+  for (let index = 0; index < fractionLength; index++) {
+    const leftDigit = left.fractionPart[index] ?? "0";
+    const rightDigit = right.fractionPart[index] ?? "0";
+    if (leftDigit !== rightDigit) return leftDigit < rightDigit ? -1 : 1;
+  }
+  return 0;
 }
 
 function validateUnicodeScalars(value: string, path: string): void {

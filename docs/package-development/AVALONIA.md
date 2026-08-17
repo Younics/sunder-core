@@ -63,7 +63,9 @@ The control takes precedence when both it and its data context implement the int
 
 Navigation starts on the App UI dispatcher and operations for one view are serialized. A later navigation to that view or closing/resetting it cancels the current call. Return after the view has a stable initial presentation; move continuing work to a cancellable background process or package service. If an `await` opts out of the captured context, dispatch subsequent control access explicitly.
 
-An unhandled view construction, warmup, navigation, or hosted rendering exception disables that package in the current App generation and is logged as a client-local presentation fault. It does not fault the Runtime package generation.
+Sunder automatically contains recoverable managed exceptions that escape through host-observed view construction, warmup, navigation, attachment, layout, or dispatcher boundaries. When the exact view is known, only that view is quarantined and replaced with a host-owned fallback. When only the package can be attributed safely, Sunder quarantines that package's App UI activation while leaving its installation and Runtime worker unchanged. After cleanup is proven and the exact package content is authoritative again, App makes one automatic fresh-activation recovery attempt for that content. A failed or repeated same-content fault remains on the host-owned fallback instead of entering a reload loop. The host logs the exception and publishes a sanitized error notification; package code does not need to report the fault explicitly.
+
+Avalonia package controls still execute inside `Sunder.App`. Process-fatal exceptions, native failures, UI-thread hangs, and deadlocks cannot be isolated reliably by an in-process exception boundary. Avoid blocking the dispatcher and move privileged or long-running work to the Worker V3 role.
 
 ## Prepared Navigation
 

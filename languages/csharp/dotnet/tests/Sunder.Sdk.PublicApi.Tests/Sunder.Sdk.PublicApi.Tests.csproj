@@ -30,5 +30,8 @@
     <None Include="..\..\..\..\..\specs\rpc\v2\conformance\**\*.json"
           Link="RpcV2Conformance\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v2\descriptor.schema.json"
+          Link="RpcV2Conformance\descriptor.schema.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

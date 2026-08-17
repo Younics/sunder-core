@@ -17,6 +17,15 @@ internal sealed class WorkerHarness : IAsyncDisposable
     public const string ContractVersion = "1.0.0";
     public static readonly string DescriptorSha256 = new('c', 64);
     public static readonly string AbiSha256 = new('d', 64);
+    public static readonly WorkerResourceProfile ResourceProfile = new(
+        Version: 1,
+        RpcValueBytes: 8 * 1024 * 1024,
+        ValueDepth: 64,
+        ValueNodes: 524_288,
+        ObjectMembers: 4_096,
+        InlineDecodedBytes: 512 * 1024,
+        ContentReferenceBytes: 64 * 1024 * 1024);
+    public static readonly string ResourceProfileHash = WorkerWire.ComputeResourceProfileHash(ResourceProfile);
 
     private readonly CancellationTokenSource _runCancellation = new();
     private readonly WorkerFrameReader _outputReader;
@@ -85,9 +94,31 @@ internal sealed class WorkerHarness : IAsyncDisposable
         Assert.Equal(sessionGeneration, activated.RootElement.GetProperty("sessionGeneration").GetInt64());
     }
 
-    public async Task HandshakeAsync(string challenge = "challenge")
+    public async Task HandshakeAsync(
+        string challenge = "challenge",
+        WorkerResourceProfile? resourceProfile = null)
     {
-        await SendAsync(new
+        var profile = resourceProfile ?? ResourceProfile;
+        var profileHash = WorkerWire.ComputeResourceProfileHash(profile);
+        await SendHelloAsync(challenge, profile, profileHash);
+        using (var ready = await ReadAsync())
+        {
+            Assert.Equal("worker.ready", ready.RootElement.GetProperty("type").GetString());
+            Assert.Equal(challenge, ready.RootElement.GetProperty("challenge").GetString());
+            Assert.Equal(profileHash, ready.RootElement.GetProperty("resourceProfileHash").GetString());
+            var contributions = ready.RootElement.GetProperty("contributions");
+            ReadyContributions = contributions.Clone();
+            Assert.Single(contributions.GetProperty("rpcProviders").EnumerateArray());
+            Assert.True(contributions.GetProperty("migrationPreparationLifecycle").GetBoolean());
+        }
+
+    }
+
+    public Task SendHelloAsync(
+        string challenge,
+        WorkerResourceProfile profile,
+        string resourceProfileHash)
+        => SendAsync(new
         {
             type = "host.hello",
             protocol = WorkerProtocol.Name,
@@ -98,18 +129,18 @@ internal sealed class WorkerHarness : IAsyncDisposable
             activationId = ActivationId,
             sessionId = SessionId,
             providers = new[] { ProviderIdentity() },
+            resourceProfile = new
+            {
+                version = profile.Version,
+                rpcValueBytes = profile.RpcValueBytes,
+                valueDepth = profile.ValueDepth,
+                valueNodes = profile.ValueNodes,
+                objectMembers = profile.ObjectMembers,
+                inlineDecodedBytes = profile.InlineDecodedBytes,
+                contentReferenceBytes = profile.ContentReferenceBytes,
+            },
+            resourceProfileHash,
         });
-        using (var ready = await ReadAsync())
-        {
-            Assert.Equal("worker.ready", ready.RootElement.GetProperty("type").GetString());
-            Assert.Equal(challenge, ready.RootElement.GetProperty("challenge").GetString());
-            var contributions = ready.RootElement.GetProperty("contributions");
-            ReadyContributions = contributions.Clone();
-            Assert.Single(contributions.GetProperty("rpcProviders").EnumerateArray());
-            Assert.True(contributions.GetProperty("migrationPreparationLifecycle").GetBoolean());
-        }
-
-    }
 
     public JsonElement? ReadyContributions { get; private set; }
 

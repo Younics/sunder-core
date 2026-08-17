@@ -3,6 +3,10 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
+internal sealed class AppPackageCleanupUnprovenException(Guid generationId)
+    : Exception(
+        $"App package generation '{generationId}' cleanup could not be proven.");
+
 internal sealed class AppPackageGeneration(
     Guid id,
     string? folder,
@@ -28,6 +32,9 @@ internal sealed class AppPackageGeneration(
 
     public PackageIconGeneration IconGeneration { get; private set; } = iconGeneration;
 
+    public AppPackageQuarantineContext QuarantineContext { get; set; } =
+        AppPackageQuarantineContext.Empty;
+
     public IReadOnlyList<(string PackageId, Assembly Assembly)> SnapshotPackageAssemblies()
         => Composition.AssemblyTracker.SnapshotPackageAssemblies();
 
@@ -47,20 +54,30 @@ internal sealed class AppPackageGeneration(
 
         Composition.UnpublishServices();
         var retirementDrains = Composition.BeginGenerationRetirement().ToList();
-        retirementDrains.AddRange(State
+        var packageRetirements = State
             .SnapshotLoadedPackageIds()
             .Select(packageId => Task.Run(
                 () => Composition.UnloadPackageForGenerationRetirementAsync(packageId),
-                CancellationToken.None)));
+                CancellationToken.None))
+            .ToArray();
+        retirementDrains.AddRange(packageRetirements);
         await Task.WhenAll(retirementDrains).ConfigureAwait(false);
 
-        await Composition.DisposeRemainingOwnedResourcesAsync().ConfigureAwait(false);
+        var cleanupProven = Composition.CleanupOutcome == AppPackageUiCleanupOutcome.Proven
+            && packageRetirements.All(task =>
+                task.Result.CleanupOutcome == AppPackageUiCleanupOutcome.Proven);
+        cleanupProven &= await Composition.DisposeRemainingOwnedResourcesAsync()
+            .ConfigureAwait(false) == AppPackageUiCleanupOutcome.Proven;
         Composition.DisposeSharedAssemblies();
         Composition.Dispose();
         IconGeneration.Dispose();
         if (Folder is not null)
         {
             AppPackageSourcePreparer.TryDeleteDirectory(Folder);
+        }
+        if (!cleanupProven)
+        {
+            throw new AppPackageCleanupUnprovenException(Id);
         }
     }
 }

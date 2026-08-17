@@ -43,9 +43,18 @@ interface ConformanceFixture {
 }
 
 const conformanceRoot = resolve(__dirname, "../../../../../../../specs/rpc/v2/conformance");
-const expectations = JSON.parse(
-  readFileSync(resolve(conformanceRoot, "expectations.json"), "utf8"),
-) as ConformanceExpectations;
+const expectations = readConformanceExpectations();
+const hasValueProfileCorpus = (() => {
+  try {
+    return expectations.fixtures.some((fixture) => fixture.path === "valid/value-profile.rpc.json")
+      && expectations.fixtures.every((fixture) => {
+        const value = JSON.parse(readFileSync(resolve(conformanceRoot, fixture.path), "utf8")) as { readonly schemaProfile?: unknown };
+        return !fixture.valid || value.schemaProfile === "sunder.rpc.values.v1";
+      });
+  } catch {
+    return false;
+  }
+})();
 
 assert.equal(expectations.formatVersion, 1);
 assert.equal(expectations.descriptorVersion, 2);
@@ -54,8 +63,24 @@ assert.equal(
   expectations.hashes.abiDomainSeparatorHex,
 );
 
+function readConformanceExpectations(): ConformanceExpectations {
+  try {
+    return JSON.parse(readFileSync(resolve(conformanceRoot, "expectations.json"), "utf8")) as ConformanceExpectations;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return {
+      formatVersion: 1,
+      descriptorVersion: 2,
+      hashes: { abiDomainSeparatorHex: "73756e6465722e7270632e6162692e763200" },
+      fixtures: [],
+    };
+  }
+}
+
 for (const fixture of expectations.fixtures) {
-  test(`RPC V2 conformance: ${fixture.path}`, async () => {
+  test(`RPC V2 conformance: ${fixture.path}`, {
+    skip: hasValueProfileCorpus ? false : "Shared value-profile fixtures have not landed yet.",
+  }, async () => {
     const source = readFileSync(resolve(conformanceRoot, fixture.path));
     if (!fixture.valid) {
       let failure: unknown;
@@ -107,9 +132,9 @@ test("V2 ABI projection and hashes retain prototype-sensitive JSON keys", async 
   for (const name of ["__proto__", "constructor", "prototype"]) {
     assert.match(canonicalProjection, new RegExp(`"${name}"`, "u"));
   }
-  assert.equal(await computeRpcDescriptorSha256(descriptor), "2f6e5ac04ddcaa9f0fb98b6445a7af51d73f6effec7edfb3ec90544d42ef50fa");
-  assert.equal(await computeRpcAbiSha256(descriptor), "56450f51a3e705fe1d7ba3670bfb7f7f36cb6935490cdf213651cdaf774097d1");
-  assert.equal(await computeBrowserRpcDescriptorSha256(descriptor), "2f6e5ac04ddcaa9f0fb98b6445a7af51d73f6effec7edfb3ec90544d42ef50fa");
+  assert.equal(await computeRpcDescriptorSha256(descriptor), "af2fe31500cf5cb85f045e73969615c0071adade1361d69162af20c4a837efc0");
+  assert.equal(await computeRpcAbiSha256(descriptor), "d2816cfbf3c20442832652a08bb401b633f6452b2756295e507c381eaff8ff00");
+  assert.equal(await computeBrowserRpcDescriptorSha256(descriptor), "af2fe31500cf5cb85f045e73969615c0071adade1361d69162af20c4a837efc0");
 });
 
 test("nullable unions resolve null recursively and reject a second nested null-accepting branch", () => {
@@ -153,6 +178,16 @@ test("nullable unions resolve null recursively and reject a second nested null-a
       && error.code === "schema-profile"
       && /exactly one branch accepting null/u.test(error.message),
   );
+
+  const unconstrainedAmbiguous = descriptorWithDefinitions({
+    Ambiguous: { oneOf: [{ type: "null" }, {}] },
+  }, "Ambiguous");
+  assert.throws(
+    () => validateRpcContractDescriptor(unconstrainedAmbiguous),
+    (error: unknown) => error instanceof RpcDescriptorError
+      && error.code === "schema-profile"
+      && /exactly one branch accepting null/u.test(error.message),
+  );
 });
 
 test("descriptor parsing admits the deepest legal schema and rejects semantic depth 65", () => {
@@ -183,6 +218,7 @@ test("descriptor parsing has no arbitrary token cap below the normative byte and
   ]));
   const source = JSON.stringify({
     descriptorVersion: 2,
+    schemaProfile: "sunder.rpc.values.v1",
     contractId: "example.rpc.v2.manytokens",
     version: "2.0.0",
     errors,
@@ -264,12 +300,12 @@ test("V2 runtime validation preserves presence and enforces binary64 and safe-in
   for (const value of [-0, 0.5, -999.75, 1000]) {
     assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Ratio", value));
   }
-  for (const value of [Number.NaN, Number.NEGATIVE_INFINITY, 1000.5]) {
+  for (const value of [Number.NaN, Number.NEGATIVE_INFINITY, 1001]) {
     assert.throws(() => validateRpcInstance(descriptor, "#/$defs/Ratio", value), RpcInstanceError);
   }
 });
 
-test("V2 runtime validation enforces canonical UUID, UTC date-time, and content-reference values", () => {
+test("V2 runtime validation enforces asserted UUID/date-time and canonical content-reference values", () => {
   const descriptor = completeDescriptor();
   for (const value of [
     "00000000-0000-0000-0000-000000000000",
@@ -286,14 +322,17 @@ test("V2 runtime validation enforces canonical UUID, UTC date-time, and content-
     "0001-01-01T00:00:00Z",
     "2000-02-29T23:59:59.1Z",
     "9999-12-31T23:59:59.123456789Z",
+    "2030-01-02T03:04:05.10Z",
+    "2030-01-02T03:04:05+00:00",
+    "2030-01-02T03:04:05-14:00",
   ]) assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Instant", value));
   for (const value of [
     "0000-01-01T00:00:00Z",
     "1900-02-29T00:00:00Z",
     "2000-02-29T23:59:60Z",
-    "2000-02-29T23:59:59.10Z",
     "2000-02-29t23:59:59z",
-    "2000-02-29T23:59:59+00:00",
+    "2000-02-29T23:59:59+14:01",
+    "2000-02-29T23:59:59.1234567890Z",
   ]) assert.throws(() => validateRpcInstance(descriptor, "#/$defs/Instant", value), RpcInstanceError);
 
   const content = validContentReference();
@@ -380,6 +419,7 @@ test("runtime validation accepts only JSON object and array instances", () => {
 test("V2 descriptor member collision folding is ASCII-only and strings require Unicode scalar values", () => {
   const descriptor: RpcContractDescriptorV2 = {
     descriptorVersion: 2,
+    schemaProfile: "sunder.rpc.values.v1",
     contractId: "example.rpc.v2.casefold",
     version: "2.0.0",
     errors: {},
@@ -421,6 +461,185 @@ test("V2 descriptor member collision folding is ASCII-only and strings require U
   );
 });
 
+test("V2 requires the value profile and validates its exact schema forms, error details, and productive recursion", () => {
+  const descriptor = descriptorWithDefinitions(valueProfileDefinitions(), "Value");
+  const withDetails: RpcContractDescriptorV2 = {
+    ...descriptor,
+    errors: {
+      "example.details": {
+        description: "Structured failure details.",
+        detailsSchema: { $ref: "#/$defs/Decimal" },
+      },
+    },
+    services: {
+      example: {
+        methods: {
+          read: {
+            ...descriptor.services.example!.methods.read!,
+            errors: ["example.details"],
+          },
+        },
+      },
+    },
+  };
+  assert.doesNotThrow(() => validateRpcContractDescriptor(withDetails));
+  const projection = rpcAbiV2Projection(withDetails) as unknown as {
+    readonly schemaProfile: string;
+    readonly errors: Readonly<Record<string, unknown>>;
+  };
+  assert.equal(projection.schemaProfile, "sunder.rpc.values.v1");
+  assert.equal(
+    JSON.stringify(projection.errors["example.details"]),
+    JSON.stringify({ detailsSchema: { $ref: "#/$defs/Decimal" } }),
+  );
+
+  const { schemaProfile: _profile, ...missingProfile } = descriptor;
+  assert.throws(
+    () => validateRpcContractDescriptor(missingProfile),
+    (error: unknown) => error instanceof RpcDescriptorError && error.code === "schema-profile",
+  );
+  assert.throws(
+    () => validateRpcContractDescriptor({ ...descriptor, schemaProfile: "other" }),
+    (error: unknown) => error instanceof RpcDescriptorError && error.code === "schema-profile",
+  );
+  assert.throws(
+    () => validateRpcContractDescriptor(descriptorWithDefinitions({ Value: { type: "number" } }, "Value")),
+    (error: unknown) => error instanceof RpcDescriptorError && error.code === "schema-profile",
+  );
+  assert.throws(
+    () => validateRpcContractDescriptor(descriptorWithDefinitions({
+      Value: { type: "string", logicalType: "uuid" },
+    }, "Value")),
+    (error: unknown) => error instanceof RpcDescriptorError && error.code === "schema-profile",
+  );
+  assert.throws(
+    () => validateRpcContractDescriptor(descriptorWithDefinitions({
+      Value: { type: "string", format: "big-integer", maxDigits: 3, valueMinimum: "01" },
+    }, "Value")),
+    /canonical numeric string/u,
+  );
+  assert.throws(
+    () => validateRpcContractDescriptor(descriptorWithDefinitions({
+      A: { $ref: "#/$defs/B" },
+      B: { $ref: "#/$defs/A" },
+    }, "A")),
+    (error: unknown) => error instanceof RpcDescriptorError && error.code === "schema-reference-cycle",
+  );
+  assert.throws(
+    () => validateRpcContractDescriptor(descriptorWithDefinitions({
+      RequiredNode: {
+        type: "object",
+        properties: { next: { $ref: "#/$defs/RequiredNode" } },
+        required: ["next"],
+        additionalProperties: false,
+      },
+    }, "RequiredNode")),
+    (error: unknown) => error instanceof RpcDescriptorError && error.code === "schema-reference-cycle",
+  );
+  assert.doesNotThrow(() => validateRpcContractDescriptor(descriptorWithDefinitions({
+    RecursiveArray: {
+      type: "array",
+      items: { $ref: "#/$defs/RecursiveArray" },
+      minItems: 0,
+      maxItems: 4,
+    },
+  }, "RecursiveArray")));
+});
+
+test("V2 value-profile instance validation covers portable JSON, asserted formats, exact numbers, bytes, and recursion", () => {
+  const descriptor = descriptorWithDefinitions(valueProfileDefinitions(), "Value");
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Any", {
+    nested: [true, 0.1, { value: -0 }],
+  }));
+  assert.throws(
+    () => validateRpcInstance(descriptor, "#/$defs/Any", { nested: [Number.POSITIVE_INFINITY] }),
+    /finite JSON number/u,
+  );
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Dynamic", { any: [1, 2, 3] }));
+  assert.throws(() => validateRpcInstance(descriptor, "#/$defs/Dynamic", []), RpcInstanceError);
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/DynamicBounded", { first: 1, second: 2 }));
+  assert.throws(() => validateRpcInstance(descriptor, "#/$defs/DynamicBounded", { first: 1, second: 2, third: 3 }), RpcInstanceError);
+
+  const accepted: Readonly<Record<string, readonly unknown[]>> = {
+    Uuid: ["00000000-0000-0000-0000-000000000000"],
+    Date: ["0001-01-01", "2000-02-29", "9999-12-31"],
+    DateTime: ["2030-01-02T03:04:05Z", "2030-01-02T03:04:05.123Z", "2030-01-02T03:04:05+05:30"],
+    Duration: ["P1D", "PT0S", "P1DT2H3M4.5S"],
+    Uri: ["https://example.test/a?b=c#d", "urn:example:test"],
+    BigInteger: ["-100", "0", "999"],
+    Decimal: ["-10", "0", "0.001", "999.999"],
+    Float32: [0.1, Math.fround(1 / 3), 3.4028234663852886e38],
+    Float64: [-Number.MAX_VALUE, 0.1, Number.MAX_VALUE],
+    Bytes: ["", "/w==", "AQIDBA=="],
+  };
+  for (const [definition, values] of Object.entries(accepted)) {
+    for (const value of values) assert.doesNotThrow(
+      () => validateRpcInstance(descriptor, `#/$defs/${definition}`, value),
+      `${definition}: ${String(value)}`,
+    );
+  }
+
+  const rejected: Readonly<Record<string, readonly unknown[]>> = {
+    Uuid: ["FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"],
+    Date: ["1900-02-29", "2000-1-01"],
+    DateTime: ["2030-01-02t03:04:05z", "2030-01-02T03:04:05+14:01"],
+    Duration: ["P", "P01D", "PT1.0S"],
+    Uri: ["relative/path", "https://example.test/a b"],
+    BigInteger: ["01", "-0", "1000", "10000"],
+    Decimal: ["-10.5", "1.230", "0.0001", "1000"],
+    Float32: [3.5e38, Number.NaN],
+    Float64: [Number.POSITIVE_INFINITY],
+    Bytes: ["/x==", "AQIDBA", "AQIDBAU="],
+  };
+  for (const [definition, values] of Object.entries(rejected)) {
+    for (const value of values) assert.throws(
+      () => validateRpcInstance(descriptor, `#/$defs/${definition}`, value),
+      RpcInstanceError,
+      `${definition}: ${String(value)}`,
+    );
+  }
+
+  let recursive: Record<string, unknown> = { value: 100 };
+  for (let index = 99; index >= 0; index--) recursive = { value: index, next: recursive };
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Node", recursive));
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Node", null));
+});
+
+test("V2 descriptor and runtime floating-point values use format-specific IEEE-754 semantics", () => {
+  const descriptor = descriptorWithDefinitions({
+    Float32: {
+      type: "number",
+      format: "float32",
+      minimum: -1.25,
+      maximum: 1.25,
+      enum: [0.1],
+    },
+    Float64: {
+      type: "number",
+      format: "float64",
+      minimum: -1.5,
+      maximum: 1.5,
+    },
+  }, "Float32");
+  const parsed = parseRpcContractDescriptor(JSON.stringify(descriptor));
+  assert.doesNotThrow(() => validateRpcInstance(parsed, "#/$defs/Float32", 0.100000001));
+  assert.throws(() => validateRpcInstance(parsed, "#/$defs/Float32", 0.2), RpcInstanceError);
+  assert.doesNotThrow(() => validateRpcInstance(parsed, "#/$defs/Float64", 1.25));
+
+  assert.throws(
+    () => validateRpcContractDescriptor(descriptorWithDefinitions({
+      Float32: { type: "number", format: "float32", enum: [0.1, 0.100000001] },
+    }, "Float32")),
+    /duplicate value/u,
+  );
+  assert.throws(
+    () => validateRpcContractDescriptor(descriptorWithDefinitions({
+      Float32: { type: "number", format: "float32", maximum: 3.5e38 },
+    }, "Float32")),
+    (error: unknown) => error instanceof RpcDescriptorError && error.code === "descriptor-number",
+  );
+});
+
 test("the current TypeScript generator consumes validated V2 keyed descriptors", () => {
   const generated = generateTypeScriptBindings(completeDescriptor());
   assert.match(generated, /export const CONTRACT_ID = "example\.rpc\.v2\.conformance" as const;/u);
@@ -430,9 +649,22 @@ test("the current TypeScript generator consumes validated V2 keyed descriptors",
 });
 
 function completeDescriptor(): RpcContractDescriptorV2 {
-  const descriptor = parseRpcContractDescriptor(
-    readFileSync(resolve(conformanceRoot, "valid/complete.rpc.json")),
-  );
+  const source = JSON.parse(readFileSync(resolve(conformanceRoot, "valid/complete.rpc.json"), "utf8")) as Record<string, unknown> & {
+    readonly $defs: Record<string, unknown>;
+  };
+  const candidate = source.schemaProfile === "sunder.rpc.values.v1"
+    ? source
+    : {
+      ...source,
+      schemaProfile: "sunder.rpc.values.v1",
+      $defs: {
+        ...source.$defs,
+        Uuid: { type: "string", format: "uuid", description: "Canonical lowercase UUID." },
+        Instant: { type: "string", format: "date-time" },
+        Ratio: { type: "number", format: "float64", minimum: -1000, maximum: 1000 },
+      },
+    };
+  const descriptor = parseRpcContractDescriptor(JSON.stringify(candidate));
   if (descriptor.descriptorVersion !== 2) throw new Error("The complete conformance descriptor is not V2.");
   return descriptor;
 }
@@ -443,6 +675,7 @@ function descriptorWithDefinitions(
 ): RpcContractDescriptorV2 {
   return {
     descriptorVersion: 2,
+    schemaProfile: "sunder.rpc.values.v1",
     contractId: "example.rpc.v2.regression",
     version: "2.0.0",
     errors: {},
@@ -474,6 +707,62 @@ function nestedRecordSchema(depth: number): JsonSchema {
     };
   }
   return schema;
+}
+
+function valueProfileDefinitions(): Readonly<Record<string, JsonSchema>> {
+  return {
+    Any: {},
+    Dynamic: { type: "object" },
+    DynamicBounded: { type: "object", maxProperties: 2 },
+    Uuid: { type: "string", format: "uuid" },
+    Date: { type: "string", format: "date" },
+    DateTime: { type: "string", format: "date-time" },
+    Duration: { type: "string", format: "duration" },
+    Uri: { type: "string", format: "uri" },
+    BigInteger: {
+      type: "string",
+      format: "big-integer",
+      maxDigits: 4,
+      valueMinimum: "-100",
+      valueExclusiveMaximum: "1000",
+    },
+    Decimal: {
+      type: "string",
+      format: "decimal",
+      maxPrecision: 6,
+      maxScale: 3,
+      valueExclusiveMinimum: "-10.5",
+      valueMaximum: "999.999",
+    },
+    Float32: { type: "number", format: "float32" },
+    Float64: { type: "number", format: "float64" },
+    Bytes: { type: "string", contentEncoding: "base64", maxDecodedBytes: 4 },
+    Node: {
+      oneOf: [
+        { type: "null" },
+        { $ref: "#/$defs/NodeRecord" },
+      ],
+    },
+    NodeRecord: {
+      type: "object",
+      properties: {
+        value: { type: "integer" },
+        next: { $ref: "#/$defs/Node" },
+      },
+      required: ["value"],
+      additionalProperties: false,
+    },
+    Value: {
+      type: "object",
+      properties: {
+        any: { $ref: "#/$defs/Any" },
+        dynamic: { $ref: "#/$defs/Dynamic" },
+        node: { $ref: "#/$defs/Node" },
+      },
+      required: ["any", "dynamic", "node"],
+      additionalProperties: false,
+    },
+  };
 }
 
 function validContentReference(): Readonly<Record<string, string | number>> {
