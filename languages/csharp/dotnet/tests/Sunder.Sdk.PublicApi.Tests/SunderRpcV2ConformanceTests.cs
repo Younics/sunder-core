@@ -236,6 +236,54 @@ public sealed class SunderRpcV2ConformanceTests
     }
 
     [Fact]
+    public void V2OptionalInstanceFacets_DefaultToZeroMinimumAndUnboundedMaximum()
+    {
+        var descriptor = SunderRpcContractDescriptor.Parse(RelaxedFacetDescriptor());
+        var longText = JsonSerializer.SerializeToElement(new string('x', 1_000_001));
+        var largeArray = JsonSerializer.SerializeToElement(Enumerable.Repeat(false, 1_000_001));
+        var largeBase64 = JsonSerializer.SerializeToElement(string.Concat(Enumerable.Repeat("AAAA", 333_334)));
+        var largeExactText = new string('9', 1_000_001);
+        var largeInteger = JsonSerializer.SerializeToElement(largeExactText);
+        using var emptyKeyMap = JsonDocument.Parse("{\"\":true}");
+
+        Assert.True(descriptor.IsValid("#/$defs/Text", longText, out var textError), textError);
+        Assert.True(descriptor.IsValid("#/$defs/LargeTextBound", longText, out var boundedTextError), boundedTextError);
+        Assert.True(descriptor.IsValid("#/$defs/Values", largeArray, out var arrayError), arrayError);
+        Assert.True(descriptor.IsValid("#/$defs/StringMap", emptyKeyMap.RootElement, out var mapError), mapError);
+        Assert.True(descriptor.IsValid("#/$defs/Bytes", largeBase64, out var base64Error), base64Error);
+        Assert.True(descriptor.IsValid("#/$defs/BigInteger", largeInteger, out var integerError), integerError);
+        Assert.True(SunderRpcDecimal.TryParse(largeExactText, out _));
+        Assert.True(
+            descriptor.IsValid("#/$defs/Decimal", JsonSerializer.SerializeToElement("1234567890.123456789"), out var decimalError),
+            decimalError);
+    }
+
+    [Fact]
+    public void V2InstanceValidation_HasNoSchemaDepthLimit()
+    {
+        const int depth = 512;
+        var descriptor = SunderRpcContractDescriptor.Parse(RelaxedFacetDescriptor());
+        using var value = JsonDocument.Parse(
+            new string('[', depth) + new string(']', depth),
+            new JsonDocumentOptions { MaxDepth = depth + 1 });
+
+        Assert.True(descriptor.IsValid("#/$defs/RecursiveArray", value.RootElement, out var recursiveError), recursiveError);
+        Assert.True(descriptor.IsValid("#/$defs/Any", value.RootElement, out var jsonError), jsonError);
+    }
+
+    [Theory]
+    [InlineData("{\"type\":\"string\",\"minLength\":2,\"maxLength\":1}")]
+    [InlineData("{\"type\":\"array\",\"items\":{\"type\":\"boolean\"},\"minItems\":2,\"maxItems\":1}")]
+    [InlineData("{\"type\":\"object\",\"additionalProperties\":{\"type\":\"boolean\"},\"propertyNames\":{\"type\":\"string\"},\"minProperties\":2,\"maxProperties\":1}")]
+    public void V2ExplicitInstanceMinimum_MustNotExceedMaximum(string schema)
+    {
+        var exception = Assert.Throws<SunderRpcDescriptorException>(() =>
+            SunderRpcContractDescriptor.Parse(SingleSchemaDescriptor(schema)));
+
+        Assert.Contains("must not exceed", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void V2Canonicalization_UsesRfc8785FiniteNumberForms()
     {
         var source = """
@@ -247,7 +295,7 @@ public sealed class SunderRpcV2ConformanceTests
               "errors":{},
               "services":{"numbers":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Unit"},"responseSchema":{"$ref":"#/$defs/Unit"}}}}},
               "$defs":{
-                "Unit":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "Unit":{"type":"object","properties":{},"required":[],"additionalProperties":false,"maxProperties":2000000},
                 "Fixed":{"type":"number","format":"float64","minimum":1.0,"maximum":1e20},
                 "Scientific":{"type":"number","format":"float64","minimum":1e-7,"maximum":0.000001},
                 "Rounded":{"type":"number","format":"float64","const":333333333.33333329},
@@ -529,6 +577,43 @@ public sealed class SunderRpcV2ConformanceTests
               }
             }
             """);
+
+    private static byte[] RelaxedFacetDescriptor()
+        => Encoding.UTF8.GetBytes("""
+            {
+              "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
+              "contractId":"example.rpc.v2.relaxedfacets",
+              "version":"2.0.0",
+              "errors":{},
+              "services":{"example":{"methods":{"check":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Unit"},"responseSchema":{"$ref":"#/$defs/Unit"}}}}},
+              "$defs":{
+                "Unit":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "Any":{},
+                "Text":{"type":"string"},
+                "LargeTextBound":{"type":"string","maxLength":2000000},
+                "Values":{"type":"array","items":{"type":"boolean"}},
+                "StringMap":{"type":"object","additionalProperties":{"type":"boolean"},"propertyNames":{"type":"string"}},
+                "Bytes":{"type":"string","contentEncoding":"base64"},
+                "BigInteger":{"type":"string","format":"big-integer"},
+                "Decimal":{"type":"string","format":"decimal"},
+                "RecursiveArray":{"type":"array","items":{"$ref":"#/$defs/RecursiveArray"}}
+              }
+            }
+            """);
+
+    private static byte[] SingleSchemaDescriptor(string schema)
+        => Encoding.UTF8.GetBytes("""
+            {
+              "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
+              "contractId":"example.rpc.v2.invalidfacet",
+              "version":"2.0.0",
+              "errors":{},
+              "services":{"example":{"methods":{"check":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Value"},"responseSchema":{"$ref":"#/$defs/Value"}}}}},
+              "$defs":{"Value":__SCHEMA__}
+            }
+            """.Replace("__SCHEMA__", schema, StringComparison.Ordinal));
 
     private static byte[] ReferenceChainDescriptor(int schemaCount, bool reverseDefinitions)
     {

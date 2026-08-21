@@ -16,6 +16,7 @@ export const SUPPORTED_WORKER_CAPABILITIES = [
   "callbacks.v1",
   "logging.v1",
   "role-local-workspace.v1",
+  "rpc.extended-deadline.v1",
   "secrets.v1",
   "settings.schema.v1",
   "settings.v1",

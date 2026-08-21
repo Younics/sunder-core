@@ -225,6 +225,50 @@ internal sealed partial class ProcessRuntimeWorker
         QueueEnvelope(new { type = "host.result", id = workerCall.Id, value = (object?)null });
     }
 
+    internal async ValueTask WriteHostProviderFaultDiagnosticAsync(RuntimeRpcFailureContext context)
+    {
+        try
+        {
+            await _packageData.Logging.Events.WriteAsync(
+                PackageLogLevel.Error,
+                "runtime.rpc.provider-fault",
+                "A Runtime RPC provider activation faulted.",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["rpc.caller_package_id"] = context.CallerPackageId,
+                    ["rpc.caller_package_version"] = context.CallerPackageVersion,
+                    ["rpc.caller_activation_id"] = context.CallerActivationId,
+                    ["rpc.provider_package_id"] = context.ProviderPackageId,
+                    ["rpc.provider_package_version"] = context.ProviderPackageVersion,
+                    ["rpc.provider_id"] = context.ProviderId,
+                    ["rpc.provider_activation_id"] = context.ProviderActivationId,
+                    ["rpc.contract_id"] = context.ContractId,
+                    ["rpc.service_id"] = context.ServiceId,
+                    ["rpc.method_id"] = context.MethodId,
+                    ["rpc.call_kind"] = context.CallKind,
+                    ["rpc.error_kind"] = context.ErrorKind,
+                    ["rpc.error_code"] = context.ErrorCode,
+                    ["rpc.validation_code"] = context.ValidationCode,
+                    ["rpc.validation_path"] = context.ValidationPath,
+                    ["rpc.value_utf8_bytes"] = context.ValueUtf8Bytes,
+                    ["rpc.value_maximum_depth"] = context.ValueMaximumDepth,
+                    ["rpc.value_total_nodes"] = context.ValueTotalNodes,
+                    ["rpc.value_maximum_object_members"] = context.ValueMaximumObjectMembers,
+                    ["rpc.value_inline_decoded_bytes"] = context.ValueInlineDecodedBytes,
+                    ["rpc.exception_type"] = context.ExceptionType,
+                    ["rpc.exception_fingerprint"] = context.ExceptionFingerprint,
+                }).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            var exceptionType = exception.GetType().FullName ?? exception.GetType().Name;
+            _logger.LogWarning(
+                "Host provider-fault diagnostic persistence failed for process package {PackageId}; exceptionFingerprint={ExceptionFingerprint}",
+                _package.PackageId,
+                RuntimeRpcFailureContextStore.CreateExceptionFingerprint(exceptionType));
+        }
+    }
+
     private static PackageLogLevel ReadWorkerLogLevel(JsonElement root)
     {
         var value = SunderWorkerProtocol.RequiredValue(root, "level");

@@ -69,9 +69,18 @@ public sealed class NotificationCenterService
         {
             lock (_syncRoot)
             {
-                _notifications.Add(notification);
-                TrimNotificationsCore(DateTimeOffset.UtcNow);
-                SaveStateCore();
+                var previousNotifications = _notifications.ToList();
+                try
+                {
+                    _notifications.Add(notification);
+                    TrimNotificationsCore(DateTimeOffset.UtcNow);
+                    SaveStateCore();
+                }
+                catch
+                {
+                    _notifications = previousNotifications;
+                    throw;
+                }
             }
 
             PublishNotificationsChanged();

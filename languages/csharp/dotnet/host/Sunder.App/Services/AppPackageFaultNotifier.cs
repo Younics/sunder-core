@@ -3,10 +3,7 @@ using Sunder.Sdk.Notifications;
 
 namespace Sunder.App.Services;
 
-internal sealed class AppPackageFaultNotifier(
-    IPackageNotificationService? notificationService,
-    IUiDispatcher? uiDispatcher = null,
-    Action<Exception>? fatalExceptionHandler = null)
+internal sealed class AppPackageFaultNotifier
 {
     internal const string ViewNotificationTitle = "Package view unavailable";
     internal const string PackageNotificationTitle = "Package App UI unavailable";
@@ -22,9 +19,41 @@ internal sealed class AppPackageFaultNotifier(
 
     private readonly object _notificationSyncRoot = new();
     private readonly HashSet<string> _reportedFaults = new(StringComparer.OrdinalIgnoreCase);
-    private readonly IUiDispatcher _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
-    private readonly Action<Exception> _fatalExceptionHandler = fatalExceptionHandler
-        ?? AppPackageFatalCleanupPropagation.PostToDispatcher;
+    private readonly Dictionary<string, AppPackageFaultNoticeIncident> _packageIncidents =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly AppPackageFaultNoticeCoordinator _noticeCoordinator;
+    private readonly Func<string, AppPackageFaultIdentity> _resolveIdentity;
+    private readonly IUiDispatcher _uiDispatcher;
+    private readonly Action<Exception> _fatalExceptionHandler;
+
+    public AppPackageFaultNotifier(
+        IPackageNotificationService? notificationService,
+        IUiDispatcher? uiDispatcher = null,
+        Action<Exception>? fatalExceptionHandler = null)
+        : this(
+            new AppPackageFaultNoticeCoordinator(notificationService, fatalExceptionHandler),
+            packageId => new AppPackageFaultIdentity(
+                packageId,
+                packageId,
+                ContentHash: null,
+                GenerationId: Guid.Empty),
+            uiDispatcher,
+            fatalExceptionHandler)
+    {
+    }
+
+    internal AppPackageFaultNotifier(
+        AppPackageFaultNoticeCoordinator noticeCoordinator,
+        Func<string, AppPackageFaultIdentity> resolveIdentity,
+        IUiDispatcher? uiDispatcher = null,
+        Action<Exception>? fatalExceptionHandler = null)
+    {
+        _noticeCoordinator = noticeCoordinator;
+        _resolveIdentity = resolveIdentity;
+        _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
+        _fatalExceptionHandler = fatalExceptionHandler
+            ?? AppPackageFatalCleanupPropagation.PostToDispatcher;
+    }
 
     public event EventHandler<PackageViewHostFaultEventArgs>? PackageFaulted;
 
@@ -43,7 +72,8 @@ internal sealed class AppPackageFaultNotifier(
             $"Quarantined hosted package view '{viewId}'.",
             PackageFailureOrigin.AppHostedView,
             exception,
-            raiseFaultEvent: true);
+            raiseFaultEvent: true,
+            deferNotification: false);
 
     public void QueuePackageDisabled(
         object sender,
@@ -61,7 +91,8 @@ internal sealed class AppPackageFaultNotifier(
             details,
             origin,
             exception,
-            raiseFaultEvent: true);
+            raiseFaultEvent: true,
+            deferNotification: true);
 
     public void QueueActivationFailure(
         string packageId,
@@ -81,7 +112,26 @@ internal sealed class AppPackageFaultNotifier(
                 : "Failed to activate an initial App package generation.",
             PackageFailureOrigin.AppActivation,
             exception,
-            raiseFaultEvent: false);
+            raiseFaultEvent: false,
+            deferNotification: false);
+
+    public void PublishPackageDisabled(string packageId)
+    {
+        AppPackageFaultNoticeIncident? incident;
+        lock (_notificationSyncRoot)
+        {
+            _packageIncidents.TryGetValue(packageId, out incident);
+        }
+        incident?.Publish();
+    }
+
+    internal AppPackageFaultNoticeIncident? GetPackageDisabledIncident(string packageId)
+    {
+        lock (_notificationSyncRoot)
+        {
+            return _packageIncidents.GetValueOrDefault(packageId);
+        }
+    }
 
     private void QueueFault(
         object sender,
@@ -93,7 +143,8 @@ internal sealed class AppPackageFaultNotifier(
         string details,
         PackageFailureOrigin origin,
         Exception? exception,
-        bool raiseFaultEvent)
+        bool raiseFaultEvent,
+        bool deferNotification)
     {
         lock (_notificationSyncRoot)
         {
@@ -109,7 +160,30 @@ internal sealed class AppPackageFaultNotifier(
             exception,
             developerLogScope: DeveloperLogEntryScope.Package,
             developerLogSource: packageId);
-        PublishNotification(title, $"{message} Reference: {correlationId}.", packageId);
+        var identity = _resolveIdentity(packageId);
+        var registration = _noticeCoordinator.Register(
+            identity,
+            viewId is null
+                ? origin == PackageFailureOrigin.AppActivation
+                    ? AppPackageFaultNoticeKind.Activation
+                    : AppPackageFaultNoticeKind.Package
+                : AppPackageFaultNoticeKind.View,
+            viewId,
+            GetNotificationTitle(identity.DisplayName, title),
+            $"{message} Reference: {correlationId}.",
+            correlationId,
+            deferNotification);
+        if (deferNotification)
+        {
+            lock (_notificationSyncRoot)
+            {
+                _packageIncidents[packageId] = registration.Incident;
+            }
+        }
+        else if (registration.ShouldPublishImmediately)
+        {
+            registration.Incident.Publish();
+        }
         if (raiseFaultEvent)
         {
             PublishPackageFaulted(
@@ -123,51 +197,18 @@ internal sealed class AppPackageFaultNotifier(
         }
     }
 
-    private void PublishNotification(string title, string message, string packageId)
+    private static string GetNotificationTitle(string displayName, string title)
     {
-        if (notificationService is null)
+        var packageName = string.IsNullOrWhiteSpace(displayName)
+            ? "Package"
+            : displayName.Trim();
+        return title switch
         {
-            return;
-        }
-
-        try
-        {
-            var publication = notificationService.PublishAsync(new PackageNotificationRequest(
-                title,
-                message,
-                PackageNotificationDisplayMode.ToastAndTray,
-                PackageNotificationSeverity.Error));
-            if (!publication.IsCompletedSuccessfully)
-            {
-                _ = ObservePublicationAsync(publication, packageId);
-            }
-        }
-        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
-        {
-            AppSessionLog.WriteError(
-                $"Failed to queue package fault notification for '{packageId}'.",
-                ex);
-        }
-    }
-
-    private async Task ObservePublicationAsync(
-        ValueTask publication,
-        string packageId)
-    {
-        try
-        {
-            await publication.ConfigureAwait(false);
-        }
-        catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
-        {
-            AppSessionLog.WriteError(
-                $"Failed to publish package fault notification for '{packageId}'.",
-                ex);
-        }
-        catch (Exception ex)
-        {
-            _fatalExceptionHandler(ex);
-        }
+            ViewNotificationTitle => $"{packageName} view unavailable",
+            PackageNotificationTitle => $"{packageName} App UI unavailable",
+            "Package App UI update failed" => $"{packageName} App UI update failed",
+            _ => title,
+        };
     }
 
     private void PublishPackageFaulted(object sender, PackageViewHostFaultEventArgs args)

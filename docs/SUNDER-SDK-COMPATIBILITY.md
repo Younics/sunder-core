@@ -79,6 +79,7 @@ Current SDK capabilities are:
 | `shell-view.v1` | shell view/hotbar/navigation services |
 | `view-navigation-preparation.v1` | hidden package-view preparation and post-presentation acknowledgement |
 | `rpc.v2` | canonical descriptor/ABI identities, RPC V2 bindings, discovery, invocation, subscription, and provider registration |
+| `rpc.extended-deadline.v1` | target opt-in for Host-clamped caller deadlines beyond the default RPC deadline |
 | `stacks.v1` | `Sunder.Sdk.Stacks` Stack import/export data contracts |
 | `stacks.rpc.v1` | `Sunder.Sdk.Stacks` package-local provider/client adapters over the Stack RPC descriptor |
 | `callbacks.v1` | generic callback sessions |

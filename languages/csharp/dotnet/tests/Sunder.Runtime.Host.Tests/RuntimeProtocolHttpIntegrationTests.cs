@@ -500,6 +500,38 @@ public sealed class RuntimeProtocolHttpIntegrationTests
         await state.ClearActiveSessionAsync();
     }
 
+    [Fact]
+    public async Task AppCallScopeOpenEndpoint_ReturnsTypedRpcFailureForRetiredSession()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "sunder-runtime-app-rpc-http-tests",
+            Guid.NewGuid().ToString("N"));
+        await using var server = await RuntimeHttpServer.StartAsync(
+            app => app.MapGroup("/api/v1").MapRuntimeRpcEndpoints(),
+            services => services.AddRuntimeHostServices(
+                new RuntimePackagePaths(root),
+                new RuntimeBearerTokenValidator(RuntimeHttpServer.Token)));
+        using var client = new HttpClient { BaseAddress = server.BaseUri };
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            RuntimeHttpServer.Token);
+
+        using var response = await client.PostAsJsonAsync(
+            "api/v1/rpc/app/call-scopes/open",
+            new RuntimeRpcAppCallScopeOpenRequest("retired-session", null));
+        var error = await response.Content.ReadFromJsonAsync<RuntimeRpcErrorDescriptor>();
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.NotNull(error);
+        Assert.Equal(RuntimeRpcErrorKind.Unavailable, error.Kind);
+        Assert.Equal("rpc.app-session.retired", error.Code);
+        Assert.Equal(RuntimeRpcDispatchState.NotDispatched, error.DispatchState);
+        Assert.Equal(RuntimeRpcRetrySafety.Safe, error.RetrySafety);
+        TryDeleteDirectory(root);
+    }
+
     private static RuntimeHandshakeResponse CreateHandshake(
         int protocolRevision,
         int minimumSupportedRevision,

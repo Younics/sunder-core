@@ -716,7 +716,10 @@ internal sealed class UnavailableSunderRpcInvocationAuthority : ISunderRpcInvoca
             "Host-mediated RPC content authority is unavailable for this invocation.");
 }
 
-/// <summary>Supplies an optional earlier deadline for an RPC call.</summary>
+/// <summary>
+/// Supplies an optional requested deadline for an RPC call. The Host always honors earlier
+/// deadlines and may honor a later deadline only for a target that declares extended-deadline support.
+/// </summary>
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed record SunderRpcCallOptions(DateTimeOffset? DeadlineUtc = null);
 
@@ -826,7 +829,10 @@ public interface ISunderRpcClient
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public interface ISunderRpcCallScope : ISunderRpcClient, IAsyncDisposable
 {
-    /// <summary>Gets the Host-clamped deadline shared by work started through this scope.</summary>
+    /// <summary>
+    /// Gets the Host-clamped scope deadline. A target without extended-deadline support may receive
+    /// an earlier per-call deadline.
+    /// </summary>
     DateTimeOffset DeadlineUtc { get; }
 
     /// <summary>Registers bounded request content for one exact target endpoint.</summary>

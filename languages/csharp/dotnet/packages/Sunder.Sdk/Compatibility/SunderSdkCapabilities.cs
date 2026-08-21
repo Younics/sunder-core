@@ -49,6 +49,8 @@ public static class SunderSdkCapabilities
     public const string RpcV1 = "rpc.v1";
     /// <summary>Canonical schema-first RPC V2 contracts, discovery, invocation, and provider registration.</summary>
     public const string RpcV2 = "rpc.v2";
+    /// <summary>Capability-gated support for caller-requested RPC deadlines beyond the Host default.</summary>
+    public const string RpcExtendedDeadlineV1 = "rpc.extended-deadline.v1";
     /// <summary>Stack data contracts.</summary>
     public const string StacksV1 = "stacks.v1";
     /// <summary>Stack RPC provider and adapter contracts.</summary>

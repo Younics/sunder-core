@@ -39,7 +39,7 @@ Those are current supported routes, not a closed capability list. Future Python,
 | Self-contained .NET worker Runtime | Exact coordinated versions of `Sunder.Sdk.Worker` and `Sunder.Package.Build` |
 | Avalonia views/settings | Add `Sunder.Sdk.Avalonia` only to the App leaf that uses Avalonia |
 | Stack contribution | Add `Sunder.Sdk.Stacks` to the Worker leaf that implements the contributor |
-| New managed aggregate | Install `Sunder.Package.Templates`; it is a scaffold tool, not a runtime dependency |
+| New managed canonical package | Install `Sunder.Package.Templates`; it is a scaffold tool, not a runtime dependency |
 | Node worker Runtime RPC | `@sunder/sdk` plus `@sunder/package-tool` |
 | Browser code in a web App | Import only `@sunder/sdk/browser`; choose any web framework |
 | Node/React starter | `npm create sunder-package@latest`; React is one template, not a web requirement |
@@ -83,4 +83,4 @@ The TypeScript SDK is intentionally narrower than the coordinated .NET SDK famil
 
 ## Drift Protection
 
-The repository's [compiled quickstart package](../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) exercises a Worker V3 executable, owner RPC, generated bindings, state, settings, logging, an Avalonia App module, navigation, warmup, and theme APIs used by these guides. It is part of `Sunder.Core.slnx`, so the normal CI build compiles and aggregates its current-platform package. Template CI separately generates, builds, and packs universal six-RID Worker, Avalonia, Stack, and package-dependency variants; Node CI covers worker/web leaves and six-RID SEA aggregation.
+The repository's [compiled quickstart package](../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) exercises a Worker V3 executable, owner RPC, generated bindings, state, settings, logging, an Avalonia App module, navigation, warmup, and theme APIs used by these guides. It is part of `Sunder.Core.slnx`, so the normal CI build compiles its exact current-RID Worker leaf and composed App/Runtime package directly from the canonical project. Template CI separately generates, builds, and packs universal six-RID Worker, Avalonia, Stack, and package-dependency variants; Node CI covers worker/web leaves and six-RID SEA aggregation.

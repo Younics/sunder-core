@@ -10,6 +10,7 @@
     <SelfContained>true</SelfContained>
     <UseAppHost>true</UseAppHost>
     <PublishSingleFile>false</PublishSingleFile>
+    <SunderPackagePrimaryProject>true</SunderPackagePrimaryProject>
     <SunderSdkPackageVersion>1.1.0</SunderSdkPackageVersion>
     <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\sunder-package.json'))</SunderGeneratedPackageManifest>
   </PropertyGroup>
@@ -23,7 +24,18 @@
                          Role="runtime"
                          Rid="$(RuntimeIdentifier)"
                          Kind="worker" />
+    <SunderNodePackageTargetLeaf Include="$(SunderFixtureAdditionalNodeLeaf)"
+                                 DiscoveryRoot="$(SunderFixtureAdditionalNodeLeafDiscoveryRoot)"
+                                 Condition="'$(SunderFixtureAdditionalNodeLeaf)' != ''" />
   </ItemGroup>
+
+  <Target Name="TraceSunderPackageFixtureBuild"
+          BeforeTargets="Build"
+          Condition="'$(SunderPackageBuildTraceFile)' != ''">
+    <WriteLinesToFile File="$(SunderPackageBuildTraceFile)"
+                      Lines="$(RuntimeIdentifier)|$(SunderPackageInnerBuild)"
+                      Overwrite="false" />
+  </Target>
 
   <Import Project="..\..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets" />
 </Project>

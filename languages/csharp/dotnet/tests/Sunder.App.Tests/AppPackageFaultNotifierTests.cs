@@ -8,7 +8,7 @@ namespace Sunder.App.Tests;
 public sealed class AppPackageFaultNotifierTests
 {
     [Fact]
-    public void QueuePackageDisabled_PublishesOnlyFixedRecoveryNeutralText()
+    public void QueuePackageDisabled_DefersSanitizedNoticeUntilRecoveryDecision()
     {
         var notifications = new CapturingNotificationService();
         var notifier = new AppPackageFaultNotifier(
@@ -24,18 +24,148 @@ public sealed class AppPackageFaultNotifierTests
             PackageFailureOrigin.AppUnhandledUi,
             new InvalidOperationException("private exception text"));
 
+        Assert.Null(notifications.Request);
+        Assert.NotNull(fault);
+
+        notifier.PublishPackageDisabled("private.package.id");
+
         var request = Assert.IsType<PackageNotificationRequest>(notifications.Request);
-        Assert.Equal(AppPackageFaultNotifier.PackageNotificationTitle, request.Title);
+        Assert.Equal("private.package.id App UI unavailable", request.Title);
         Assert.StartsWith(
             "A package's App UI became unavailable. Other packages remain available. Reference: ",
             request.Message,
             StringComparison.Ordinal);
         Assert.DoesNotContain("private", request.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("disabled", request.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.NotNull(fault);
         Assert.Equal(
             "A package's App UI became unavailable. Other packages remain available.",
             fault.Message);
+    }
+
+    [Fact]
+    public void SharedCoordinator_CoalescesSameContentAcrossGenerationNotifiers()
+    {
+        var notifications = new CapturingNotificationService();
+        var coordinator = new AppPackageFaultNoticeCoordinator(notifications);
+        var first = new AppPackageFaultNotifier(
+            coordinator,
+            packageId => new AppPackageFaultIdentity(
+                packageId,
+                "Agent",
+                "content-hash",
+                Guid.NewGuid()),
+            ImmediateUiDispatcher.Instance);
+        var second = new AppPackageFaultNotifier(
+            coordinator,
+            packageId => new AppPackageFaultIdentity(
+                packageId,
+                "Agent",
+                "content-hash",
+                Guid.NewGuid()),
+            ImmediateUiDispatcher.Instance);
+
+        first.QueueActivationFailure(
+            "agent",
+            candidateReplacement: true,
+            new InvalidOperationException("first"));
+        second.QueueActivationFailure(
+            "agent",
+            candidateReplacement: true,
+            new InvalidOperationException("second"));
+
+        Assert.Equal(1, notifications.PublishCount);
+        Assert.Equal("Agent App UI update failed", notifications.Request?.Title);
+    }
+
+    [Fact]
+    public void SharedCoordinator_RetriesPublicationAfterRecoverableStoreFailure()
+    {
+        var notifications = new FailFirstNotificationService();
+        var coordinator = new AppPackageFaultNoticeCoordinator(notifications);
+        AppPackageFaultIdentity Resolve(string packageId) => new(
+            packageId,
+            "Agent",
+            "content-hash",
+            Guid.NewGuid());
+        var first = new AppPackageFaultNotifier(
+            coordinator,
+            Resolve,
+            ImmediateUiDispatcher.Instance);
+        var second = new AppPackageFaultNotifier(
+            coordinator,
+            Resolve,
+            ImmediateUiDispatcher.Instance);
+
+        first.QueueActivationFailure(
+            "agent",
+            candidateReplacement: true,
+            new InvalidOperationException("first"));
+        second.QueueActivationFailure(
+            "agent",
+            candidateReplacement: true,
+            new InvalidOperationException("second"));
+
+        Assert.Equal(2, notifications.PublishAttempts);
+        Assert.Equal(1, notifications.SuccessfulPublications);
+    }
+
+    [Fact]
+    public void SharedCoordinator_RetriesLonePublicationAfterRecoverableStoreFailure()
+    {
+        var notifications = new FailFirstNotificationService();
+        var coordinator = new AppPackageFaultNoticeCoordinator(notifications);
+        var notifier = new AppPackageFaultNotifier(
+            coordinator,
+            packageId => new AppPackageFaultIdentity(
+                packageId,
+                "Agent",
+                "content-hash",
+                Guid.NewGuid()),
+            ImmediateUiDispatcher.Instance);
+
+        notifier.QueueActivationFailure(
+            "agent",
+            candidateReplacement: true,
+            new InvalidOperationException("first"));
+
+        Assert.Equal(2, notifications.PublishAttempts);
+        Assert.Equal(1, notifications.SuccessfulPublications);
+    }
+
+    [Fact]
+    public async Task SharedCoordinator_RetriesRequestThatArrivesDuringFailedPublication()
+    {
+        var notifications = new DeferredFailFirstNotificationService();
+        var coordinator = new AppPackageFaultNoticeCoordinator(notifications);
+        AppPackageFaultIdentity Resolve(string packageId) => new(
+            packageId,
+            "Agent",
+            "content-hash",
+            Guid.NewGuid());
+        var first = new AppPackageFaultNotifier(
+            coordinator,
+            Resolve,
+            ImmediateUiDispatcher.Instance);
+        var second = new AppPackageFaultNotifier(
+            coordinator,
+            Resolve,
+            ImmediateUiDispatcher.Instance);
+
+        first.QueueActivationFailure(
+            "agent",
+            candidateReplacement: true,
+            new InvalidOperationException("first"));
+        second.QueueActivationFailure(
+            "agent",
+            candidateReplacement: true,
+            new InvalidOperationException("second"));
+        Assert.Equal(1, notifications.PublishAttempts);
+
+        notifications.FailFirstPublication();
+        await TestSupport.AsyncAssert.WaitForConditionAsync(
+            () => notifications.PublishAttempts == 2);
+
+        Assert.Equal(1, notifications.SuccessfulPublications);
     }
 
     [Fact]
@@ -90,13 +220,65 @@ public sealed class AppPackageFaultNotifierTests
     {
         public PackageNotificationRequest? Request { get; private set; }
 
+        public int PublishCount { get; private set; }
+
         public ValueTask PublishAsync(
             PackageNotificationRequest request,
             CancellationToken cancellationToken = default)
         {
+            PublishCount++;
             Request = request;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class FailFirstNotificationService : IPackageNotificationService
+    {
+        public int PublishAttempts { get; private set; }
+        public int SuccessfulPublications { get; private set; }
+
+        public ValueTask PublishAsync(
+            PackageNotificationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            PublishAttempts++;
+            if (PublishAttempts == 1)
+            {
+                throw new InvalidOperationException("notification store unavailable");
+            }
+
+            SuccessfulPublications++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class DeferredFailFirstNotificationService : IPackageNotificationService
+    {
+        private readonly TaskCompletionSource _firstPublication = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int PublishAttempts { get; private set; }
+        public int SuccessfulPublications { get; private set; }
+
+        public ValueTask PublishAsync(
+            PackageNotificationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            PublishAttempts++;
+            if (PublishAttempts == 1)
+            {
+                return new ValueTask(_firstPublication.Task);
+            }
+
+            SuccessfulPublications++;
+            return ValueTask.CompletedTask;
+        }
+
+        public void FailFirstPublication()
+            => _firstPublication.TrySetException(
+                new InvalidOperationException("notification store unavailable"));
     }
 
     private sealed class ImmediateUiDispatcher : IUiDispatcher

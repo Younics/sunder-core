@@ -7,8 +7,8 @@
     <Nullable>enable</Nullable>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <SunderPackageProject>true</SunderPackageProject>
-    <SunderPackageRuntimeIdentifiers>$(NETCoreSdkRuntimeIdentifier)</SunderPackageRuntimeIdentifiers>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\sunder-package.json'))</SunderGeneratedPackageManifest>
   </PropertyGroup>
 
   <ItemGroup>

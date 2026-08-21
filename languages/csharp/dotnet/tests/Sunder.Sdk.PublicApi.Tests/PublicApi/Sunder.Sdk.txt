@@ -425,6 +425,7 @@ type sealed class Sunder.Sdk.Compatibility.SunderSdkCapabilities
   field static System.String NotificationsV1 = "notifications.v1"
   field static System.String PackagingV1 = "packaging.v1"
   field static System.String RoleLocalWorkspaceV1 = "role-local-workspace.v1"
+  field static System.String RpcExtendedDeadlineV1 = "rpc.extended-deadline.v1"
   field static System.String RpcV1 = "rpc.v1"
   field static System.String RpcV2 = "rpc.v2"
   field static System.String RuntimeGenerationsV1 = "runtime-generations.v1"

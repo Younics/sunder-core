@@ -50,6 +50,7 @@ internal sealed class AppPackageDisableCoordinator(
                 exception,
                 unloadPackageAsync,
                 quarantineBoundariesAsync,
+                deferNotification: false,
                 out var completion))
         {
             return;
@@ -66,6 +67,7 @@ internal sealed class AppPackageDisableCoordinator(
         Exception? exception,
         Func<string, CancellationToken, bool, Task<AppPackageUnloadResult>> unloadPackageAsync,
         Func<Task<AppPackageUiCleanupOutcome>> quarantineBoundariesAsync,
+        bool deferNotification,
         out Task<AppPackageUiCleanupOutcome> completion)
     {
         TaskCompletionSource<AppPackageUiCleanupOutcome> operation;
@@ -98,6 +100,10 @@ internal sealed class AppPackageDisableCoordinator(
         if (newlyDisabled)
         {
             faultNotifier.QueuePackageDisabled(sender, packageId, message, origin, exception);
+            if (!deferNotification)
+            {
+                faultNotifier.PublishPackageDisabled(packageId);
+            }
         }
         completion = operation.Task;
         _ = CompleteOperationAsync(
@@ -124,6 +130,7 @@ internal sealed class AppPackageDisableCoordinator(
                 exception: null,
                 unloadPackageAsync,
                 quarantineBoundariesAsync,
+                deferNotification: true,
                 out var completion))
         {
             return Task.CompletedTask;

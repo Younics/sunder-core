@@ -14,6 +14,7 @@ public static class SunderPackageFormat
     public const string WebTargetKind = "web";
     public const string WorkerTargetKind = "worker";
     internal const string RpcV2Capability = "rpc.v2";
+    internal const string RpcExtendedDeadlineV1Capability = "rpc.extended-deadline.v1";
     internal const string WorkerProtocolV3Capability = "worker-protocol.v3";
     public const string DiscoverContractAction = "discover";
     public const string InvokeContractAction = "invoke";

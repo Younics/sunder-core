@@ -26,6 +26,8 @@ internal sealed class AppPackageHostComposition : IDisposable
         Guid generationId,
         AppPackageViewRegistry viewRegistry,
         AppPackageHostState state,
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        AppPackageFaultNoticeCoordinator faultNoticeCoordinator,
         Func<Guid, string, string, string?, Exception, bool> quarantineView,
         Func<Guid, string, Task<AppPackageUiCleanupOutcome>> quarantinePackageBoundariesAsync,
         Action<Guid, string, string?, Assembly> registerFaultAttribution,
@@ -45,10 +47,24 @@ internal sealed class AppPackageHostComposition : IDisposable
         _state = state;
         _registerFaultAttribution = registerFaultAttribution;
         AssemblyTracker = new AppPackageAssemblyTracker();
-        var faultNotificationService = notificationCenter is null
-            ? null
-            : new AppPackageNotificationService(notificationCenter, "sunder.app", "Sunder");
-        FaultNotifier = new AppPackageFaultNotifier(faultNotificationService, uiDispatcher);
+        var packagesById = activePackages
+            .GroupBy(static package => package.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.First(),
+                StringComparer.OrdinalIgnoreCase);
+        FaultNotifier = new AppPackageFaultNotifier(
+            faultNoticeCoordinator,
+            packageId =>
+            {
+                var package = packagesById.GetValueOrDefault(packageId);
+                return new AppPackageFaultIdentity(
+                    packageId,
+                    package?.DisplayName ?? packageId,
+                    _state.GetPackageContentHash(packageId),
+                    generationId);
+            },
+            uiDispatcher);
         ViewFacade = new AppPackageHostedViewFacade(
             viewRegistry,
             _state.IsPackageDisabled,
@@ -214,6 +230,7 @@ internal sealed class AppPackageHostComposition : IDisposable
         string message,
         PackageFailureOrigin origin,
         Exception? exception,
+        bool deferNotification,
         out Task<AppPackageUiCleanupOutcome> completion)
         => _disableCoordinator.TryBeginDisablePackage(
             _eventSender,
@@ -223,6 +240,7 @@ internal sealed class AppPackageHostComposition : IDisposable
             exception,
             UnloadPackageForDisableAsync,
             () => _quarantinePackageBoundariesAsync(packageId),
+            deferNotification,
             out completion);
 
     public async Task ApplyInheritedPackageQuarantineAsync(string packageId)

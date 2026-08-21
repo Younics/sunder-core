@@ -19,6 +19,7 @@ internal sealed partial class SunderWorkerRuntime
     private WorkerProviderIdentity[] _providerIdentities = [];
     private WorkerRuntimeConfiguration? _configuration;
     private readonly Dictionary<string, InboundInvocation> _invocations = new(StringComparer.Ordinal);
+    private readonly AsyncLocal<string?> _currentInvocationId = new();
     private readonly HashSet<string> _rememberedHostIds = new(StringComparer.Ordinal);
     private readonly Queue<string> _rememberedHostIdOrder = new();
     private readonly CancellationTokenSource _protocolStop = new();
@@ -55,6 +56,8 @@ internal sealed partial class SunderWorkerRuntime
     }
 
     internal object Gate { get; } = new();
+
+    internal string? CurrentInvocationId => _currentInvocationId.Value;
     internal CancellationToken StoppingToken => _protocolStop.Token;
     internal bool IsActiveUnderGate => _phase is RuntimePhase.Activating or RuntimePhase.Active;
     internal bool CanReadStateForMigrationPreparationUnderGate =>
@@ -933,6 +936,8 @@ internal sealed partial class SunderWorkerRuntime
         // Provider code may issue a nested Host RPC before its first asynchronous yield. Keep that
         // synchronous prefix off the protocol reader so it can consume the nested response.
         await Task.Yield();
+        var previousInvocationId = _currentInvocationId.Value;
+        _currentInvocationId.Value = invocation.Id;
         try
         {
             if (invocation.Kind == InboundInvocationKind.Unary)
@@ -965,6 +970,7 @@ internal sealed partial class SunderWorkerRuntime
         }
         finally
         {
+            _currentInvocationId.Value = previousInvocationId;
             lock (Gate)
             {
                 _invocations.Remove(invocation.Id);

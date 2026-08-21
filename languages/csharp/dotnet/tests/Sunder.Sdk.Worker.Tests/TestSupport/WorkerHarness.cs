@@ -34,7 +34,8 @@ internal sealed class WorkerHarness : IAsyncDisposable
     public WorkerHarness(
         Func<SunderWorkerContext, SunderWorkerOptions> configure,
         WorkerLimits? limits = null,
-        bool ignoreInputReadCancellation = false)
+        bool ignoreInputReadCancellation = false,
+        bool rpcExtendedDeadlineV1 = false)
     {
         Limits = (limits ?? WorkerLimits.Default) with { };
         Input = new AsyncByteStream(ignoreInputReadCancellation);
@@ -59,6 +60,10 @@ internal sealed class WorkerHarness : IAsyncDisposable
             ["SUNDER_WORKER_TEMP_ROOT"] = DataPath,
             ["SUNDER_PACKAGE_WORKSPACE_ROOT"] = WorkspacePath,
         };
+        if (rpcExtendedDeadlineV1)
+        {
+            environment["SUNDER_RPC_EXTENDED_DEADLINE_V1"] = "1";
+        }
         RunTask = SunderWorker.RunAsync(
             configure,
             Input,

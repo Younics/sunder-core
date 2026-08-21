@@ -98,6 +98,7 @@ internal sealed record RuntimeRpcPolicyOptions
     public int MaxPayloadDepth { get; init; } = RuntimeResourcePolicies.Standard.MaximumValueDepth;
     public int MaxPayloadNodes { get; init; } = RuntimeResourcePolicies.Standard.MaximumValueNodes;
     public int MaxObjectMembers { get; init; } = RuntimeResourcePolicies.Standard.MaximumObjectMembers;
+    public int MaxInlineDecodedBytes { get; init; } = RuntimeResourcePolicies.Standard.MaximumInlineDecodedBytes;
     public int MaxConcurrentCallsPerCaller { get; init; } = 32;
     public int MaxConcurrentCallsPerCallee { get; init; } = 64;
     public int MaxNestedCallDepth { get; init; } = 8;
@@ -106,6 +107,7 @@ internal sealed record RuntimeRpcPolicyOptions
     public int MaxAppCallerSessions { get; init; } = 128;
     public int MaxCallScopesPerCaller { get; init; } = 64;
     public TimeSpan DefaultDeadline { get; init; } = TimeSpan.FromMinutes(10);
+    public TimeSpan MaximumExtendedDeadline { get; init; } = TimeSpan.FromMinutes(35);
 
     internal static RuntimeRpcPolicyOptions FromResourcePolicy(RuntimeResourcePolicy policy)
     {
@@ -116,6 +118,7 @@ internal sealed record RuntimeRpcPolicyOptions
             MaxPayloadDepth = policy.MaximumValueDepth,
             MaxPayloadNodes = policy.MaximumValueNodes,
             MaxObjectMembers = policy.MaximumObjectMembers,
+            MaxInlineDecodedBytes = policy.MaximumInlineDecodedBytes,
         };
     }
 }

@@ -41,6 +41,7 @@ internal sealed class RuntimeRpcHostCallerActivation : IRuntimeRpcCallerActivati
 
     public string PackageId => StackPrincipalId;
     public string PackageVersion => "1.0.0";
+    public Guid? ActivationId => null;
     public string Role => SunderPackageFormat.RuntimeHostRole;
     public string ManifestSha256 { get; }
     public PackageSourceKind? SourceKind => null;

@@ -2,26 +2,50 @@
   <Import Project="Sunder.Package.props" />
 
   <PropertyGroup>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <SunderPackageAggregateProject>true</SunderPackageAggregateProject>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <SelfContained>true</SelfContained>
+    <UseAppHost>true</UseAppHost>
+    <PublishSingleFile>false</PublishSingleFile>
+    <SunderPackageProject>true</SunderPackageProject>
+    <SunderPackagePrimaryProject>true</SunderPackagePrimaryProject>
+    <SunderPackageAppProject>Sunder.Package.Quickstart.App\Sunder.Package.Quickstart.App.csproj</SunderPackageAppProject>
+    <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\sunder-package.json'))</SunderGeneratedPackageManifest>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="Sunder.Package.Quickstart.Worker\Sunder.Package.Quickstart.Worker.csproj"
+    <ProjectReference Include="..\..\packages\Sunder.Sdk.Worker\Sunder.Sdk.Worker.csproj" />
+    <ProjectReference Include="Sunder.Package.Quickstart.Protocol\Sunder.Package.Quickstart.Protocol.csproj"
+                      PrivateAssets="all" />
+    <ProjectReference Include="$(SunderPackageAppProject)"
+                      Condition="'$(SunderPackageAppProject)' != '' and '$(SunderPackageInnerBuild)' != 'true'"
                       ReferenceOutputAssembly="false"
-                      AdditionalProperties="RuntimeIdentifier=$(NETCoreSdkRuntimeIdentifier)" />
-    <ProjectReference Include="Sunder.Package.Quickstart.App\Sunder.Package.Quickstart.App.csproj"
-                      ReferenceOutputAssembly="false" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Quickstart.Worker\bin\$(Configuration)\$(TargetFramework)\$(NETCoreSdkRuntimeIdentifier)\sunder-dev"
-                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Quickstart.Worker\bin\$(Configuration)\$(TargetFramework)\$(NETCoreSdkRuntimeIdentifier)" />
-    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Quickstart.App\bin\$(Configuration)\$(TargetFramework)\sunder-dev"
-                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Quickstart.App\bin\$(Configuration)\$(TargetFramework)" />
+                      Private="false"
+                      BuildReference="false"
+                      PrivateAssets="all" />
+    <Compile Include="PackageMetadata.cs" />
+    <Compile Include="Sunder.Package.Quickstart.Worker\**\*.cs"
+             Exclude="Sunder.Package.Quickstart.Worker\bin\**;Sunder.Package.Quickstart.Worker\obj\**" />
+    <SunderContractBundle Include="Sunder.Package.Quickstart.Protocol\Contracts\greeting.rpc.json"
+                          ContractId="docs.sunder.quickstart.greeting"
+                          Version="2.0.0"
+                          DescriptorPath="contracts/greeting.rpc.json"
+                          Exposure="package" />
+    <SunderRpcProvider Include="docs.sunder.quickstart.greeting"
+                       ContractId="docs.sunder.quickstart.greeting"
+                       ContractVersion="2.0.0"
+                       Role="runtime"
+                       Audience="owner" />
+    <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)"
+                         Role="runtime"
+                         Rid="$(RuntimeIdentifier)"
+                         Kind="worker" />
   </ItemGroup>
 
   <Import Project="..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets" />

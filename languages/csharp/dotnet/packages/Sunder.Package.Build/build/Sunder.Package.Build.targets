@@ -18,11 +18,21 @@
     <SunderGeneratedPackageManifest Condition="'$(SunderGeneratedPackageManifest)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'sunder-package.json'))))</SunderGeneratedPackageManifest>
     <SunderPackageRuntimeIdentifiers Condition="'$(SunderPackageRuntimeIdentifiers)' == ''">win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</SunderPackageRuntimeIdentifiers>
     <SunderPackageAssetsDirectory Condition="'$(SunderPackageAssetsDirectory)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', 'Assets'))))</SunderPackageAssetsDirectory>
-    <_SunderPackagePreparationTarget Condition="'$(SunderPackageAggregateProject)' == 'true'">AggregateSunderPackage</_SunderPackagePreparationTarget>
-    <_SunderPackagePreparationTarget Condition="'$(_SunderPackagePreparationTarget)' == ''">EmitSunderDevOutput</_SunderPackagePreparationTarget>
+    <SunderPackagePrimaryProject Condition="'$(SunderPackagePrimaryProject)' == ''">false</SunderPackagePrimaryProject>
+    <SunderPackageInnerBuild Condition="'$(SunderPackageInnerBuild)' == ''">false</SunderPackageInnerBuild>
+    <SunderPackageUsePrebuiltLeaves Condition="'$(SunderPackageUsePrebuiltLeaves)' == ''">false</SunderPackageUsePrebuiltLeaves>
+    <SunderPackageComposeRuntimeIdentifiers Condition="'$(SunderPackageComposeRuntimeIdentifiers)' == ''">$(SunderPackageRuntimeIdentifiers)</SunderPackageComposeRuntimeIdentifiers>
+    <_SunderPackageBaseOutputPath Condition="'$(BaseOutputPath)' != ''">$(BaseOutputPath)</_SunderPackageBaseOutputPath>
+    <_SunderPackageBaseOutputPath Condition="'$(_SunderPackageBaseOutputPath)' == ''">bin</_SunderPackageBaseOutputPath>
+    <SunderPackageComposedOutputRoot Condition="'$(SunderPackageComposedOutputRoot)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(_SunderPackageBaseOutputPath)', '$(Configuration)', '$(TargetFramework)'))))</SunderPackageComposedOutputRoot>
+    <SunderPackageComposedOutputPath Condition="'$(SunderPackageComposedOutputPath)' == ''">$([System.IO.Path]::Combine('$(SunderPackageComposedOutputRoot)', 'sunder-dev'))</SunderPackageComposedOutputPath>
+    <SunderPackagePrimaryTargetLeafRoot Condition="'$(SunderPackagePrimaryTargetLeafRoot)' == ''">$(SunderPackageComposedOutputRoot)</SunderPackagePrimaryTargetLeafRoot>
+    <SunderPackageAppTargetFramework Condition="'$(SunderPackageAppTargetFramework)' == ''">$(TargetFramework)</SunderPackageAppTargetFramework>
+    <_SunderPackagePreparationTarget Condition="'$(SunderPackagePrimaryProject)' == 'true'">AggregateSunderPackage</_SunderPackagePreparationTarget>
+    <_SunderPackagePreparationTarget Condition="'$(_SunderPackagePreparationTarget)' == ''">Build;EmitSunderDevOutput</_SunderPackagePreparationTarget>
   </PropertyGroup>
 
-  <ItemGroup Condition="'$(SunderPackageAggregateProject)' != 'true'">
+  <ItemGroup>
     <_SunderPackageRuntimeIdentifier Include="$(SunderPackageRuntimeIdentifiers)" />
   </ItemGroup>
 
@@ -42,6 +52,8 @@
   <UsingTask TaskName="Sunder.Package.Build.Tasks.EmitSunderDevOutputTask"
              AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
   <UsingTask TaskName="Sunder.Package.Build.Tasks.AggregateSunderPackageTask"
+             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.CleanSunderPackageOutputTask"
              AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
   <UsingTask TaskName="Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask"
              AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
@@ -83,7 +95,7 @@
 
   <Target Name="GenerateSunderPackageManifest"
            DependsOnTargets="_PrepareSunderPackageBuildTasks;GenerateSunderRpcBindings"
-           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true' and '$(SunderPackageProject)' != 'false'">
+            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <ItemGroup>
       <_SunderAuthoredAssembly Include="$(TargetPath)" />
       <_SunderAuthoredAssembly Include="@(ReferenceCopyLocalPaths)"
@@ -153,8 +165,8 @@
           Condition="'$(_SunderHasWorkerTarget)' == 'true'" />
 
   <Target Name="_ValidateSunderDevOutputPath"
-           DependsOnTargets="_PrepareSunderPackageBuildTasks"
-           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true' and '$(SunderPackageProject)' != 'false'">
+            DependsOnTargets="_PrepareSunderPackageBuildTasks"
+            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <PropertyGroup>
       <SunderDevOutputPath Condition="'$(SunderDevOutputPath)' == ''">$([System.IO.Path]::Combine('$(TargetDir)', 'sunder-dev'))</SunderDevOutputPath>
       <SunderDevOutputDiscoveryRoot Condition="'$(SunderDevOutputDiscoveryRoot)' == ''">$(TargetDir)</SunderDevOutputDiscoveryRoot>
@@ -172,7 +184,7 @@
   <Target Name="EmitSunderDevOutput"
             AfterTargets="Build"
             DependsOnTargets="GenerateSunderPackageManifest;_RunSunderPackageWorkerSigning;_ValidateSunderDevOutputPath"
-           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true' and '$(SunderPackageProject)' != 'false'">
+            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <ItemGroup>
       <_SunderRuntimeFiles Include="$(TargetDir)*.dll" />
       <_SunderRuntimeFiles Include="$(TargetDir)*.pdb" />
@@ -234,38 +246,137 @@
                               ContractFiles="@(_SunderResolvedContractFile)" />
   </Target>
 
-  <Target Name="AggregateSunderPackage"
-          AfterTargets="Build"
-          DependsOnTargets="_PrepareSunderPackageBuildTasks"
-          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' == 'true'">
+  <Target Name="_ValidateSunderPackagePrimaryProject"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true'">
     <PropertyGroup>
-      <SunderDevOutputPath Condition="'$(SunderDevOutputPath)' == ''">$([System.IO.Path]::Combine('$(TargetDir)', 'sunder-dev'))</SunderDevOutputPath>
-      <SunderDevOutputDiscoveryRoot Condition="'$(SunderDevOutputDiscoveryRoot)' == ''">$(TargetDir)</SunderDevOutputDiscoveryRoot>
+      <_SunderPackageAppProjectFullPath Condition="'$(SunderPackageAppProject)' != ''">$([System.IO.Path]::GetFullPath('$(SunderPackageAppProject)', '$(MSBuildProjectDirectory)'))</_SunderPackageAppProjectFullPath>
+      <_SunderPackageAppProjectDirectory Condition="'$(_SunderPackageAppProjectFullPath)' != ''">$([System.IO.Path]::GetDirectoryName('$(_SunderPackageAppProjectFullPath)'))</_SunderPackageAppProjectDirectory>
+      <SunderPackageAppTargetDiscoveryRoot Condition="'$(SunderPackageAppTargetDiscoveryRoot)' == '' and '$(_SunderPackageAppProjectDirectory)' != ''">$([System.IO.Path]::Combine('$(_SunderPackageAppProjectDirectory)', 'bin', '$(Configuration)', '$(SunderPackageAppTargetFramework)'))</SunderPackageAppTargetDiscoveryRoot>
+      <SunderPackageAppTargetLeaf Condition="'$(SunderPackageAppTargetLeaf)' == '' and '$(SunderPackageAppTargetDiscoveryRoot)' != ''">$([System.IO.Path]::Combine('$(SunderPackageAppTargetDiscoveryRoot)', 'sunder-dev'))</SunderPackageAppTargetLeaf>
     </PropertyGroup>
-    <AggregateSunderPackageTask TargetLeaves="@(SunderPackageTargetLeaf)"
-                                 OutputPath="$(SunderDevOutputPath)"
-                                 OutputDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
-                                 ProjectDirectory="$(MSBuildProjectDirectory)"
-                                 TargetDirectory="$(TargetDir)"
-                                 ExpectedPackageVersion="$(Version)">
-      <Output TaskParameter="NormalizedOutputPath" PropertyName="SunderDevOutputPath" />
+
+    <ItemGroup>
+      <_SunderPackageConfiguredRuntimeIdentifier Include="$(SunderPackageRuntimeIdentifiers)" />
+      <_SunderPackageSelectedRuntimeIdentifier Include="$(SunderPackageComposeRuntimeIdentifiers)" />
+      <_SunderPackageUnknownRuntimeIdentifier Include="@(_SunderPackageSelectedRuntimeIdentifier)"
+                                              Exclude="@(_SunderPackageConfiguredRuntimeIdentifier)" />
+    </ItemGroup>
+
+    <Error Condition="'$(SunderPackageAppProject)' != '' and !Exists('$(_SunderPackageAppProjectFullPath)')"
+           Text="SunderPackageAppProject '$(_SunderPackageAppProjectFullPath)' does not exist." />
+    <Error Condition="'@(_SunderPackageSelectedRuntimeIdentifier)' == ''"
+           Text="SunderPackageComposeRuntimeIdentifiers must select at least one configured RID." />
+    <Error Condition="'@(_SunderPackageUnknownRuntimeIdentifier)' != ''"
+           Text="SunderPackageComposeRuntimeIdentifiers contains unconfigured RID(s): @(_SunderPackageUnknownRuntimeIdentifier, ', ')." />
+    <Error Condition="'$(SunderPackageUsePrebuiltLeaves)' == 'true' and '$(BuildProjectReferences)' != 'false'"
+           Text="SunderPackageUsePrebuiltLeaves=true requires BuildProjectReferences=false so signed prebuilt inputs cannot trigger Worker or App builds." />
+  </Target>
+
+  <Target Name="_RejectSunderPackageBuildInPrebuiltMode"
+          BeforeTargets="PrepareForBuild;Build"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true' and '$(SunderPackageUsePrebuiltLeaves)' == 'true'">
+    <Error Text="SunderPackageUsePrebuiltLeaves=true does not permit Build. Invoke PackSunderPackage with BuildProjectReferences=false." />
+  </Target>
+
+  <Target Name="_BuildSunderPackageApp"
+          DependsOnTargets="_ValidateSunderPackagePrimaryProject"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true' and '$(SunderPackageUsePrebuiltLeaves)' != 'true' and '$(SunderPackageAppProject)' != ''">
+    <MSBuild Projects="$(_SunderPackageAppProjectFullPath)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(SunderPackageAppTargetFramework)"
+             RemoveProperties="RuntimeIdentifier;SunderPackagePrimaryProject;SunderPackageInnerBuild;SunderPackageUsePrebuiltLeaves;SunderPackageComposeRuntimeIdentifiers"
+             BuildInParallel="false"
+             StopOnFirstFailure="true" />
+  </Target>
+
+  <Target Name="_BuildSunderPackagePrimaryLeaves"
+          DependsOnTargets="_ValidateSunderPackagePrimaryProject"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true' and '$(SunderPackageUsePrebuiltLeaves)' != 'true'">
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=%(_SunderPackageSelectedRuntimeIdentifier.Identity);SunderPackageInnerBuild=true;SunderPackageUsePrebuiltLeaves=false"
+             BuildInParallel="false"
+             StopOnFirstFailure="true" />
+  </Target>
+
+  <Target Name="ComposeSunderPackage"
+          AfterTargets="Build"
+          DependsOnTargets="EmitSunderDevOutput;_ValidateSunderPackagePrimaryProject;_BuildSunderPackageApp;_PrepareSunderPackageBuildTasks"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true' and '$(SunderPackageUsePrebuiltLeaves)' != 'true'">
+    <ItemGroup>
+      <_SunderPackageCompositionLeaf Remove="@(_SunderPackageCompositionLeaf)" />
+      <_SunderPackageCompositionLeaf Include="$(SunderDevOutputPath)"
+                                     DiscoveryRoot="$(SunderDevOutputDiscoveryRoot)" />
+      <_SunderPackageCompositionLeaf Include="$(SunderPackageAppTargetLeaf)"
+                                     DiscoveryRoot="$(SunderPackageAppTargetDiscoveryRoot)"
+                                     Condition="'$(SunderPackageAppTargetLeaf)' != ''" />
+      <_SunderPackageCompositionLeaf Include="@(SunderPackageTargetLeaf)" />
+      <_SunderPackageCompositionLeaf Include="@(SunderNodePackageTargetLeaf)" />
+    </ItemGroup>
+
+    <AggregateSunderPackageTask TargetLeaves="@(_SunderPackageCompositionLeaf)"
+                                OutputPath="$(SunderPackageComposedOutputPath)"
+                                OutputDiscoveryRoot="$(SunderPackageComposedOutputRoot)"
+                                ProjectDirectory="$(MSBuildProjectDirectory)"
+                                TargetDirectory="$(SunderPackageComposedOutputRoot)"
+                                ExpectedPackageVersion="$(Version)" />
+  </Target>
+
+  <Target Name="AggregateSunderPackage"
+          DependsOnTargets="_ValidateSunderPackagePrimaryProject;_BuildSunderPackagePrimaryLeaves;_BuildSunderPackageApp;_PrepareSunderPackageBuildTasks"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true'">
+    <ItemGroup>
+      <_SunderPackageCompositionLeaf Remove="@(_SunderPackageCompositionLeaf)" />
+      <_SunderPackageCompositionLeaf Include="$([System.IO.Path]::Combine('$(SunderPackagePrimaryTargetLeafRoot)', '%(_SunderPackageSelectedRuntimeIdentifier.Identity)', 'sunder-dev'))">
+        <DiscoveryRoot>$([System.IO.Path]::Combine('$(SunderPackagePrimaryTargetLeafRoot)', '%(_SunderPackageSelectedRuntimeIdentifier.Identity)'))</DiscoveryRoot>
+      </_SunderPackageCompositionLeaf>
+      <_SunderPackageCompositionLeaf Include="$(SunderPackageAppTargetLeaf)"
+                                     DiscoveryRoot="$(SunderPackageAppTargetDiscoveryRoot)"
+                                     Condition="'$(SunderPackageAppTargetLeaf)' != ''" />
+      <_SunderPackageCompositionLeaf Include="@(SunderPackageTargetLeaf)" />
+      <_SunderPackageCompositionLeaf Include="@(SunderNodePackageTargetLeaf)" />
+    </ItemGroup>
+
+    <AggregateSunderPackageTask TargetLeaves="@(_SunderPackageCompositionLeaf)"
+                                  OutputPath="$(SunderPackageComposedOutputPath)"
+                                  OutputDiscoveryRoot="$(SunderPackageComposedOutputRoot)"
+                                  ProjectDirectory="$(MSBuildProjectDirectory)"
+                                  TargetDirectory="$(SunderPackageComposedOutputRoot)"
+                                  ExpectedPackageVersion="$(Version)">
+      <Output TaskParameter="NormalizedOutputPath" PropertyName="SunderPackageComposedOutputPath" />
     </AggregateSunderPackageTask>
   </Target>
 
+  <Target Name="CleanSunderPackageComposedOutput"
+          AfterTargets="Clean"
+          DependsOnTargets="_PrepareSunderPackageBuildTasks"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true'">
+    <CleanSunderPackageOutputTask OutputPath="$(SunderPackageComposedOutputPath)"
+                                  OutputDiscoveryRoot="$(SunderPackageComposedOutputRoot)"
+                                  ProjectDirectory="$(MSBuildProjectDirectory)"
+                                  TargetDirectory="$(SunderPackageComposedOutputRoot)" />
+  </Target>
+
   <Target Name="PackSunderPackage"
-            DependsOnTargets="Build;$(_SunderPackagePreparationTarget)"
-           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
+            DependsOnTargets="$(_SunderPackagePreparationTarget)"
+            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <PropertyGroup>
       <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
       <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.1.0</_SunderPackageVersion>
       <SunderPackageFileName Condition="'$(SunderPackageFileName)' == ''">$(AssemblyName).$(_SunderPackageVersion).sunderpkg</SunderPackageFileName>
-      <SunderPackageOutputPath Condition="'$(SunderPackageOutputPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(TargetDir)', '$(SunderPackageFileName)'))))</SunderPackageOutputPath>
+      <_SunderPackagePackOutputRoot Condition="'$(SunderPackagePrimaryProject)' == 'true'">$(SunderPackageComposedOutputRoot)</_SunderPackagePackOutputRoot>
+      <_SunderPackagePackOutputRoot Condition="'$(_SunderPackagePackOutputRoot)' == ''">$(TargetDir)</_SunderPackagePackOutputRoot>
+      <SunderPackageOutputPath Condition="'$(SunderPackageOutputPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(_SunderPackagePackOutputRoot)', '$(SunderPackageFileName)'))))</SunderPackageOutputPath>
+      <_SunderPackagePackInputPath Condition="'$(SunderPackagePrimaryProject)' == 'true'">$(SunderPackageComposedOutputPath)</_SunderPackagePackInputPath>
+      <_SunderPackagePackInputPath Condition="'$(_SunderPackagePackInputPath)' == ''">$(SunderDevOutputPath)</_SunderPackagePackInputPath>
+      <_SunderPackagePackDiscoveryRoot Condition="'$(SunderPackagePrimaryProject)' == 'true'">$(SunderPackageComposedOutputRoot)</_SunderPackagePackDiscoveryRoot>
+      <_SunderPackagePackDiscoveryRoot Condition="'$(_SunderPackagePackDiscoveryRoot)' == ''">$(SunderDevOutputDiscoveryRoot)</_SunderPackagePackDiscoveryRoot>
     </PropertyGroup>
 
-    <PackSunderPackageTask DevPackagePath="$(SunderDevOutputPath)"
-                            DevPackageDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
-                            PackageOutputPath="$(SunderPackageOutputPath)"
-                            ProjectDirectory="$(MSBuildProjectDirectory)" />
+    <PackSunderPackageTask DevPackagePath="$(_SunderPackagePackInputPath)"
+                             DevPackageDiscoveryRoot="$(_SunderPackagePackDiscoveryRoot)"
+                             PackageOutputPath="$(SunderPackageOutputPath)"
+                             ProjectDirectory="$(MSBuildProjectDirectory)" />
   </Target>
 
   <Target Name="PackSunderPackageOnPublish"
@@ -277,12 +388,16 @@
       <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.1.0</_SunderPackageVersion>
       <SunderPackageFileName Condition="'$(SunderPackageFileName)' == ''">$(AssemblyName).$(_SunderPackageVersion).sunderpkg</SunderPackageFileName>
       <SunderPublishPackageOutputPath Condition="'$(SunderPublishPackageOutputPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(PublishDir)', '$(SunderPackageFileName)'))))</SunderPublishPackageOutputPath>
+      <_SunderPackagePublishInputPath Condition="'$(SunderPackagePrimaryProject)' == 'true'">$(SunderPackageComposedOutputPath)</_SunderPackagePublishInputPath>
+      <_SunderPackagePublishInputPath Condition="'$(_SunderPackagePublishInputPath)' == ''">$(SunderDevOutputPath)</_SunderPackagePublishInputPath>
+      <_SunderPackagePublishDiscoveryRoot Condition="'$(SunderPackagePrimaryProject)' == 'true'">$(SunderPackageComposedOutputRoot)</_SunderPackagePublishDiscoveryRoot>
+      <_SunderPackagePublishDiscoveryRoot Condition="'$(_SunderPackagePublishDiscoveryRoot)' == ''">$(SunderDevOutputDiscoveryRoot)</_SunderPackagePublishDiscoveryRoot>
     </PropertyGroup>
 
     <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(SunderPublishPackageOutputPath)'))" />
-    <PackSunderPackageTask DevPackagePath="$(SunderDevOutputPath)"
-                            DevPackageDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
-                            PackageOutputPath="$(SunderPublishPackageOutputPath)"
-                            ProjectDirectory="$(MSBuildProjectDirectory)" />
+    <PackSunderPackageTask DevPackagePath="$(_SunderPackagePublishInputPath)"
+                             DevPackageDiscoveryRoot="$(_SunderPackagePublishDiscoveryRoot)"
+                             PackageOutputPath="$(SunderPublishPackageOutputPath)"
+                             ProjectDirectory="$(MSBuildProjectDirectory)" />
   </Target>
 </Project>

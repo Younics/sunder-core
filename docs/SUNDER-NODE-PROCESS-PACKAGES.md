@@ -76,6 +76,6 @@ Browser code imports only `@sunder/sdk/browser`. The Host injects the exact `sun
 
 ## Aggregate packages
 
-Each production build emits a canonical one-target leaf under `dist/targets/<rid>`. These leaves are accepted by `AggregateSunderPackageTask`. In a generated .NET aggregate project, include them as `SunderNodePackageTargetLeaf` items with `DiscoveryRoot` set to the same `dist/targets` root used by the producer. Do not include two leaves for the same exact role/RID key.
+Each production build emits a canonical one-target leaf under `dist/targets/<rid>`. These leaves are accepted by `AggregateSunderPackageTask`. In a primary .NET package project, include them as `SunderNodePackageTargetLeaf` items with `DiscoveryRoot` set to the same `dist/targets` root used by the producer; the canonical project automatically adds those items during current-RID and universal composition. Do not include two leaves for the same exact role/RID key.
 
 The Sunder CLI remains a thin Runtime/Registry client and does not scaffold packages. Node and web authoring use `npm create sunder-package@latest` and `@sunder/package-tool`; managed .NET/Avalonia authoring uses `dotnet new sunder-package`.

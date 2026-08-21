@@ -74,13 +74,25 @@
       "canonicalAbiProjectionBytes": 2353
     },
     {
-      "path": "invalid/bare-number.rpc.json",
-      "valid": false,
-      "schemaValid": false,
-      "errorCode": "schema-profile"
+      "path": "valid/optional-instance-facets.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "edda996d842544fe3d203a709d54659ddac953c2d69ad7ab04955fce505324e8",
+      "abiSha256": "d46bd02b33499e09a51c7bccf8be0a1cda01828cccabf2b9d1731db4bb83bc7d",
+      "canonicalDescriptorBytes": 1157,
+      "canonicalAbiProjectionBytes": 1139
     },
     {
-      "path": "invalid/base64-unbounded.rpc.json",
+      "path": "valid/unbounded-base64.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "6d79d940513ad668e17f9258c2366eb71edba7b2343519b1f8e60e381c3f5d97",
+      "abiSha256": "568a2472df183b2f74dac70ede7bb9e7ef7b80bb6a594b49c706ad66459c892b",
+      "canonicalDescriptorBytes": 378,
+      "canonicalAbiProjectionBytes": 360
+    },
+    {
+      "path": "invalid/bare-number.rpc.json",
       "valid": false,
       "schemaValid": false,
       "errorCode": "schema-profile"
@@ -207,12 +219,6 @@
     },
     {
       "path": "invalid/type-array-nullable.rpc.json",
-      "valid": false,
-      "schemaValid": false,
-      "errorCode": "schema-profile"
-    },
-    {
-      "path": "invalid/unbounded-string.rpc.json",
       "valid": false,
       "schemaValid": false,
       "errorCode": "schema-profile"

@@ -57,6 +57,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                     writer.WriteString("type", "worker.scope-open");
                     writer.WriteString("id", id);
                     WriteDeadline(writer, options);
+                    WriteParentInvocationId(writer);
                     writer.WriteEndObject();
                 }),
                 cancellationToken,
@@ -268,6 +269,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                 writer.WritePropertyName("request");
                 WorkerJson.WriteJsonValue(writer, request);
                 WriteDeadline(writer, options);
+                WriteParentInvocationId(writer);
                 writer.WriteEndObject();
             }),
             cancellationToken);
@@ -315,6 +317,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                 writer.WritePropertyName("request");
                 WorkerJson.WriteJsonValue(writer, request);
                 WriteDeadline(writer, options);
+                WriteParentInvocationId(writer);
                 writer.WriteEndObject();
             }),
             OutboundStreamIdentity.Subscribe(serviceId, methodId),
@@ -1304,6 +1307,19 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         else
         {
             writer.WriteNull("deadlineUtc");
+        }
+    }
+
+    private void WriteParentInvocationId(Utf8JsonWriter writer)
+    {
+        if (!_environment.RpcExtendedDeadlineV1) return;
+        if (_runtime.CurrentInvocationId is { } invocationId)
+        {
+            writer.WriteString("parentInvocationId", invocationId);
+        }
+        else
+        {
+            writer.WriteNull("parentInvocationId");
         }
     }
 

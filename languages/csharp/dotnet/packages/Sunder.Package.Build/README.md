@@ -4,7 +4,7 @@
 
 `Sunder.Package.Build` contains the MSBuild targets and tasks that turn a Sunder package project into local development output and distributable `.sunderpkg` archives.
 
-Reference this package from App projects with `Sunder.Sdk`, or from Runtime worker projects with `Sunder.Sdk.Worker`.
+Reference this package from App projects with `Sunder.Sdk`, or from Runtime worker projects with `Sunder.Sdk.Worker`. A package family can opt its canonical Worker project into direct composition with `SunderPackagePrimaryProject=true`; a separate aggregate wrapper is not required.
 
 ## Install
 
@@ -42,7 +42,31 @@ Package authors do not maintain `sunder-package.json` by hand.
 
 ## Expected Project Shape
 
-A package family normally contains a Worker project, an optional App project, a package-local Protocol project, and an Aggregate project. Build still inspects `ISunderAppPackageModule` metadata and infers exact `avalonia` App targets. It never infers a Runtime target from `ISunderRuntimePackageModule`; every Runtime leaf must explicitly declare one exact-RID `worker` target. A project with no App module or explicit worker emits zero targets and is valid only when it declares at least one contract bundle.
+A package family normally contains one canonical Worker/package project, an optional App project, and a package-local Protocol project. Set `SunderPackagePrimaryProject=true` only on the canonical Worker project. Point `SunderPackageAppProject` at the optional App csproj; it is a build-only input invoked through the MSBuild task and is never a Worker compile input or runtime dependency. Add the outer-only `BuildReference=false`/`ReferenceOutputAssembly=false` edge shown below so a first restore of the canonical csproj also restores the App; its condition omits the edge from guarded inner Worker evaluations.
+
+```xml
+<PropertyGroup>
+  <OutputType>Exe</OutputType>
+  <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+  <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+  <SelfContained>true</SelfContained>
+  <UseAppHost>true</UseAppHost>
+  <PublishSingleFile>false</PublishSingleFile>
+  <SunderPackagePrimaryProject>true</SunderPackagePrimaryProject>
+  <SunderPackageAppProject Condition="Exists('MyPackage.App/MyPackage.App.csproj')">MyPackage.App/MyPackage.App.csproj</SunderPackageAppProject>
+</PropertyGroup>
+
+<ItemGroup>
+  <ProjectReference Include="$(SunderPackageAppProject)"
+                    Condition="'$(SunderPackageAppProject)' != '' and '$(SunderPackageInnerBuild)' != 'true'"
+                    ReferenceOutputAssembly="false"
+                    Private="false"
+                    BuildReference="false"
+                    PrivateAssets="all" />
+</ItemGroup>
+```
+
+Build still inspects `ISunderAppPackageModule` metadata and infers exact `avalonia` App targets. It never infers a Runtime target from `ISunderRuntimePackageModule`; every Runtime leaf must explicitly declare one exact-RID `worker` target. A project with no App module or explicit worker emits zero targets and is valid only when it declares at least one contract bundle. Ordinary non-primary leaf projects and App-only packages retain their existing build and pack behavior.
 
 ```csharp
 using Sunder.Sdk.Packaging;
@@ -68,7 +92,7 @@ Build the package project:
 dotnet build .\MyPackage\MyPackage.csproj
 ```
 
-The build emits an unpacked dev package next to the build output:
+The canonical build remains one exact current-RID Worker leaf internally, emitted under the RID-specific output, and then composes that leaf with the optional App leaf into a non-RID development tree:
 
 ```text
 bin/Debug/net10.0/sunder-dev/
@@ -90,6 +114,8 @@ bin/Debug/net10.0/sunder-dev/
       <rid>/
 ```
 
+The exact Worker input remains at `bin/Debug/net10.0/<current-rid>/sunder-dev`; composition never overwrites a leaf. `Clean` removes only the safely marked composed tree. The optional App project is built exactly once, while guarded inner Worker builds suppress App build and composition recursion.
+
 Load this folder into Sunder App during development:
 
 ```powershell
@@ -104,7 +130,7 @@ Use the canonical explicit pack target:
 dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
 
-The target builds the correct leaf or aggregate development tree, validates its index, writes a deterministic `.sunderpkg`, then re-extracts and validates that exact archive before reporting success. By default the archive is beside the Release target output:
+For a primary project, the target sequentially invokes guarded `Build` targets on the same csproj for every RID in `SunderPackageRuntimeIdentifiers`, builds the optional App exactly once, aggregates the validated leaves, writes one deterministic universal `.sunderpkg`, then re-extracts and validates that exact archive before reporting success. The project is invoked through the MSBuild task, never through a self `ProjectReference`, and inner builds are intentionally not parallel. By default the archive is beside the non-RID Release output:
 
 ```text
 bin/Release/net10.0/MyPackage.1.0.0.sunderpkg
@@ -116,7 +142,7 @@ bin/Release/net10.0/MyPackage.1.0.0.sunderpkg
 dotnet publish .\MyPackage\MyPackage.csproj -c Release
 ```
 
-Generated aggregates keep one package `Version` in `Sunder.Package.props`, imported by every leaf. Custom projects should likewise define one normal MSBuild `Version` source rather than overriding different leaves independently.
+Generated package families keep one package `Version` in `Sunder.Package.props`, imported by the primary, App, and Protocol projects. Custom projects should likewise define one normal MSBuild `Version` source rather than overriding different leaves independently.
 
 ## Archive Shape
 
@@ -168,9 +194,18 @@ Common MSBuild properties used by the package targets:
 | --- | --- |
 | `Version` | Package version used in generated metadata and default archive name |
 | `SunderPackageRuntimeIdentifiers` | Semicolon-separated inferred target RIDs; defaults to all six supported exact RIDs |
+| `SunderPackagePrimaryProject` | Opts the canonical Worker/package csproj into current-RID build composition and universal pack fan-out |
+| `SunderPackageAppProject` | Optional build-only App csproj path; pair it with the documented non-building, non-compiling restore edge, and tooling explicitly builds it once |
+| `SunderPackageComposeRuntimeIdentifiers` | RID leaves selected for primary aggregation; defaults to all configured RIDs and may be set to one RID for prebuilt fan-in |
+| `SunderPackageUsePrebuiltLeaves` | Uses existing leaves without running Worker or App `Build`; requires `BuildProjectReferences=false` |
 | `RuntimeIdentifier` | Required exact RID for an explicit `worker` target; must equal that target's `Rid` |
 | `SunderPackageAssetsDirectory` | Physical source directory copied to logical `assets/`; defaults to the project `Assets` directory |
-| `SunderDevOutputPath` | Overrides the generated path only when it normalizes to the direct `TargetDir/sunder-dev` child; existing output must carry the generated marker |
+| `SunderDevOutputPath` | Overrides a leaf path only when it normalizes to the direct `TargetDir/sunder-dev` child; existing output must carry the generated marker |
+| `SunderPackageComposedOutputRoot` | Overrides the primary non-RID output root; defaults to `bin/<Configuration>/<TFM>` |
+| `SunderPackageComposedOutputPath` | Overrides the composed tree path, which must remain the direct `sunder-dev` child of the composed output root |
+| `SunderPackagePrimaryTargetLeafRoot` | Overrides the root containing prebuilt `<rid>/sunder-dev` Worker leaves |
+| `SunderPackageAppTargetLeaf` | Overrides the optional App project's prebuilt `sunder-dev` path |
+| `SunderPackageAppTargetDiscoveryRoot` | Overrides the App leaf discovery root paired with `SunderPackageAppTargetLeaf` |
 | `SunderPackageFileName` | Overrides the default archive file name |
 | `SunderPackageOutputPath` | Overrides output path for the explicit `PackSunderPackage` target |
 | `SunderPublishPackageOutputPath` | Overrides archive output path during `dotnet publish` |
@@ -231,21 +266,19 @@ Schema-first RPC metadata is authored with strict MSBuild items. Every imported 
 
 `SunderUsesContract` requires an existing `app` or `runtime` `Role`, an exact local `ContractVersion`, an explicit lowercase Boolean `Required`, and one or more unique `Actions` from `discover`, `invoke`, and `subscribe`. Version ranges are not accepted. `SunderRpcProvider` requires an existing target `Role`, exact local `ContractId` and `ContractVersion`, and `Audience="owner"` or `Audience="public"`. Public providers require public bundle exposure; package-exposed bundles can have owner-audience providers only. Uses are unique by `(Role, ContractId)` and providers by `(Role, ProviderId)`. Every Runtime target and every App target participating in RPC receives `rpc.v2`; legacy `rpc.v1` is removed.
 
-Aggregate projects can combine validated leaf trees without rebuilding them:
+For signed release fan-in, first produce validated leaves in their final RID-specific locations with binaries signed through `SunderPackageWorkerSigningTargets` before indexing, then explicitly pack without permitting project builds:
 
-```xml
-<PropertyGroup>
-  <SunderPackageAggregateProject>true</SunderPackageAggregateProject>
-</PropertyGroup>
-<ItemGroup>
-  <SunderPackageTargetLeaf Include="Worker/bin/$(Configuration)/$(TargetFramework)/linux-x64/sunder-dev"
-                           DiscoveryRoot="Worker/bin/$(Configuration)/$(TargetFramework)/linux-x64" />
-  <SunderPackageTargetLeaf Include="App/bin/$(Configuration)/$(TargetFramework)/sunder-dev"
-                           DiscoveryRoot="App/bin/$(Configuration)/$(TargetFramework)" />
-</ItemGroup>
+```powershell
+dotnet msbuild .\MyPackage.csproj `
+  -t:PackSunderPackage `
+  -p:Configuration=Release `
+  -p:SunderPackageUsePrebuiltLeaves=true `
+  -p:BuildProjectReferences=false
 ```
 
-Every target leaf requires explicit `DiscoveryRoot` metadata matching the producer's `SunderDevOutputDiscoveryRoot`. The default producer root is `TargetDir`; use the same configured ancestor on both sides when leaves are nested more deeply. `AggregateSunderPackage` holds those roots while locating and locking leaves, verifies package-wide metadata agreement (including identical contract bundles), rejects duplicate exact targets and projection collisions, and factors identical files into global or role-shared layers before validating the canonical output. Role-scoped uses and providers are unioned by `(Role, ContractId)` and `(Role, ProviderId)`: identical declarations from multiple RID leaves deduplicate, while conflicting declarations fail aggregation. App leaves therefore declare only App uses/providers and Runtime leaves only Runtime uses/providers; shared descriptor payload remains package-wide.
+This mode never invokes Worker or App `Build` and fails before reading inputs unless `BuildProjectReferences=false`. It defaults to all configured RIDs; set `SunderPackageComposeRuntimeIdentifiers=linux-x64` to compose one RID. Missing leaves, stale or mismatched package metadata, duplicate targets, changed signed bytes, and invalid indexes still fail through normal aggregate and package validation.
+
+Additional prebuilt leaves remain supported through `SunderPackageTargetLeaf` and `SunderNodePackageTargetLeaf`. Every additional item requires explicit `DiscoveryRoot` metadata matching its producer. `AggregateSunderPackage` holds those roots while locating and locking leaves, verifies package-wide metadata agreement (including identical contract bundles), rejects duplicate exact targets and projection collisions, and factors identical files into global or role-shared layers before validating the canonical output. Role-scoped uses and providers are unioned by `(Role, ContractId)` and `(Role, ProviderId)`: identical declarations from multiple RID leaves deduplicate, while conflicting declarations fail aggregation. App leaves therefore declare only App uses/providers and Runtime leaves only Runtime uses/providers; shared descriptor payload remains package-wide.
 
 ## Validate Before Publishing
 

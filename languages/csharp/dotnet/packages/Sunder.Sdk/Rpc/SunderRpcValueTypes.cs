@@ -170,8 +170,6 @@ public readonly record struct SunderRpcDecimal
 
 internal static class SunderRpcValueText
 {
-    private const int MaximumTextLength = 1_000_000;
-
     public static bool IsOffsetDateTime(string value)
     {
         if (value.Length < 20
@@ -260,7 +258,7 @@ internal static class SunderRpcValueText
 
     public static bool IsDuration(string value)
     {
-        if (value.Length < 3 || value.Length > MaximumTextLength || value[0] != 'P') return false;
+        if (value.Length < 3 || value[0] != 'P') return false;
         var index = 1;
         var components = 0;
         foreach (var designator in new[] { 'Y', 'M', 'D' })
@@ -305,7 +303,7 @@ internal static class SunderRpcValueText
 
     public static bool IsAbsoluteUri(string value)
     {
-        if (value.Length is 0 or > MaximumTextLength
+        if (value.Length == 0
             || value.Any(static character => character >= 0x7f || character <= 0x20 || character == '\\'))
         {
             return false;
@@ -335,7 +333,7 @@ internal static class SunderRpcValueText
 
     private static bool IsCanonicalExactNumber(string value, bool allowFraction)
     {
-        if (value.Length is 0 or > MaximumTextLength) return false;
+        if (value.Length == 0) return false;
         var negative = value[0] == '-';
         var offset = negative ? 1 : 0;
         if (offset == value.Length) return false;

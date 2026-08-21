@@ -368,6 +368,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var shellLifecycleApplied = false;
         if (_mainWindowViewModel is not null)
         {
             await _mainWindowViewModel.ApplyPackageLifecycleSnapshotAsync(
@@ -376,10 +377,21 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 retryDisabledPackageIds,
                 cancellationToken,
                 detachAuxiliaryPackageViews: DetachSettingsWindowPackageView).ConfigureAwait(false);
+            shellLifecycleApplied = true;
         }
 
-        await ApplyPackagesWindowSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
-        await RefreshSettingsWindowPackageSectionsAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await ApplyAuxiliaryWindowPackageSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (
+            shellLifecycleApplied
+            && cancellationToken.IsCancellationRequested
+            && AppPackageUiFaultPolicy.IsRecoverable(exception))
+        {
+            AppSessionLog.WriteInfo(
+                "Skipped auxiliary package-window refresh after the shell lifecycle commit was applied.");
+        }
     }
 
     internal async Task ApplyPackageMetadataSnapshotAsync(
@@ -392,40 +404,51 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
             await _mainWindowViewModel.ApplyPackageMetadataSnapshotAsync(snapshot, cancellationToken)
                 .ConfigureAwait(false);
         }
-        await ApplyPackagesWindowSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
-        await RefreshSettingsWindowPackageSectionsAsync(cancellationToken).ConfigureAwait(false);
+        await ApplyAuxiliaryWindowPackageSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task ApplyPackagesWindowSnapshotAsync(
+    private Task ApplyAuxiliaryWindowPackageSnapshotAsync(
         RuntimePackageSnapshot snapshot,
         CancellationToken cancellationToken)
-    {
-        if (_packagesWindow?.DataContext is not PackagesWindowViewModel viewModel)
+        => InvokeOnUiThreadAsync(async () =>
         {
-            return;
-        }
+            if (_packagesWindow?.DataContext is PackagesWindowViewModel packagesViewModel)
+            {
+                await packagesViewModel.ApplyPackageSnapshotAsync(snapshot, cancellationToken);
+            }
+
+            if (_settingsWindow?.DataContext is SettingsWindowViewModel settingsViewModel)
+            {
+                await settingsViewModel.RefreshPackageSectionsAsync(cancellationToken);
+            }
+        }, cancellationToken);
+
+    private Task RefreshSettingsWindowPackageSectionsAsync(CancellationToken cancellationToken = default)
+        => InvokeOnUiThreadAsync(async () =>
+        {
+            if (_settingsWindow?.DataContext is SettingsWindowViewModel viewModel)
+            {
+                await viewModel.RefreshPackageSectionsAsync(cancellationToken);
+            }
+        }, cancellationToken);
+
+    private Task InvokeOnUiThreadAsync(
+        Func<Task> action,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         if (_uiDispatcher.CheckAccess())
         {
-            await viewModel.ApplyPackageSnapshotAsync(snapshot, cancellationToken);
-        }
-        else
-        {
-            await _uiDispatcher.InvokeAsync(() => viewModel.ApplyPackageSnapshotAsync(snapshot, cancellationToken));
-        }
-    }
-
-    private async Task RefreshSettingsWindowPackageSectionsAsync(CancellationToken cancellationToken = default)
-    {
-        if (!_uiDispatcher.CheckAccess() && Application.Current is not null)
-        {
-            await _uiDispatcher.InvokeAsync(() => RefreshSettingsWindowPackageSectionsAsync(cancellationToken));
-            return;
+            return action();
         }
 
-        if (_settingsWindow?.DataContext is SettingsWindowViewModel viewModel)
-        {
-            await viewModel.RefreshPackageSectionsAsync(cancellationToken);
-        }
+        return _uiDispatcher.InvokeAsync<Task>(
+            () =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return action();
+            },
+            cancellationToken).Unwrap();
     }
 
     private void DetachSettingsWindowPackageView()

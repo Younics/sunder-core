@@ -211,6 +211,44 @@ public sealed class RuntimeEventSubscriptionServiceTests
     }
 
     [Fact]
+    public async Task ForcePackageRecoveryPresentationAsync_TimeoutAfterAppliedWriterReturnsApplied()
+    {
+        var runtimeInstanceId = Guid.NewGuid();
+        var package = CreateActiveAppPackage();
+        var snapshot = CreateSnapshot(runtimeInstanceId, 1, [package]);
+        var source = CreateSource("hash-a", 1);
+        var factory = new StreamingRuntimeClientFactory(snapshot);
+        factory.Client.PackageSources = [source];
+        await using var service = new RuntimeEventSubscriptionService(
+            factory,
+            new DeveloperLogService());
+        var writerStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        service.InitializePresentation(snapshot, [source], async (_, _, _, cancellationToken) =>
+        {
+            writerStarted.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The shell lifecycle commit succeeded before optional window refresh was canceled.
+            }
+        });
+
+        var recovery = service.ForcePackageRecoveryPresentationAsync(
+            "agent",
+            "hash-a",
+            TimeSpan.FromMilliseconds(50));
+        await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(
+            AppPackageUiRecoveryPresentationOutcome.Applied,
+            await recovery.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
     public async Task ForcePackageRecoveryPresentationAsync_NormalRuntimePresentationSupersedesRecovery()
     {
         var runtimeInstanceId = Guid.NewGuid();
@@ -416,6 +454,62 @@ public sealed class RuntimeEventSubscriptionServiceTests
         Assert.Equal(
             AppPackageUiRecoveryPresentationOutcome.TimedOut,
             await recovery.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task ForcePackageRecoveryPresentationAsync_CompletedTransferSurvivesCanceledSnapshotRead()
+    {
+        var runtimeInstanceId = Guid.NewGuid();
+        var package = CreateActiveAppPackage();
+        var initial = CreateSnapshot(runtimeInstanceId, 1, [package]);
+        var replacement = CreateSnapshot(runtimeInstanceId, 2, [package]);
+        var laterFailure = CreateSnapshot(runtimeInstanceId, 3, [package]);
+        var initialSource = CreateSource("hash-a", 1);
+        var replacementSource = CreateSource("hash-a", 2);
+        var laterSource = CreateSource("hash-a", 3);
+        var factory = new StreamingRuntimeClientFactory(initial);
+        factory.Client.PackageSources = [initialSource];
+        var readStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRead = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.Client.GetRuntimePackageSnapshotAsyncCallback = async cancellationToken =>
+        {
+            readStarted.TrySetResult();
+            await releaseRead.Task;
+            cancellationToken.ThrowIfCancellationRequested();
+            return initial;
+        };
+        await using var service = new RuntimeEventSubscriptionService(
+            factory,
+            new DeveloperLogService());
+        var writes = new List<long>();
+        service.InitializePresentation(initial, [initialSource], (snapshot, _, _, _) =>
+        {
+            writes.Add(snapshot.SessionGeneration);
+            return snapshot.SessionGeneration == 3
+                ? Task.FromException(new InvalidOperationException("later presentation failed"))
+                : Task.CompletedTask;
+        });
+
+        var recovery = service.ForcePackageRecoveryPresentationAsync(
+            "agent",
+            "hash-a",
+            TimeSpan.FromSeconds(2));
+        await readStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        factory.Client.PackageSources = [replacementSource];
+        factory.Client.SetSnapshot(replacement);
+        await service.ApplySnapshotAsync(replacement, [replacementSource])
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ApplySnapshotAsync(laterFailure, [laterSource]));
+
+        releaseRead.TrySetResult();
+
+        Assert.Equal(
+            AppPackageUiRecoveryPresentationOutcome.Applied,
+            await recovery.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal([2L, 3L], writes);
     }
 
     [Fact]

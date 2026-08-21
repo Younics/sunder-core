@@ -63,9 +63,14 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        var descriptor = await management.OpenAppRpcCallScopeAsync(
+        var result = await management.OpenAppRpcCallScopeAsync(
             new RuntimeRpcAppCallScopeOpenRequest(sessionId, options?.DeadlineUtc),
             cancellationToken).ConfigureAwait(false);
+        ThrowIfError(result.Error);
+        var descriptor = result.Scope
+                         ?? throw Protocol(
+                             "rpc.transport.empty-call-scope",
+                             "The Runtime returned an empty RPC call scope.");
         return new RuntimeAppWebRpcCallScope(this, descriptor);
     }
 

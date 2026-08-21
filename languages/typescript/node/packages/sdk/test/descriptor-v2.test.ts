@@ -605,6 +605,56 @@ test("V2 value-profile instance validation covers portable JSON, asserted format
   assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Node", null));
 });
 
+test("V2 quantitative instance facets are optional and have no million-unit default ceiling", () => {
+  const descriptor = descriptorWithDefinitions(relaxedFacetDefinitions(), "Unit");
+  const longText = "x".repeat(1_000_001);
+  const largeBase64 = "AAAA".repeat(333_334);
+  const largeInteger = "9".repeat(1_000_001);
+
+  assert.doesNotThrow(() => validateRpcContractDescriptor(descriptor));
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Text", longText));
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/LargeTextBound", longText));
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Values", [true, false]));
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/LargeValuesBound", [true, false]));
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/StringMap", { "": true }));
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Bytes", largeBase64));
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/BigInteger", largeInteger));
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Decimal", "1234567890.123456789"));
+});
+
+test("V2 instance validation is iterative and has no schema-depth limit", () => {
+  const descriptor = descriptorWithDefinitions(relaxedFacetDefinitions(), "Unit");
+  let value: unknown = [];
+  for (let depth = 0; depth < 10_000; depth++) value = [value];
+
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/RecursiveArray", value));
+  assert.doesNotThrow(() => validateRpcInstance(descriptor, "#/$defs/Any", value));
+
+  const cyclic: { self?: unknown } = {};
+  cyclic.self = cyclic;
+  assert.throws(() => validateRpcInstance(descriptor, "#/$defs/Any", cyclic), /cyclic object graph/u);
+});
+
+test("V2 explicitly supplied instance minima must not exceed maxima", () => {
+  const schemas: readonly JsonSchema[] = [
+    { type: "string", minLength: 2, maxLength: 1 },
+    { type: "array", items: { type: "boolean" }, minItems: 2, maxItems: 1 },
+    {
+      type: "object",
+      additionalProperties: { type: "boolean" },
+      propertyNames: { type: "string" },
+      minProperties: 2,
+      maxProperties: 1,
+    },
+  ];
+  for (const schema of schemas) {
+    assert.throws(
+      () => validateRpcContractDescriptor(descriptorWithDefinitions({ Value: schema }, "Value")),
+      /must not exceed/u,
+    );
+  }
+});
+
 test("V2 descriptor and runtime floating-point values use format-specific IEEE-754 semantics", () => {
   const descriptor = descriptorWithDefinitions({
     Float32: {
@@ -762,6 +812,26 @@ function valueProfileDefinitions(): Readonly<Record<string, JsonSchema>> {
       required: ["any", "dynamic", "node"],
       additionalProperties: false,
     },
+  };
+}
+
+function relaxedFacetDefinitions(): Readonly<Record<string, JsonSchema>> {
+  return {
+    Unit: { type: "object", properties: {}, required: [], additionalProperties: false, maxProperties: 2_000_000 },
+    Any: {},
+    Text: { type: "string" },
+    LargeTextBound: { type: "string", maxLength: 2_000_000 },
+    Values: { type: "array", items: { type: "boolean" } },
+    LargeValuesBound: { type: "array", items: { type: "boolean" }, maxItems: 2_000_000 },
+    StringMap: {
+      type: "object",
+      additionalProperties: { type: "boolean" },
+      propertyNames: { type: "string" },
+    },
+    Bytes: { type: "string", contentEncoding: "base64" },
+    BigInteger: { type: "string", format: "big-integer" },
+    Decimal: { type: "string", format: "decimal" },
+    RecursiveArray: { type: "array", items: { $ref: "#/$defs/RecursiveArray" } },
   };
 }
 

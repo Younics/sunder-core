@@ -144,12 +144,12 @@ public sealed class PackageTemplateTests
                 .SelectMany(static document => document.Descendants("PackageReference"))
                 .Where(reference => reference.Attribute("Include")?.Value.StartsWith("Sunder.", StringComparison.Ordinal) == true)
                 .ToArray();
-            Assert.Equal(9, sunderReferences.Length);
+            Assert.Equal(8, sunderReferences.Length);
             Assert.All(sunderReferences, reference => Assert.Equal(TestVersionRange, reference.Attribute("Version")?.Value));
 
             Assert.True(File.Exists(Path.Combine(output, "Escaped.Sample.csproj")));
             Assert.True(File.Exists(Path.Combine(output, "Escaped.Sample.Protocol", "Escaped.Sample.Protocol.csproj")));
-            Assert.True(File.Exists(Path.Combine(output, "Escaped.Sample.Worker", "Escaped.Sample.Worker.csproj")));
+            Assert.False(File.Exists(Path.Combine(output, "Escaped.Sample.Worker", "Escaped.Sample.Worker.csproj")));
             Assert.True(File.Exists(Path.Combine(output, "Escaped.Sample.App", "Escaped.Sample.App.csproj")));
             Assert.True(File.Exists(Path.Combine(output, "Escaped.Sample.Protocol", "Contracts", "sample.rpc.json")));
             Assert.False(Directory.Exists(Path.Combine(output, "Escaped.Sample.Protocol", "Generated")));
@@ -170,7 +170,7 @@ public sealed class PackageTemplateTests
             var generatedProjects = Directory.EnumerateFiles(output, "*.csproj", SearchOption.AllDirectories)
                 .Select(XDocument.Load)
                 .ToArray();
-            Assert.Equal(4, generatedProjects.Length);
+            Assert.Equal(3, generatedProjects.Length);
             Assert.All(generatedProjects, project =>
             {
                 Assert.Empty(project.Descendants("Version"));
@@ -186,8 +186,17 @@ public sealed class PackageTemplateTests
             Assert.DoesNotContain(protocolProject.Descendants("PackageId"), _ => true);
             var workerProject = XDocument.Load(Path.Combine(
                 output,
-                "Escaped.Sample.Worker",
-                "Escaped.Sample.Worker.csproj"));
+                "Escaped.Sample.csproj"));
+            Assert.Equal("true", workerProject.Descendants("SunderPackagePrimaryProject").Single().Value);
+            Assert.Equal(
+                "Escaped.Sample.App\\Escaped.Sample.App.csproj",
+                workerProject.Descendants("SunderPackageAppProject").Single().Value);
+            var appRestoreReference = Assert.Single(
+                workerProject.Descendants("ProjectReference"),
+                item => item.Attribute("Include")?.Value == "$(SunderPackageAppProject)");
+            Assert.Equal("false", appRestoreReference.Attribute("BuildReference")?.Value);
+            Assert.Equal("false", appRestoreReference.Attribute("ReferenceOutputAssembly")?.Value);
+            Assert.Contains("SunderPackageInnerBuild", appRestoreReference.Attribute("Condition")?.Value, StringComparison.Ordinal);
             var sampleBundle = Assert.Single(
                 workerProject.Descendants("SunderContractBundle"),
                 item => item.Attribute("ContractId")?.Value == "escaped.sample.sample");
@@ -221,8 +230,8 @@ public sealed class PackageTemplateTests
             Assert.Null(stackProvider.Attribute("VersionRange"));
             foreach (var roleProjectPath in new[]
                      {
-                          Path.Combine(output, "Escaped.Sample.Worker", "Escaped.Sample.Worker.csproj"),
-                         Path.Combine(output, "Escaped.Sample.App", "Escaped.Sample.App.csproj"),
+                          Path.Combine(output, "Escaped.Sample.csproj"),
+                          Path.Combine(output, "Escaped.Sample.App", "Escaped.Sample.App.csproj"),
                      })
             {
                 var protocolReference = XDocument.Load(roleProjectPath)
@@ -258,7 +267,7 @@ public sealed class PackageTemplateTests
     }
 
     [Fact]
-    public async Task GeneratedAggregate_BuildsAndPacksUniversalPackage()
+    public async Task GeneratedPrimaryProject_BuildsCurrentRidAndPacksUniversalPackage()
     {
         var repositoryRoot = FindRepositoryRoot();
         var root = CreateTempDirectory();
@@ -301,12 +310,13 @@ public sealed class PackageTemplateTests
             var packagesPath = Path.Combine(root, "packages");
             var shapes = new[]
             {
-                new GeneratedShape("Default", [], 6, HasApp: false, HasDependency: false),
-                new GeneratedShape("Avalonia", ["--withAvalonia"], 12, HasApp: true, HasDependency: false),
-                new GeneratedShape("Stacks", ["--withStacks"], 6, HasApp: false, HasDependency: false),
+                new GeneratedShape("Default", [], 1, 6, HasApp: false, HasDependency: false),
+                new GeneratedShape("Avalonia", ["--withAvalonia"], 7, 12, HasApp: true, HasDependency: false),
+                new GeneratedShape("Stacks", ["--withStacks"], 1, 6, HasApp: false, HasDependency: false),
                 new GeneratedShape(
                     "HostDependency",
                     ["--withHostDependency", "--hostPackageId", "host.package", "--hostPackageVersionRange", ">=1.1.0 <1.2.0"],
+                    1,
                     6,
                     HasApp: false,
                     HasDependency: true),
@@ -334,11 +344,11 @@ public sealed class PackageTemplateTests
                 generateArguments.AddRange(shape.Options);
                 AssertSuccess(await RunDotnetAsync(repositoryRoot, generateArguments.ToArray()));
 
-                var aggregateProject = Path.Combine(output, projectName + ".csproj");
+                var primaryProject = Path.Combine(output, projectName + ".csproj");
                 AssertSuccess(await RunDotnetAsync(
                     output,
                     "restore",
-                    aggregateProject,
+                    primaryProject,
                     "--source",
                     localFeed,
                     "--source",
@@ -347,13 +357,17 @@ public sealed class PackageTemplateTests
                     packagesPath,
                     "--disable-parallel",
                     "--ignore-failed-sources"));
-                AssertSuccess(await RunDotnetAsync(
+                var build = await RunDotnetAsync(
                     output,
                     "build",
-                    aggregateProject,
+                    primaryProject,
                     "--no-restore",
                     "--disable-build-servers",
-                    "-m:1"));
+                    "-m:1");
+                AssertSuccess(build);
+                Assert.Equal(
+                    shape.HasApp ? 1 : 0,
+                    CountOccurrences(build.StandardOutput + build.StandardError, projectName + ".App ->"));
 
                 var protocolProjectPath = Path.Combine(
                     output,
@@ -393,8 +407,13 @@ public sealed class PackageTemplateTests
                         $"Restore did not create a lock file for {generatedProject}.");
                 }
 
-                var aggregateOutput = Path.Combine(output, "bin", "Debug", "net10.0");
-                var devPackage = Path.Combine(aggregateOutput, "sunder-dev");
+                var primaryOutput = Path.Combine(output, "bin", "Debug", "net10.0");
+                var devPackage = Path.Combine(primaryOutput, "sunder-dev");
+                var workerLeaf = Path.Combine(
+                    primaryOutput,
+                    System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier,
+                    "sunder-dev");
+                Assert.True(File.Exists(Path.Combine(workerLeaf, "manifest", "sunder-package.json")));
                 Assert.True(File.Exists(Path.Combine(devPackage, "manifest", "sunder-package.json")));
                 Assert.True(File.Exists(Path.Combine(devPackage, "manifest", "content-index.json")));
                 var bundledSampleDescriptor = Path.Combine(
@@ -432,7 +451,7 @@ public sealed class PackageTemplateTests
                     Assert.Equal(3, manifest.RootElement.GetProperty("manifestVersion").GetInt32());
                     Assert.Equal("1.0.0", manifest.RootElement.GetProperty("version").GetString());
                     var targets = manifest.RootElement.GetProperty("targets").EnumerateArray().ToArray();
-                    Assert.Equal(shape.TargetCount, targets.Length);
+                    Assert.Equal(shape.BuildTargetCount, targets.Length);
                     Assert.Contains(targets, target => target.GetProperty("role").GetString() == "runtime");
                     Assert.Equal(
                         shape.HasApp,
@@ -531,17 +550,22 @@ public sealed class PackageTemplateTests
                         manifest.RootElement.GetProperty("dependsOn").GetArrayLength());
                 }
 
-                AssertSuccess(await RunDotnetAsync(
+                var pack = await RunDotnetAsync(
                     output,
                     "msbuild",
-                    aggregateProject,
+                    primaryProject,
                     "-t:PackSunderPackage",
                     "-p:Configuration=Debug",
                     "-m:1",
                     "-nr:false",
-                    "-nologo"));
-                var archivePath = Path.Combine(aggregateOutput, $"{projectName}.1.0.0.sunderpkg");
+                    "-nologo");
+                AssertSuccess(pack);
+                Assert.Equal(
+                    shape.HasApp ? 1 : 0,
+                    CountOccurrences(pack.StandardOutput + pack.StandardError, projectName + ".App ->"));
+                var archivePath = Path.Combine(primaryOutput, $"{projectName}.1.0.0.sunderpkg");
                 Assert.True(File.Exists(archivePath), $"Universal package was not created: {archivePath}");
+                var firstArchiveBytes = await File.ReadAllBytesAsync(archivePath);
                 using var archive = ZipFile.OpenRead(archivePath);
                 Assert.Contains(archive.Entries, entry => entry.FullName == "manifest/sunder-package.json");
                 Assert.Contains(archive.Entries, entry => entry.FullName == "manifest/content-index.json");
@@ -552,6 +576,56 @@ public sealed class PackageTemplateTests
                 Assert.DoesNotContain(archive.Entries, entry => entry.FullName == "sunder-package.json");
                 Assert.DoesNotContain(archive.Entries, entry => entry.FullName.StartsWith("payload/lib/", StringComparison.Ordinal));
                 Assert.DoesNotContain(archive.Entries, entry => entry.FullName.StartsWith("payload/assets/", StringComparison.Ordinal));
+                var packedManifestEntry = Assert.Single(
+                    archive.Entries,
+                    entry => entry.FullName == "manifest/sunder-package.json");
+                using (var packedManifest = JsonDocument.Parse(packedManifestEntry.Open()))
+                {
+                    var packedTargets = packedManifest.RootElement.GetProperty("targets").EnumerateArray().ToArray();
+                    Assert.Equal(shape.PackTargetCount, packedTargets.Length);
+                    Assert.Equal(
+                        shape.HasApp,
+                        packedTargets.Any(target => target.GetProperty("role").GetString() == "app"));
+                }
+                archive.Dispose();
+
+                if (shape.Name == "Default")
+                {
+                    AssertSuccess(await RunDotnetAsync(
+                        output,
+                        "msbuild",
+                        primaryProject,
+                        "-t:PackSunderPackage",
+                        "-p:Configuration=Debug",
+                        "-m:1",
+                        "-nr:false",
+                        "-nologo"));
+                    Assert.Equal(firstArchiveBytes, await File.ReadAllBytesAsync(archivePath));
+                }
+
+                if (shape.HasApp)
+                {
+                    var prebuiltArchivePath = Path.Combine(primaryOutput, $"{projectName}.prebuilt.sunderpkg");
+                    var prebuiltPack = await RunDotnetAsync(
+                        output,
+                        "msbuild",
+                        primaryProject,
+                        "-t:PackSunderPackage",
+                        "-p:Configuration=Debug",
+                        "-p:SunderPackageUsePrebuiltLeaves=true",
+                        "-p:BuildProjectReferences=false",
+                        $"-p:SunderPackageOutputPath={prebuiltArchivePath}",
+                        "-m:1",
+                        "-nr:false",
+                        "-nologo");
+                    AssertSuccess(prebuiltPack);
+                    Assert.Equal(
+                        0,
+                        CountOccurrences(
+                            prebuiltPack.StandardOutput + prebuiltPack.StandardError,
+                            projectName + ".App ->"));
+                    Assert.True(File.Exists(prebuiltArchivePath));
+                }
             }
         }
         finally
@@ -644,6 +718,18 @@ public sealed class PackageTemplateTests
             result.ExitCode == 0,
             $"dotnet exited with {result.ExitCode}.{Environment.NewLine}{result.StandardOutput}{Environment.NewLine}{result.StandardError}");
 
+    private static int CountOccurrences(string value, string expected)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = value.IndexOf(expected, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += expected.Length;
+        }
+        return count;
+    }
+
     private static string ResolveConfiguration()
         => new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)).Parent?.Name
            ?? "Debug";
@@ -691,7 +777,8 @@ public sealed class PackageTemplateTests
     private sealed record GeneratedShape(
         string Name,
         IReadOnlyList<string> Options,
-        int TargetCount,
+        int BuildTargetCount,
+        int PackTargetCount,
         bool HasApp,
         bool HasDependency);
 }

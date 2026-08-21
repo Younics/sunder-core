@@ -838,6 +838,134 @@ public sealed class WorkerV3RuntimeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task WorkerV3_NestedInvocationEmitsLineageOnlyWhenCapabilityIsDeclared(
+        bool rpcExtendedDeadlineV1)
+    {
+        SunderWorkerContext? context = null;
+        var handler = new TestRpcHandler
+        {
+            Unary = async (_, _, _, request, cancellationToken) =>
+            {
+                _ = await context!.Rpc.InvokeAsync(
+                    new SunderRpcEndpointReference("rpc1_example"),
+                    "messages",
+                    "send",
+                    request,
+                    cancellationToken: cancellationToken);
+                return request.Clone();
+            },
+        };
+        await using var worker = new WorkerHarness(workerContext =>
+        {
+            context = workerContext;
+            return new SunderWorkerOptions([WorkerHarness.Registration(handler)]);
+        }, rpcExtendedDeadlineV1: rpcExtendedDeadlineV1);
+        await worker.HandshakeAndActivateAsync();
+
+        await worker.SendInvocationAsync("parent1", "unary", "nested");
+        using (var nested = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.invoke", nested.RootElement.GetProperty("type").GetString());
+            if (rpcExtendedDeadlineV1)
+            {
+                Assert.Equal("parent1", nested.RootElement.GetProperty("parentInvocationId").GetString());
+            }
+            else
+            {
+                Assert.False(nested.RootElement.TryGetProperty("parentInvocationId", out _));
+            }
+            await worker.SendAsync(new
+            {
+                type = "host.result",
+                id = nested.RootElement.GetProperty("id").GetString(),
+                value = new { accepted = true },
+            });
+        }
+        using (var result = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.result", result.RootElement.GetProperty("type").GetString());
+        }
+
+        await worker.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task WorkerV3_OptedInNestedScopeAndSubscribeCarryParentInvocationId()
+    {
+        SunderWorkerContext? context = null;
+        var handler = new TestRpcHandler
+        {
+            Unary = async (_, _, _, request, cancellationToken) =>
+            {
+                await using var scope = await context!.Rpc.CreateCallScopeAsync(
+                    cancellationToken: cancellationToken);
+                await foreach (var _ in scope.SubscribeAsync(
+                                   new SunderRpcEndpointReference("rpc1_example"),
+                                   "messages",
+                                   "watch",
+                                   request,
+                                   cancellationToken: cancellationToken))
+                {
+                }
+                return request.Clone();
+            },
+        };
+        await using var worker = new WorkerHarness(workerContext =>
+        {
+            context = workerContext;
+            return new SunderWorkerOptions([WorkerHarness.Registration(handler)]);
+        }, rpcExtendedDeadlineV1: true);
+        await worker.HandshakeAndActivateAsync();
+
+        await worker.SendInvocationAsync("scope-parent", "unary", "nested-scope");
+        const string scopeId = "nested-scope-id";
+        using (var open = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.scope-open", open.RootElement.GetProperty("type").GetString());
+            Assert.Equal("scope-parent", open.RootElement.GetProperty("parentInvocationId").GetString());
+            await worker.SendAsync(new
+            {
+                type = "host.result",
+                id = open.RootElement.GetProperty("id").GetString(),
+                value = new
+                {
+                    scopeId,
+                    deadlineUtc = DateTimeOffset.UtcNow.AddMinutes(1).UtcDateTime.ToString("O"),
+                },
+            });
+        }
+        using (var subscribe = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.subscribe", subscribe.RootElement.GetProperty("type").GetString());
+            Assert.Equal(scopeId, subscribe.RootElement.GetProperty("scopeId").GetString());
+            Assert.Equal("scope-parent", subscribe.RootElement.GetProperty("parentInvocationId").GetString());
+            await worker.SendAsync(new
+            {
+                type = "host.complete",
+                id = subscribe.RootElement.GetProperty("id").GetString(),
+            });
+        }
+        using (var close = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.scope-close", close.RootElement.GetProperty("type").GetString());
+            await worker.SendAsync(new
+            {
+                type = "host.result",
+                id = close.RootElement.GetProperty("id").GetString(),
+                value = (object?)null,
+            });
+        }
+        using (var result = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.result", result.RootElement.GetProperty("type").GetString());
+        }
+
+        await worker.ShutdownAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task WorkerV3_ShutdownInterruptsPendingCandidateOrCommitCallback(bool duringCommit)
     {
         var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1004,6 +1132,7 @@ public sealed class WorkerV3RuntimeTests
         {
             Assert.Equal("worker.scope-open", request.RootElement.GetProperty("type").GetString());
             Assert.Equal(requestedDeadline, request.RootElement.GetProperty("deadlineUtc").GetDateTimeOffset());
+            Assert.False(request.RootElement.TryGetProperty("parentInvocationId", out _));
             await worker.SendAsync(new
             {
                 type = "host.result",

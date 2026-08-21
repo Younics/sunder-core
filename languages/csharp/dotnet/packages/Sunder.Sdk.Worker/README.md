@@ -29,7 +29,7 @@ Worker projects are exact-RID, self-contained executables. Reference the exact c
 </ItemGroup>
 ```
 
-Build one native leaf per supported RID and combine those validated leaves with an aggregate package project. The worker apphost and complete self-contained publish closure are stored only in that exact target layer; a worker assembly does not implement `ISunderRuntimePackageModule`.
+Set `SunderPackagePrimaryProject=true` on the canonical Worker/package csproj. A normal build emits its current native leaf and composed development tree; `PackSunderPackage` invokes guarded builds of that same csproj for every configured RID and aggregates the validated leaves without a wrapper project. The worker apphost and complete self-contained publish closure are stored only in that exact target layer; a worker assembly does not implement `ISunderRuntimePackageModule`.
 
 Register the providers declared by the package manifest and run the worker from the process entry point:
 

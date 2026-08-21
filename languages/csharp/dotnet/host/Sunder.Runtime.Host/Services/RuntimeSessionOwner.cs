@@ -453,6 +453,38 @@ internal sealed class RuntimeSessionOwner
         }
     }
 
+    internal void LogRpcProviderFaultDiagnostic(RuntimeRpcFailureContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        // This Host-owned Runtime log is the durable fallback for in-process providers;
+        // process providers additionally persist the same safe context in package events.
+        _logger.LogError(
+            new EventId(2401, "RuntimeRpcProviderFault"),
+            "Runtime RPC provider fault diagnostic: callerPackageId={CallerPackageId} callerPackageVersion={CallerPackageVersion} callerActivationId={CallerActivationId} providerPackageId={ProviderPackageId} providerPackageVersion={ProviderPackageVersion} providerId={ProviderId} providerActivationId={ProviderActivationId} contractId={ContractId} serviceId={ServiceId} methodId={MethodId} callKind={CallKind} errorKind={ErrorKind} errorCode={ErrorCode} validationCode={ValidationCode} validationPath={ValidationPath} valueUtf8Bytes={ValueUtf8Bytes} valueMaximumDepth={ValueMaximumDepth} valueTotalNodes={ValueTotalNodes} valueMaximumObjectMembers={ValueMaximumObjectMembers} valueInlineDecodedBytes={ValueInlineDecodedBytes} exceptionType={ExceptionType} exceptionFingerprint={ExceptionFingerprint}",
+            context.CallerPackageId,
+            context.CallerPackageVersion,
+            context.CallerActivationId,
+            context.ProviderPackageId,
+            context.ProviderPackageVersion,
+            context.ProviderId,
+            context.ProviderActivationId,
+            context.ContractId,
+            context.ServiceId,
+            context.MethodId,
+            context.CallKind,
+            context.ErrorKind,
+            context.ErrorCode,
+            context.ValidationCode,
+            context.ValidationPath,
+            context.ValueUtf8Bytes,
+            context.ValueMaximumDepth,
+            context.ValueTotalNodes,
+            context.ValueMaximumObjectMembers,
+            context.ValueInlineDecodedBytes,
+            context.ExceptionType,
+            context.ExceptionFingerprint);
+    }
+
     internal bool HandleRpcProviderFault(
         string packageId,
         PackageActivationIdentity activationIdentity,

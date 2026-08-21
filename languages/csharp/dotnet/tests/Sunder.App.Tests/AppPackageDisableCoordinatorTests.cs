@@ -133,7 +133,7 @@ public sealed class AppPackageDisableCoordinatorTests
     {
         var disabled = false;
         await using var backgroundProcesses = new BackgroundProcessQueueService();
-        var viewRegistry = new AppPackageViewRegistry();
+        var viewRegistry = new AppPackageViewRegistry(ImmediateUiDispatcher.Instance);
         viewRegistry.RegisterPackageView(
             "agent",
             new PackageViewRegistration("agent.chat", "Chat"),
@@ -161,6 +161,7 @@ public sealed class AppPackageDisableCoordinatorTests
                 WasLoaded: true,
                 AppPackageUiCleanupOutcome.Proven)),
             quarantineBoundariesAsync: ProvenBoundaryCleanupAsync,
+            deferNotification: false,
             out var cleanup));
 
         Assert.Equal(
@@ -173,7 +174,7 @@ public sealed class AppPackageDisableCoordinatorTests
         Func<string, bool> markPackageDisabled,
         Func<string, bool> isPackageDisabled)
     {
-        var viewRegistry = new AppPackageViewRegistry();
+        var viewRegistry = new AppPackageViewRegistry(ImmediateUiDispatcher.Instance);
         var viewFacade = new AppPackageHostedViewFacade(
             viewRegistry,
             isPackageDisabled,
@@ -194,5 +195,24 @@ public sealed class AppPackageDisableCoordinatorTests
     {
         public void Dispose()
             => throw new InvalidOperationException("view cleanup failed");
+    }
+
+    private sealed class ImmediateUiDispatcher : IUiDispatcher
+    {
+        public static ImmediateUiDispatcher Instance { get; } = new();
+
+        public bool CheckAccess() => true;
+
+        public Task InvokeAsync(Action action)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        public Task InvokeAsync(Func<Task> action) => action();
+
+        public Task<T> InvokeAsync<T>(Func<T> action) => Task.FromResult(action());
+
+        public Task<T> InvokeAsync<T>(Func<Task<T>> action) => action();
     }
 }

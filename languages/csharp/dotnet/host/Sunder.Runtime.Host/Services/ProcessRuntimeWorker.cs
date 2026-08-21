@@ -14,6 +14,7 @@ using Sunder.Package.Format;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.Runtime.Host.Services;
@@ -21,6 +22,7 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 {
     private const int StreamBufferCapacity = 32;
+    private const string RpcExtendedDeadlineEnvironmentVariable = "SUNDER_RPC_EXTENDED_DEADLINE_V1";
     private readonly ILogger _logger;
     private readonly PreparedRuntimePackage _package;
     private readonly RuntimePackageDataResources _packageData;
@@ -35,6 +37,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     private readonly CancellationToken _hostStopping;
     private readonly string _workerTemporaryPath;
     private readonly IReadOnlyList<ProviderIdentity> _expectedProviders;
+    private readonly bool _rpcExtendedDeadlineV1;
     private readonly object _stateGate = new();
     private readonly object _callGate = new();
     private readonly object _writeQueueGate = new();
@@ -105,6 +108,9 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             Path.GetTempPath(),
             "sunder-runtime-worker",
             activationId.ToString("N"));
+        _rpcExtendedDeadlineV1 = package.SelectedTarget?.RequiredHostCapabilities?.Contains(
+            SunderSdkCapabilities.RpcExtendedDeadlineV1,
+            StringComparer.Ordinal) == true;
         _expectedProviders = (package.Source.Manifest?.Provides ?? [])
             .Where(static provider => provider is not null
                                       && string.Equals(
@@ -801,6 +807,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         startInfo.Environment["SUNDER_WORKER_TEMP_ROOT"] = Path.GetFullPath(temporaryPath);
         startInfo.Environment["SUNDER_PACKAGE_WORKSPACE_ROOT"] = Path.GetFullPath(
             _packageData.Storage.RoleLocalWorkspace.WorkspaceRootPath);
+        if (_rpcExtendedDeadlineV1)
+        {
+            startInfo.Environment[RpcExtendedDeadlineEnvironmentVariable] = "1";
+        }
         return startInfo;
     }
 
@@ -1513,12 +1523,13 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 throw new SunderWorkerProtocolException(
                     "Process worker returned details on a resource-exhausted error.");
             }
-            return new SunderRpcException(new SunderRpcError(
-                SunderRpcErrorKind.ResourceExhausted,
-                code,
-                message,
-                SunderRpcDispatchState.PossiblyDispatched,
-                SunderRpcRetrySafety.Unsafe));
+            return SunderRpcException.Infrastructure(
+                    SunderRpcErrorKind.ResourceExhausted,
+                    "rpc.worker.response-limit",
+                    "The RPC response exceeds the negotiated worker transport limits.")
+                .WithDispatchMetadata(
+                    SunderRpcDispatchState.PossiblyDispatched,
+                    SunderRpcRetrySafety.Unsafe);
         }
         if (kindText != "domain")
         {
@@ -1591,10 +1602,12 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                             : "Process worker exceeded its outstanding host-call limit.");
                 }
                 RememberWorkerId(id);
+                var parentFrame = ResolveWorkerCallParent(type, root);
                 call = new WorkerCall(
                     id,
                     control,
                     logging,
+                    parentFrame,
                     CancellationTokenSource.CreateLinkedTokenSource(_forceStop.Token));
                 _workerCalls.Add(id, call);
                 _workerCallCleanup.Add(call.Completion.Task);
@@ -1606,6 +1619,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 
     private async Task RunWorkerCallObservedAsync(string type, JsonElement root, WorkerCall call)
     {
+        using var parentFrame = _broker.EnterCallFrame(call.ParentFrame);
         try
         {
             await RunWorkerCallAsync(type, root, call).ConfigureAwait(false);
@@ -1837,7 +1851,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     "serviceId",
                     "methodId",
                     "request",
-                    "deadlineUtc");
+                    "deadlineUtc",
+                    "parentInvocationId");
                 var endpoint = new SunderRpcEndpointReference(
                     SunderWorkerProtocol.RequiredString(root, "endpointReference", 256));
                 var serviceId = SunderWorkerProtocol.RequiredString(root, "serviceId", 128);
@@ -1873,7 +1888,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     "serviceId",
                     "methodId",
                     "request",
-                    "deadlineUtc");
+                    "deadlineUtc",
+                    "parentInvocationId");
                 var endpoint = new SunderRpcEndpointReference(
                     SunderWorkerProtocol.RequiredString(root, "endpointReference", 256));
                 var serviceId = SunderWorkerProtocol.RequiredString(root, "serviceId", 128);
@@ -1905,7 +1921,12 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
             case "worker.scope-open":
             {
-                SunderWorkerProtocol.RequireOnlyProperties(root, "type", "id", "deadlineUtc");
+                SunderWorkerProtocol.RequireOnlyProperties(
+                    root,
+                    "type",
+                    "id",
+                    "deadlineUtc",
+                    "parentInvocationId");
                 ISunderRpcCallScope? rpcScope = null;
                 WorkerCallScope? workerScope = null;
                 try
@@ -2758,6 +2779,47 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         return new SunderRpcCallOptions(deadline);
     }
 
+    private RuntimeRpcCallFrame? ResolveWorkerCallParent(string type, JsonElement root)
+    {
+        if (type is not ("worker.invoke" or "worker.subscribe" or "worker.scope-open")) return null;
+
+        var hasParentProperty = root.TryGetProperty("parentInvocationId", out var parentValue);
+        if (_rpcExtendedDeadlineV1 != hasParentProperty)
+        {
+            throw new SunderWorkerProtocolException(_rpcExtendedDeadlineV1
+                ? "Worker RPC request omitted parentInvocationId required by rpc.extended-deadline.v1."
+                : "Worker RPC request used parentInvocationId without declaring rpc.extended-deadline.v1.");
+        }
+        if (hasParentProperty && parentValue.ValueKind != JsonValueKind.Null)
+        {
+            if (parentValue.ValueKind != JsonValueKind.String)
+            {
+                throw new SunderWorkerProtocolException(
+                    "Worker RPC parentInvocationId must be a live Host invocation id or null.");
+            }
+            var parentId = ReadSafeId(root, "parentInvocationId");
+            if (!_hostCalls.ContainsKey(parentId))
+            {
+                throw new SunderWorkerProtocolException(
+                    $"Process worker used unknown or completed parent invocation id '{parentId}'.");
+            }
+        }
+
+        RuntimeRpcCallFrame? frame = null;
+        foreach (var hostCall in _hostCalls.Values)
+        {
+            var context = hostCall.Context;
+            frame = frame is null
+                ? new RuntimeRpcCallFrame(context.CallDepth, context.DeadlineUtc)
+                : new RuntimeRpcCallFrame(
+                    Math.Max(frame.Depth, context.CallDepth),
+                    frame.DeadlineUtc < context.DeadlineUtc
+                        ? frame.DeadlineUtc
+                        : context.DeadlineUtc);
+        }
+        return frame;
+    }
+
     private void HandleWorkerCancellation(JsonElement root)
     {
         SunderWorkerProtocol.RequireOnlyProperties(root, "type", "id");
@@ -3461,11 +3523,13 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         string id,
         bool control,
         bool logging,
+        RuntimeRpcCallFrame? parentFrame,
         CancellationTokenSource cancellation)
     {
         public string Id { get; } = id;
         public bool Control { get; } = control;
         public bool Logging { get; } = logging;
+        public RuntimeRpcCallFrame? ParentFrame { get; } = parentFrame;
         public CancellationTokenSource Cancellation { get; } = cancellation;
         public Task CancellationCallbacks { get; set; } = Task.CompletedTask;
         public TaskCompletionSource Completion { get; } =

@@ -161,7 +161,14 @@ stream transport. Callback and auth work use their dedicated Host-stamped lifecy
 key migration uses bounded Host-mediated migration requests.
 
 Worker-to-Host requests use worker-issued ids. They never carry caller identity. The Host stamps identity from the
-authenticated process activation and applies the active session lease. The implemented capabilities are:
+authenticated process activation and applies the active session lease. A target requiring
+`rpc.extended-deadline.v1` receives `SUNDER_RPC_EXTENDED_DEADLINE_V1=1` in its sanitized process environment; this
+causes the official SDKs to add nullable `parentInvocationId` to `worker.invoke`, `worker.subscribe`, and
+`worker.scope-open`. Non-opted targets omit the field and retain the original strict V3 envelopes. The Host requires
+the field exactly for opted-in targets, accepts a non-null value only when it identifies a live Host-owned call, and
+derives deadline/depth from Host state, never from worker-supplied values. It also conservatively inherits the earliest
+deadline and greatest depth across all live calls for that process, so omission by a legacy worker or a null value from
+an opted-in worker cannot escape an inbound invocation. The implemented capabilities are:
 
 | Capability | Methods |
 | --- | --- |
@@ -191,12 +198,14 @@ For V3, every authenticated `host.error.error` object contains exactly `kind`, `
 
 Caller-owned RPC scope envelopes have these exact authority fields:
 
-- `worker.scope-open` carries `id` and nullable `deadlineUtc`. Its `host.result.value` contains the opaque
+- `worker.scope-open` carries `id` and nullable `deadlineUtc`; an `rpc.extended-deadline.v1` target also carries
+  nullable `parentInvocationId`. Its `host.result.value` contains the opaque
   Host-issued `scopeId` and Host-clamped `deadlineUtc`.
 - `worker.scope-close` carries `id` and `scopeId`. A successful result is JSON `null`. Closing an unknown or
   already closed scope is a protocol violation; closing is otherwise idempotent in the SDK.
 - Scoped `worker.get-provider`, `worker.report-invariant-violation`, `worker.discover`, `worker.watch`, `worker.invoke`, and `worker.subscribe`
-  retain their unscoped fields and add `scopeId`.
+  retain their unscoped fields and add `scopeId`; opted-in scoped invoke/subscribe retain nullable
+  `parentInvocationId`.
 - `worker.report-invariant-violation` carries the exact `endpointReference` and a sanitized `exceptionMessage` of at
   most 512 characters. The Host accepts it only from the designated Agent orchestrator and only while that endpoint
   remains visible and belongs to the current activation; stale or unauthorized reports return `false`.

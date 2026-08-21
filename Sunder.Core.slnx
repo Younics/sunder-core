@@ -48,6 +48,8 @@
   </Folder>
   <Folder Name="/Documentation Samples/">
     <Project Path="languages/csharp/dotnet/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.csproj" />
+    <Project Path="languages/csharp/dotnet/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.App/Sunder.Package.Quickstart.App.csproj" />
+    <Project Path="languages/csharp/dotnet/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.Protocol/Sunder.Package.Quickstart.Protocol.csproj" />
   </Folder>
   <Folder Name="/Registry Contracts/">
     <Project Path="languages/csharp/dotnet/libraries/Sunder.Registry.Contracts/Sunder.Registry.Contracts.csproj" />

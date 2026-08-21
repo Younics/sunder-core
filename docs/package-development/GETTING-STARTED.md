@@ -48,7 +48,7 @@ dotnet new sunder-package `
   --withAvalonia
 ```
 
-Use `--output .\MyPackage` when you need an explicit destination. The generated family contains `Sunder.Package.props` as its single package-version source, an exact-RID Worker project, an always-present non-packable `*.Protocol` project, an Aggregate project, and optional App/Stack code. The Protocol project starts with an RPC descriptor plus generated DTO, client, and provider adapters. The Aggregate builds all six self-contained Worker leaves into one universal package. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates the canonical Manifest V3 document from compiled metadata and MSBuild items.
+Use `--output .\MyPackage` when you need an explicit destination. The generated family contains `Sunder.Package.props` as its single package-version source, a root unsuffixed canonical Worker/package project, an always-present non-packable `*.Protocol` project, and optional App/Stack code. Worker source remains under `*.Worker/`, but there is no separate Worker csproj or Aggregate wrapper. The Protocol project starts with an RPC descriptor plus generated DTO, client, and provider adapters. The canonical project sets `SunderPackagePrimaryProject=true`; build composes its current-RID Worker leaf with the optional App, while `PackSunderPackage` builds all six self-contained Worker leaves into one universal package. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates the canonical Manifest V3 document from compiled metadata and MSBuild items.
 
 ### Template Options
 
@@ -70,7 +70,7 @@ dotnet restore .\MyPackage\MyPackage.csproj
 dotnet build .\MyPackage\MyPackage.csproj --no-restore
 ```
 
-The build emits `MyPackage/bin/Debug/net10.0/sunder-dev/`. That folder is generated output and may be deleted and recreated on every build. Do not edit it.
+The build emits the exact Worker leaf at `MyPackage/bin/Debug/net10.0/<current-rid>/sunder-dev/` and a composed development tree at `MyPackage/bin/Debug/net10.0/sunder-dev/`. The optional App csproj is a build-only `SunderPackageAppProject` input and never enters Worker compile or runtime output. Both folders are generated output and may be deleted and recreated; do not edit them.
 
 ## Run In Sunder
 
@@ -97,7 +97,7 @@ Sunder.App.exe `
 
 ## Pack And Validate
 
-Set the strict SemVer package version once in the generated `Sunder.Package.props`. The Aggregate, Worker, App, and Protocol projects all import this file:
+Set the strict SemVer package version once in the generated `Sunder.Package.props`. The canonical, App, and Protocol projects all import this file:
 
 ```xml
 <Project>

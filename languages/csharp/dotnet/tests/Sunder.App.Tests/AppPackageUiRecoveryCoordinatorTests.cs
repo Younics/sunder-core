@@ -1,4 +1,5 @@
 using Sunder.App.Services;
+using Sunder.Sdk.Notifications;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -9,6 +10,7 @@ public sealed class AppPackageUiRecoveryCoordinatorTests
     public async Task Recovery_CoalescesNormalizedDuplicateAndWaitsForProvenCleanup()
     {
         await using var host = CreateHost();
+        var notifications = new CapturingNotificationService();
         using var tasks = new OwnedTaskObserver(nameof(AppPackageUiRecoveryCoordinatorTests));
         var cleanup = new TaskCompletionSource<AppPackageUiCleanupOutcome>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -28,7 +30,8 @@ public sealed class AppPackageUiRecoveryCoordinatorTests
             " Agent ",
             " ABC123 ",
             Guid.NewGuid(),
-            cleanup.Task);
+            cleanup.Task,
+            CreateFaultNotice(notifications, "agent", "abc123"));
 
         Assert.True(coordinator.TrySchedule(request));
         Assert.False(coordinator.TrySchedule(request with
@@ -46,12 +49,14 @@ public sealed class AppPackageUiRecoveryCoordinatorTests
 
         Assert.Equal(1, Volatile.Read(ref presentationCount));
         Assert.Equal(1, coordinator.AttemptedRecoveryCount);
+        Assert.Equal(0, notifications.PublishCount);
     }
 
     [Fact]
     public async Task Recovery_UnprovenCleanupNeverOverlapsActivationAndRemainsTerminal()
     {
         await using var host = CreateHost();
+        var notifications = new CapturingNotificationService();
         using var tasks = new OwnedTaskObserver(nameof(AppPackageUiRecoveryCoordinatorTests));
         var presentationCount = 0;
         using var coordinator = new AppPackageUiRecoveryCoordinator(
@@ -66,14 +71,83 @@ public sealed class AppPackageUiRecoveryCoordinatorTests
             "agent",
             "hash-a",
             Guid.NewGuid(),
-            Task.FromResult(AppPackageUiCleanupOutcome.Unproven));
+            Task.FromResult(AppPackageUiCleanupOutcome.Unproven),
+            CreateFaultNotice(notifications, "agent", "hash-a"));
 
         Assert.True(coordinator.TrySchedule(request));
         await coordinator.WaitForRecoveryAsync("agent", "hash-a")
             .WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal(0, Volatile.Read(ref presentationCount));
+        Assert.Equal(1, notifications.PublishCount);
         Assert.False(coordinator.TrySchedule(request));
+    }
+
+    [Fact]
+    public async Task Recovery_CleanupTimeoutPublishesWithoutStartingPresentation()
+    {
+        await using var host = CreateHost();
+        var notifications = new CapturingNotificationService();
+        using var tasks = new OwnedTaskObserver(nameof(AppPackageUiRecoveryCoordinatorTests));
+        var cleanup = new TaskCompletionSource<AppPackageUiCleanupOutcome>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var presentationCount = 0;
+        using var coordinator = new AppPackageUiRecoveryCoordinator(
+            host,
+            (_, _, _) =>
+            {
+                Interlocked.Increment(ref presentationCount);
+                return Task.FromResult(AppPackageUiRecoveryPresentationOutcome.Applied);
+            },
+            tasks,
+            new AppPackageUiRecoveryAttemptRegistry(),
+            TimeSpan.FromMilliseconds(20));
+        var request = new AppPackageUiRecoveryRequest(
+            "agent",
+            "hash-a",
+            Guid.NewGuid(),
+            cleanup.Task,
+            CreateFaultNotice(notifications, "agent", "hash-a"));
+
+        Assert.True(coordinator.TrySchedule(request));
+        await coordinator.WaitForRecoveryAsync("agent", "hash-a")
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(0, Volatile.Read(ref presentationCount));
+        Assert.Equal(1, notifications.PublishCount);
+        Assert.False(cleanup.Task.IsCompleted);
+        cleanup.TrySetResult(AppPackageUiCleanupOutcome.Proven);
+    }
+
+    [Theory]
+    [InlineData((int)AppPackageUiRecoveryPresentationOutcome.Applied, 0)]
+    [InlineData((int)AppPackageUiRecoveryPresentationOutcome.ContentChanged, 0)]
+    [InlineData((int)AppPackageUiRecoveryPresentationOutcome.Superseded, 0)]
+    [InlineData((int)AppPackageUiRecoveryPresentationOutcome.TimedOut, 1)]
+    public async Task RecoveryOutcome_PublishesOnlyWhenRecoveryTimesOut(
+        int outcomeValue,
+        int expectedNotifications)
+    {
+        var outcome = (AppPackageUiRecoveryPresentationOutcome)outcomeValue;
+        await using var host = CreateHost();
+        using var tasks = new OwnedTaskObserver(nameof(AppPackageUiRecoveryCoordinatorTests));
+        var notifications = new CapturingNotificationService();
+        using var coordinator = new AppPackageUiRecoveryCoordinator(
+            host,
+            (_, _, _) => Task.FromResult(outcome),
+            tasks);
+        var request = new AppPackageUiRecoveryRequest(
+            "agent",
+            "hash-a",
+            Guid.NewGuid(),
+            Task.FromResult(AppPackageUiCleanupOutcome.Proven),
+            CreateFaultNotice(notifications, "agent", "hash-a"));
+
+        Assert.True(coordinator.TrySchedule(request));
+        await coordinator.WaitForRecoveryAsync("agent", "hash-a")
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(expectedNotifications, notifications.PublishCount);
     }
 
     [Fact]
@@ -202,6 +276,40 @@ public sealed class AppPackageUiRecoveryCoordinatorTests
             contentHash,
             Guid.NewGuid(),
             Task.FromResult(AppPackageUiCleanupOutcome.Proven));
+
+    private static AppPackageFaultNoticeIncident CreateFaultNotice(
+        IPackageNotificationService notifications,
+        string packageId,
+        string contentHash)
+    {
+        var coordinator = new AppPackageFaultNoticeCoordinator(notifications);
+        return coordinator.Register(
+            new AppPackageFaultIdentity(
+                packageId,
+                "Agent",
+                contentHash,
+                Guid.NewGuid()),
+            AppPackageFaultNoticeKind.Package,
+            viewId: null,
+            "Agent App UI unavailable",
+            "The package App UI is unavailable. Reference: test.",
+            "test",
+            deferNotification: true).Incident;
+    }
+
+    private sealed class CapturingNotificationService : IPackageNotificationService
+    {
+        public int PublishCount { get; private set; }
+
+        public ValueTask PublishAsync(
+            PackageNotificationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            PublishCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private sealed class ImmediateUiDispatcher : IUiDispatcher
     {

@@ -418,6 +418,146 @@ while (true)
         var id = root.GetProperty("id").GetString();
         var kind = root.GetProperty("kind").GetString();
         var method = root.GetProperty("methodId").GetString();
+        if (mode == "nonopt-lineage-field"
+            && root.GetProperty("context").GetProperty("callDepth").GetInt32() == 1)
+        {
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.invoke",
+                id = "undeclaredLineageCall",
+                endpointReference = root.GetProperty("context").GetProperty("provider").GetProperty("endpointReference").GetString(),
+                serviceId = "messages",
+                methodId = "send",
+                request = new { message = "undeclared-lineage" },
+                deadlineUtc = DateTimeOffset.UtcNow.AddHours(1).UtcDateTime.ToString("O"),
+                parentInvocationId = id,
+            });
+            continue;
+        }
+        if (mode == "nested-call-missing-parent"
+            && root.GetProperty("context").GetProperty("callDepth").GetInt32() == 1)
+        {
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.invoke",
+                id = "missingParentCall",
+                endpointReference = root.GetProperty("context").GetProperty("provider").GetProperty("endpointReference").GetString(),
+                serviceId = "messages",
+                methodId = "send",
+                request = new { message = "missing-parent" },
+                deadlineUtc = DateTimeOffset.UtcNow.AddHours(1).UtcDateTime.ToString("O"),
+            });
+            continue;
+        }
+        if (mode == "nested-call-forged-parent"
+            && root.GetProperty("context").GetProperty("callDepth").GetInt32() == 1)
+        {
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.invoke",
+                id = "forgedParentCall",
+                endpointReference = root.GetProperty("context").GetProperty("provider").GetProperty("endpointReference").GetString(),
+                serviceId = "messages",
+                methodId = "send",
+                request = new { message = "forged-parent" },
+                deadlineUtc = DateTimeOffset.UtcNow.AddHours(1).UtcDateTime.ToString("O"),
+                parentInvocationId = "unknownHostCall",
+            });
+            continue;
+        }
+        if (mode == "nested-call-completed-parent"
+            && root.GetProperty("context").GetProperty("callDepth").GetInt32() == 1)
+        {
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.result",
+                id,
+                value = new { accepted = true },
+            });
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.invoke",
+                id = "completedParentCall",
+                endpointReference = root.GetProperty("context").GetProperty("provider").GetProperty("endpointReference").GetString(),
+                serviceId = "messages",
+                methodId = "send",
+                request = new { message = "completed-parent" },
+                deadlineUtc = DateTimeOffset.UtcNow.AddHours(1).UtcDateTime.ToString("O"),
+                parentInvocationId = id,
+            });
+            continue;
+        }
+        if (mode is "nested-call-context" or "nested-call-null-parent" or "nested-call-concurrent-frames"
+            && root.GetProperty("context").GetProperty("callDepth").GetInt32() == 1)
+        {
+            var parentContext = root.GetProperty("context");
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.invoke",
+                id = "nestedCall1",
+                endpointReference = parentContext.GetProperty("provider").GetProperty("endpointReference").GetString(),
+                serviceId = "messages",
+                methodId = "send",
+                request = new { message = "nested-child" },
+                deadlineUtc = DateTimeOffset.UtcNow.AddHours(1).UtcDateTime.ToString("O"),
+                parentInvocationId = mode == "nested-call-null-parent" ? null : id,
+            });
+            using var nestedInvocation = await ReadFrameAsync(input);
+            var nestedRoot = nestedInvocation.RootElement;
+            if (nestedRoot.GetProperty("type").GetString() != "host.invoke") return 67;
+            var nestedContext = nestedRoot.GetProperty("context");
+            int? concurrentCallDepth = null;
+            if (mode == "nested-call-concurrent-frames")
+            {
+                await WriteFrameAsync(output, new
+                {
+                    type = "worker.invoke",
+                    id = "nestedCall2",
+                    endpointReference = parentContext.GetProperty("provider").GetProperty("endpointReference").GetString(),
+                    serviceId = "messages",
+                    methodId = "send",
+                    request = new { message = "nested-grandchild" },
+                    deadlineUtc = DateTimeOffset.UtcNow.AddHours(1).UtcDateTime.ToString("O"),
+                    parentInvocationId = id,
+                });
+                using var concurrentInvocation = await ReadFrameAsync(input);
+                var concurrentRoot = concurrentInvocation.RootElement;
+                if (concurrentRoot.GetProperty("type").GetString() != "host.invoke") return 68;
+                concurrentCallDepth = concurrentRoot.GetProperty("context").GetProperty("callDepth").GetInt32();
+                await WriteFrameAsync(output, new
+                {
+                    type = "worker.result",
+                    id = concurrentRoot.GetProperty("id").GetString(),
+                    value = new { accepted = true },
+                });
+                using (await ReadExpectedHostResultAsync(input, "nestedCall2"))
+                {
+                }
+            }
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.result",
+                id = nestedRoot.GetProperty("id").GetString(),
+                value = new { accepted = true },
+            });
+            using var nestedResult = await ReadExpectedHostResultAsync(input, "nestedCall1");
+            await WriteStatusAsync("nested-call-context.json", new
+            {
+                parentCallDepth = parentContext.GetProperty("callDepth").GetInt32(),
+                nestedCallDepth = nestedContext.GetProperty("callDepth").GetInt32(),
+                concurrentCallDepth,
+                parentDeadlineUtc = parentContext.GetProperty("deadlineUtc").GetString(),
+                nestedDeadlineUtc = nestedContext.GetProperty("deadlineUtc").GetString(),
+                extendedDeadlineCapability = Environment.GetEnvironmentVariable("SUNDER_RPC_EXTENDED_DEADLINE_V1"),
+            });
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.result",
+                id,
+                value = new { accepted = true },
+            });
+            continue;
+        }
         if (mode == "late-worker-cancel")
         {
             await WriteFrameAsync(output, new
@@ -431,6 +571,23 @@ while (true)
             await WriteFrameAsync(output, new { type = "worker.cancel", id = "lateCancel1" });
         }
         if (method == "wait") continue;
+        if (mode == "response-limit"
+            && root.GetProperty("request").TryGetProperty("message", out var requestMessage)
+            && requestMessage.GetString() == "oversized")
+        {
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.error",
+                id,
+                error = new
+                {
+                    kind = "resource-exhausted",
+                    code = "rpc.worker.response-limit",
+                    message = "worker-secret=must-not-reach-caller",
+                },
+            });
+            continue;
+        }
         if (method == "content-roundtrip")
         {
             var invocationId = id!;
@@ -632,6 +789,7 @@ while (true)
                     home = Environment.GetEnvironmentVariable(OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME"),
                     workingPath = Environment.CurrentDirectory,
                     deadlineUtc = root.GetProperty("context").GetProperty("deadlineUtc").GetString(),
+                    extendedDeadlineCapability = Environment.GetEnvironmentVariable("SUNDER_RPC_EXTENDED_DEADLINE_V1"),
                 },
                 _ => new { accepted = true },
             };

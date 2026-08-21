@@ -1,5 +1,8 @@
+using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Rpc;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -24,13 +27,16 @@ public sealed class RuntimeRpcValueMeasurementTests
     }
 
     [Fact]
-    public void Utf8Bytes_UsesTransportEscapingAndPreservesPortableJsonNumbers()
+    public void Utf8Bytes_UsesCompactWorkerEncodingAndPreservesPortableJsonNumbers()
     {
         using var document = JsonDocument.Parse(
             "{\"text\":\"é<&\\n\",\"numbers\":[1E+30,-0,1.2300]}");
         var expected = JsonSerializer.SerializeToUtf8Bytes(
             document.RootElement,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            {
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            });
 
         var measurement = RuntimeRpcValueMeasurer.Measure(
             document.RootElement,
@@ -47,7 +53,10 @@ public sealed class RuntimeRpcValueMeasurementTests
         var overValue = JsonSerializer.SerializeToElement(new string('a', 64 * 1024 + 1));
         var exactBytes = JsonSerializer.SerializeToUtf8Bytes(
             exactValue,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web)).Length;
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            {
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            }).Length;
         var limits = Limits(bytes: exactBytes);
 
         Assert.Equal(
@@ -99,6 +108,38 @@ public sealed class RuntimeRpcValueMeasurementTests
         Assert.Equal(RuntimeRpcValueLimitKind.ObjectMembers, exception.LimitKind);
     }
 
+    [Fact]
+    public void InlineDecodedBytes_FollowsRefsAndUnionsAndCountsConcreteValueOnce()
+    {
+        var contract = InlineDecodedContract();
+        var fiveBytes = Convert.ToBase64String(new byte[5]);
+        var value = JsonSerializer.SerializeToElement(new
+        {
+            primary = fiveBytes,
+            choice = new { kind = "unknown", data = fiveBytes },
+            representation = new
+            {
+                kind = "text",
+                data = Convert.ToBase64String(new byte[100]),
+            },
+        });
+
+        var measured = RuntimeRpcInlineDecodedMeasurer.Measure(
+            contract,
+            "#/$defs/Payload",
+            value,
+            maximumDecodedBytes: 10);
+        var exhausted = Assert.Throws<RuntimeRpcValueLimitException>(() =>
+            RuntimeRpcInlineDecodedMeasurer.Measure(
+                contract,
+                "#/$defs/Payload",
+                value,
+                maximumDecodedBytes: 9));
+
+        Assert.Equal(10, measured);
+        Assert.Equal(RuntimeRpcValueLimitKind.InlineDecodedBytes, exhausted.LimitKind);
+    }
+
     private static RuntimeRpcPolicyOptions Limits(
         int bytes = 1024,
         int depth = 64,
@@ -111,4 +152,28 @@ public sealed class RuntimeRpcValueMeasurementTests
             MaxPayloadNodes = nodes,
             MaxObjectMembers = members,
         };
+
+    private static SunderRpcContractDescriptor InlineDecodedContract()
+        => SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
+            {
+              "$schema":"https://json-schema.org/draft/2020-12/schema",
+              "descriptorVersion":2,
+              "schemaProfile":"sunder.rpc.values.v1",
+              "contractId":"measurement.rpc",
+              "version":"1.0.0",
+              "errors":{},
+              "services":{"values":{"methods":{
+                "send":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Payload"},"responseSchema":{"$ref":"#/$defs/Payload"}}
+              }}},
+              "$defs":{
+                "Bytes":{"type":"string","contentEncoding":"base64"},
+                "BytesAlias":{"$ref":"#/$defs/Bytes"},
+                "ChoiceOne":{"type":"object","properties":{"kind":{"type":"string","const":"one"},"data":{"$ref":"#/$defs/Bytes"}},"required":["kind","data"],"additionalProperties":false},
+                "ChoiceTwo":{"type":"object","properties":{"kind":{"type":"string","const":"two"},"data":{"$ref":"#/$defs/BytesAlias"}},"required":["kind","data"],"additionalProperties":false},
+                "Encoded":{"type":"object","properties":{"kind":{"type":"string","const":"encoded"},"data":{"$ref":"#/$defs/Bytes"}},"required":["kind","data"],"additionalProperties":false},
+                "Text":{"type":"object","properties":{"kind":{"type":"string","const":"text"},"data":{"type":"string"}},"required":["kind","data"],"additionalProperties":false},
+                "Payload":{"type":"object","properties":{"primary":{"$ref":"#/$defs/BytesAlias"},"choice":{"oneOf":[{"$ref":"#/$defs/ChoiceOne"},{"$ref":"#/$defs/ChoiceTwo"}]},"representation":{"oneOf":[{"$ref":"#/$defs/Encoded"},{"$ref":"#/$defs/Text"}]}},"required":["primary","choice","representation"],"additionalProperties":false}
+              }
+            }
+            """));
 }

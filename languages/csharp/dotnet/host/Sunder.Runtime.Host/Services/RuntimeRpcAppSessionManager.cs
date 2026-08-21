@@ -10,6 +10,7 @@ internal interface IRuntimeRpcCallerActivation
 {
     string PackageId { get; }
     string PackageVersion { get; }
+    Guid? ActivationId { get; }
     string Role { get; }
     string ManifestSha256 { get; }
     PackageSourceKind? SourceKind { get; }
@@ -259,6 +260,7 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
     public string SessionId { get; set; } = string.Empty;
     public string PackageId { get; }
     public string PackageVersion { get; }
+    public Guid? ActivationId => AppGenerationId;
     public string Role => SunderPackageFormat.AppHostRole;
     public string ManifestSha256 { get; }
     public PackageSourceKind? SourceKind => _source.Kind;

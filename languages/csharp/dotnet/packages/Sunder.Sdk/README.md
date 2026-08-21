@@ -61,7 +61,7 @@ Decision summary:
 | Avalonia views/settings | Add `Sunder.Sdk.Avalonia` to that App leaf |
 | Stack contributor | Add `Sunder.Sdk.Stacks` to the implementing leaf |
 | Canonical C# build/archive | `Sunder.Package.Build` with `PrivateAssets="all"` |
-| New .NET aggregate | Install `Sunder.Package.Templates` as a scaffold tool |
+| New canonical .NET package | Install `Sunder.Package.Templates` as a scaffold tool |
 | Node worker or web App | Use the coordinated npm packages; `@sunder/sdk` is an RPC/worker/browser subset, not this .NET API surface |
 
 ## Package Shape
@@ -73,6 +73,7 @@ Typical package projects:
 - Target `net10.0`.
 - Reference `Sunder.Sdk.Worker` from Worker leaves and `Sunder.Sdk` from App or Protocol projects.
 - Reference `Sunder.Package.Build` with `PrivateAssets="all"`.
+- Set `SunderPackagePrimaryProject=true` on the canonical Worker/package csproj; a separate Aggregate wrapper is not needed.
 - Reference `Sunder.Sdk.Avalonia` and Avalonia packages only when they register Avalonia UI behavior.
 - Do not reference `Sunder.App` or `Sunder.Runtime.Host`.
 
@@ -348,7 +349,7 @@ The canonical explicit pack target produces a distributable `.sunderpkg` archive
 dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
 
-Generated aggregates read the package version once from `Sunder.Package.props`. `dotnet publish` remains available when a pipeline also needs normal publish output.
+Generated package families read the package version once from `Sunder.Package.props`. `dotnet publish` remains available when a pipeline also needs normal publish output.
 
 Validate before publishing to a registry:
 

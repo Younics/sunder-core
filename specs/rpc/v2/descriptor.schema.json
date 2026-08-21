@@ -84,17 +84,12 @@
     "collectionBound": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 1000000
+      "maximum": 9007199254740991
     },
     "positiveCollectionBound": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 1000000
-    },
-    "propertyBound": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 256
+      "maximum": 9007199254740991
     },
     "localReferenceString": {
       "type": "string",
@@ -385,10 +380,10 @@
           "const": false
         },
         "minProperties": {
-          "$ref": "#/$defs/propertyBound"
+          "$ref": "#/$defs/collectionBound"
         },
         "maxProperties": {
-          "$ref": "#/$defs/propertyBound"
+          "$ref": "#/$defs/collectionBound"
         },
         "title": {
           "$ref": "#/$defs/annotation"
@@ -404,9 +399,7 @@
       "required": [
         "type",
         "additionalProperties",
-        "propertyNames",
-        "minProperties",
-        "maxProperties"
+        "propertyNames"
       ],
       "properties": {
         "type": {
@@ -443,7 +436,7 @@
     "arraySchema": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "items", "minItems", "maxItems"],
+      "required": ["type", "items"],
       "properties": {
         "type": {
           "const": "array"
@@ -468,7 +461,7 @@
     "stringSchema": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "minLength", "maxLength"],
+      "required": ["type"],
       "properties": {
         "type": {
           "const": "string"
@@ -532,7 +525,7 @@
     "bigIntegerSchema": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "format", "maxDigits"],
+      "required": ["type", "format"],
       "properties": {
         "type": {
           "const": "string"
@@ -578,7 +571,7 @@
     "decimalSchema": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "format", "maxPrecision", "maxScale"],
+      "required": ["type", "format"],
       "properties": {
         "type": {
           "const": "string"
@@ -627,7 +620,7 @@
     "base64Schema": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "contentEncoding", "maxDecodedBytes"],
+      "required": ["type", "contentEncoding"],
       "properties": {
         "type": {
           "const": "string"

@@ -15,7 +15,7 @@ Package tests should cover package-owned behavior at the narrowest boundary, the
 | Artifact | `PackSunderPackage` emits one `.sunderpkg` and the exact archive passes `sunder dev package validate`. |
 | Host smoke | The package activates as a development package; primary App-to-Runtime behavior and unload/reload work. |
 
-The repository's [quickstart project](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) is the compiled-package layer for these guides. `Sunder.Core.slnx` builds its current-RID Worker/App aggregate in normal CI. Generated-template CI separately builds and publishes universal headless, Avalonia, Stack, and package-dependency variants so all six Worker leaves and the `Sunder.Package.Build` path are exercised with packed NuGet dependencies.
+The repository's [quickstart project](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) is the compiled-package layer for these guides. `Sunder.Core.slnx` builds its current-RID Worker leaf and composed App/Runtime package directly from the canonical project in normal CI. Generated-template CI separately builds and publishes universal headless, Avalonia, Stack, and package-dependency variants so all six Worker leaves and the `Sunder.Package.Build` path are exercised with packed NuGet dependencies.
 
 ## Unit-Test Package Code
 
@@ -66,6 +66,8 @@ sunder dev package validate .\src\MyPackage\bin\Release\net10.0\MyPackage.1.2.3.
 ```
 
 `Sunder.Package.Build` validates the archive it creates, but the explicit CLI check proves the exact file selected for upload. Fail CI unless exactly one expected archive exists. Do not validate one path and publish another.
+
+The canonical project builds all configured Worker RIDs sequentially during `PackSunderPackage`; no Aggregate wrapper or self `ProjectReference` is needed. A signed release pipeline that has already produced and signed exact leaves can fan them in without builds by adding `-p:SunderPackageUsePrebuiltLeaves=true -p:BuildProjectReferences=false`. Optionally select one prebuilt RID with `-p:SunderPackageComposeRuntimeIdentifiers=<rid>`; omitted selection means all configured RIDs. Missing or mismatched leaves remain fatal.
 
 ## Host Smoke Checklist
 

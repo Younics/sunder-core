@@ -529,6 +529,83 @@ public sealed class ProcessRuntimeWorkerTests
         await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
+    [Theory]
+    [InlineData("nested-call-context")]
+    [InlineData("nested-call-null-parent")]
+    [InlineData("nested-call-concurrent-frames")]
+    public async Task Worker_NestedCallInheritsHostOwnedDeadlineAndDepthAcrossProcessBoundary(string mode)
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(mode);
+        var activation = await fixture.PublishBrokerSessionAsync();
+        var requestedDeadline = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        var result = await activation.Client.InvokeAsync(
+            activation.Endpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "nested" }),
+            new SunderRpcCallOptions(requestedDeadline));
+        using var status = await fixture.WaitForWorkerStatusAsync("nested-call-context.json");
+
+        Assert.True(result.GetProperty("accepted").GetBoolean());
+        Assert.Equal(1, status.RootElement.GetProperty("parentCallDepth").GetInt32());
+        Assert.Equal(2, status.RootElement.GetProperty("nestedCallDepth").GetInt32());
+        Assert.Equal("1", status.RootElement.GetProperty("extendedDeadlineCapability").GetString());
+        if (mode == "nested-call-concurrent-frames")
+        {
+            Assert.Equal(3, status.RootElement.GetProperty("concurrentCallDepth").GetInt32());
+        }
+        else
+        {
+            Assert.Equal(JsonValueKind.Null, status.RootElement.GetProperty("concurrentCallDepth").ValueKind);
+        }
+        Assert.Equal(
+            status.RootElement.GetProperty("parentDeadlineUtc").GetDateTimeOffset(),
+            status.RootElement.GetProperty("nestedDeadlineUtc").GetDateTimeOffset());
+    }
+
+    [Theory]
+    [InlineData("nested-call-missing-parent")]
+    [InlineData("nested-call-forged-parent")]
+    [InlineData("nested-call-completed-parent")]
+    public async Task Worker_OptedInLineageRejectsUnknownOrCompletedParentId(string mode)
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(mode);
+        var activation = await fixture.PublishBrokerSessionAsync();
+
+        try
+        {
+            _ = await activation.Client.InvokeAsync(
+                activation.Endpoint,
+                "messages",
+                "send",
+                JsonSerializer.SerializeToElement(new { message = "invalid-parent" }));
+        }
+        catch (SunderRpcException)
+        {
+            // The completed-parent case may return before the following protocol violation is read.
+        }
+
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task Worker_NonOptedTargetRejectsLineageProtocolField()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("nonopt-lineage-field");
+        var activation = await fixture.PublishBrokerSessionAsync();
+
+        _ = await Assert.ThrowsAsync<SunderRpcException>(async () =>
+            await activation.Client.InvokeAsync(
+                activation.Endpoint,
+                "messages",
+                "send",
+                JsonSerializer.SerializeToElement(new { message = "undeclared-lineage" })));
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
     [Fact]
     public async Task Worker_StreamCountOverflowIsHostAuthenticatedAndCallLocal()
     {
@@ -577,6 +654,65 @@ public sealed class ProcessRuntimeWorkerTests
             JsonSerializer.SerializeToElement(new { message = "still-active" }));
         Assert.True(sibling.GetProperty("accepted").GetBoolean());
         Assert.Single(fixture.Catalog.GetSnapshot().Providers);
+        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Broker_ProcessResponseLimitIsHostAuthenticatedAndCallLocal(bool stream)
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("response-limit");
+        var activation = await fixture.PublishBrokerSessionAsync();
+        if (stream)
+        {
+            await fixture.SetSubscribePermissionAsync(RuntimeRpcPermissionState.Granted);
+        }
+        var request = JsonSerializer.SerializeToElement(new { message = "oversized" });
+
+        SunderRpcException exhausted;
+        if (stream)
+        {
+            await using var events = activation.Client.SubscribeAsync(
+                    activation.Endpoint,
+                    "messages",
+                    "watch",
+                    request)
+                .GetAsyncEnumerator();
+            exhausted = await Assert.ThrowsAsync<SunderRpcException>(async () =>
+                await events.MoveNextAsync().AsTask());
+        }
+        else
+        {
+            exhausted = await Assert.ThrowsAsync<SunderRpcException>(async () =>
+                await activation.Client.InvokeAsync(
+                    activation.Endpoint,
+                    "messages",
+                    "send",
+                    request));
+        }
+
+        Assert.True(exhausted.IsHostAuthenticated);
+        Assert.Equal(SunderRpcErrorKind.ResourceExhausted, exhausted.Error.Kind);
+        Assert.Equal("rpc.worker.response-limit", exhausted.Error.Code);
+        Assert.Equal(
+            "The RPC response exceeds the negotiated worker transport limits.",
+            exhausted.Error.Message);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, exhausted.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, exhausted.Error.RetrySafety);
+        Assert.DoesNotContain("worker-secret", exhausted.ToString(), StringComparison.Ordinal);
+        Assert.False(RuntimeRpcFailureContextStore.TryGet(exhausted, out _));
+        Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
+        Assert.Equal(PackageReadinessState.Ready, fixture.Owner.State.GetSessionPackage("process.test")!.Readiness);
+        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
+
+        var valid = await activation.Client.InvokeAsync(
+            activation.Endpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "still-active" }));
+        Assert.True(valid.GetProperty("accepted").GetBoolean());
+        Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
         Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
     }
 
@@ -1479,6 +1615,7 @@ public sealed class ProcessRuntimeWorkerTests
             Environment.GetEnvironmentVariable(OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME"),
             result.GetProperty("home").GetString());
         Assert.EndsWith("Z", result.GetProperty("deadlineUtc").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, result.GetProperty("extendedDeadlineCapability").ValueKind);
     }
 
     [Theory]
@@ -1734,6 +1871,42 @@ public sealed class ProcessRuntimeWorkerTests
                 JsonSerializer.SerializeToElement(new { message = "hello" })));
 
         Assert.Equal(SunderRpcErrorKind.ProviderFaulted, failure.Error.Kind);
+        if (mode == "invalid-output")
+        {
+            Assert.Equal("rpc.provider.invalid-output", failure.Error.Code);
+            Assert.Equal("The provider returned output that violates its contract.", failure.Error.Message);
+            Assert.True(RuntimeRpcFailureContextStore.TryGet(failure, out var diagnostic));
+            Assert.Equal("caller.package", diagnostic.CallerPackageId);
+            Assert.Equal("1.0.0", diagnostic.CallerPackageVersion);
+            Assert.NotNull(diagnostic.CallerActivationId);
+            Assert.Equal("process.test", diagnostic.ProviderPackageId);
+            Assert.Equal("1.0.0", diagnostic.ProviderPackageVersion);
+            Assert.Equal(fixture.ActivationId, diagnostic.ProviderActivationId);
+            Assert.Equal("example.rpc", diagnostic.ContractId);
+            Assert.Equal("messages", diagnostic.ServiceId);
+            Assert.Equal("send", diagnostic.MethodId);
+            Assert.Equal("unary", diagnostic.CallKind);
+            Assert.Equal("type-mismatch", diagnostic.ValidationCode);
+            Assert.Equal("$.*", diagnostic.ValidationPath);
+            Assert.True(diagnostic.ValueUtf8Bytes > 0);
+            Assert.True(diagnostic.ValueMaximumDepth > 0);
+            Assert.True(diagnostic.ValueTotalNodes > 0);
+            Assert.True(diagnostic.ValueMaximumObjectMembers > 0);
+            Assert.Equal(0, diagnostic.ValueInlineDecodedBytes);
+
+            var logFiles = Directory.GetFiles(fixture.Context.Storage.LogsRootPath, "*.log");
+            var persisted = string.Join(
+                Environment.NewLine,
+                await Task.WhenAll(logFiles.Select(static path => File.ReadAllTextAsync(path))));
+            Assert.Contains("event=runtime.rpc.provider-fault", persisted, StringComparison.Ordinal);
+            Assert.Contains("rpc_call_kind=unary", persisted, StringComparison.Ordinal);
+            Assert.Contains("rpc_validation_code=type-mismatch", persisted, StringComparison.Ordinal);
+            Assert.Contains("rpc_validation_path=$.*", persisted, StringComparison.Ordinal);
+            Assert.Contains("rpc_value_utf8_bytes=", persisted, StringComparison.Ordinal);
+            Assert.Contains("rpc_value_inline_decoded_bytes=0", persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("accepted", persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("not-a-boolean", persisted, StringComparison.Ordinal);
+        }
         Assert.Empty(fixture.Catalog.GetSnapshot().Providers);
         Assert.Equal(PackageReadinessState.Failed, fixture.Owner.State.GetSessionPackage("process.test")!.Readiness);
         Assert.Equal(PackageFailureOrigin.RuntimeRpcProvider, fixture.Owner.State.GetSessionPackage("process.test")!.FailureOrigin);
@@ -1922,6 +2095,7 @@ public sealed class ProcessRuntimeWorkerTests
                 File.SetUnixFileMode(entryPoint, modeBits | UnixFileMode.UserExecute);
             }
             var rid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
+            var extendedDeadline = mode.StartsWith("nested-call-", StringComparison.Ordinal);
             var target = new SunderPackageTargetManifest
             {
                 Role = SunderPackageFormat.RuntimeHostRole,
@@ -1930,7 +2104,16 @@ public sealed class ProcessRuntimeWorkerTests
                 EntryPoint = Path.GetFileName(entryPoint),
                 TargetFramework = "net10.0",
                 SdkVersion = "1.1.0",
-                RequiredHostCapabilities = ["core.v1", "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"],
+                RequiredHostCapabilities = extendedDeadline
+                    ?
+                    [
+                        "core.v1",
+                        "rpc.extended-deadline.v1",
+                        "rpc.v2",
+                        "sdk-baseline-1-1.v1",
+                        "worker-protocol.v3",
+                    ]
+                    : ["core.v1", "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"],
             };
             var manifest = new SunderPackageManifest
             {

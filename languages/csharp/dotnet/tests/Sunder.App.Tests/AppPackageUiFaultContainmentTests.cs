@@ -120,7 +120,7 @@ public sealed class AppPackageUiFaultContainmentTests
 
         Assert.Equal(1, deliveredFaults);
         var notification = Assert.Single(notifications.ListNotifications());
-        Assert.Equal(AppPackageFaultNotifier.ViewNotificationTitle, notification.Title);
+        Assert.Equal("agent view unavailable", notification.Title);
         Assert.Equal(PackageNotificationSeverity.Error, notification.Severity);
         Assert.DoesNotContain("private view failure", notification.Message, StringComparison.Ordinal);
         Assert.True(notification.Message.Length <= 150);
@@ -217,7 +217,7 @@ public sealed class AppPackageUiFaultContainmentTests
         Assert.True(notificationQueuedBeforeCleanup);
 
         var notification = Assert.Single(notifications.ListNotifications());
-        Assert.Equal(AppPackageFaultNotifier.PackageNotificationTitle, notification.Title);
+        Assert.Equal("agent App UI unavailable", notification.Title);
         Assert.DoesNotContain("dispatcher package secret", notification.Message, StringComparison.Ordinal);
     }
 
@@ -258,7 +258,7 @@ public sealed class AppPackageUiFaultContainmentTests
         }
 
         Assert.True(host.IsPackageAppUiQuarantined("agent"));
-        Assert.Equal(AppPackageFaultNotifier.PackageNotificationTitle,
+        Assert.Equal("agent App UI unavailable",
             Assert.Single(notifications.ListNotifications()).Title);
 
     }

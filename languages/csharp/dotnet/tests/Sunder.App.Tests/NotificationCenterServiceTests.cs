@@ -124,6 +124,28 @@ public sealed class NotificationCenterServiceTests
     }
 
     [Fact]
+    public async Task PublishAsync_WhenPersistenceFails_RollsBackInMemoryRecord()
+    {
+        var rootPath = CreateTempDirectory();
+        var statePath = Path.Combine(rootPath, "notifications.json");
+        var service = new NotificationCenterService(statePath);
+        await service.PublishAsync(
+            "agent",
+            "Agent",
+            new PackageNotificationRequest("First", "Persisted."));
+        File.Delete(statePath);
+        Directory.CreateDirectory(statePath);
+
+        await Assert.ThrowsAnyAsync<IOException>(() => service.PublishAsync(
+            "agent",
+            "Agent",
+            new PackageNotificationRequest("Second", "Must roll back.")).AsTask());
+
+        Assert.Equal("First", Assert.Single(service.ListNotifications()).Title);
+        Assert.Empty(Directory.EnumerateFiles(rootPath, "notifications.json.*.tmp"));
+    }
+
+    [Fact]
     public async Task MarkAllRead_PersistsTimestampAndClearsUnreadAfterReload()
     {
         var statePath = Path.Combine(CreateTempDirectory(), "notifications.json");

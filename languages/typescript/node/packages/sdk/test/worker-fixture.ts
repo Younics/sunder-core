@@ -314,6 +314,27 @@ void runWorker((workerContext) => {
     },
     handler: {
       async invokeUnary(context, _serviceId, methodId, request): Promise<JsonValue> {
+        if (mode === "nested-lineage" && methodId === "echo") {
+          return await workerContext.rpc.invoke(
+            "rpc1_endpoint",
+            "messages",
+            "echo",
+            request,
+          );
+        }
+        if (mode === "nested-lineage-scope-subscribe" && methodId === "echo") {
+          const scope = await workerContext.rpc.createCallScope();
+          for await (const _ of scope.subscribe(
+            "rpc1_endpoint",
+            "messages",
+            "watch",
+            request,
+          )) {
+            // The test Host completes without events.
+          }
+          await scope.close();
+          return { accepted: true };
+        }
         if (methodId === "release-overflow") {
           releaseOverflowConsumption?.();
           releaseOverflowConsumption = undefined;

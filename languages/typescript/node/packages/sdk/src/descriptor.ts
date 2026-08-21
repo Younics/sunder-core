@@ -7,7 +7,8 @@ const MAXIMUM_DEPTH = 64;
 // oneOf. This derived bound is deliberately above every valid depth-64 schema.
 const MAXIMUM_JSON_DEPTH = MAXIMUM_DEPTH * 4 + 16;
 const MAXIMUM_SCHEMA_NODES = 4096;
-const MAXIMUM_COLLECTION_ITEMS = 1_000_000;
+const MAXIMUM_V1_COLLECTION_ITEMS = 1_000_000;
+const MAXIMUM_QUANTITATIVE_BOUND = Number.MAX_SAFE_INTEGER;
 
 export const SUNDER_RPC_VALUE_SCHEMA_PROFILE = "sunder.rpc.values.v1" as const;
 
@@ -363,7 +364,7 @@ function validateSchema(
       break;
     case "array":
       only(schema, path, "type", "items", "minItems", "maxItems", "enum", "const", "title", "description");
-      validateOrderedBounds(schema, path, "minItems", "maxItems", MAXIMUM_COLLECTION_ITEMS);
+      validateOrderedBounds(schema, path, "minItems", "maxItems", MAXIMUM_V1_COLLECTION_ITEMS);
       validateSchema(objectValue(required(schema, "items", path), `${path}.items`, "a schema object"), `${path}.items`, state, depth + 1);
       break;
     case "string":
@@ -371,7 +372,7 @@ function validateSchema(
       if (!has(schema, "minLength") || !has(schema, "maxLength")) {
         fail(`${path} must declare minLength and maxLength.`, "descriptor-invalid");
       }
-      validateOrderedBounds(schema, path, "minLength", "maxLength", MAXIMUM_COLLECTION_ITEMS);
+      validateOrderedBounds(schema, path, "minLength", "maxLength", MAXIMUM_V1_COLLECTION_ITEMS);
       break;
     case "integer":
     case "number":
@@ -428,7 +429,7 @@ function validateValueProfileSchema(
       if (structuralNames.every((name) => name === "type" || name === "maxProperties")) {
         onlyWithCode(schema, path, "schema-profile", "type", "maxProperties", "title", "description");
         if (has(schema, "maxProperties")) {
-          integerBound(schema.maxProperties, `${path}.maxProperties`, 0, MAXIMUM_COLLECTION_ITEMS);
+          integerBound(schema.maxProperties, `${path}.maxProperties`, 0, MAXIMUM_QUANTITATIVE_BOUND);
         }
       } else {
         validateObjectSchema(schema, path, state, depth);
@@ -436,7 +437,7 @@ function validateValueProfileSchema(
       break;
     case "array":
       onlyWithCode(schema, path, "schema-profile", "type", "items", "minItems", "maxItems", "title", "description");
-      validateOrderedBounds(schema, path, "minItems", "maxItems", MAXIMUM_COLLECTION_ITEMS);
+      validateOptionalOrderedBounds(schema, path, "minItems", "maxItems");
       validateSchema(
         objectValue(required(schema, "items", path), `${path}.items`, "a schema object"),
         `${path}.items`,
@@ -486,8 +487,9 @@ function validateValueProfileStringSchema(schema: JsonObject, path: string): voi
       "description",
     );
     if (schema.contentEncoding !== "base64") fail(`${path}.contentEncoding must be exactly 'base64'.`, "schema-profile");
-    if (!has(schema, "maxDecodedBytes")) fail(`${path}.maxDecodedBytes is required.`, "schema-profile");
-    integerBound(schema.maxDecodedBytes, `${path}.maxDecodedBytes`, 0, MAXIMUM_COLLECTION_ITEMS);
+    if (has(schema, "maxDecodedBytes")) {
+      integerBound(schema.maxDecodedBytes, `${path}.maxDecodedBytes`, 0, MAXIMUM_QUANTITATIVE_BOUND);
+    }
     return;
   }
 
@@ -512,7 +514,9 @@ function validateValueProfileStringSchema(schema: JsonObject, path: string): voi
         "title",
         "description",
       );
-      const maxDigits = integerBound(required(schema, "maxDigits", path), `${path}.maxDigits`, 1, MAXIMUM_COLLECTION_ITEMS);
+      const maxDigits = has(schema, "maxDigits")
+        ? integerBound(schema.maxDigits, `${path}.maxDigits`, 1, MAXIMUM_QUANTITATIVE_BOUND)
+        : undefined;
       validateExactNumericValueBounds(schema, path, maxDigits, undefined);
       return;
     }
@@ -532,8 +536,12 @@ function validateValueProfileStringSchema(schema: JsonObject, path: string): voi
         "title",
         "description",
       );
-      const maxPrecision = integerBound(required(schema, "maxPrecision", path), `${path}.maxPrecision`, 1, MAXIMUM_COLLECTION_ITEMS);
-      const maxScale = integerBound(required(schema, "maxScale", path), `${path}.maxScale`, 0, MAXIMUM_COLLECTION_ITEMS);
+      const maxPrecision = has(schema, "maxPrecision")
+        ? integerBound(schema.maxPrecision, `${path}.maxPrecision`, 1, MAXIMUM_QUANTITATIVE_BOUND)
+        : undefined;
+      const maxScale = has(schema, "maxScale")
+        ? integerBound(schema.maxScale, `${path}.maxScale`, 0, MAXIMUM_QUANTITATIVE_BOUND)
+        : undefined;
       validateExactNumericValueBounds(schema, path, maxPrecision, maxScale);
       return;
     }
@@ -541,10 +549,7 @@ function validateValueProfileStringSchema(schema: JsonObject, path: string): voi
   }
 
   onlyWithCode(schema, path, "schema-profile", "type", "minLength", "maxLength", "enum", "const", "title", "description");
-  if (!has(schema, "minLength") || !has(schema, "maxLength")) {
-    fail(`${path} must declare minLength and maxLength.`, "schema-profile");
-  }
-  validateOrderedBounds(schema, path, "minLength", "maxLength", MAXIMUM_COLLECTION_ITEMS);
+  validateOptionalOrderedBounds(schema, path, "minLength", "maxLength");
   validateEnumAndConst(schema, path, "string");
 }
 
@@ -589,7 +594,7 @@ function validateValueProfileNumberSchema(schema: JsonObject, path: string, requ
 function validateExactNumericValueBounds(
   schema: JsonObject,
   path: string,
-  maximumDigitsOrPrecision: number,
+  maximumDigitsOrPrecision: number | undefined,
   maximumScale: number | undefined,
 ): void {
   const lowerNames = ["valueMinimum", "valueExclusiveMinimum"].filter((name) => has(schema, name));
@@ -600,9 +605,10 @@ function validateExactNumericValueBounds(
   for (const name of [...lowerNames, ...upperNames]) {
     const value = schema[name];
     if (typeof value !== "string") fail(`${path}.${name} must be a canonical numeric string.`, "schema-profile");
-    const number = maximumScale === undefined ? parseCanonicalBigInteger(value) : parseCanonicalDecimal(value);
+    const number = schema.format === "decimal" ? parseCanonicalDecimal(value) : parseCanonicalBigInteger(value);
     if (number === undefined) fail(`${path}.${name} must be a canonical numeric string.`, "schema-profile");
-    if (number.precision > maximumDigitsOrPrecision || maximumScale !== undefined && number.scale > maximumScale) {
+    if (maximumDigitsOrPrecision !== undefined && number.precision > maximumDigitsOrPrecision
+      || maximumScale !== undefined && number.scale > maximumScale) {
       fail(`${path}.${name} exceeds the schema's declared digit limits.`, "schema-profile");
     }
     parsed.set(name, number);
@@ -656,9 +662,16 @@ function validateObjectSchema(
       if (scalarLength(name) === 0 || scalarLength(name) > 128) fail(`${path}.properties contains an empty or overlong property name.`);
       validateSchema(objectValue(properties[name], `${path}.properties.${name}`, "a schema object"), `${path}.properties.${name}`, state, depth + 1);
     }
-    const minimum = has(schema, "minProperties") ? integerBound(schema.minProperties, `${path}.minProperties`, 0, 256) : 0;
-    const maximum = has(schema, "maxProperties") ? integerBound(schema.maxProperties, `${path}.maxProperties`, 0, 256) : propertyNames.length;
-    if (minimum > maximum || maximum > propertyNames.length) fail(`${path}'s object property bounds are inconsistent with its closed properties.`);
+    const maximumAllowed = state.version === 2 ? MAXIMUM_QUANTITATIVE_BOUND : 256;
+    const minimum = has(schema, "minProperties")
+      ? integerBound(schema.minProperties, `${path}.minProperties`, 0, maximumAllowed)
+      : 0;
+    const maximum = has(schema, "maxProperties")
+      ? integerBound(schema.maxProperties, `${path}.maxProperties`, 0, maximumAllowed)
+      : state.version === 2 ? Number.POSITIVE_INFINITY : propertyNames.length;
+    if (minimum > maximum || state.version === 1 && maximum > propertyNames.length) {
+      fail(`${path}'s object property bounds are inconsistent with its closed properties.`);
+    }
     if (has(schema, "propertyNames")) fail(`${path}.propertyNames is only supported for bounded map schemas.`);
   } else {
     if (additional === null || typeof additional !== "object" || Array.isArray(additional)) {
@@ -669,14 +682,15 @@ function validateObjectSchema(
       fail(`${path} cannot mix named properties with map additionalProperties.`);
     }
     if (has(schema, "required") && arrayValue(schema.required, `${path}.required`).length !== 0) fail(`${path}.required must be absent or empty for a map schema.`);
-    validateOrderedBounds(schema, path, "minProperties", "maxProperties", MAXIMUM_COLLECTION_ITEMS);
+    validateOptionalOrderedBounds(schema, path, "minProperties", "maxProperties");
     const propertyNamesSchema = objectValue(required(schema, "propertyNames", path), `${path}.propertyNames`, "a schema object");
     validateSchema(propertyNamesSchema, `${path}.propertyNames`, state, depth + 1);
     if (propertyNamesSchema.type !== "string"
       || has(propertyNamesSchema, "logicalType")
-      || !has(propertyNamesSchema, "minLength")
-      || !has(propertyNamesSchema, "maxLength")) {
-      fail(`${path}.propertyNames must be a bounded string schema.`, state.version === 2 ? "schema-profile" : "descriptor-invalid");
+      || has(propertyNamesSchema, "format")
+      || has(propertyNamesSchema, "contentEncoding")
+      || state.version === 1 && (!has(propertyNamesSchema, "minLength") || !has(propertyNamesSchema, "maxLength"))) {
+      fail(`${path}.propertyNames must be an ordinary string schema.`, state.version === 2 ? "schema-profile" : "descriptor-invalid");
     }
     validateSchema(additionalSchema, `${path}.additionalProperties`, state, depth + 1);
   }
@@ -774,7 +788,7 @@ function collectRequiredReferenceEdges(
       source,
       definitions,
       edges,
-      hasProductiveBoundary || schema.minItems === 0,
+      hasProductiveBoundary || !has(schema, "minItems") || schema.minItems === 0,
     );
   }
   if (isObjectValue(schema.additionalProperties)) {
@@ -783,7 +797,7 @@ function collectRequiredReferenceEdges(
       source,
       definitions,
       edges,
-      hasProductiveBoundary || schema.minProperties === 0,
+      hasProductiveBoundary || !has(schema, "minProperties") || schema.minProperties === 0,
     );
   }
 }
@@ -1035,6 +1049,21 @@ function validateAnnotations(schema: JsonObject, path: string): void {
 function validateOrderedBounds(schema: JsonObject, path: string, minimumName: string, maximumName: string, maximumAllowed: number): void {
   const minimum = integerBound(required(schema, minimumName, path), `${path}.${minimumName}`, 0, maximumAllowed);
   const maximum = integerBound(required(schema, maximumName, path), `${path}.${maximumName}`, 0, maximumAllowed);
+  if (minimum > maximum) fail(`${path}.${minimumName} must not exceed ${maximumName}.`);
+}
+
+function validateOptionalOrderedBounds(
+  schema: JsonObject,
+  path: string,
+  minimumName: string,
+  maximumName: string,
+): void {
+  const minimum = has(schema, minimumName)
+    ? integerBound(schema[minimumName], `${path}.${minimumName}`, 0, MAXIMUM_QUANTITATIVE_BOUND)
+    : 0;
+  const maximum = has(schema, maximumName)
+    ? integerBound(schema[maximumName], `${path}.${maximumName}`, 0, MAXIMUM_QUANTITATIVE_BOUND)
+    : Number.POSITIVE_INFINITY;
   if (minimum > maximum) fail(`${path}.${minimumName} must not exceed ${maximumName}.`);
 }
 
@@ -1336,7 +1365,12 @@ function v1CaseFold(value: string): string {
 
 function scalarLength(value: string): number {
   validateUnicodeScalars(value, "A JSON string");
-  return [...value].length;
+  let length = 0;
+  for (let index = 0; index < value.length; index++) {
+    if (value.charCodeAt(index) >= 0xd800 && value.charCodeAt(index) <= 0xdbff) index++;
+    length++;
+  }
+  return length;
 }
 
 interface ExactDecimal {

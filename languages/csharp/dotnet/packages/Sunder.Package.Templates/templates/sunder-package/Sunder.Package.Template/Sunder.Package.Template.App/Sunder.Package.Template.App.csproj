@@ -10,6 +10,7 @@
     <SunderPackageProject>true</SunderPackageProject>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <SunderPackageAssetsDirectory>$(MSBuildProjectDirectory)\..\Assets</SunderPackageAssetsDirectory>
+    <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\sunder-package.json'))</SunderGeneratedPackageManifest>
   </PropertyGroup>
 
   <ItemGroup>

@@ -146,7 +146,7 @@ public sealed class AppPackageViewRegistryTests
     [Fact]
     public async Task RemoveCachedViewsAsync_WhenParentDetachmentFails_ReportsCleanupAsUnproven()
     {
-        var registry = new AppPackageViewRegistry();
+        var registry = new AppPackageViewRegistry(new ImmediateUiDispatcher());
         var serviceProvider = new ServiceCollection().BuildServiceProvider();
         registry.RegisterPackageView<TestPackageView>(
             "test.package",
@@ -170,6 +170,32 @@ public sealed class AppPackageViewRegistryTests
 
         Assert.False(cleanupProven);
         GC.KeepAlive(parent);
+    }
+
+    [Fact]
+    public async Task RemoveCachedViewsAsync_FromWorker_MarshalsControlCleanup()
+    {
+        var dispatcher = new TrackingUiDispatcher();
+        var registry = new AppPackageViewRegistry(dispatcher);
+        var serviceProvider = new ServiceCollection().BuildServiceProvider();
+        DisposableDataContext? dataContext = null;
+
+        await Task.Run(async () =>
+        {
+            registry.RegisterPackageView<DisposableDataContextPackageView>(
+                "test.package",
+                "test.view",
+                serviceProvider);
+            var view = Assert.IsType<DisposableDataContextPackageView>(
+                registry.GetOrCreateView("test.view", _ => false, ReportFailure));
+            dataContext = Assert.IsType<DisposableDataContext>(view.DataContext);
+
+            await registry.RemoveCachedViewsAsync("test.package", CancellationToken.None);
+        });
+
+        Assert.NotNull(dataContext);
+        Assert.True(dataContext.IsDisposed);
+        Assert.Equal(1, dispatcher.InvocationCount);
     }
 
     [Fact]
@@ -312,6 +338,53 @@ public sealed class AppPackageViewRegistryTests
     }
 
     private sealed class ConstructorDependency;
+
+    private sealed class ImmediateUiDispatcher : IUiDispatcher
+    {
+        public bool CheckAccess() => true;
+        public Task InvokeAsync(Action action)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+        public Task InvokeAsync(Func<Task> action) => action();
+        public Task<T> InvokeAsync<T>(Func<T> action) => Task.FromResult(action());
+        public Task<T> InvokeAsync<T>(Func<Task<T>> action) => action();
+    }
+
+    private sealed class TrackingUiDispatcher : IUiDispatcher
+    {
+        private int _invocationCount;
+
+        public int InvocationCount => Volatile.Read(ref _invocationCount);
+
+        public bool CheckAccess() => false;
+
+        public Task InvokeAsync(Action action)
+        {
+            Interlocked.Increment(ref _invocationCount);
+            action();
+            return Task.CompletedTask;
+        }
+
+        public Task InvokeAsync(Func<Task> action)
+        {
+            Interlocked.Increment(ref _invocationCount);
+            return action();
+        }
+
+        public Task<T> InvokeAsync<T>(Func<T> action)
+        {
+            Interlocked.Increment(ref _invocationCount);
+            return Task.FromResult(action());
+        }
+
+        public Task<T> InvokeAsync<T>(Func<Task<T>> action)
+        {
+            Interlocked.Increment(ref _invocationCount);
+            return action();
+        }
+    }
 
     private sealed class NavigationPackageView(NavigationProbe probe) : Control, IPackageViewNavigationTarget
     {

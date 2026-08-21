@@ -466,6 +466,36 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public async Task Worker_OversizedProviderStreamEventIsCallLocalResourceExhaustion()
+    {
+        var handler = new TestRpcHandler
+        {
+            Unary = static (_, _, _, request, _) => ValueTask.FromResult(request.Clone()),
+            Stream = static (_, _, _, _, cancellationToken) => OversizedEvent(cancellationToken),
+        };
+        await using var worker = new WorkerHarness(_ => new SunderWorkerOptions(
+            [WorkerHarness.Registration(handler)]));
+        await ActivateAsync(worker, MinimumResourceProfile());
+
+        await worker.SendInvocationAsync("oversized-stream-1", "server-stream", "oversized");
+        using (var response = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.error", response.RootElement.GetProperty("type").GetString());
+            Assert.Equal("resource-exhausted", response.RootElement.GetProperty("error").GetProperty("kind").GetString());
+            Assert.Equal("rpc.worker.response-limit", response.RootElement.GetProperty("error").GetProperty("code").GetString());
+        }
+        Assert.False(worker.RunTask.IsCompleted);
+
+        await worker.SendInvocationAsync("valid-after-stream-1", "unary", "echo");
+        using (var response = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.result", response.RootElement.GetProperty("type").GetString());
+        }
+        Assert.False(worker.RunTask.IsCompleted);
+        await worker.ShutdownAsync();
+    }
+
+    [Fact]
     public async Task Worker_PreservesHostDomainErrorDetailsAndRejectsInfrastructureDetails()
     {
         var activated = new TaskCompletionSource<ISunderRpcClient>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -747,5 +777,13 @@ public sealed class WorkerRuntimeTests
         await Task.Yield();
         cancellationToken.ThrowIfCancellationRequested();
         yield return JsonSerializer.SerializeToElement(new { sequence = 2 });
+    }
+
+    private static async IAsyncEnumerable<JsonElement> OversizedEvent(
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        yield return JsonSerializer.SerializeToElement(new { text = new string('"', 600_000) });
+        await Task.CompletedTask;
     }
 }

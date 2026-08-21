@@ -130,9 +130,40 @@ public sealed class RuntimeAppWebRpcClientTests
         }
     }
 
+    [Fact]
+    public async Task CreateCallScope_PreservesRetiredAppSessionRpcErrorWithoutRetry()
+    {
+        var handler = new InvariantReportHandler
+        {
+            CallScopeOpenError = new RuntimeRpcErrorDescriptor(
+                RuntimeRpcErrorKind.Unavailable,
+                "rpc.app-session.retired",
+                "The App RPC caller session is unavailable or retired.",
+                RuntimeRpcDispatchState.NotDispatched,
+                RuntimeRpcRetrySafety.Safe),
+        };
+        var management = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+        await using var client = new RuntimeAppWebRpcClient(management, "app-session");
+
+        var exception = await Assert.ThrowsAsync<SunderRpcException>(() =>
+            client.CreateCallScopeAsync().AsTask());
+
+        Assert.Equal(SunderRpcErrorKind.Unavailable, exception.Error.Kind);
+        Assert.Equal("rpc.app-session.retired", exception.Error.Code);
+        Assert.Equal(SunderRpcDispatchState.NotDispatched, exception.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Safe, exception.Error.RetrySafety);
+        Assert.Equal(1, handler.CallScopeOpenCount);
+    }
+
     private sealed class InvariantReportHandler(RuntimeResourcePolicy? resourcePolicy = null) : HttpMessageHandler
     {
         public HttpStatusCode CallScopeCloseStatusCode { get; init; } = HttpStatusCode.NoContent;
+
+        public RuntimeRpcErrorDescriptor? CallScopeOpenError { get; init; }
+
+        public int CallScopeOpenCount { get; private set; }
 
         public int CallScopeCloseCount { get; private set; }
 
@@ -188,6 +219,14 @@ public sealed class RuntimeAppWebRpcClientTests
 
             if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app/call-scopes/open")
             {
+                CallScopeOpenCount++;
+                if (CallScopeOpenError is not null)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.Conflict)
+                    {
+                        Content = JsonContent.Create(CallScopeOpenError),
+                    };
+                }
                 return Json(new RuntimeRpcAppCallScopeDescriptor(
                     "call-scope",
                     DateTimeOffset.UtcNow.AddMinutes(1)));

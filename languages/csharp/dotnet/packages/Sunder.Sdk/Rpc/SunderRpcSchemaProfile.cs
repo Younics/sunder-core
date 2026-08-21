@@ -8,12 +8,11 @@ internal static class SunderRpcSchemaProfile
     private const int MaximumSchemaDepth = 64;
     private const int MaximumSchemaNodes = 4096;
     private const int MaximumProperties = 256;
-    private const int MaximumCollectionItems = 1_000_000;
-    private const int MaximumStringCharacters = 1_000_000;
+    private const int MaximumV1CollectionItems = 1_000_000;
+    private const int MaximumV1StringCharacters = 1_000_000;
     private const int MaximumUnionVariants = 16;
     private const int MaximumEnumValues = 256;
-    private const int MaximumExactDigits = 1_000_000;
-    private const int MaximumDecodedBytes = 1_000_000;
+    private const long MaximumSafeInteger = 9_007_199_254_740_991;
     private static readonly string[] AnnotationProperties = ["title", "description"];
 
     public static void ValidateDefinitions(
@@ -68,7 +67,7 @@ internal static class SunderRpcSchemaProfile
         }
 
         var state = new InstanceValidationState(descriptor);
-        return ValidateInstance(schema, value, "$", state, 1, out error);
+        return ValidateInstance(schema, value, "$", state, out error);
     }
 
     private static void ValidateSchema(
@@ -211,7 +210,7 @@ internal static class SunderRpcSchemaProfile
                     ValidateFormattedStringSchema(schema, path);
                     return;
                 }
-                ValidateStringSchema(schema, path);
+                ValidateStringSchema(schema, path, isV2);
                 break;
             case "integer":
                 ValidateIntegerSchema(schema, path, isV2);
@@ -364,7 +363,7 @@ internal static class SunderRpcSchemaProfile
                     depth + 1,
                     isV2);
             }
-            ValidateOptionalPropertyBounds(schema, path, propertyCount);
+            ValidateOptionalPropertyBounds(schema, path, propertyCount, isV2);
             if (schema.TryGetProperty("propertyNames", out _))
             {
                 throw Error($"{path}.propertyNames is only supported for bounded map schemas.");
@@ -381,8 +380,12 @@ internal static class SunderRpcSchemaProfile
             {
                 throw Error($"{path}.required must be absent or empty for a map schema.");
             }
-            var minimum = RequiredBound(schema, "minProperties", path, 0, MaximumCollectionItems);
-            var maximum = RequiredBound(schema, "maxProperties", path, 0, MaximumCollectionItems);
+            var minimum = isV2
+                ? OptionalBound(schema, "minProperties", path, 0, MaximumSafeInteger, 0)
+                : RequiredBound(schema, "minProperties", path, 0, MaximumV1CollectionItems);
+            var maximum = isV2
+                ? OptionalBound(schema, "maxProperties", path, 0, MaximumSafeInteger, long.MaxValue)
+                : RequiredBound(schema, "maxProperties", path, 0, MaximumV1CollectionItems);
             if (minimum > maximum)
             {
                 throw Error($"{path}.minProperties must not exceed maxProperties.");
@@ -402,10 +405,10 @@ internal static class SunderRpcSchemaProfile
                 || propertyNames.TryGetProperty("logicalType", out _)
                 || propertyNames.TryGetProperty("format", out _)
                 || propertyNames.TryGetProperty("contentEncoding", out _)
-                || !propertyNames.TryGetProperty("minLength", out _)
-                || !propertyNames.TryGetProperty("maxLength", out _))
+                || !isV2 && (!propertyNames.TryGetProperty("minLength", out _)
+                             || !propertyNames.TryGetProperty("maxLength", out _)))
             {
-                throw Error($"{path}.propertyNames must be a bounded string schema.");
+                throw Error($"{path}.propertyNames must be an ordinary string schema.");
             }
             ValidateSchema(
                 additional,
@@ -455,8 +458,12 @@ internal static class SunderRpcSchemaProfile
                 "title",
                 "description");
         }
-        var minimum = RequiredBound(schema, "minItems", path, 0, MaximumCollectionItems);
-        var maximum = RequiredBound(schema, "maxItems", path, 0, MaximumCollectionItems);
+        var minimum = isV2
+            ? OptionalBound(schema, "minItems", path, 0, MaximumSafeInteger, 0)
+            : RequiredBound(schema, "minItems", path, 0, MaximumV1CollectionItems);
+        var maximum = isV2
+            ? OptionalBound(schema, "maxItems", path, 0, MaximumSafeInteger, long.MaxValue)
+            : RequiredBound(schema, "maxItems", path, 0, MaximumV1CollectionItems);
         if (minimum > maximum)
         {
             throw Error($"{path}.minItems must not exceed maxItems.");
@@ -484,11 +491,11 @@ internal static class SunderRpcSchemaProfile
             "description");
         if (schema.TryGetProperty("maxProperties", out _))
         {
-            _ = RequiredBound(schema, "maxProperties", path, 0, MaximumCollectionItems);
+            _ = RequiredBound(schema, "maxProperties", path, 0, MaximumSafeInteger);
         }
     }
 
-    private static void ValidateStringSchema(JsonElement schema, string path)
+    private static void ValidateStringSchema(JsonElement schema, string path, bool isV2)
     {
         SunderRpcDescriptorParser.RequireOnlyProperties(
             schema,
@@ -500,8 +507,12 @@ internal static class SunderRpcSchemaProfile
             "const",
             "title",
             "description");
-        var minimum = RequiredBound(schema, "minLength", path, 0, MaximumStringCharacters);
-        var maximum = RequiredBound(schema, "maxLength", path, 0, MaximumStringCharacters);
+        var minimum = isV2
+            ? OptionalBound(schema, "minLength", path, 0, MaximumSafeInteger, 0)
+            : RequiredBound(schema, "minLength", path, 0, MaximumV1StringCharacters);
+        var maximum = isV2
+            ? OptionalBound(schema, "maxLength", path, 0, MaximumSafeInteger, long.MaxValue)
+            : RequiredBound(schema, "maxLength", path, 0, MaximumV1StringCharacters);
         if (minimum > maximum)
         {
             throw Error($"{path}.minLength must not exceed maxLength.");
@@ -527,7 +538,10 @@ internal static class SunderRpcSchemaProfile
         {
             throw Error($"{path}.contentEncoding must be 'base64'.");
         }
-        _ = RequiredBound(schema, "maxDecodedBytes", path, 0, MaximumDecodedBytes);
+        if (schema.TryGetProperty("maxDecodedBytes", out _))
+        {
+            _ = RequiredBound(schema, "maxDecodedBytes", path, 0, MaximumSafeInteger);
+        }
     }
 
     private static void ValidateFormattedStringSchema(JsonElement schema, string path)
@@ -565,7 +579,10 @@ internal static class SunderRpcSchemaProfile
                     "valueExclusiveMaximum",
                     "title",
                     "description");
-                _ = RequiredBound(schema, "maxDigits", path, 1, MaximumExactDigits);
+                if (schema.TryGetProperty("maxDigits", out _))
+                {
+                    _ = RequiredBound(schema, "maxDigits", path, 1, MaximumSafeInteger);
+                }
                 ValidateExactValueBounds(schema, path, format);
                 break;
             case "decimal":
@@ -582,8 +599,14 @@ internal static class SunderRpcSchemaProfile
                     "valueExclusiveMaximum",
                     "title",
                     "description");
-                _ = RequiredBound(schema, "maxPrecision", path, 1, MaximumExactDigits);
-                _ = RequiredBound(schema, "maxScale", path, 0, MaximumExactDigits);
+                if (schema.TryGetProperty("maxPrecision", out _))
+                {
+                    _ = RequiredBound(schema, "maxPrecision", path, 1, MaximumSafeInteger);
+                }
+                if (schema.TryGetProperty("maxScale", out _))
+                {
+                    _ = RequiredBound(schema, "maxScale", path, 0, MaximumSafeInteger);
+                }
                 ValidateExactValueBounds(schema, path, format);
                 break;
             default:
@@ -1088,8 +1111,8 @@ internal static class SunderRpcSchemaProfile
         }
         if (schema.TryGetProperty("items", out var items))
         {
-            var mayBeEmpty = schema.TryGetProperty("minItems", out var minimum)
-                             && minimum.GetInt32() == 0;
+            var mayBeEmpty = !schema.TryGetProperty("minItems", out var minimum)
+                             || TryGetSafeInteger(minimum, out var minimumValue) && minimumValue == 0;
             CollectRequiredReferenceEdges(
                 items,
                 sourceDefinition,
@@ -1101,8 +1124,8 @@ internal static class SunderRpcSchemaProfile
         if (schema.TryGetProperty("additionalProperties", out var additional)
             && additional.ValueKind == JsonValueKind.Object)
         {
-            var mayBeEmpty = schema.TryGetProperty("minProperties", out var minimum)
-                             && minimum.GetInt32() == 0;
+            var mayBeEmpty = !schema.TryGetProperty("minProperties", out var minimum)
+                             || TryGetSafeInteger(minimum, out var minimumValue) && minimumValue == 0;
             CollectRequiredReferenceEdges(
                 additional,
                 sourceDefinition,
@@ -1228,9 +1251,9 @@ internal static class SunderRpcSchemaProfile
         {
             var text = value.GetString()!;
             if (schema.TryGetProperty("minLength", out var minimum)
-                && text.EnumerateRunes().Count() < minimum.GetInt32()
+                && text.EnumerateRunes().Count() < ReadQuantitativeBound(minimum)
                 || schema.TryGetProperty("maxLength", out var maximum)
-                && text.EnumerateRunes().Count() > maximum.GetInt32())
+                && text.EnumerateRunes().Count() > ReadQuantitativeBound(maximum))
             {
                 throw Error($"{path} is outside the schema's string length bounds.");
             }
@@ -1276,24 +1299,42 @@ internal static class SunderRpcSchemaProfile
         }
     }
 
-    private static void ValidateOptionalPropertyBounds(JsonElement schema, string path, int propertyCount)
+    private static void ValidateOptionalPropertyBounds(
+        JsonElement schema,
+        string path,
+        int propertyCount,
+        bool isV2)
     {
-        var minimum = schema.TryGetProperty("minProperties", out _)
-            ? RequiredBound(schema, "minProperties", path, 0, MaximumProperties)
-            : 0;
-        var maximum = schema.TryGetProperty("maxProperties", out _)
-            ? RequiredBound(schema, "maxProperties", path, 0, MaximumProperties)
-            : propertyCount;
-        if (minimum > maximum || maximum > propertyCount)
+        var maximumAllowed = isV2 ? MaximumSafeInteger : MaximumProperties;
+        var minimum = OptionalBound(schema, "minProperties", path, 0, maximumAllowed, 0);
+        var maximum = OptionalBound(
+            schema,
+            "maxProperties",
+            path,
+            0,
+            maximumAllowed,
+            isV2 ? long.MaxValue : propertyCount);
+        if (minimum > maximum || !isV2 && maximum > propertyCount)
         {
             throw Error($"{path}'s object property bounds are inconsistent with its closed properties.");
         }
     }
 
-    private static int RequiredBound(JsonElement schema, string name, string path, int minimum, int maximum)
+    private static long OptionalBound(
+        JsonElement schema,
+        string name,
+        string path,
+        long minimum,
+        long maximum,
+        long defaultValue)
+        => schema.TryGetProperty(name, out _)
+            ? RequiredBound(schema, name, path, minimum, maximum)
+            : defaultValue;
+
+    private static long RequiredBound(JsonElement schema, string name, string path, long minimum, long maximum)
     {
         var value = SunderRpcDescriptorParser.Required(schema, name, path, JsonValueKind.Number);
-        if (!value.TryGetInt32(out var result) || result < minimum || result > maximum)
+        if (!TryGetSafeInteger(value, out var result) || result < minimum || result > maximum)
         {
             throw Error($"{path}.{name} must be an integer from {minimum} through {maximum}.");
         }
@@ -1426,9 +1467,18 @@ internal static class SunderRpcSchemaProfile
 
     private static bool ExactNumberFitsSchema(JsonElement schema, ExactNumber value, string format)
         => format == "big-integer"
-            ? value.DigitCount <= schema.GetProperty("maxDigits").GetInt32()
-            : value.Precision <= schema.GetProperty("maxPrecision").GetInt32()
-              && value.Scale <= schema.GetProperty("maxScale").GetInt32();
+            ? !schema.TryGetProperty("maxDigits", out var maximumDigits)
+              || value.DigitCount <= ReadQuantitativeBound(maximumDigits)
+            : (!schema.TryGetProperty("maxPrecision", out var maximumPrecision)
+               || value.Precision <= ReadQuantitativeBound(maximumPrecision))
+              && (!schema.TryGetProperty("maxScale", out var maximumScale)
+                  || value.Scale <= ReadQuantitativeBound(maximumScale));
+
+    private static long ReadQuantitativeBound(JsonElement value)
+    {
+        _ = TryGetSafeInteger(value, out var result);
+        return result;
+    }
 
     private static bool ExactNumberSatisfiesBounds(JsonElement schema, ExactNumber value, string format)
     {
@@ -1455,7 +1505,7 @@ internal static class SunderRpcSchemaProfile
     private static bool TryParseExactNumber(string value, bool allowFraction, out ExactNumber exact)
     {
         exact = default;
-        if (value.Length is 0 or > MaximumStringCharacters) return false;
+        if (value.Length == 0) return false;
         var negative = value[0] == '-';
         var offset = negative ? 1 : 0;
         if (offset == value.Length) return false;
@@ -1555,40 +1605,43 @@ internal static class SunderRpcSchemaProfile
         JsonElement value,
         string path,
         InstanceValidationState state,
-        int depth,
         out string? error)
     {
-        if (depth > MaximumSchemaDepth)
+        var pending = new Stack<InstanceWork>();
+        pending.Push(new InstanceWork(schema, value, path));
+        while (pending.TryPop(out var work))
         {
-            error = $"{path} exceeds the RPC payload depth limit.";
-            return false;
+            if (!ValidateInstanceValue(work.Schema, work.Value, work.Path, state, pending, out error))
+            {
+                return false;
+            }
         }
-        if (schema.TryGetProperty("$ref", out var reference))
+
+        error = null;
+        return true;
+    }
+
+    private static bool ValidateInstanceValue(
+        JsonElement schema,
+        JsonElement value,
+        string path,
+        InstanceValidationState state,
+        Stack<InstanceWork> pending,
+        out string? error)
+    {
+        while (schema.TryGetProperty("$ref", out var reference))
         {
             SunderRpcDescriptorParser.TryGetReferenceName(reference.GetString(), out var name);
             state.Descriptor.TryGetDefinition(name, out var target);
-            return ValidateInstance(target, value, path, state, depth + 1, out error);
+            schema = target;
         }
         if (schema.TryGetProperty("oneOf", out var oneOf))
         {
-            var matches = 0;
-            string? lastError = null;
-            foreach (var variant in oneOf.EnumerateArray())
+            if (!TrySelectUnionVariant(oneOf, value, path, state, out var variant, out error))
             {
-                if (ValidateInstance(variant, value, path, state, depth + 1, out var branchError))
-                {
-                    matches++;
-                }
-                else
-                {
-                    lastError = branchError;
-                }
-            }
-            if (matches != 1)
-            {
-                error = matches == 0 ? lastError ?? $"{path} does not match a union variant." : $"{path} matches multiple union variants.";
                 return false;
             }
+            pending.Push(new InstanceWork(variant, value, path));
             error = null;
             return true;
         }
@@ -1596,7 +1649,7 @@ internal static class SunderRpcSchemaProfile
         if (state.IsV2 && schema.EnumerateObject().All(static property =>
                 property.Name is "title" or "description"))
         {
-            return ValidateUnconstrainedJsonValue(value, path, state, depth, out error);
+            return ValidateUnconstrainedJsonValue(value, path, state, out error);
         }
 
         var type = schema.GetProperty("type").GetString()!;
@@ -1633,11 +1686,11 @@ internal static class SunderRpcSchemaProfile
             case "object":
                 if (state.IsV2 && !schema.TryGetProperty("additionalProperties", out _))
                 {
-                    return ValidateDynamicObjectInstance(schema, value, path, state, depth, out error);
+                    return ValidateDynamicObjectInstance(schema, value, path, state, out error);
                 }
-                return ValidateObjectInstance(schema, value, path, state, depth, out error);
+                return ValidateObjectInstance(schema, value, path, state, pending, out error);
             case "array":
-                return ValidateArrayInstance(schema, value, path, state, depth, out error);
+                return ValidateArrayInstance(schema, value, path, pending, out error);
             case "string":
                 if (state.IsV2 && schema.TryGetProperty("contentEncoding", out _))
                 {
@@ -1652,11 +1705,15 @@ internal static class SunderRpcSchemaProfile
                     break;
                 }
                 var length = scalarText!.EnumerateRunes().Count();
-                var minLength = schema.GetProperty("minLength").GetInt32();
-                var maxLength = schema.GetProperty("maxLength").GetInt32();
+                var minLength = schema.TryGetProperty("minLength", out var minimumLength)
+                    ? ReadQuantitativeBound(minimumLength)
+                    : 0;
+                var maxLength = schema.TryGetProperty("maxLength", out var maximumLength)
+                    ? ReadQuantitativeBound(maximumLength)
+                    : long.MaxValue;
                 if (length < minLength || length > maxLength)
                 {
-                    error = $"{path} has {length} characters; expected {minLength} through {maxLength}.";
+                    error = $"{path} has {length} characters outside its declared length bounds.";
                     return false;
                 }
                 break;
@@ -1669,35 +1726,83 @@ internal static class SunderRpcSchemaProfile
         return true;
     }
 
+    private static bool TrySelectUnionVariant(
+        JsonElement oneOf,
+        JsonElement value,
+        string path,
+        InstanceValidationState state,
+        out JsonElement selected,
+        out string? error)
+    {
+        var variants = oneOf.EnumerateArray().ToArray();
+        var resolved = variants.Select(variant => ResolveSchema(variant, state.Descriptor.Definitions)).ToArray();
+        var nullIndex = Array.FindIndex(resolved, IsNullSchema);
+        if (variants.Length == 2 && nullIndex >= 0)
+        {
+            selected = value.ValueKind == JsonValueKind.Null
+                ? variants[nullIndex]
+                : variants[1 - nullIndex];
+            error = null;
+            return true;
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            selected = default;
+            error = $"{path} does not match a tagged union variant.";
+            return false;
+        }
+
+        var candidates = GetTagCandidates(resolved[0]).ToHashSet(StringComparer.Ordinal);
+        foreach (var variant in resolved.Skip(1))
+        {
+            candidates.IntersectWith(GetTagCandidates(variant));
+        }
+        var discriminator = candidates.First(candidate => HasUniqueStringTags(resolved, candidate));
+        if (!value.TryGetProperty(discriminator, out var discriminatorValue)
+            || discriminatorValue.ValueKind != JsonValueKind.String)
+        {
+            selected = default;
+            error = $"{path} is missing the tagged union discriminator '{discriminator}'.";
+            return false;
+        }
+
+        var tag = discriminatorValue.GetString();
+        for (var index = 0; index < variants.Length; index++)
+        {
+            var constant = resolved[index].GetProperty("properties")
+                .GetProperty(discriminator)
+                .GetProperty("const")
+                .GetString();
+            if (string.Equals(tag, constant, StringComparison.Ordinal))
+            {
+                selected = variants[index];
+                error = null;
+                return true;
+            }
+        }
+
+        selected = default;
+        error = $"{path} has an unknown tagged union discriminator value.";
+        return false;
+    }
+
     private static bool ValidateDynamicObjectInstance(
         JsonElement schema,
         JsonElement value,
         string path,
         InstanceValidationState state,
-        int depth,
         out string? error)
     {
-        var properties = value.EnumerateObject().ToArray();
-        if (!ValidateObjectPropertyNames(properties, path, state.IsV2, out error)) return false;
+        if (!ValidateUnconstrainedJsonValue(value, path, state, out error)) return false;
         var maximum = schema.TryGetProperty("maxProperties", out var bound)
-            ? bound.GetInt32()
-            : MaximumCollectionItems;
-        if (properties.Length > maximum)
+            ? ReadQuantitativeBound(bound)
+            : long.MaxValue;
+        var propertyCount = value.GetPropertyCount();
+        if (propertyCount > maximum)
         {
-            error = $"{path} has {properties.Length} properties; expected at most {maximum}.";
+            error = $"{path} has {propertyCount} properties; expected at most {maximum}.";
             return false;
-        }
-        foreach (var property in properties)
-        {
-            if (!ValidateUnconstrainedJsonValue(
-                    property.Value,
-                    path + "." + property.Name,
-                    state,
-                    depth + 1,
-                    out error))
-            {
-                return false;
-            }
         }
         error = null;
         return true;
@@ -1707,77 +1812,55 @@ internal static class SunderRpcSchemaProfile
         JsonElement value,
         string path,
         InstanceValidationState state,
-        int depth,
         out string? error)
     {
-        if (depth > MaximumSchemaDepth)
+        var pending = new Stack<UnconstrainedValueWork>();
+        pending.Push(new UnconstrainedValueWork(value, path));
+        while (pending.TryPop(out var work))
         {
-            error = $"{path} exceeds the RPC payload depth limit.";
-            return false;
-        }
-        switch (value.ValueKind)
-        {
-            case JsonValueKind.Object:
-                var properties = value.EnumerateObject().ToArray();
-                if (properties.Length > MaximumCollectionItems)
-                {
-                    error = $"{path} exceeds the global object-property limit.";
-                    return false;
-                }
-                if (!ValidateObjectPropertyNames(properties, path, state.IsV2, out error))
-                {
-                    return false;
-                }
-                foreach (var property in properties)
-                {
-                    if (!ValidateUnconstrainedJsonValue(
+            switch (work.Value.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    if (!ValidateObjectPropertyNames(work.Value.EnumerateObject(), work.Path, state.IsV2, out error))
+                    {
+                        return false;
+                    }
+                    foreach (var property in work.Value.EnumerateObject())
+                    {
+                        pending.Push(new UnconstrainedValueWork(
                             property.Value,
-                            path + "." + property.Name,
-                            state,
-                            depth + 1,
-                            out error))
+                            AppendPropertyPath(work.Path, property.Name)));
+                    }
+                    break;
+                case JsonValueKind.Array:
+                    var index = 0;
+                    foreach (var item in work.Value.EnumerateArray())
                     {
+                        pending.Push(new UnconstrainedValueWork(item, AppendItemPath(work.Path, index++)));
+                    }
+                    break;
+                case JsonValueKind.String:
+                    if (!TryGetScalarString(work.Value, out _))
+                    {
+                        error = $"{work.Path} is not scalar Unicode.";
                         return false;
                     }
-                }
-                break;
-            case JsonValueKind.Array:
-                if (value.GetArrayLength() > MaximumCollectionItems)
-                {
-                    error = $"{path} exceeds the global array-item limit.";
-                    return false;
-                }
-                var index = 0;
-                foreach (var item in value.EnumerateArray())
-                {
-                    if (!ValidateUnconstrainedJsonValue(item, path + "[" + index++ + "]", state, depth + 1, out error))
+                    break;
+                case JsonValueKind.Number:
+                    if (!TryGetFiniteDouble(work.Value, out _))
                     {
+                        error = $"{work.Path} is not a finite JSON number.";
                         return false;
                     }
-                }
-                break;
-            case JsonValueKind.String:
-                if (!TryGetScalarString(value, out var text)
-                    || text.EnumerateRunes().Count() > MaximumStringCharacters)
-                {
-                    error = $"{path} exceeds the global string-character limit or is not scalar Unicode.";
+                    break;
+                case JsonValueKind.True:
+                case JsonValueKind.False:
+                case JsonValueKind.Null:
+                    break;
+                default:
+                    error = $"{work.Path} is not a JSON value.";
                     return false;
-                }
-                break;
-            case JsonValueKind.Number:
-                if (!TryGetFiniteDouble(value, out _))
-                {
-                    error = $"{path} is not a finite JSON number.";
-                    return false;
-                }
-                break;
-            case JsonValueKind.True:
-            case JsonValueKind.False:
-            case JsonValueKind.Null:
-                break;
-            default:
-                error = $"{path} is not a JSON value.";
-                return false;
+            }
         }
         error = null;
         return true;
@@ -1788,21 +1871,23 @@ internal static class SunderRpcSchemaProfile
         JsonElement value,
         string path,
         InstanceValidationState state,
-        int depth,
+        Stack<InstanceWork> pending,
         out string? error)
     {
-        var properties = value.EnumerateObject().ToArray();
-        if (!ValidateObjectPropertyNames(properties, path, state.IsV2, out error))
+        if (!ValidateObjectPropertyNames(value.EnumerateObject(), path, state.IsV2, out error))
         {
             return false;
         }
-        var minimum = schema.TryGetProperty("minProperties", out var minElement) ? minElement.GetInt32() : 0;
+        var propertyCount = value.GetPropertyCount();
+        var minimum = schema.TryGetProperty("minProperties", out var minElement)
+            ? ReadQuantitativeBound(minElement)
+            : 0;
         var maximum = schema.TryGetProperty("maxProperties", out var maxElement)
-            ? maxElement.GetInt32()
-            : schema.TryGetProperty("properties", out var declaredProperties) ? declaredProperties.GetPropertyCount() : int.MaxValue;
-        if (properties.Length < minimum || properties.Length > maximum)
+            ? ReadQuantitativeBound(maxElement)
+            : long.MaxValue;
+        if (propertyCount < minimum || propertyCount > maximum)
         {
-            error = $"{path} has {properties.Length} properties; expected {minimum} through {maximum}.";
+            error = $"{path} has {propertyCount} properties outside its declared property-count bounds.";
             return false;
         }
 
@@ -1818,30 +1903,30 @@ internal static class SunderRpcSchemaProfile
                     return false;
                 }
             }
-            foreach (var property in properties)
+            foreach (var property in value.EnumerateObject())
             {
                 if (!declared.TryGetProperty(property.Name, out var propertySchema))
                 {
                     error = $"{path} contains undeclared property '{property.Name}'.";
                     return false;
                 }
-                if (!ValidateInstance(propertySchema, property.Value, path + "." + property.Name, state, depth + 1, out error))
-                {
-                    return false;
-                }
+                pending.Push(new InstanceWork(
+                    propertySchema,
+                    property.Value,
+                    AppendPropertyPath(path, property.Name)));
             }
         }
         else
         {
             var keySchema = schema.GetProperty("propertyNames");
-            foreach (var property in properties)
+            foreach (var property in value.EnumerateObject())
             {
                 var key = JsonSerializer.SerializeToElement(property.Name);
-                if (!ValidateInstance(keySchema, key, path + ".<key>", state, depth + 1, out error)
-                    || !ValidateInstance(additional, property.Value, path + "." + property.Name, state, depth + 1, out error))
-                {
-                    return false;
-                }
+                pending.Push(new InstanceWork(
+                    additional,
+                    property.Value,
+                    AppendPropertyPath(path, property.Name)));
+                pending.Push(new InstanceWork(keySchema, key, AppendPropertyPath(path, "<key>")));
             }
         }
         error = null;
@@ -1852,26 +1937,26 @@ internal static class SunderRpcSchemaProfile
         JsonElement schema,
         JsonElement value,
         string path,
-        InstanceValidationState state,
-        int depth,
+        Stack<InstanceWork> pending,
         out string? error)
     {
         var length = value.GetArrayLength();
-        var minimum = schema.GetProperty("minItems").GetInt32();
-        var maximum = schema.GetProperty("maxItems").GetInt32();
+        var minimum = schema.TryGetProperty("minItems", out var minimumItems)
+            ? ReadQuantitativeBound(minimumItems)
+            : 0;
+        var maximum = schema.TryGetProperty("maxItems", out var maximumItems)
+            ? ReadQuantitativeBound(maximumItems)
+            : long.MaxValue;
         if (length < minimum || length > maximum)
         {
-            error = $"{path} has {length} items; expected {minimum} through {maximum}.";
+            error = $"{path} has {length} items outside its declared item-count bounds.";
             return false;
         }
         var items = schema.GetProperty("items");
         var index = 0;
         foreach (var item in value.EnumerateArray())
         {
-            if (!ValidateInstance(items, item, path + "[" + index++ + "]", state, depth + 1, out error))
-            {
-                return false;
-            }
+            pending.Push(new InstanceWork(items, item, AppendItemPath(path, index++)));
         }
         error = null;
         return true;
@@ -1900,7 +1985,9 @@ internal static class SunderRpcSchemaProfile
         string path,
         out string? error)
     {
-        var maximum = schema.GetProperty("maxDecodedBytes").GetInt32();
+        var maximum = schema.TryGetProperty("maxDecodedBytes", out var maximumElement)
+            ? ReadQuantitativeBound(maximumElement)
+            : long.MaxValue;
         if (value.Length % 4 != 0)
         {
             error = $"{path} must be canonical padded RFC 4648 base64.";
@@ -1909,29 +1996,50 @@ internal static class SunderRpcSchemaProfile
         var padding = value.EndsWith("==", StringComparison.Ordinal) ? 2
             : value.EndsWith('=') ? 1
             : 0;
-        var decodedLength = value.Length / 4 * 3 - padding;
-        if (decodedLength > maximum)
+        var contentLength = value.Length - padding;
+        for (var index = 0; index < contentLength; index++)
         {
-            error = $"{path} decodes to {decodedLength} bytes; expected at most {maximum}.";
-            return false;
-        }
-        try
-        {
-            var bytes = Convert.FromBase64String(value);
-            if (!string.Equals(Convert.ToBase64String(bytes), value, StringComparison.Ordinal))
+            if (Base64Sextet(value[index]) < 0)
             {
                 error = $"{path} must be canonical padded RFC 4648 base64.";
                 return false;
             }
         }
-        catch (FormatException)
+        for (var index = contentLength; index < value.Length; index++)
+        {
+            if (value[index] != '=')
+            {
+                error = $"{path} must be canonical padded RFC 4648 base64.";
+                return false;
+            }
+        }
+        if (padding == 2 && Base64Sextet(value[^3]) % 16 != 0
+            || padding == 1 && Base64Sextet(value[^2]) % 4 != 0)
         {
             error = $"{path} must be canonical padded RFC 4648 base64.";
+            return false;
+        }
+
+        var decodedLength = (long)value.Length / 4 * 3 - padding;
+        if (decodedLength > maximum)
+        {
+            error = $"{path} decodes to {decodedLength} bytes; expected at most {maximum}.";
             return false;
         }
         error = null;
         return true;
     }
+
+    private static int Base64Sextet(char value)
+        => value switch
+        {
+            >= 'A' and <= 'Z' => value - 'A',
+            >= 'a' and <= 'z' => value - 'a' + 26,
+            >= '0' and <= '9' => value - '0' + 52,
+            '+' => 62,
+            '/' => 63,
+            _ => -1,
+        };
 
     private static bool ValidateFormattedStringInstance(
         JsonElement schema,
@@ -1942,14 +2050,14 @@ internal static class SunderRpcSchemaProfile
     {
         var length = value.EnumerateRunes().Count();
         var minimum = schema.TryGetProperty("minLength", out var minimumElement)
-            ? minimumElement.GetInt32()
+            ? ReadQuantitativeBound(minimumElement)
             : 0;
         var maximum = schema.TryGetProperty("maxLength", out var maximumElement)
-            ? maximumElement.GetInt32()
-            : MaximumStringCharacters;
+            ? ReadQuantitativeBound(maximumElement)
+            : long.MaxValue;
         if (length < minimum || length > maximum)
         {
-            error = $"{path} has {length} characters; expected {minimum} through {maximum}.";
+            error = $"{path} has {length} characters outside its declared length bounds.";
             return false;
         }
         if (format is "big-integer" or "decimal")
@@ -2059,7 +2167,7 @@ internal static class SunderRpcSchemaProfile
 
     private static bool IsDuration(string value)
     {
-        if (value.Length < 3 || value.Length > MaximumStringCharacters || value[0] != 'P') return false;
+        if (value.Length < 3 || value[0] != 'P') return false;
         var index = 1;
         var components = 0;
         foreach (var designator in new[] { 'Y', 'M', 'D' })
@@ -2119,7 +2227,7 @@ internal static class SunderRpcSchemaProfile
 
     private static bool IsAbsoluteUri(string value)
     {
-        if (value.Length is 0 or > MaximumStringCharacters
+        if (value.Length == 0
             || value.Any(static character => character >= 0x7f || character <= 0x20 || character == '\\'))
         {
             return false;
@@ -2155,12 +2263,11 @@ internal static class SunderRpcSchemaProfile
             error = $"{path} must be a content-reference object.";
             return false;
         }
-        var properties = value.EnumerateObject().ToArray();
-        if (!ValidateObjectPropertyNames(properties, path, isV2, out error))
+        if (!ValidateObjectPropertyNames(value.EnumerateObject(), path, isV2, out error))
         {
             return false;
         }
-        if (properties.Length != 7
+        if (value.GetPropertyCount() != 7
             || !value.TryGetProperty("id", out var idElement)
             || !value.TryGetProperty("length", out var lengthElement)
             || !value.TryGetProperty("sha256", out var sha256Element)
@@ -2220,7 +2327,7 @@ internal static class SunderRpcSchemaProfile
     }
 
     private static bool ValidateObjectPropertyNames(
-        IReadOnlyList<JsonProperty> properties,
+        IEnumerable<JsonProperty> properties,
         string path,
         bool isV2,
         out string? error)
@@ -2232,7 +2339,6 @@ internal static class SunderRpcSchemaProfile
         foreach (var property in properties)
         {
             if (!HasOnlyUnicodeScalars(property.Name)
-                || property.Name.EnumerateRunes().Count() > MaximumStringCharacters
                 || !exact.Add(property.Name)
                 || caseInsensitive is not null && !caseInsensitive.Add(property.Name))
             {
@@ -2273,6 +2379,14 @@ internal static class SunderRpcSchemaProfile
         }
         return true;
     }
+
+    private static string AppendPropertyPath(string path, string propertyName)
+        => path.Length >= 4096 || propertyName.Length >= 4096 - path.Length
+            ? path
+            : path + "." + propertyName;
+
+    private static string AppendItemPath(string path, int index)
+        => path.Length >= 4096 ? path : path + "[" + index + "]";
 
     internal static bool IsUuid(string value)
     {
@@ -2548,6 +2662,10 @@ internal static class SunderRpcSchemaProfile
         public SunderRpcContractDescriptor Descriptor { get; } = descriptor;
         public bool IsV2 { get; } = descriptor.DescriptorVersion == SunderRpcProtocol.DescriptorVersionV2;
     }
+
+    private readonly record struct InstanceWork(JsonElement Schema, JsonElement Value, string Path);
+
+    private readonly record struct UnconstrainedValueWork(JsonElement Value, string Path);
 
     private readonly record struct ExactNumber(
         bool Negative,

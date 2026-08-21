@@ -230,6 +230,35 @@ public sealed class SunderPackageArchiveInspectorTests
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
     }
 
+    [Fact]
+    public async Task ExtractAndValidateAsync_AcceptsExtendedDeadlineWorkerCapability()
+    {
+        var root = CreateTempDirectory();
+        var target = CreateTarget(
+            "runtime",
+            "linux-x64",
+            "worker",
+            "bin/worker",
+            requiredHostCapabilities:
+            [
+                "core.v1",
+                "rpc.extended-deadline.v1",
+                "rpc.v2",
+                "sdk-baseline-1-1.v1",
+                "worker-protocol.v3",
+            ]);
+        var archivePath = CreatePackageArchive(
+            root,
+            CreateManifest([target]),
+            new Dictionary<string, byte[]> { ["payload/runtime/linux-x64/bin/worker"] = [1] });
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "staging"));
+
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+    }
+
     [Theory]
     [InlineData("rpc.v2")]
     [InlineData("worker-protocol.v3")]

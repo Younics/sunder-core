@@ -34,9 +34,9 @@
 </Project>
 ```
 
-Use one Worker build per supported exact RID and aggregate the leaves for a universal package. A C# Runtime leaf always uses the official apphost name derived from the project target name: `.exe` for a Windows RID and the extensionless apphost for Linux/macOS. Custom C# worker entry-point names, managed `.dll` entry points, and an apphost stored in a shared layer are rejected. App projects reference `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, and the Avalonia packages they use directly. Add `Sunder.Sdk.Stacks` to a Worker only when used. `Sunder.Package.Build` has no consumer compile/runtime asset and must remain private build tooling.
+Use one Worker build per supported exact RID and aggregate the leaves for a universal package. Set `SunderPackagePrimaryProject=true` on the canonical Worker/package csproj so it can perform this fan-out directly; do not add a self `ProjectReference` or a separate Aggregate wrapper. A C# Runtime leaf always uses the official apphost name derived from the project target name: `.exe` for a Windows RID and the extensionless apphost for Linux/macOS. Custom C# worker entry-point names, managed `.dll` entry points, and an apphost stored in a shared layer are rejected. App projects reference `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, and the Avalonia packages they use directly. Add `Sunder.Sdk.Stacks` to a Worker only when used. `Sunder.Package.Build` has no consumer compile/runtime asset and must remain private build tooling.
 
-Declare identity and display metadata in the target assemblies. Aggregate leaves must compile the same metadata:
+Declare identity and display metadata in the target assemblies. Composed leaves must compile the same metadata:
 
 ```csharp
 using Sunder.Sdk.Packaging;
@@ -50,7 +50,7 @@ using Sunder.Sdk.Packaging;
 
 `Version` is separate assembly/package build metadata. Runtime dependencies use `[assembly: SunderPackageDependency(...)]`; NuGet `PackageReference` items are compile/build dependencies and do not create installed-package dependencies.
 
-The generated aggregate imports `Sunder.Package.props` from every leaf. Edit its single `<Version>` value; do not duplicate versions across the Aggregate, Worker, App, or Protocol projects. A standalone custom project may keep the same single `Version` property in its project or a shared imported props file.
+The generated family imports `Sunder.Package.props` from every real project. Edit its single `<Version>` value; do not duplicate versions across the canonical, App, or Protocol projects. A standalone custom project may keep the same single `Version` property in its project or a shared imported props file.
 
 ## Build Output
 
@@ -75,6 +75,8 @@ bin/Debug/net10.0/sunder-dev/
       shared/
       <rid>/
 ```
+
+The canonical Worker itself remains an exact current-RID leaf at `bin/Debug/net10.0/<rid>/sunder-dev`. `Sunder.Package.Build` composes that leaf with the optional build-only `SunderPackageAppProject` into the non-RID tree shown above, without overwriting either input. `Clean` deletes only a safely marked composed tree.
 
 It contains generated metadata, exact target requirements, the Worker's complete self-contained publish closure, App assemblies and eligible dependencies, package-local RPC descriptors, and files copied from source `Assets/**`. Host-provided App SDK/framework boundary assemblies are excluded. Do not edit, commit, or use `sunder-dev` as the source of truth.
 
@@ -110,13 +112,15 @@ The output includes:
 bin/Release/net10.0/MyPackage.1.2.3.sunderpkg
 ```
 
-`PackSunderPackage` is the canonical explicit archive target and depends on the build plus the correct leaf/aggregate preparation target. `dotnet publish` also creates an archive in the publish directory when a pipeline separately needs publish output:
+`PackSunderPackage` is the canonical explicit archive target. On a primary project it uses sequential guarded MSBuild task calls to build the same Worker csproj once for every `SunderPackageRuntimeIdentifiers` RID, builds `SunderPackageAppProject` exactly once, aggregates all leaves, and packs one universal archive. Inner Worker builds do not recursively build the App or compose. `dotnet publish` also creates an archive in the publish directory when a pipeline separately needs publish output:
 
 ```powershell
 dotnet publish .\MyPackage.csproj -c Release --no-restore
 ```
 
 The pack task validates its existing indexed staging tree without rewriting the index, creates the deterministic archive, then independently extracts and validates that exact written file. A post-signing mutation therefore fails instead of being assigned a new hash. A final validation failure removes the new archive. `SunderPackageFileName`, `SunderPackageOutputPath`, and `SunderPublishPackageOutputPath` customize names/locations when release automation needs them. Prefer defaults unless the pipeline has one explicit artifact convention.
+
+For signed release fan-in, pre-produce the exact `<rid>/sunder-dev` leaves with `SunderPackageWorkerSigningTargets` signing the private closure before indexing, then invoke `PackSunderPackage` with `SunderPackageUsePrebuiltLeaves=true` and `BuildProjectReferences=false`. Do not mutate a leaf after indexing. No Worker or App `Build` runs in prebuilt mode. It fails closed without the reference flag and still validates missing/mismatched leaves. `SunderPackageComposeRuntimeIdentifiers` defaults to all configured RIDs; set it to one RID when intentionally composing a single-RID prebuilt artifact.
 
 The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative source for generated manifest, development output, archive layout, hashes, safety checks, and size limits.
 

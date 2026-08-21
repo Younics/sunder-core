@@ -147,7 +147,12 @@ internal sealed class RuntimeRpcInvocationAuthority(
 
     private void EnsureActive()
     {
-        if (Volatile.Read(ref _revoked) != 0 || _revocation.IsCancellationRequested) throw Revoked();
+        if (Volatile.Read(ref _revoked) != 0
+            || invocationCancellation.IsCancellationRequested
+            || _revocation.IsCancellationRequested)
+        {
+            throw Revoked();
+        }
     }
 
     private void ValidateActivation()

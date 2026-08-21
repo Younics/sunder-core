@@ -70,6 +70,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly OwnedTaskObserver _faultTasks;
     private readonly AppPackageUiFaultRouter _faultRouter = new();
     private readonly AppPackageFaultAttributionIndex _faultAttribution = new();
+    private readonly AppPackageFaultNoticeCoordinator _faultNoticeCoordinator;
     private readonly object _boundarySyncRoot = new();
     private readonly Dictionary<Guid, List<WeakReference<HostedPackageViewBoundary>>> _boundariesByGeneration = [];
     private readonly object _quarantineCommitSyncRoot = new();
@@ -117,10 +118,17 @@ public sealed class PackageViewHostService : IAsyncDisposable
     {
         _sessionFolder = sessionFolder;
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
+        viewRegistry.SetUiDispatcher(_uiDispatcher);
         _propagateFatalCleanupFault = fatalCleanupFaultHandler
             ?? AppPackageFatalCleanupPropagation.PostToDispatcher;
         _faultTasks = new OwnedTaskObserver(
             nameof(PackageViewHostService),
+            _propagateFatalCleanupFault);
+        var faultNotificationService = notificationCenter is null
+            ? null
+            : new AppPackageNotificationService(notificationCenter, "sunder.app", "Sunder");
+        _faultNoticeCoordinator = new AppPackageFaultNoticeCoordinator(
+            faultNotificationService,
             _propagateFatalCleanupFault);
 
         async Task DownloadSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken)
@@ -176,6 +184,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             RegisterPendingCandidate,
             shellViewService,
             settingsNavigationService,
+            _faultNoticeCoordinator,
             notificationCenter,
             backgroundProcessQueue,
             getRuntimeConnectionInfo,
@@ -1327,6 +1336,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         Task<AppPackageUiCleanupOutcome> completion;
         AppPackageGeneration targetGeneration;
         AppPackageUiRecoveryRequest? recoveryRequest = null;
+        AppPackageFaultNoticeIncident? faultNotice = null;
         lock (_quarantineCommitSyncRoot)
         {
             var faultedContentHash = attribution.ContentHash;
@@ -1384,7 +1394,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             {
                 _packageQuarantines[quarantineKey] = new PackageQuarantineRecord(
                     packageId,
-                    faultedContentHash,
+                    faultedContentHash!,
                     ++_quarantineRevision,
                     RejectCandidate: pendingCandidate?.RejectOnFault == true);
             }
@@ -1393,12 +1403,16 @@ public sealed class PackageViewHostService : IAsyncDisposable
             var reportedException = pendingCandidate is null
                 ? exception
                 : new InvalidOperationException(exception.ToString());
+            var canAttemptRecovery = pendingCandidate is null
+                && ReferenceEquals(targetGeneration, CurrentGeneration)
+                && !string.IsNullOrWhiteSpace(faultedContentHash);
 
             if (!targetGeneration.Composition.TryBeginDisablePackage(
                     packageId,
                     details,
                     origin,
                     reportedException,
+                    deferNotification: canAttemptRecovery,
                     out completion))
             {
                 if (previousQuarantine is null)
@@ -1418,36 +1432,52 @@ public sealed class PackageViewHostService : IAsyncDisposable
                 _acceptedPackageFaultGenerations.Add(acceptedFaultKey);
             }
 
-            if (pendingCandidate is null
-                && ReferenceEquals(targetGeneration, CurrentGeneration)
-                && !string.IsNullOrWhiteSpace(faultedContentHash))
+            faultNotice = targetGeneration.Composition.FaultNotifier
+                .GetPackageDisabledIncident(packageId);
+
+            if (canAttemptRecovery)
             {
                 recoveryRequest = new AppPackageUiRecoveryRequest(
                     packageId,
-                    faultedContentHash,
+                    faultedContentHash!,
                     attribution.GenerationId,
-                    completion);
+                    completion,
+                    faultNotice);
             }
         }
 
         _faultTasks.Observe(completion, $"quarantining package App UI for '{packageId}'");
-        PublishPackageUiRecoveryRequested(recoveryRequest);
+        if (recoveryRequest is null)
+        {
+            faultNotice?.Publish();
+        }
+        else
+        {
+            PublishPackageUiRecoveryRequested(recoveryRequest);
+        }
         return true;
     }
 
     private void PublishPackageUiRecoveryRequested(AppPackageUiRecoveryRequest? request)
     {
         var handlers = PackageUiRecoveryRequestedHandlers;
-        if (request is null || handlers is null)
+        if (request is null)
         {
             return;
         }
+        if (handlers is null)
+        {
+            request.FaultNotice?.Publish();
+            return;
+        }
 
+        var delivered = false;
         foreach (Action<AppPackageUiRecoveryRequest> handler in handlers.GetInvocationList())
         {
             try
             {
                 handler(request);
+                delivered = true;
             }
             catch (Exception exception) when (AppPackageUiFaultPolicy.IsRecoverable(exception))
             {
@@ -1455,6 +1485,10 @@ public sealed class PackageViewHostService : IAsyncDisposable
                     $"Package App UI recovery subscriber failed for '{request.PackageId}'.",
                     exception);
             }
+        }
+        if (!delivered)
+        {
+            request.FaultNotice?.Publish();
         }
     }
 

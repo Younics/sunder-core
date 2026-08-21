@@ -11,8 +11,11 @@ internal sealed record WorkerEnvironment(
     string SessionId,
     string PackageContentPath,
     string PackageDataPath,
-    string PackageWorkspacePath)
+    string PackageWorkspacePath,
+    bool RpcExtendedDeadlineV1)
 {
+    private const string RpcExtendedDeadlineEnvironmentVariable = "SUNDER_RPC_EXTENDED_DEADLINE_V1";
+
     public static WorkerEnvironment Capture(Func<string, string?> getEnvironmentVariable)
     {
         var protocol = Required(getEnvironmentVariable, "SUNDER_WORKER_PROTOCOL", 64);
@@ -49,6 +52,9 @@ internal sealed record WorkerEnvironment(
         var contentPath = RequiredPath(getEnvironmentVariable, "SUNDER_PACKAGE_CONTENT_ROOT");
         var temporaryPath = RequiredPath(getEnvironmentVariable, "SUNDER_WORKER_TEMP_ROOT");
         var workspacePath = RequiredPath(getEnvironmentVariable, "SUNDER_PACKAGE_WORKSPACE_ROOT");
+        var rpcExtendedDeadlineV1 = OptionalFlag(
+            getEnvironmentVariable,
+            RpcExtendedDeadlineEnvironmentVariable);
         if (PathsEqual(contentPath, temporaryPath)
             || PathsEqual(contentPath, workspacePath)
             || PathsEqual(temporaryPath, workspacePath))
@@ -66,7 +72,18 @@ internal sealed record WorkerEnvironment(
             sessionId,
             contentPath,
             temporaryPath,
-            workspacePath);
+            workspacePath,
+            rpcExtendedDeadlineV1);
+    }
+
+    private static bool OptionalFlag(
+        Func<string, string?> getEnvironmentVariable,
+        string name)
+    {
+        var value = getEnvironmentVariable(name);
+        if (value is null) return false;
+        if (value == "1") return true;
+        throw new InvalidOperationException($"{name} must be absent or exactly '1'.");
     }
 
     private static string Required(

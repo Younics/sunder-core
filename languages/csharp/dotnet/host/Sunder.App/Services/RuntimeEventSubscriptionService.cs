@@ -35,6 +35,8 @@ public sealed class RuntimeEventSubscriptionService(
     private string? _forcedRecoveryPackageId;
     private string? _forcedRecoveryContentHash;
     private RuntimePackageSnapshot? _forcedRecoverySnapshot;
+    private bool _forcedRecoverySuperseded;
+    private RecoveryPresentationTransfer? _forcedRecoveryTransfer;
     private RecoveryPresentationTransfer? _recoveryPresentationTransfer;
     private TaskCompletionSource? _presentationsDrained;
     private TaskCompletionSource _appliedStampChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -252,6 +254,8 @@ public sealed class RuntimeEventSubscriptionService(
                         attemptCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                             waitCancellation.Token);
                         _forcedRecoveryPresentation = attemptCancellation;
+                        _forcedRecoverySuperseded = false;
+                        _forcedRecoveryTransfer = null;
                         _forcedRecoveryPackageId = packageId;
                         _forcedRecoveryContentHash = contentHash;
                         _forcedRecoverySnapshot = null;
@@ -267,9 +271,10 @@ public sealed class RuntimeEventSubscriptionService(
                                 attemptCancellation.Token)
                             .ConfigureAwait(false);
                     }
-                    catch (OperationCanceledException) when (
+                    catch (OperationCanceledException exception) when (
                         !waitCancellation.IsCancellationRequested
-                        && attemptCancellation.IsCancellationRequested)
+                        && attemptCancellation.IsCancellationRequested
+                        && AppPackageUiFaultPolicy.IsRecoverable(exception))
                     {
                         if (GetForcedRecoveryTransferTask(attemptCancellation) is { } transfer)
                         {
@@ -334,13 +339,12 @@ public sealed class RuntimeEventSubscriptionService(
                                     AppPackageQuarantineRetryIntent.ForAutomaticPackageRecovery(packageId),
                                     attemptCancellation.Token)
                                 .ConfigureAwait(false);
-                            attemptCancellation.Token.ThrowIfCancellationRequested();
 
                             var superseded = false;
                             lock (_syncRoot)
                             {
                                 if (!ReferenceEquals(_forcedRecoveryPresentation, attemptCancellation)
-                                    || attemptCancellation.IsCancellationRequested
+                                    || _forcedRecoverySuperseded
                                     || _retiredRuntimeInstances.Contains(read.Snapshot.RuntimeInstanceId)
                                     || IsNewerGenerationTracked(read.Snapshot))
                                 {
@@ -348,7 +352,8 @@ public sealed class RuntimeEventSubscriptionService(
                                     transferredRecovery = ReferenceEquals(
                                         _forcedRecoveryPresentation,
                                         attemptCancellation)
-                                            ? _recoveryPresentationTransfer?.Completion.Task
+                                            ? (_forcedRecoveryTransfer ?? _recoveryPresentationTransfer)
+                                                ?.Completion.Task
                                             : null;
                                 }
                                 else
@@ -372,9 +377,10 @@ public sealed class RuntimeEventSubscriptionService(
                         }
                     }
                 }
-                catch (OperationCanceledException) when (
+                catch (OperationCanceledException exception) when (
                     !waitCancellation.IsCancellationRequested
-                    && attemptCancellation?.IsCancellationRequested == true)
+                    && attemptCancellation?.IsCancellationRequested == true
+                    && AppPackageUiFaultPolicy.IsRecoverable(exception))
                 {
                     if (writerStarted)
                     {
@@ -406,6 +412,8 @@ public sealed class RuntimeEventSubscriptionService(
                             _forcedRecoveryPackageId = null;
                             _forcedRecoveryContentHash = null;
                             _forcedRecoverySnapshot = null;
+                            _forcedRecoverySuperseded = false;
+                            _forcedRecoveryTransfer = null;
                         }
                     }
                     attemptCancellation?.Dispose();
@@ -417,8 +425,26 @@ public sealed class RuntimeEventSubscriptionService(
 
                 if (transferredRecovery is not null)
                 {
-                    return await transferredRecovery.WaitAsync(waitCancellation.Token)
-                        .ConfigureAwait(false);
+                    try
+                    {
+                        return await transferredRecovery.WaitAsync(waitCancellation.Token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException exception) when (
+                        !cancellationToken.IsCancellationRequested
+                        && timeoutCancellation.IsCancellationRequested
+                        && !_cancellation.IsCancellationRequested
+                        && AppPackageUiFaultPolicy.IsRecoverable(exception))
+                    {
+                        lock (_syncRoot)
+                        {
+                            if (transferredRecovery.IsCompletedSuccessfully)
+                            {
+                                return transferredRecovery.Result;
+                            }
+                        }
+                        throw;
+                    }
                 }
                 if (shouldRetry)
                 {
@@ -427,10 +453,11 @@ public sealed class RuntimeEventSubscriptionService(
                 }
             }
         }
-        catch (OperationCanceledException) when (
+        catch (OperationCanceledException exception) when (
             !cancellationToken.IsCancellationRequested
             && timeoutCancellation.IsCancellationRequested
-            && !_cancellation.IsCancellationRequested)
+            && !_cancellation.IsCancellationRequested
+            && AppPackageUiFaultPolicy.IsRecoverable(exception))
         {
             return AppPackageUiRecoveryPresentationOutcome.TimedOut;
         }
@@ -627,7 +654,10 @@ public sealed class RuntimeEventSubscriptionService(
                 _presentationGate.Release();
             }
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && supersededPresentation.IsCancellationRequested)
+        catch (OperationCanceledException exception) when (
+            !cancellationToken.IsCancellationRequested
+            && supersededPresentation.IsCancellationRequested
+            && AppPackageUiFaultPolicy.IsRecoverable(exception))
         {
             // A newer Runtime stamp owns the next presentation commit.
         }
@@ -676,7 +706,7 @@ public sealed class RuntimeEventSubscriptionService(
         lock (_syncRoot)
         {
             _supersededPresentation?.Cancel();
-            _forcedRecoveryPresentation?.Cancel();
+            SupersedeForcedRecoveryPresentation();
             _recoveryPresentationTransfer?.Completion.TrySetResult(
                 AppPackageUiRecoveryPresentationOutcome.Superseded);
             _appliedStampChanged.TrySetResult();
@@ -710,6 +740,7 @@ public sealed class RuntimeEventSubscriptionService(
                 _forcedRecoveryPackageId = null;
                 _forcedRecoveryContentHash = null;
                 _forcedRecoverySnapshot = null;
+                _forcedRecoveryTransfer = null;
                 _recoveryPresentationTransfer = null;
             }
             _presentationGate.Dispose();
@@ -1063,10 +1094,14 @@ public sealed class RuntimeEventSubscriptionService(
                 ?? _forcedRecoveryPackageId!;
             var recoveryContentHash = _recoveryPresentationTransfer?.ContentHash
                 ?? _forcedRecoveryContentHash!;
+            if (_forcedRecoveryTransfer?.Completion.Task.IsCompletedSuccessfully == true)
+            {
+                return explicitRetryPackageIds;
+            }
             var recoverySnapshot = _forcedRecoverySnapshot ?? _latestSnapshot;
             if (recoverySnapshot is null)
             {
-                _forcedRecoveryPresentation?.Cancel();
+                SupersedeForcedRecoveryPresentation();
                 return explicitRetryPackageIds;
             }
             if (!ShouldAcceptSnapshot(snapshot)
@@ -1088,7 +1123,7 @@ public sealed class RuntimeEventSubscriptionService(
                     && snapshot.SessionGeneration == recoverySnapshot.SessionGeneration
                     && !exactTargetIsActive)
                 {
-                    _forcedRecoveryPresentation?.Cancel();
+                    SupersedeForcedRecoveryPresentation();
                 }
                 return explicitRetryPackageIds;
             }
@@ -1098,14 +1133,15 @@ public sealed class RuntimeEventSubscriptionService(
                 _recoveryPresentationTransfer?.Completion.TrySetResult(
                     AppPackageUiRecoveryPresentationOutcome.ContentChanged);
                 _recoveryPresentationTransfer = null;
-                _forcedRecoveryPresentation?.Cancel();
+                SupersedeForcedRecoveryPresentation();
                 return explicitRetryPackageIds;
             }
 
             transfer = _recoveryPresentationTransfer ??= new RecoveryPresentationTransfer(
                 recoveryPackageId,
                 recoveryContentHash);
-            _forcedRecoveryPresentation?.Cancel();
+            _forcedRecoveryTransfer = transfer;
+            SupersedeForcedRecoveryPresentation();
             return AppPackageQuarantineRetryIntent.ForAutomaticPackageRecovery(
                 (explicitRetryPackageIds ?? []).Append(transfer.PackageId));
         }
@@ -1117,8 +1153,14 @@ public sealed class RuntimeEventSubscriptionService(
         {
             _recoveryPresentationTransfer?.Completion.TrySetResult(
                 AppPackageUiRecoveryPresentationOutcome.Superseded);
-            _forcedRecoveryPresentation?.Cancel();
+            SupersedeForcedRecoveryPresentation();
         }
+    }
+
+    private void SupersedeForcedRecoveryPresentation()
+    {
+        _forcedRecoverySuperseded = true;
+        _forcedRecoveryPresentation?.Cancel();
     }
 
     private Task<AppPackageUiRecoveryPresentationOutcome>? GetForcedRecoveryTransferTask(
@@ -1127,7 +1169,7 @@ public sealed class RuntimeEventSubscriptionService(
         lock (_syncRoot)
         {
             return ReferenceEquals(_forcedRecoveryPresentation, attemptCancellation)
-                ? _recoveryPresentationTransfer?.Completion.Task
+                ? (_forcedRecoveryTransfer ?? _recoveryPresentationTransfer)?.Completion.Task
                 : null;
         }
     }

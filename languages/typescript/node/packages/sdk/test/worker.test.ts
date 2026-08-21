@@ -268,6 +268,59 @@ test("activation callback can await discovery and invocation before acknowledgem
   }
 });
 
+test("provider nested invocation carries its Host invocation lineage", async () => {
+  const worker = startWorker("nested-lineage", true);
+  try {
+    await handshake(worker);
+    send(worker, invocation("parent-lineage", "unary", "echo"));
+
+    const nested = await worker.messages.next();
+    assert.equal(nested.type, "worker.invoke");
+    assert.equal(nested.parentInvocationId, "parent-lineage");
+    send(worker, { type: "host.result", id: nested.id!, value: { accepted: true } });
+
+    const result = await worker.messages.next();
+    assert.equal(result.type, "worker.result");
+    send(worker, { type: "host.shutdown", shutdownId: "nested-stop", reason: "test" });
+    assert.equal((await worker.messages.next()).type, "worker.shutdown-ack");
+  } finally {
+    worker.child.kill("SIGKILL");
+  }
+});
+
+test("opted-in nested scope and subscription carry Host invocation lineage", async () => {
+  const worker = startWorker("nested-lineage-scope-subscribe", true);
+  try {
+    await handshake(worker);
+    send(worker, invocation("scope-parent-lineage", "unary", "echo"));
+
+    const open = await worker.messages.next();
+    assert.equal(open.type, "worker.scope-open");
+    assert.equal(open.parentInvocationId, "scope-parent-lineage");
+    send(worker, {
+      type: "host.result",
+      id: open.id!,
+      value: { scopeId: "nested-scope", deadlineUtc: formatUtcTimestamp(new Date(Date.now() + 30_000)) },
+    });
+
+    const subscribe = await worker.messages.next();
+    assert.equal(subscribe.type, "worker.subscribe");
+    assert.equal(subscribe.scopeId, "nested-scope");
+    assert.equal(subscribe.parentInvocationId, "scope-parent-lineage");
+    send(worker, { type: "host.complete", id: subscribe.id! });
+
+    const close = await worker.messages.next();
+    assert.equal(close.type, "worker.scope-close");
+    send(worker, { type: "host.result", id: close.id!, value: null });
+    assert.equal((await worker.messages.next()).type, "worker.result");
+
+    send(worker, { type: "host.shutdown", shutdownId: "nested-scope-stop", reason: "test" });
+    assert.equal((await worker.messages.next()).type, "worker.shutdown-ack");
+  } finally {
+    worker.child.kill("SIGKILL");
+  }
+});
+
 test("storage-migration preparation is exact-generation and read-only before activation", async () => {
   const worker = startWorker("migration-preparation");
   try {
@@ -616,6 +669,7 @@ test("worker emits seven-digit outbound deadlines and awaits shutdown lifecycle"
     const request = await deadline.messages.next();
     assert.equal(request.type, "worker.invoke");
     assert.equal(request.deadlineUtc, "2030-01-02T03:04:05.6780000Z");
+    assert.equal(Object.hasOwn(request, "parentInvocationId"), false);
     send(deadline, { type: "host.result", id: request.id!, value: null });
     await waitForStderr(deadline, "OUTBOUND_DEADLINE_OK");
     send(deadline, { type: "host.shutdown", shutdownId: "deadline-stop", reason: "test" });
@@ -732,6 +786,7 @@ test("caller-owned scope carries authority through RPC calls and closes idempote
     const opened = await worker.messages.next();
     assert.equal(opened.type, "worker.scope-open");
     assert.equal(opened.deadlineUtc, "2030-01-02T03:04:05.6780000Z");
+    assert.equal(Object.hasOwn(opened, "parentInvocationId"), false);
     send(worker, {
       type: "host.result",
       id: opened.id!,
@@ -761,6 +816,7 @@ test("caller-owned scope carries authority through RPC calls and closes idempote
     const invoke = await worker.messages.next();
     assert.equal(invoke.type, "worker.invoke");
     assert.equal(invoke.scopeId, "scope1");
+    assert.equal(Object.hasOwn(invoke, "parentInvocationId"), false);
     send(worker, { type: "host.result", id: invoke.id!, value: null });
 
     const closed = await worker.messages.next();
@@ -1297,6 +1353,7 @@ test("worker rejects missing required values and isolates bounded stream queue e
     await handshake(countOverflow, minimumResourceProfile);
     const request = await countOverflow.messages.next();
     assert.equal(request.type, "worker.subscribe");
+    assert.equal(Object.hasOwn(request, "parentInvocationId"), false);
     assert.equal(request.endpointReference, "rpc1_private-endpoint");
     assert.equal(request.serviceId, "messages\r\nprivate/path");
     assert.equal(request.methodId, "watch\tprivate");
@@ -1406,7 +1463,7 @@ test("provider content client binds register, verified stream open, and discard 
   }
 });
 
-function startWorker(mode?: string): WorkerProcess {
+function startWorker(mode?: string, rpcExtendedDeadlineV1 = false): WorkerProcess {
   const fixture = resolve(__dirname, "worker-fixture.js");
   const root = mkdtempSync(join(tmpdir(), "sunder-worker-test-"));
   const contentRoot = join(root, "content");
@@ -1427,6 +1484,7 @@ function startWorker(mode?: string): WorkerProcess {
       SUNDER_WORKER_TEMP_ROOT: temporaryRoot,
       SUNDER_PACKAGE_WORKSPACE_ROOT: workspaceRoot,
       SUNDER_TEST_MODE: mode,
+      ...(rpcExtendedDeadlineV1 ? { SUNDER_RPC_EXTENDED_DEADLINE_V1: "1" } : {}),
     },
   });
   const messages = new MessageQueue();

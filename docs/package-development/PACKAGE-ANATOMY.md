@@ -47,7 +47,7 @@ An App-only package can use its App role-local workspace and App logging, but Ru
 
 All `IPackageContext` capabilities are scoped to one activation and must not escape it. Host capability implementations are thread-safe unless a member explicitly says otherwise; that guarantee does not make package services, returned Avalonia controls, streams, or caller-owned collections thread-safe. Follow each member's ownership/threading contract and marshal control access to the App dispatcher. `RoleLocalWorkspace` is host-owned; package code must not dispose it.
 
-## Typical Aggregate Project
+## Typical Canonical Project
 
 ```text
 MyPackage/
@@ -63,9 +63,9 @@ MyPackage/
     PackageModule.cs
 ```
 
-The generated `*.Protocol` project is non-packable and package-local. It contains bundled descriptors plus generated DTO, client, and provider adapters; Worker and App consume it through private project references. Keep Avalonia types out of Worker code. The aggregate project builds one self-contained Worker leaf per exact RID and combines validated leaves into one universal package.
+The root unsuffixed csproj is the canonical Worker/package project and sets `SunderPackagePrimaryProject=true`. Worker source may stay under `*.Worker/`, but that folder has no separate csproj. The generated `*.Protocol` project is non-packable and package-local. It contains bundled descriptors plus generated DTO, client, and provider adapters; Worker and App consume it through private project references. Keep Avalonia types out of Worker code. A normal build emits one exact current-RID Worker leaf and composes it with the optional App; `PackSunderPackage` sequentially builds all configured Worker RIDs and combines validated leaves into one universal package.
 
-The compiled [quickstart package](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) demonstrates the Worker, App, Protocol, and Aggregate topology with a generated owner RPC binding.
+The compiled [quickstart package](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) demonstrates the canonical Worker/package, App, and Protocol topology with a generated owner RPC binding.
 
 ## Package Dependencies Versus Protocol Helpers
 

@@ -901,6 +901,7 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
     public bool AllowsPrePublicationLease => Volatile.Read(ref _allowsPrePublicationLease) != 0;
     public string PackageId => Package.Descriptor.PackageId;
     public string PackageVersion => Package.Descriptor.Version;
+    public Guid? ActivationId => Package.RuntimeActivationId;
     public string Role => SunderPackageFormat.RuntimeHostRole;
     public string ManifestSha256 => Package.RpcManifestSha256;
     public PackageSourceKind? SourceKind => Package.Source.Kind;

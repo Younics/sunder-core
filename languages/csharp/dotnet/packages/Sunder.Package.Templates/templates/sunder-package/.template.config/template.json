@@ -4,6 +4,7 @@
   "classifications": ["Sunder", "Package", "Avalonia"],
   "identity": "Sunder.Package",
   "name": "Sunder Package",
+  "description": "Creates a canonical Worker/package project with optional App and package-local Protocol projects.",
   "shortName": "sunder-package",
   "sourceName": "Sunder.Package.Template",
   "preferNameDirectory": true,

@@ -1,4 +1,3 @@
-using Avalonia;
 using Avalonia.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Views.Controls;
@@ -22,7 +21,7 @@ internal sealed class AppPackageViewRegistry
     private readonly HashSet<string> _quarantinedViewIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PackageSettingsViewDescriptor> _settingsViewPackagesById;
     private readonly Dictionary<string, List<string>> _viewIdsByPackageId = new(StringComparer.OrdinalIgnoreCase);
-    private readonly IUiDispatcher _uiDispatcher;
+    private IUiDispatcher _uiDispatcher;
 
     public AppPackageViewRegistry(IUiDispatcher? uiDispatcher = null)
         : this(new Dictionary<string, PackageSettingsViewDescriptor>(StringComparer.OrdinalIgnoreCase), uiDispatcher)
@@ -36,6 +35,9 @@ internal sealed class AppPackageViewRegistry
         _settingsViewPackagesById = new Dictionary<string, PackageSettingsViewDescriptor>(settingsViewPackagesById, StringComparer.OrdinalIgnoreCase);
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
     }
+
+    internal void SetUiDispatcher(IUiDispatcher uiDispatcher)
+        => _uiDispatcher = uiDispatcher ?? throw new ArgumentNullException(nameof(uiDispatcher));
 
     public void RegisterPackageView<TView>(string packageId, PackageViewRegistration registration, IServiceProvider serviceProvider)
         where TView : Control
@@ -558,7 +560,7 @@ internal sealed class AppPackageViewRegistry
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_uiDispatcher.CheckAccess() || Application.Current is null)
+        if (_uiDispatcher.CheckAccess())
         {
             return RemoveCachedViewsWithOutcome(packageId);
         }
@@ -620,7 +622,7 @@ internal sealed class AppPackageViewRegistry
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_uiDispatcher.CheckAccess() || Application.Current is null)
+        if (_uiDispatcher.CheckAccess())
         {
             return RemoveCachedView(packageId, viewId);
         }
@@ -676,7 +678,7 @@ internal sealed class AppPackageViewRegistry
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_uiDispatcher.CheckAccess() || Application.Current is null)
+        if (_uiDispatcher.CheckAccess())
         {
             return UnregisterPackageWithOutcome(packageId);
         }

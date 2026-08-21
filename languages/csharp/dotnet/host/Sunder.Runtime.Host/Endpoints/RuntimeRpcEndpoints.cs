@@ -96,17 +96,26 @@ internal static class RuntimeRpcEndpoints
         => context.RequestServices.GetRequiredService<RuntimeRpcAppSessionManager>()
             .OpenAsync(request, cancellationToken);
 
-    private static Task<RuntimeRpcAppCallScopeDescriptor> OpenAppCallScopeAsync(
+    private static IResult OpenAppCallScopeAsync(
         RuntimeRpcAppCallScopeOpenRequest request,
         HttpContext context,
         CancellationToken cancellationToken)
     {
-        var scope = context.RequestServices.GetRequiredService<RuntimeRpcBroker>()
-            .CreateAppCallScope(
-                request.SessionId,
-                new SunderRpcCallOptions(request.DeadlineUtc),
-                cancellationToken);
-        return Task.FromResult(new RuntimeRpcAppCallScopeDescriptor(scope.Id, scope.DeadlineUtc));
+        try
+        {
+            var scope = context.RequestServices.GetRequiredService<RuntimeRpcBroker>()
+                .CreateAppCallScope(
+                    request.SessionId,
+                    new SunderRpcCallOptions(request.DeadlineUtc),
+                    cancellationToken);
+            return Results.Ok(new RuntimeRpcAppCallScopeDescriptor(scope.Id, scope.DeadlineUtc));
+        }
+        catch (SunderRpcException exception)
+        {
+            return Results.Json(
+                ToProtocol(exception.Error),
+                statusCode: StatusCodes.Status409Conflict);
+        }
     }
 
     private static async Task<IResult> CloseAppCallScopeAsync(

@@ -69,7 +69,7 @@ A method schema reference MUST be the closed object `{ "$ref": "#/$defs/<name>" 
 
 ## Restricted Schema Profile
 
-Every V2 root selects `sunder.rpc.values.v1`. Schemas use Draft 2020-12 vocabulary only through the closed forms below. This is not unrestricted JSON Schema. Unknown keywords, remote or dynamic references, open record forms, ambiguous unions, unsupported formats, and unbounded ordinary strings or collections are invalid.
+Every V2 root selects `sunder.rpc.values.v1`. Schemas use Draft 2020-12 vocabulary only through the closed forms below. This is not unrestricted JSON Schema. Unknown keywords, remote or dynamic references, open record forms, ambiguous unions, and unsupported formats are invalid.
 
 Every schema object MUST be exactly one form. Non-reference forms MAY carry `title` and `description` annotations of at most 2048 Unicode scalar values; a reference has no siblings.
 
@@ -80,28 +80,28 @@ Every schema object MUST be exactly one form. Non-reference forms MAY carry `tit
 | JSON | No structural member: `{}` after annotations are removed | Annotations |
 | JSONObject | `type: "object"` and no record/map members | `maxProperties`, annotations |
 | Closed record | `type: "object"`, `properties`, `required`, `additionalProperties: false` | `minProperties`, `maxProperties`, annotations |
-| Bounded map | `type: "object"`, schema-valued `additionalProperties`, ordinary bounded-string `propertyNames`, `minProperties`, `maxProperties` | Empty `properties`, empty `required`, annotations |
-| Array | `type: "array"`, `items`, `minItems`, `maxItems` | Annotations |
-| Ordinary string | `type: "string"`, `minLength`, `maxLength` | `enum` or `const`, annotations |
-| Formatted string | `type: "string"`, one supported `format` | Format-specific limits and exact-value bounds, annotations |
-| Base64 bytes | `type: "string"`, `contentEncoding: "base64"`, `maxDecodedBytes` | Annotations |
+| Map | `type: "object"`, schema-valued `additionalProperties`, ordinary-string `propertyNames` | Empty `properties`, empty `required`, `minProperties`, `maxProperties`, annotations |
+| Array | `type: "array"`, `items` | `minItems`, `maxItems`, annotations |
+| Ordinary string | `type: "string"` | `minLength`, `maxLength`, `enum` or `const`, annotations |
+| Formatted string | `type: "string"`, one supported `format` | Optional format-specific limits and exact-value bounds, annotations |
+| Base64 bytes | `type: "string"`, `contentEncoding: "base64"` | `maxDecodedBytes`, annotations |
 | Safe integer | `type: "integer"` | Numeric bounds, `enum` or `const`, annotations |
 | Floating point | `type: "number"`, `format: "float32"` or `format: "float64"` | Numeric bounds, `enum` or `const`, annotations |
 | Boolean or null | `type` | `enum` or `const`, annotations |
 | Content reference | `type: "object"`, `logicalType: "content-reference"` | Annotations |
 
-`enum` and `const` are mutually exclusive. An enum contains 1 through 256 semantically unique primitive values compatible with its declared type. Inclusive and exclusive bounds on the same side are mutually exclusive. All present lower bounds MUST be no greater than corresponding upper bounds. Length, collection, exact-digit, precision, scale, decoded-byte, and dynamic-property limits are integers from 0 through 1,000,000, except `maxDigits` and `maxPrecision`, which are at least 1. A closed record has at most 256 declared properties; its optional property-count bounds cannot exceed that count. The descriptor has a maximum non-repeating resolved schema depth of 64 and at most 4096 physical schema nodes.
+`enum` and `const` are mutually exclusive. An enum contains 1 through 256 semantically unique primitive values compatible with its declared type. Inclusive and exclusive bounds on the same side are mutually exclusive. All present lower bounds MUST be no greater than corresponding upper bounds. Length, collection, exact-digit, precision, scale, decoded-byte, and dynamic-property limits are optional safe integers from 0 through 9007199254740991, except that a supplied `maxDigits` or `maxPrecision` is at least 1. An omitted minimum is zero and an omitted maximum is unbounded. A closed record has at most 256 declared properties independently of its instance property-count facets; closedness still prevents undeclared instance members. The descriptor has a maximum non-repeating resolved schema depth of 64 and at most 4096 physical schema nodes.
 
 Record property names are non-empty, at most 128 scalar values, and MUST NOT duplicate or ASCII-case-collide in the descriptor. `required` contains unique declared names. A map MUST NOT mix named properties with map entries. A closed empty record is the ordinary unit value and validates only `{}`; JSONObject is a distinct dynamic object form.
 
-JSON validates any JSON value and JSONObject validates any JSON object. JSONObject's `maxProperties` defaults to 1,000,000. Values reached through either form remain bounded at runtime: nesting depth is at most 64, each string has at most 1,000,000 scalar values, each array or object has at most 1,000,000 entries, and every number must decode to a finite binary64 value.
+JSON validates any JSON value and JSONObject validates any JSON object. Neither form, nor any omitted quantitative facet, imposes an implicit string-length, collection-size, node-count, or nesting-depth ceiling. Every number reached through JSON or JSONObject MUST still decode to a finite binary64 value, every string and object member name MUST contain Unicode scalar values, and duplicate object member names are invalid. Transport and Host resource policy MAY reject or externalize a value independently of schema validity, but those limits are not semantics of `sunder.rpc.values.v1`.
 
 A `oneOf` is valid only when it is one of these forms:
 
 - A nullable union has exactly two variants, exactly one of which resolves to `{ "type": "null" }`, and exactly one branch accepts null.
 - A tagged union has only variants that resolve to closed records and exactly one common required property whose inline schema has `type: "string"` and a distinct string `const` in every resolved variant. That property is the discriminator.
 
-References MUST be exact local references resolving through `$defs`. Recursion is permitted only when every reference cycle crosses at least one productive boundary: an optional closed-record property, an array with `minItems: 0`, or a map with `minProperties: 0`. Removing productive edges from the definition-reference graph MUST leave it acyclic. Thus a required self-property, a direct alias cycle, an array with a positive minimum containing itself, and a map with a positive minimum containing itself are invalid. Validation, resolution for union discrimination, and hashing MUST terminate for every valid recursive descriptor.
+References MUST be exact local references resolving through `$defs`. Recursion is permitted only when every reference cycle crosses at least one productive boundary: an optional closed-record property, an array whose omitted or explicit `minItems` is zero, or a map whose omitted or explicit `minProperties` is zero. Removing productive edges from the definition-reference graph MUST leave it acyclic. Thus a required self-property, a direct alias cycle, an array with a positive minimum containing itself, and a map with a positive minimum containing itself are invalid. Validation, resolution for union discrimination, and hashing MUST terminate for every valid recursive descriptor. Instance validation MUST NOT impose the descriptor's schema-depth or node-count limits on runtime values.
 
 Keywords not listed for a form, including `pattern`, `default`, `anyOf`, `allOf`, `not`, `if`, `then`, `else`, `unevaluatedProperties`, and tuple-array keywords, are outside the descriptor value profile. [`descriptor.schema.json`](descriptor.schema.json) checks the machine-readable structural subset. Checks requiring raw tokens, format algorithms, exact arithmetic, or whole-document graph analysis remain normative prose.
 
@@ -114,15 +114,15 @@ Keywords not listed for a form, including `pattern`, `default`, `anyOf`, `allOf`
 - `date-time` has `YYYY-MM-DDTHH:mm:ss[.fraction](Z|+HH:MM|-HH:MM)` form and DateTimeOffset semantics. `T` and `Z` are uppercase, the offset is no greater than 14:00, seconds are `00` through `59`, leap seconds are invalid, and a present fraction has 1 through 9 digits. An offset is mandatory.
 - `duration` is canonical non-negative ISO 8601 `P[nY][nM][nD][T[nH][nM][n[.fraction]S]]` text with at least one component. Components have no leading zero unless zero, and a fractional second has no trailing zero. Week, sign, and fractional non-second forms are invalid.
 - `uri` is an absolute RFC 3986-style URI with an ASCII scheme, no controls, spaces, DEL, or reverse solidus, and only complete hexadecimal percent escapes.
-- `big-integer` is a canonical exact integer string and requires `maxDigits`.
-- `decimal` is a canonical exact decimal string and requires `maxPrecision` and `maxScale`.
+- `big-integer` is a canonical exact integer string and MAY carry `maxDigits`.
+- `decimal` is a canonical exact decimal string and MAY carry `maxPrecision` and `maxScale` independently.
 - `float32` and `float64` apply only to `type: "number"` and select IEEE-754 binary32 or binary64 decoding respectively. Bare `type: "number"` is invalid.
 
 A canonical big integer is `0` or `-?[1-9][0-9]*`. Its digit count excludes the sign. A canonical decimal is an optional `-`, an integer part that is `0` or has no leading zero, and an optional fraction whose last digit is nonzero. `-0`, exponent notation, a plus sign, leading integer zeroes, a bare decimal point, and trailing fractional zeroes are invalid. Decimal precision is the count of coefficient digits after leading zeroes are removed, with zero having precision 1; scale is the fraction length.
 
-Big-integer and decimal schemas MAY carry at most one of `valueMinimum` and `valueExclusiveMinimum`, and at most one of `valueMaximum` and `valueExclusiveMaximum`. Every bound is a canonical string fitting that schema's digit, precision, and scale limits. Values and bounds are ordered as mathematical integers or decimals using exact arithmetic, never binary floating point or locale rules.
+Big-integer and decimal schemas MAY carry at most one of `valueMinimum` and `valueExclusiveMinimum`, and at most one of `valueMaximum` and `valueExclusiveMaximum`. Every bound is a canonical string fitting every digit, precision, or scale limit that is present; an omitted limit is unbounded. Values and bounds are ordered as mathematical integers or decimals using exact arithmetic, never binary floating point or locale rules.
 
-Base64 values use the standard RFC 4648 alphabet, required canonical padding, no whitespace, and zero unused trailing bits. `maxDecodedBytes` bounds decoded length; encoded length is not the resource measure.
+Base64 values use the standard RFC 4648 alphabet, required canonical padding, no whitespace, and zero unused trailing bits. When present, `maxDecodedBytes` bounds decoded length; encoded length is not the resource measure.
 
 `logicalType` is reserved in this profile except for the exact content-reference schema:
 

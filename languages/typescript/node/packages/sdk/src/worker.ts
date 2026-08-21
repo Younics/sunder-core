@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
 import { lstatSync } from "node:fs";
 import { mkdir, open, realpath, stat, unlink, type FileHandle } from "node:fs/promises";
@@ -68,6 +69,7 @@ const SAFE_ID = /^[A-Za-z0-9_-]+$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const SHA256_ANY_CASE = /^[0-9a-fA-F]{64}$/u;
 const STORAGE_KEY = /^[A-Za-z0-9._-]{1,256}$/u;
+const RPC_EXTENDED_DEADLINE_ENVIRONMENT = "SUNDER_RPC_EXTENDED_DEADLINE_V1";
 const WINDOWS_RESERVED = new Set([
   "CON", "PRN", "AUX", "NUL",
   "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
@@ -111,6 +113,7 @@ class WorkerRuntime {
   readonly #decoder = new FrameDecoder(LIMITS);
   readonly #writer = new ProtocolWriter();
   readonly #hostInvocations = new Map<string, HostInvocation>();
+  readonly #currentInvocationId = new AsyncLocalStorage<string>();
   readonly #hostContributions = new Map<string, HostContribution>();
   readonly #clientCalls = new Map<string, ClientCall>();
   readonly #scopes = new Map<string, ScopeState>();
@@ -544,9 +547,9 @@ class WorkerRuntime {
       signal: controller.signal,
     });
     const request = requiredValue(root, "request");
-    const operation = kind === "unary"
+    const operation = this.#currentInvocationId.run(id, () => kind === "unary"
       ? this.#invokeUnary(invocation, context, request)
-      : this.#invokeStream(invocation, context, request);
+      : this.#invokeStream(invocation, context, request));
     invocation.operation = operation.finally(() => {
       this.#hostInvocations.delete(id);
       invocation.active = false;
@@ -1055,6 +1058,7 @@ class WorkerRuntime {
       const value = await this.#unaryClientCall<JsonValue>({
         type: "worker.scope-open",
         deadlineUtc: deadline(options),
+        ...this.#lineageMetadata(),
       }, options, {
         abandonedResult: async (result) => {
           const identity = scopeIdentity(result);
@@ -1260,6 +1264,7 @@ class WorkerRuntime {
       methodId: boundedString(methodId, "RPC methodId", 128),
       request,
       deadlineUtc: deadline(options),
+      ...this.#lineageMetadata(),
     }, options);
   }
 
@@ -1282,6 +1287,7 @@ class WorkerRuntime {
       methodId: validatedMethodId,
       request,
       deadlineUtc: deadline(options),
+      ...this.#lineageMetadata(),
     }, options, {
       operation: "subscribe",
       serviceId: sanitizeDiagnosticIdentity(validatedServiceId),
@@ -1324,6 +1330,12 @@ class WorkerRuntime {
       this.#fail(protocol);
       throw protocol;
     }
+  }
+
+  #lineageMetadata(): Readonly<{ parentInvocationId?: string | null }> {
+    return this.#environment.rpcExtendedDeadlineV1
+      ? { parentInvocationId: this.#currentInvocationId.getStore() ?? null }
+      : {};
   }
 
   #createInvocationContentClient(invocation: HostInvocation): RpcContentClient {
@@ -2477,12 +2489,30 @@ function captureEnvironment(): WorkerEnvironment {
   const content = localPath(requiredPathEnvironment("SUNDER_PACKAGE_CONTENT_ROOT"));
   const temporary = localPath(requiredPathEnvironment("SUNDER_WORKER_TEMP_ROOT"));
   const workspace = localPath(requiredPathEnvironment("SUNDER_PACKAGE_WORKSPACE_ROOT"));
+  const rpcExtendedDeadlineV1 = optionalEnvironmentFlag(RPC_EXTENDED_DEADLINE_ENVIRONMENT);
   const identities = [content.rootPath, temporary.rootPath, workspace.rootPath]
     .map((path) => process.platform === "win32" ? path.toLowerCase() : path);
   if (new Set(identities).size !== identities.length) {
     throw new Error("Worker V3 content, temporary, and persistent workspace roots must be distinct.");
   }
-  return Object.freeze({ protocol, packageId, packageVersion, activationId, sessionId, content, temporary, workspace });
+  return Object.freeze({
+    protocol,
+    packageId,
+    packageVersion,
+    activationId,
+    sessionId,
+    content,
+    temporary,
+    workspace,
+    rpcExtendedDeadlineV1,
+  });
+}
+
+function optionalEnvironmentFlag(name: string): boolean {
+  const value = process.env[name];
+  if (value === undefined) return false;
+  if (value === "1") return true;
+  throw new Error(`${name} must be absent or exactly '1'.`);
 }
 
 function requiredEnvironment(name: string, maximum: number): string {
@@ -3801,6 +3831,7 @@ interface WorkerEnvironment {
   readonly content: WorkerLocalPath;
   readonly temporary: WorkerLocalPath;
   readonly workspace: WorkerLocalPath;
+  readonly rpcExtendedDeadlineV1: boolean;
 }
 
 interface NormalizedWorkerOptions {

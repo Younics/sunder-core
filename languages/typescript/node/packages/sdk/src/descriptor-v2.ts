@@ -113,7 +113,7 @@ export function validateRpcInstance(
     jsonError = "$ cannot be safely inspected as a JSON value.";
   }
   if (jsonError !== undefined) throw new RpcInstanceError(jsonError);
-  const error = instanceError(schema, value, "$", descriptor.$defs, descriptor.descriptorVersion, 1);
+  const error = instanceError(schema, value, "$", descriptor.$defs, descriptor.descriptorVersion);
   if (error !== undefined) throw new RpcInstanceError(error);
 }
 
@@ -252,56 +252,67 @@ function jsonRecord(): Record<string, JsonValue> {
 }
 
 function jsonValueShapeError(value: unknown, path: string, active: WeakSet<object>): string | undefined {
-  if (value === null || typeof value === "boolean") return undefined;
-  if (typeof value === "string") {
-    return hasUnicodeScalars(value) ? undefined : `${path} contains an unpaired UTF-16 surrogate.`;
-  }
-  if (typeof value === "number") return Number.isFinite(value) ? undefined : `${path} must be a finite JSON number.`;
-  if (typeof value !== "object") return `${path} contains a value that is not JSON.`;
-  if (active.has(value)) return `${path} contains a cyclic object graph.`;
+  const pending: JsonShapeWork[] = [{ kind: "visit", value, path }];
+  while (pending.length > 0) {
+    const work = pending.pop();
+    if (work === undefined) break;
+    if (work.kind === "leave") {
+      active.delete(work.value);
+      continue;
+    }
 
-  active.add(value);
-  try {
-    return Array.isArray(value)
-      ? jsonArrayShapeError(value, path, active)
-      : jsonObjectShapeError(value, path, active);
-  } finally {
-    active.delete(value);
-  }
-}
+    const item = work.value;
+    if (item === null || typeof item === "boolean") continue;
+    if (typeof item === "string") {
+      if (!hasUnicodeScalars(item)) return `${work.path} contains an unpaired UTF-16 surrogate.`;
+      continue;
+    }
+    if (typeof item === "number") {
+      if (!Number.isFinite(item)) return `${work.path} must be a finite JSON number.`;
+      continue;
+    }
+    if (typeof item !== "object") return `${work.path} contains a value that is not JSON.`;
+    if (active.has(item)) return `${work.path} contains a cyclic object graph.`;
+    active.add(item);
+    pending.push({ kind: "leave", value: item });
 
-function jsonObjectShapeError(value: object, path: string, active: WeakSet<object>): string | undefined {
-  const prototype = Object.getPrototypeOf(value) as object | null;
-  if (!isPlainObjectPrototype(prototype)) {
-    return `${path} must be a plain object or null-prototype record.`;
-  }
-  for (const name of Reflect.ownKeys(value)) {
-    if (typeof name === "symbol") return `${path} contains a symbol-keyed property.`;
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor === undefined || !("value" in descriptor)) return `${propertyPath(path, name)} must be a data property.`;
-    if (!descriptor.enumerable) return `${propertyPath(path, name)} must be an enumerable JSON property.`;
-    const error = jsonValueShapeError(descriptor.value, propertyPath(path, name), active);
-    if (error !== undefined) return error;
+    const children: { readonly value: unknown; readonly path: string }[] = [];
+    if (Array.isArray(item)) {
+      if (!isArrayPrototype(Object.getPrototypeOf(item) as object | null)) return `${work.path} must be a normal JSON array.`;
+      let elementCount = 0;
+      for (const name of Reflect.ownKeys(item)) {
+        if (typeof name === "symbol") return `${work.path} contains a symbol-keyed array property.`;
+        const descriptor = Object.getOwnPropertyDescriptor(item, name);
+        if (descriptor === undefined || !("value" in descriptor)) return `${propertyPath(work.path, name)} must be a data property.`;
+        if (name === "length") continue;
+        if (!isArrayElementName(name, item.length)) return `${propertyPath(work.path, name)} is not a JSON array element.`;
+        if (!descriptor.enumerable) return `${propertyPath(work.path, name)} must be an enumerable JSON array element.`;
+        elementCount++;
+        children.push({ value: descriptor.value, path: arrayItemPath(work.path, name) });
+      }
+      if (elementCount !== item.length) return `${work.path} must not be a sparse array.`;
+    } else {
+      const prototype = Object.getPrototypeOf(item) as object | null;
+      if (!isPlainObjectPrototype(prototype)) return `${work.path} must be a plain object or null-prototype record.`;
+      for (const name of Reflect.ownKeys(item)) {
+        if (typeof name === "symbol") return `${work.path} contains a symbol-keyed property.`;
+        const descriptor = Object.getOwnPropertyDescriptor(item, name);
+        if (descriptor === undefined || !("value" in descriptor)) return `${propertyPath(work.path, name)} must be a data property.`;
+        if (!descriptor.enumerable) return `${propertyPath(work.path, name)} must be an enumerable JSON property.`;
+        children.push({ value: descriptor.value, path: propertyPath(work.path, name) });
+      }
+    }
+    for (let index = children.length - 1; index >= 0; index--) {
+      const child = children[index];
+      if (child !== undefined) pending.push({ kind: "visit", value: child.value, path: child.path });
+    }
   }
   return undefined;
 }
 
-function jsonArrayShapeError(value: readonly unknown[], path: string, active: WeakSet<object>): string | undefined {
-  if (!isArrayPrototype(Object.getPrototypeOf(value) as object | null)) return `${path} must be a normal JSON array.`;
-  let elementCount = 0;
-  for (const name of Reflect.ownKeys(value)) {
-    if (typeof name === "symbol") return `${path} contains a symbol-keyed array property.`;
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor === undefined || !("value" in descriptor)) return `${propertyPath(path, name)} must be a data property.`;
-    if (name === "length") continue;
-    if (!isArrayElementName(name, value.length)) return `${propertyPath(path, name)} is not a JSON array element.`;
-    if (!descriptor.enumerable) return `${propertyPath(path, name)} must be an enumerable JSON array element.`;
-    elementCount++;
-    const error = jsonValueShapeError(descriptor.value, `${path}[${name}]`, active);
-    if (error !== undefined) return error;
-  }
-  return elementCount === value.length ? undefined : `${path} must not be a sparse array.`;
-}
+type JsonShapeWork =
+  | { readonly kind: "visit"; readonly value: unknown; readonly path: string }
+  | { readonly kind: "leave"; readonly value: object };
 
 function isArrayElementName(name: string, length: number): boolean {
   const index = Number(name);
@@ -334,76 +345,134 @@ function instanceError(
   path: string,
   definitions: Readonly<Record<string, JsonSchema>>,
   version: DescriptorVersion,
-  depth: number,
 ): string | undefined {
-  if (typeof schema.$ref === "string") {
-    const target = definitions[referenceName(schema.$ref)];
-    return target === undefined
-      ? `${path} references a missing schema.`
-      : instanceError(target, value, path, definitions, version, depth + 1);
-  }
-  if (Array.isArray(schema.oneOf)) {
-    let matches = 0;
-    let lastError: string | undefined;
-    for (const variant of asSchemaArray(schema.oneOf)) {
-      const error = instanceError(variant, value, path, definitions, version, depth + 1);
-      if (error === undefined) matches++;
-      else lastError = error;
+  const pending: InstanceWork[] = [{ schema, value, path }];
+  while (pending.length > 0) {
+    const work = pending.pop();
+    if (work === undefined) break;
+    let currentSchema = work.schema;
+    while (typeof currentSchema.$ref === "string") {
+      const target = definitions[referenceName(currentSchema.$ref)];
+      if (target === undefined) return `${work.path} references a missing schema.`;
+      currentSchema = target;
     }
-    if (matches === 1) return undefined;
-    return matches === 0 ? lastError ?? `${path} does not match a union variant.` : `${path} matches multiple union variants.`;
-  }
-  if (typeof schema.logicalType === "string") return logicalInstanceError(schema.logicalType, value, path);
-
-  const structuralNames = Object.keys(schema).filter((name) => name !== "title" && name !== "description");
-  if (structuralNames.length === 0) return undefined;
-
-  const type = schema.type;
-  if (!matchesType(value, type)) return `${path} must be of type '${String(type)}'.`;
-  if (has(schema, "const") && !literalEquals(value, schema.const, schema)) return `${path} does not match its const value.`;
-  if (Array.isArray(schema.enum) && !schema.enum.some((item) => literalEquals(value, item, schema))) {
-    return `${path} is not an allowed enum value.`;
-  }
-
-  switch (type) {
-    case "object":
-      if (structuralNames.every((name) => name === "type" || name === "maxProperties")) {
-        return typeof schema.maxProperties === "number" && Object.keys(value as object).length > schema.maxProperties
-          ? `${path} exceeds maxProperties ${schema.maxProperties}.`
-          : undefined;
-      }
-      return objectInstanceError(schema, value as Record<string, unknown>, path, definitions, version, depth);
-    case "array":
-      return arrayInstanceError(schema, value as readonly unknown[], path, definitions, version, depth);
-    case "string": {
-      const text = value as string;
-      if (!hasUnicodeScalars(text)) return `${path} contains an unpaired UTF-16 surrogate.`;
-      if (typeof schema.contentEncoding === "string") return base64InstanceError(schema, text, path);
-      if (typeof schema.format === "string") return formatInstanceError(schema, text, path);
-      const minimum = typeof schema.minLength === "number" ? schema.minLength : 0;
-      const maximum = typeof schema.maxLength === "number" ? schema.maxLength : Number.POSITIVE_INFINITY;
-      const length = scalarLength(text);
-      if (length < minimum || length > maximum) {
-        return `${path} has ${length} Unicode scalar values; expected ${minimum} through ${maximum}.`;
-      }
-      return undefined;
+    if (Array.isArray(currentSchema.oneOf)) {
+      const selected = selectUnionVariant(asSchemaArray(currentSchema.oneOf), work.value, work.path, definitions);
+      if (typeof selected === "string") return selected;
+      pending.push({ schema: selected, value: work.value, path: work.path });
+      continue;
     }
-    case "integer":
-      return numberInstanceError(schema, value as number, path);
-    case "number":
-      return numberInstanceError(schema, value as number, path);
-    default:
-      return undefined;
+    if (typeof currentSchema.logicalType === "string") {
+      const error = logicalInstanceError(currentSchema.logicalType, work.value, work.path);
+      if (error !== undefined) return error;
+      continue;
+    }
+
+    const structuralNames = Object.keys(currentSchema).filter((name) => name !== "title" && name !== "description");
+    if (structuralNames.length === 0) continue;
+
+    const type = currentSchema.type;
+    if (!matchesType(work.value, type)) return `${work.path} must be of type '${String(type)}'.`;
+    if (has(currentSchema, "const") && !literalEquals(work.value, currentSchema.const, currentSchema)) {
+      return `${work.path} does not match its const value.`;
+    }
+    if (Array.isArray(currentSchema.enum)
+      && !currentSchema.enum.some((item) => literalEquals(work.value, item, currentSchema))) {
+      return `${work.path} is not an allowed enum value.`;
+    }
+
+    switch (type) {
+      case "object":
+        if (structuralNames.every((name) => name === "type" || name === "maxProperties")) {
+          if (typeof currentSchema.maxProperties === "number"
+            && Object.keys(work.value as object).length > currentSchema.maxProperties) {
+            return `${work.path} exceeds maxProperties ${currentSchema.maxProperties}.`;
+          }
+        } else {
+          const error = queueObjectInstance(
+            currentSchema,
+            work.value as Record<string, unknown>,
+            work.path,
+            version,
+            pending,
+          );
+          if (error !== undefined) return error;
+        }
+        break;
+      case "array": {
+        const error = queueArrayInstance(
+          currentSchema,
+          work.value as readonly unknown[],
+          work.path,
+          pending,
+        );
+        if (error !== undefined) return error;
+        break;
+      }
+      case "string": {
+        const text = work.value as string;
+        if (!hasUnicodeScalars(text)) return `${work.path} contains an unpaired UTF-16 surrogate.`;
+        if (typeof currentSchema.contentEncoding === "string") {
+          const error = base64InstanceError(currentSchema, text, work.path);
+          if (error !== undefined) return error;
+          break;
+        }
+        if (typeof currentSchema.format === "string") {
+          const error = formatInstanceError(currentSchema, text, work.path);
+          if (error !== undefined) return error;
+          break;
+        }
+        const minimum = typeof currentSchema.minLength === "number" ? currentSchema.minLength : 0;
+        const maximum = typeof currentSchema.maxLength === "number" ? currentSchema.maxLength : Number.POSITIVE_INFINITY;
+        const length = scalarLength(text);
+        if (length < minimum || length > maximum) {
+          return `${work.path} has ${length} Unicode scalar values outside its declared length bounds.`;
+        }
+        break;
+      }
+      case "integer":
+      case "number": {
+        const error = numberInstanceError(currentSchema, work.value as number, work.path);
+        if (error !== undefined) return error;
+        break;
+      }
+    }
   }
+  return undefined;
 }
 
-function objectInstanceError(
+interface InstanceWork {
+  readonly schema: JsonSchema;
+  readonly value: unknown;
+  readonly path: string;
+}
+
+function selectUnionVariant(
+  variants: readonly JsonSchema[],
+  value: unknown,
+  path: string,
+  definitions: Readonly<Record<string, JsonSchema>>,
+): JsonSchema | string {
+  const resolved = variants.map((variant) => resolveSchema(variant, definitions));
+  const nullIndex = resolved.findIndex((variant) => variant.type === "null");
+  if (variants.length === 2 && nullIndex >= 0) {
+    return variants[value === null ? nullIndex : 1 - nullIndex] ?? `${path} does not match a nullable union variant.`;
+  }
+  if (!isObject(value)) return `${path} does not match a tagged union variant.`;
+
+  const discriminator = taggedUnionDiscriminator(resolved);
+  const tag = value[discriminator];
+  if (typeof tag !== "string") return `${path} is missing tagged union discriminator '${discriminator}'.`;
+  const index = resolved.findIndex((variant) => discriminatorValue(variant, discriminator) === tag);
+  return variants[index] ?? `${path} has an unknown tagged union discriminator value.`;
+}
+
+function queueObjectInstance(
   schema: JsonSchema,
   value: Record<string, unknown>,
   path: string,
-  definitions: Readonly<Record<string, JsonSchema>>,
   version: DescriptorVersion,
-  depth: number,
+  pending: InstanceWork[],
 ): string | undefined {
   const entries = Object.entries(value);
   if (version === 1) {
@@ -416,52 +485,54 @@ function objectInstanceError(
   }
   const minimum = typeof schema.minProperties === "number" ? schema.minProperties : 0;
   const properties = isObject(schema.properties) ? schema.properties : {};
-  const maximum = typeof schema.maxProperties === "number" ? schema.maxProperties : Object.keys(properties).length;
+  const maximum = typeof schema.maxProperties === "number"
+    ? schema.maxProperties
+    : version === 1 && schema.additionalProperties === false
+      ? Object.keys(properties).length
+      : Number.POSITIVE_INFINITY;
   if (entries.length < minimum || entries.length > maximum) {
-    return `${path} has ${entries.length} properties; expected ${minimum} through ${maximum}.`;
+    return `${path} has ${entries.length} properties outside its declared property-count bounds.`;
   }
 
   if (schema.additionalProperties === false) {
     for (const required of asStringArray(schema.required)) {
       if (!has(value, required)) return `${path} is missing required property '${required}'.`;
     }
-    for (const [name, item] of entries) {
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const [name, item] = entries[index] ?? [];
+      if (name === undefined) continue;
       const propertySchema = properties[name];
       if (!isObject(propertySchema)) return `${path} contains undeclared property '${name}'.`;
-      const error = instanceError(propertySchema, item, propertyPath(path, name), definitions, version, depth + 1);
-      if (error !== undefined) return error;
+      pending.push({ schema: propertySchema, value: item, path: propertyPath(path, name) });
     }
     return undefined;
   }
 
   const keySchema = asSchema(schema.propertyNames);
   const itemSchema = asSchema(schema.additionalProperties);
-  for (const [name, item] of entries) {
-    const keyError = instanceError(keySchema, name, `${path}.<key>`, definitions, version, depth + 1);
-    if (keyError !== undefined) return keyError;
-    const itemError = instanceError(itemSchema, item, propertyPath(path, name), definitions, version, depth + 1);
-    if (itemError !== undefined) return itemError;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const [name, item] = entries[index] ?? [];
+    if (name === undefined) continue;
+    pending.push({ schema: itemSchema, value: item, path: propertyPath(path, name) });
+    pending.push({ schema: keySchema, value: name, path: propertyPath(path, "<key>") });
   }
   return undefined;
 }
 
-function arrayInstanceError(
+function queueArrayInstance(
   schema: JsonSchema,
   value: readonly unknown[],
   path: string,
-  definitions: Readonly<Record<string, JsonSchema>>,
-  version: DescriptorVersion,
-  depth: number,
+  pending: InstanceWork[],
 ): string | undefined {
-  const minimum = Number(schema.minItems);
-  const maximum = Number(schema.maxItems);
+  const minimum = typeof schema.minItems === "number" ? schema.minItems : 0;
+  const maximum = typeof schema.maxItems === "number" ? schema.maxItems : Number.POSITIVE_INFINITY;
   if (value.length < minimum || value.length > maximum) {
-    return `${path} has ${value.length} items; expected ${minimum} through ${maximum}.`;
+    return `${path} has ${value.length} items outside its declared item-count bounds.`;
   }
   const itemSchema = asSchema(schema.items);
-  for (let index = 0; index < value.length; index++) {
-    const error = instanceError(itemSchema, value[index], `${path}[${index}]`, definitions, version, depth + 1);
-    if (error !== undefined) return error;
+  for (let index = value.length - 1; index >= 0; index--) {
+    pending.push({ schema: itemSchema, value: value[index], path: arrayItemPath(path, String(index)) });
   }
   return undefined;
 }
@@ -519,8 +590,11 @@ function exactNumericInstanceError(
 ): string | undefined {
   const parsed = decimal ? parseCanonicalDecimal(value) : parseCanonicalBigInteger(value);
   if (parsed === undefined) return `${path} must be a canonical ${decimal ? "decimal" : "big-integer"} string.`;
-  const maximumPrecision = Number(decimal ? schema.maxPrecision : schema.maxDigits);
-  const maximumScale = decimal ? Number(schema.maxScale) : 0;
+  const precisionFacet = decimal ? schema.maxPrecision : schema.maxDigits;
+  const maximumPrecision = typeof precisionFacet === "number" ? precisionFacet : Number.POSITIVE_INFINITY;
+  const maximumScale = decimal && typeof schema.maxScale === "number"
+    ? schema.maxScale
+    : Number.POSITIVE_INFINITY;
   if (parsed.precision > maximumPrecision || parsed.scale > maximumScale) {
     return `${path} exceeds its declared ${decimal ? "precision or scale" : "digit"} limit.`;
   }
@@ -549,9 +623,12 @@ function base64InstanceError(schema: JsonSchema, value: string, path: string): s
   }
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
   const decodedBytes = value.length / 4 * 3 - padding;
-  return decodedBytes <= Number(schema.maxDecodedBytes)
+  const maximum = typeof schema.maxDecodedBytes === "number"
+    ? schema.maxDecodedBytes
+    : Number.POSITIVE_INFINITY;
+  return decodedBytes <= maximum
     ? undefined
-    : `${path} decodes to ${decodedBytes} bytes, exceeding maxDecodedBytes ${String(schema.maxDecodedBytes)}.`;
+    : `${path} decodes to ${decodedBytes} bytes, exceeding maxDecodedBytes ${maximum}.`;
 }
 
 function logicalInstanceError(logicalType: string, value: unknown, path: string): string | undefined {
@@ -847,7 +924,12 @@ function has(object: object, name: string): boolean {
 }
 
 function propertyPath(path: string, name: string): string {
+  if (path.length >= 4096 || name.length >= 4096 - path.length) return path;
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(name) ? `${path}.${name}` : `${path}[${JSON.stringify(name)}]`;
+}
+
+function arrayItemPath(path: string, index: string): string {
+  return path.length >= 4096 ? path : `${path}[${index}]`;
 }
 
 function v1CaseFold(value: string): string {
@@ -869,7 +951,12 @@ function hasUnicodeScalars(value: string): boolean {
 }
 
 function scalarLength(value: string): number {
-  return [...value].length;
+  let length = 0;
+  for (let index = 0; index < value.length; index++) {
+    if (value.charCodeAt(index) >= 0xd800 && value.charCodeAt(index) <= 0xdbff) index++;
+    length++;
+  }
+  return length;
 }
 
 function ordinal(left: string, right: string): number {

@@ -121,7 +121,7 @@ public sealed class PackageViewHostServiceTests
             var notification = Assert.Single(notificationCenter.ListNotifications());
             Assert.Equal("sunder.app", notification.SourcePackageId);
             Assert.Equal("Sunder", notification.SourceDisplayName);
-            Assert.Equal(AppPackageFaultNotifier.PackageNotificationTitle, notification.Title);
+            Assert.Equal("agent App UI unavailable", notification.Title);
             Assert.DoesNotContain("agent", notification.Message, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("Hosted view failed.", notification.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("Secret duplicate details.", notification.Message, StringComparison.Ordinal);
@@ -1426,7 +1426,7 @@ public sealed class PackageViewHostServiceTests
 
             Assert.Empty(viewRegistry.ListPackageViewIds("agent"));
             var activationNotification = Assert.Single(notificationCenter.ListNotifications());
-            Assert.Equal(AppPackageFaultNotifier.PackageNotificationTitle, activationNotification.Title);
+            Assert.Equal("Agent App UI unavailable", activationNotification.Title);
             Assert.DoesNotContain(
                 "Test package requested activation failure",
                 activationNotification.Message,
@@ -1548,12 +1548,15 @@ public sealed class PackageViewHostServiceTests
                 new Uri("http://127.0.0.1:5199"),
                 "test-token"),
             rpcHandler);
+        var notificationCenter = new NotificationCenterService(
+            Path.Combine(rootPath, "notifications.json"));
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
             [],
             [],
             [],
             sessionFolder,
+            notificationCenter: notificationCenter,
             getRuntimeConnectionInfo: runtimeTransport.GetConnectionInfo,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -1565,6 +1568,10 @@ public sealed class PackageViewHostServiceTests
         var recoveryCandidateReady = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseRecoveryCandidate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var recoveryApplied = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRecoveryCompletion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var recoveryCount = 0;
         Control? originalView = null;
@@ -1593,6 +1600,8 @@ public sealed class PackageViewHostServiceTests
                         return null;
                     },
                     cancellationToken);
+                recoveryApplied.TrySetResult();
+                await releaseRecoveryCompletion.Task.WaitAsync(cancellationToken);
                 return AppPackageUiRecoveryPresentationOutcome.Applied;
             },
             tasks);
@@ -1625,6 +1634,7 @@ public sealed class PackageViewHostServiceTests
             Assert.True(hostService.TryHandleUnobservedTaskException(
                 new AggregateException(fault)));
             Assert.NotNull(recoveryRequest);
+            Assert.Empty(notificationCenter.ListNotifications());
             Assert.Equal(
                 AppPackageUiCleanupOutcome.Proven,
                 await recoveryRequest.CleanupCompletion.WaitAsync(TimeSpan.FromSeconds(2)));
@@ -1638,10 +1648,9 @@ public sealed class PackageViewHostServiceTests
             Assert.True(hostService.TryHandleUnobservedTaskException(
                 new AggregateException(fault)));
             releaseRecoveryCandidate.SetResult();
-            await recoveryCoordinator.WaitForRecoveryAsync("agent", source.ContentHash)
-                .WaitAsync(TimeSpan.FromSeconds(5));
-            await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await recoveryApplied.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
+            Assert.Empty(notificationCenter.ListNotifications());
             Assert.NotEqual(originalGenerationId, hostService.CurrentGenerationId);
             Assert.False(hostService.IsPackageAppUiQuarantined("agent"));
             var replacementView = Assert.IsAssignableFrom<Control>(
@@ -1666,17 +1675,26 @@ public sealed class PackageViewHostServiceTests
             Assert.True(hostService.TryHandleUnhandledException(replacementFault));
             await TestSupport.AsyncAssert.WaitForConditionAsync(
                 () => hostService.IsPackageAppUiQuarantined("agent")
-                    && GetIsDisposed(replacementView));
+                    && GetIsDisposed(replacementView)
+                    && notificationCenter.ListNotifications().Count == 1);
 
             Assert.Equal(1, Volatile.Read(ref recoveryCount));
             Assert.Equal(1, recoveryCoordinator.AttemptedRecoveryCount);
             Assert.Empty(hostService.FilterEnabledPackages([package]));
             Assert.Equal(2, rpcHandler.CloseCount);
+            Assert.Equal(
+                "Agent App UI unavailable",
+                Assert.Single(notificationCenter.ListNotifications()).Title);
+            releaseRecoveryCompletion.SetResult();
+            await recoveryCoordinator.WaitForRecoveryAsync("agent", source.ContentHash)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
         {
             releaseRecovery.TrySetResult();
             releaseRecoveryCandidate.TrySetResult();
+            releaseRecoveryCompletion.TrySetResult();
             recoveryCoordinator.Dispose();
             await tasks.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
             await hostService.DisposeAsync();
@@ -1699,12 +1717,15 @@ public sealed class PackageViewHostServiceTests
             "agent",
             PackageSourceKind.Dev,
             packageSourceFolder);
+        var notificationCenter = new NotificationCenterService(
+            Path.Combine(rootPath, "notifications.json"));
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
             [],
             [],
             [],
             sessionFolder,
+            notificationCenter: notificationCenter,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
         using var tasks = new OwnedTaskObserver(nameof(PackageViewHostServiceTests));
@@ -1750,6 +1771,9 @@ public sealed class PackageViewHostServiceTests
 
             Assert.Equal(0, Volatile.Read(ref recoveryCount));
             Assert.True(hostService.IsPackageAppUiQuarantined("agent"));
+            Assert.Equal(
+                "Agent App UI unavailable",
+                Assert.Single(notificationCenter.ListNotifications()).Title);
         }
         finally
         {
@@ -2411,7 +2435,7 @@ public sealed class PackageViewHostServiceTests
 
             await Task.Delay(100);
             var hostNotification = Assert.Single(notificationCenter.ListNotifications());
-            Assert.Equal("Package App UI update failed", hostNotification.Title);
+            Assert.Equal("Agent App UI update failed", hostNotification.Title);
             Assert.Empty(backgroundProcesses.ListProcesses());
             Assert.False(File.Exists(sideEffectPath));
         }

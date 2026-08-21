@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -75,14 +76,31 @@ public sealed partial class RuntimeManagementClient
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
     }
 
-    public Task<RuntimeRpcAppCallScopeDescriptor> OpenAppRpcCallScopeAsync(
+    public async Task<RuntimeRpcAppCallScopeOpenResult> OpenAppRpcCallScopeAsync(
         RuntimeRpcAppCallScopeOpenRequest request,
         CancellationToken token = default)
-        => PostAsync<RuntimeRpcAppCallScopeOpenRequest, RuntimeRpcAppCallScopeDescriptor>(
-            "rpc/app/call-scopes/open",
-            request,
-            RuntimeProtocolFeatures.AppWebRpcV2,
-            token);
+    {
+        using var message = CreateRpcRequest("rpc/app/call-scopes/open", request);
+        using var response = await _httpClient.SendAsync(message, token).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.Conflict
+            && string.Equals(
+                response.Content.Headers.ContentType?.MediaType,
+                "application/json",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var error = await _responses.ReadJsonAsync<RuntimeRpcErrorDescriptor>(response, token)
+                            .ConfigureAwait(false)
+                        ?? throw new InvalidDataException(
+                            "The Runtime returned an empty RPC call-scope error.");
+            EnsureRpcErrorDetails(error, "Runtime RPC call-scope error details");
+            return new RuntimeRpcAppCallScopeOpenResult(null, error);
+        }
+
+        var scope = await _responses.ReadRequiredJsonAsync<RuntimeRpcAppCallScopeDescriptor>(
+            response,
+            token).ConfigureAwait(false);
+        return new RuntimeRpcAppCallScopeOpenResult(scope, null);
+    }
 
     public async Task CloseAppRpcCallScopeAsync(
         RuntimeRpcAppCallScopeCloseRequest closeRequest,
@@ -311,6 +329,10 @@ public sealed partial class RuntimeManagementClient
 
 public sealed record RuntimeRpcAppContentOpenResult(
     Stream? Content,
+    RuntimeRpcErrorDescriptor? Error);
+
+public sealed record RuntimeRpcAppCallScopeOpenResult(
+    RuntimeRpcAppCallScopeDescriptor? Scope,
     RuntimeRpcErrorDescriptor? Error);
 
 internal sealed class NonDisposingReadStream(Stream inner) : Stream

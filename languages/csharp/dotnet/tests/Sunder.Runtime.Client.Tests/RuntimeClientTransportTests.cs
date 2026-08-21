@@ -12,6 +12,62 @@ namespace Sunder.Runtime.Client.Tests;
 public sealed class RuntimeClientTransportTests
 {
     [Fact]
+    public async Task AppCallScopeOpen_ReturnsTypedRpcErrorResult()
+    {
+        var expected = new RuntimeRpcErrorDescriptor(
+            RuntimeRpcErrorKind.Unavailable,
+            "rpc.app-session.retired",
+            "The App RPC caller session is unavailable or retired.",
+            RuntimeRpcDispatchState.NotDispatched,
+            RuntimeRpcRetrySafety.Safe);
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateResourceHandshake(RuntimeResourcePolicies.Standard)),
+            "/api/v1/rpc/app/call-scopes/open" => new HttpResponseMessage(HttpStatusCode.Conflict)
+            {
+                Content = JsonContent.Create(expected),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        var result = await client.OpenAppRpcCallScopeAsync(
+            new RuntimeRpcAppCallScopeOpenRequest("retired-session", null));
+
+        Assert.Null(result.Scope);
+        Assert.Equal(expected, result.Error);
+    }
+
+    [Fact]
+    public async Task AppCallScopeOpen_DoesNotDecodeProblemDetailsAsRpcError()
+    {
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateResourceHandshake(RuntimeResourcePolicies.Standard)),
+            "/api/v1/rpc/app/call-scopes/open" => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StringContent(
+                    "{\"title\":\"Internal Runtime error\",\"code\":\"runtime.v1.internal\"}",
+                    Encoding.UTF8,
+                    "application/problem+json"),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        var exception = await Assert.ThrowsAsync<RuntimeClientException>(() =>
+            client.OpenAppRpcCallScopeAsync(
+                new RuntimeRpcAppCallScopeOpenRequest("app-session", null)));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, exception.StatusCode);
+        Assert.Equal("runtime.v1.internal", exception.ErrorCode);
+    }
+
+    [Fact]
     public async Task SharedFacades_NegotiateOnceForOneConnectionIdentity()
     {
         var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch

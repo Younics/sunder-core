@@ -97,6 +97,7 @@ test("worker capabilities are explicit, closed, canonical, and stamped on every 
       "callbacks.v1",
       "logging.v1",
       "role-local-workspace.v1",
+      "rpc.extended-deadline.v1",
       "rpc.v2",
       "sdk-baseline-1-1.v1",
       "secrets.v1",
