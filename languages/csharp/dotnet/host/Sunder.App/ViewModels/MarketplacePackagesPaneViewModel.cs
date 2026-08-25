@@ -1,20 +1,24 @@
 using System.Collections.ObjectModel;
 using LiveMarkdown.Avalonia;
+using Sunder.App.Services;
 using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 
 public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposable
 {
-    private readonly MarketplacePackageProfileViewModel _profile = new();
+    private readonly MarketplacePackageProfileViewModel _profile;
     private bool _rpcAccessLoaded;
     private bool _rpcAccessLoading;
     private string _rpcAccessError = string.Empty;
 
-    internal MarketplacePackagesPaneViewModel(PackagesMarketplaceCatalog catalog)
+    internal MarketplacePackagesPaneViewModel(
+        PackagesMarketplaceCatalog catalog,
+        RemoteImageService? remoteImageService)
     {
         Catalog = catalog;
         SelectionLoader = new MarketplacePackageSelectionLoader(catalog);
+        _profile = new MarketplacePackageProfileViewModel(remoteImageService);
     }
 
     public event Func<IReadOnlyList<RegistryPackageMediaItemViewModel>, int, Task>? ImageGalleryRequested
@@ -172,8 +176,8 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
                .FirstOrDefault(package => string.Equals(package.PackageId, selectedPackageId, StringComparison.OrdinalIgnoreCase))
            ?? Packages.FirstOrDefault();
 
-    public string? ApplyProfile(RegistryPackageProfile? profile)
-        => _profile.Apply(profile);
+    public string? ApplyProfile(RegistryPackageProfile? profile, Uri? registryOrigin)
+        => _profile.Apply(profile, registryOrigin);
 
     public void Dispose()
     {

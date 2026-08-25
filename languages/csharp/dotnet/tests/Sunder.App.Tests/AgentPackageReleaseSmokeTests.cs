@@ -8,17 +8,18 @@ namespace Sunder.App.Tests;
 
 public sealed class AgentPackageReleaseSmokeTests
 {
-    [Fact]
+    [ExternalArtifactFact("SUNDER_REQUIRE_AGENT_UI_SNAPSHOT", "SUNDER_AGENT_UI_SNAPSHOT_DIR")]
+    [Trait("Category", "ExternalArtifact")]
     public async Task RuntimeProducedAgentSnapshot_MaterializesAndActivatesInApp()
     {
         var snapshotDirectory = Environment.GetEnvironmentVariable("SUNDER_AGENT_UI_SNAPSHOT_DIR");
-        if (string.IsNullOrWhiteSpace(snapshotDirectory)) return;
+        Assert.False(string.IsNullOrWhiteSpace(snapshotDirectory), "SUNDER_AGENT_UI_SNAPSHOT_DIR is required by the selected artifact lane.");
 
         var metadata = JsonSerializer.Deserialize<AgentAppSnapshotMetadata>(
-            await File.ReadAllTextAsync(Path.Combine(snapshotDirectory, "metadata.json")),
+            await File.ReadAllTextAsync(Path.Combine(snapshotDirectory!, "metadata.json")),
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
         Assert.NotNull(metadata);
-        var snapshotPath = Path.Combine(snapshotDirectory, "sunder.package.agent.snapshot");
+        var snapshotPath = Path.Combine(snapshotDirectory!, "sunder.package.agent.snapshot");
         await using var snapshotStream = File.OpenRead(snapshotPath);
         var actualHash = Convert.ToHexString(await SHA256.HashDataAsync(snapshotStream)).ToLowerInvariant();
         Assert.Equal(metadata.Snapshot.ContentHash, actualHash);

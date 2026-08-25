@@ -62,12 +62,14 @@ public sealed class PackageIconImageLoaderTests
     }
 
     [Fact]
-    public async Task LoadAnonymousMediaAsync_RejectsFileUrls()
+    public void RegistryImageUriResolver_RejectsFileUrls()
     {
-        var result = await PackageIconImageLoader.LoadAnonymousMediaAsync(new Uri("file:///tmp/icon.png"));
+        var resolved = RemoteImageService.TryResolveRegistryImageUri(
+            new Uri("https://registry.example/"),
+            "file:///tmp/icon.png",
+            out _);
 
-        Assert.Null(result.Image);
-        Assert.Contains("HTTP or HTTPS", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.False(resolved);
     }
 
     [Fact]

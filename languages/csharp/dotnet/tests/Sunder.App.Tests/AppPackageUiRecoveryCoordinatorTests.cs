@@ -1,4 +1,5 @@
 using Sunder.App.Services;
+using Sunder.Core.TestSupport;
 using Sunder.Sdk.Notifications;
 using Xunit;
 
@@ -39,7 +40,9 @@ public sealed class AppPackageUiRecoveryCoordinatorTests
             PackageId = "agent",
             ContentHash = "abc123",
         }));
-        await Task.Delay(50);
+        await Eventually.AssertPendingAsync(
+            presentationStarted.Task,
+            () => $"cleanupCompleted={cleanup.Task.IsCompleted}; presentationCount={Volatile.Read(ref presentationCount)}");
         Assert.Equal(0, Volatile.Read(ref presentationCount));
 
         cleanup.SetResult(AppPackageUiCleanupOutcome.Proven);
@@ -116,7 +119,12 @@ public sealed class AppPackageUiRecoveryCoordinatorTests
         Assert.Equal(0, Volatile.Read(ref presentationCount));
         Assert.Equal(1, notifications.PublishCount);
         Assert.False(cleanup.Task.IsCompleted);
+        Assert.True(AppCleanupQuarantine.IsRetained(cleanup.Task));
         cleanup.TrySetResult(AppPackageUiCleanupOutcome.Proven);
+        await Eventually.ObserveAsync(
+            _ => ValueTask.FromResult(AppCleanupQuarantine.IsRetained(cleanup.Task)),
+            static retained => !retained,
+            TimeSpan.FromSeconds(2));
     }
 
     [Theory]

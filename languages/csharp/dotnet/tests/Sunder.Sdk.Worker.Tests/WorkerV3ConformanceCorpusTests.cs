@@ -59,6 +59,7 @@ public sealed class WorkerV3ConformanceCorpusTests
         var domainFault = rpc.GetProperty("domainFault");
         var undeclaredDomainFault = rpc.GetProperty("undeclaredDomainFault");
         var storageMigrations = root.GetProperty("storageMigrations");
+        var envelopePropertySets = root.GetProperty("envelopePropertySets");
         var expectedEvents = stream.GetProperty("events").EnumerateArray()
             .Select(static item => item.Clone())
             .ToArray();
@@ -134,10 +135,11 @@ public sealed class WorkerV3ConformanceCorpusTests
         await worker.StartCandidateAndCommitAsync(generation);
         await worker.PrepareStorageMigrationsAsync(generation);
         await worker.SendAsync(new { type = "host.activate", sessionGeneration = generation });
-        await CompleteStorageMigrationsAsync(worker, storageMigrations);
-        await CompletePackageDataRoundTripAsync(worker, packageData);
+        await CompleteStorageMigrationsAsync(worker, storageMigrations, envelopePropertySets);
+        await CompletePackageDataRoundTripAsync(worker, packageData, envelopePropertySets);
         using (var activated = await worker.ReadAsync())
         {
+            AssertEnvelopePropertySet(activated.RootElement, envelopePropertySets);
             Assert.Equal("worker.activated", activated.RootElement.GetProperty("type").GetString());
             Assert.Equal(generation, activated.RootElement.GetProperty("sessionGeneration").GetInt64());
         }
@@ -150,6 +152,7 @@ public sealed class WorkerV3ConformanceCorpusTests
             generation);
         using (var result = await worker.ReadAsync())
         {
+            AssertEnvelopePropertySet(result.RootElement, envelopePropertySets);
             Assert.Equal("worker.result", result.RootElement.GetProperty("type").GetString());
             Assert.True(JsonElement.DeepEquals(
                 unary.GetProperty("result"),
@@ -165,11 +168,13 @@ public sealed class WorkerV3ConformanceCorpusTests
         foreach (var expected in expectedEvents)
         {
             using var item = await worker.ReadAsync();
+            AssertEnvelopePropertySet(item.RootElement, envelopePropertySets);
             Assert.Equal("worker.event", item.RootElement.GetProperty("type").GetString());
             Assert.True(JsonElement.DeepEquals(expected, item.RootElement.GetProperty("value")));
         }
         using (var complete = await worker.ReadAsync())
         {
+            AssertEnvelopePropertySet(complete.RootElement, envelopePropertySets);
             Assert.Equal("worker.complete", complete.RootElement.GetProperty("type").GetString());
         }
 
@@ -181,6 +186,7 @@ public sealed class WorkerV3ConformanceCorpusTests
             generation);
         using (var fault = await worker.ReadAsync())
         {
+            AssertEnvelopePropertySet(fault.RootElement, envelopePropertySets);
             Assert.Equal("worker.error", fault.RootElement.GetProperty("type").GetString());
             var expected = domainFault.GetProperty("error");
             var actual = fault.RootElement.GetProperty("error");
@@ -200,6 +206,7 @@ public sealed class WorkerV3ConformanceCorpusTests
             generation);
         using (var diagnostic = await worker.ReadAsync())
         {
+            AssertEnvelopePropertySet(diagnostic.RootElement, envelopePropertySets);
             Assert.True(undeclaredDomainFault.GetProperty("diagnosticRequired").GetBoolean());
             Assert.Equal(
                 "worker.provider-fault-diagnostic",
@@ -216,6 +223,7 @@ public sealed class WorkerV3ConformanceCorpusTests
         }
         using (var fault = await worker.ReadAsync())
         {
+            AssertEnvelopePropertySet(fault.RootElement, envelopePropertySets);
             Assert.Equal("worker.error", fault.RootElement.GetProperty("type").GetString());
             var expected = undeclaredDomainFault.GetProperty("error");
             var actual = fault.RootElement.GetProperty("error");
@@ -232,6 +240,7 @@ public sealed class WorkerV3ConformanceCorpusTests
         });
         using (var shutdown = await worker.ReadAsync())
         {
+            AssertEnvelopePropertySet(shutdown.RootElement, envelopePropertySets);
             Assert.Equal("worker.shutdown-ack", shutdown.RootElement.GetProperty("type").GetString());
             Assert.Equal(lifecycle.GetProperty("shutdownId").GetString(), shutdown.RootElement.GetProperty("shutdownId").GetString());
         }
@@ -297,7 +306,8 @@ public sealed class WorkerV3ConformanceCorpusTests
 
     private static async Task CompleteStorageMigrationsAsync(
         WorkerHarness worker,
-        JsonElement storageMigrations)
+        JsonElement storageMigrations,
+        JsonElement envelopePropertySets)
     {
         foreach (var plan in storageMigrations.GetProperty("plans").EnumerateArray())
         {
@@ -306,6 +316,7 @@ public sealed class WorkerV3ConformanceCorpusTests
                     rule.GetProperty("kind").GetString() == "dynamic-cleanup"))
             {
                 using var keys = await worker.ReadAsync();
+                AssertEnvelopePropertySet(keys.RootElement, envelopePropertySets);
                 Assert.Equal("worker.migration-keys", keys.RootElement.GetProperty("type").GetString());
                 Assert.Equal(plan.GetProperty("store").GetString(), keys.RootElement.GetProperty("store").GetString());
                 await worker.SendAsync(new
@@ -322,6 +333,7 @@ public sealed class WorkerV3ConformanceCorpusTests
             }
 
             using var apply = await worker.ReadAsync();
+            AssertEnvelopePropertySet(apply.RootElement, envelopePropertySets);
             Assert.Equal("worker.migration-apply", apply.RootElement.GetProperty("type").GetString());
             Assert.Equal(plan.GetProperty("store").GetString(), apply.RootElement.GetProperty("store").GetString());
             var actualRules = apply.RootElement.GetProperty("rules").EnumerateArray().ToArray();
@@ -350,14 +362,43 @@ public sealed class WorkerV3ConformanceCorpusTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "Conformance")]
+    [Trait("Size", "Small")]
+    public void SharedEnvelopePropertyOracle_RejectsSeededExtraProperty()
+    {
+        using var corpus = JsonDocument.Parse(File.ReadAllBytes(
+            Path.Combine(AppContext.BaseDirectory, "WorkerV3Conformance", "corpus.json")));
+        using var mutated = JsonDocument.Parse("""{"type":"worker.result","id":"one","value":null,"seeded":true}""");
+
+        Assert.ThrowsAny<Exception>(() => AssertEnvelopePropertySet(
+            mutated.RootElement,
+            corpus.RootElement.GetProperty("envelopePropertySets")));
+    }
+
+    private static void AssertEnvelopePropertySet(JsonElement envelope, JsonElement propertySets)
+    {
+        var type = envelope.GetProperty("type").GetString()!;
+        var expected = propertySets.GetProperty(type).EnumerateArray()
+            .Select(static property => property.GetString()!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var actual = envelope.EnumerateObject().Select(static property => property.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(expected, actual);
+    }
+
     private static async Task CompletePackageDataRoundTripAsync(
         WorkerHarness worker,
-        JsonElement packageData)
+        JsonElement packageData,
+        JsonElement envelopePropertySets)
     {
         var key = packageData.GetProperty("key").GetString();
         var value = packageData.GetProperty("value").GetString();
         using (var set = await worker.ReadAsync())
         {
+            AssertEnvelopePropertySet(set.RootElement, envelopePropertySets);
             Assert.Equal("worker.state-set", set.RootElement.GetProperty("type").GetString());
             Assert.Equal(key, set.RootElement.GetProperty("key").GetString());
             Assert.Equal(value, set.RootElement.GetProperty("value").GetProperty("value").GetString());
@@ -370,6 +411,7 @@ public sealed class WorkerV3ConformanceCorpusTests
         }
         using (var get = await worker.ReadAsync())
         {
+            AssertEnvelopePropertySet(get.RootElement, envelopePropertySets);
             Assert.Equal("worker.state-get", get.RootElement.GetProperty("type").GetString());
             Assert.Equal(key, get.RootElement.GetProperty("key").GetString());
             await worker.SendAsync(new
@@ -381,6 +423,7 @@ public sealed class WorkerV3ConformanceCorpusTests
         }
         using (var delete = await worker.ReadAsync())
         {
+            AssertEnvelopePropertySet(delete.RootElement, envelopePropertySets);
             Assert.Equal("worker.state-delete", delete.RootElement.GetProperty("type").GetString());
             Assert.Equal(key, delete.RootElement.GetProperty("key").GetString());
             await worker.SendAsync(new

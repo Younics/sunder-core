@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Sunder.Core.TestSupport;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
@@ -9,6 +10,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
+[Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class ActivePackageSessionTests
 {
     [Fact]
@@ -365,7 +367,7 @@ public sealed class ActivePackageSessionTests
 
         var retirement = owner.State.ClearActiveSessionAsync();
         await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await Task.Delay(50);
+        await Eventually.AssertPendingAsync(retirement, () => $"stopCount={service.StopCount}; callbackReleased={releaseCallback.IsSet}");
 
         Assert.Equal(0, service.StopCount);
         releaseCallback.Set();
@@ -408,7 +410,7 @@ public sealed class ActivePackageSessionTests
             lease.Dispose();
 
             var retirement = owner.State.ClearActiveSessionAsync();
-            await Task.Delay(50);
+            await Eventually.AssertPendingAsync(retirement, () => $"stopCount={service.StopCount}; callbackReleased={releaseCallback.IsSet}");
 
             Assert.Equal(0, service.StopCount);
             releaseCallback.Set();
@@ -463,15 +465,17 @@ public sealed class ActivePackageSessionTests
                 owner,
                 "faulting.package",
                 package => package.Readiness == PackageReadinessState.Failed);
-            await Task.Delay(50);
+            await Eventually.AssertPendingAsync(
+                service.Stopped,
+                () => $"stopCount={service.StopCount}; callbackReleased={releaseCallback.IsSet}");
 
             Assert.Equal(0, service.StopCount);
             releaseCallback.Set();
-            var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
-            while (service.StopCount == 0 && DateTimeOffset.UtcNow < deadline)
-            {
-                await Task.Delay(20);
-            }
+            await Eventually.ObserveAsync(
+                _ => ValueTask.FromResult(service.StopCount),
+                static count => count == 1,
+                TimeSpan.FromSeconds(2),
+                describe: (count, error) => $"stopCount={count}; error={error?.Message}");
             Assert.Equal(1, service.StopCount);
         }
         finally
@@ -569,6 +573,91 @@ public sealed class ActivePackageSessionTests
             {
                 await owner.State.ClearActiveSessionAsync();
             }
+        }
+    }
+
+    [Fact]
+    public Task PackageFaultPublication_ConcurrentClearWaitsForCommittedSnapshotAndEvent()
+        => AssertFaultPublicationSurvivesConcurrentClearAsync(runtimeGenerationFault: false);
+
+    [Fact]
+    public Task RuntimeGenerationFaultPublication_ConcurrentClearWaitsForCommittedSnapshotAndEvent()
+        => AssertFaultPublicationSurvivesConcurrentClearAsync(runtimeGenerationFault: true);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PackageFault_StaleExactTargetDoesNotAdvanceGeneration(
+        bool runtimeGenerationFault)
+    {
+        const string packageId = "faulting.package";
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService());
+        var session = CreateSession(packageId, new RecordingGenerationBackgroundService());
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance);
+        var committed = false;
+
+        try
+        {
+            await publisher.PublishAsync(
+                session,
+                null,
+                [],
+                [],
+                owner.Generation,
+                CancellationToken.None);
+            PackageActivationIdentity staleActivationIdentity;
+            RuntimePackageGeneration staleRuntimeGeneration;
+            using (var lease = owner.State.AcquireLease())
+            {
+                var package = Assert.IsType<ActiveLoadedPackage>(
+                    owner.State.GetLoadedPackage(lease, packageId));
+                staleActivationIdentity = new PackageActivationIdentity(
+                    new object(),
+                    package.RuntimeActivationId);
+                staleRuntimeGeneration = new RuntimePackageGeneration(
+                    package.RuntimeActivationId,
+                    lease.Generation + 1);
+            }
+
+            Task Publish(long _)
+            {
+                committed = true;
+                return Task.CompletedTask;
+            }
+
+            var applied = runtimeGenerationFault
+                ? owner.State.HandleRuntimeGenerationFault(
+                    packageId,
+                    staleRuntimeGeneration,
+                    expectedGeneration: 1,
+                    PackageFailureOrigin.RuntimeBackgroundService,
+                    new InvalidOperationException("Stale Runtime generation fault."),
+                    "test stale Runtime generation fault",
+                    Publish)
+                : owner.State.HandlePackageFault(
+                    packageId,
+                    staleActivationIdentity,
+                    expectedGeneration: 1,
+                    PackageFailureOrigin.RuntimeRpcProvider,
+                    new InvalidOperationException("Stale package activation fault."),
+                    "test stale package activation fault",
+                    Publish);
+
+            Assert.False(applied);
+            Assert.False(committed);
+            Assert.Equal(1, owner.Generation);
+            Assert.Equal(packageId, Assert.Single(owner.State.GetActivePackages()).PackageId);
+            Assert.Equal(
+                PackageReadinessState.Ready,
+                Assert.Single(owner.State.GetSessionPackages()).Readiness);
+        }
+        finally
+        {
+            await owner.State.ClearActiveSessionAsync();
         }
     }
 
@@ -1344,7 +1433,7 @@ public sealed class ActivePackageSessionTests
     }
 
     [Fact]
-    public async Task DelayedFaultCommit_CannotRegressNewerSnapshotEventsSourcesOrUi()
+    public async Task DelayedFaultCommit_CompletesBeforeNewerSnapshotEventsSourcesOrUi()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
         var initialFolder = Path.Combine(rootPath, "initial-session");
@@ -1386,8 +1475,9 @@ public sealed class ActivePackageSessionTests
         var releaseFaultCommit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<bool>? faultTask = null;
         Task<IReadOnlyList<string>>? replacementPublication = null;
-        bool? staleCommitApplied = null;
+        bool? faultCommitApplied = null;
         SessionPackageDescriptor[] faultedPackages = [];
+        PackageSessionState.SessionPublicationSnapshot? faultPublicationSnapshot = null;
 
         try
         {
@@ -1414,14 +1504,15 @@ public sealed class ActivePackageSessionTests
                 "test delayed fault publication",
                 committed: generation =>
                 {
-                    var activePackages = owner.State.GetActivePackages();
-                    faultedPackages = owner.State.GetSessionPackages().ToArray();
+                    var publicationSnapshot = owner.State.CapturePublicationSnapshot(generation);
+                    faultPublicationSnapshot = publicationSnapshot;
+                    faultedPackages = publicationSnapshot.SessionPackages.ToArray();
                     faultCommitEntered.TrySetResult();
                     releaseFaultCommit.Task.GetAwaiter().GetResult();
-                    staleCommitApplied = owner.CommitGeneration(
-                        generation,
-                        activePackages,
-                        faultedPackages,
+                    faultCommitApplied = owner.CommitGeneration(
+                        publicationSnapshot.Generation,
+                        publicationSnapshot.ActivePackages,
+                        publicationSnapshot.SessionPackages,
                         initialSources,
                         [],
                         ["Package 'fault.package' failed: Exact activation fault."]);
@@ -1441,30 +1532,35 @@ public sealed class ActivePackageSessionTests
                 ["newer warning"],
                 ["newer error"],
                 expectedGeneration: 2);
-            await WaitForGenerationAsync(owner, generation: 3);
+            Assert.False(replacementPublication.IsCompleted);
+            Assert.Equal(1, owner.GetSnapshot().SessionGeneration);
+            Assert.Throws<RuntimeUnavailableException>(() => owner.State.AcquireLease());
+            releaseFaultCommit.TrySetResult();
+            Assert.True(await faultTask.WaitAsync(TimeSpan.FromSeconds(5)));
+            await replacementPublication.WaitAsync(TimeSpan.FromSeconds(5));
 
             var newerSnapshot = owner.GetSnapshot();
+            Assert.Equal(3, owner.Generation);
+            Assert.Equal("replacement.package", Assert.Single(owner.State.GetActivePackages()).PackageId);
             Assert.Equal(3, newerSnapshot.SessionGeneration);
             Assert.Equal("replacement.package", Assert.Single(newerSnapshot.ActivePackages).PackageId);
             Assert.Equal("replacement.package", Assert.Single(owner.Sources.Snapshot().ActiveDevOverlays).PackageId);
             Assert.Contains("newer warning", newerSnapshot.Warnings);
             Assert.Contains("newer error", newerSnapshot.Errors);
-            releaseFaultCommit.TrySetResult();
-            Assert.True(await faultTask.WaitAsync(TimeSpan.FromSeconds(5)));
-            await replacementPublication.WaitAsync(TimeSpan.FromSeconds(5));
-
-            var finalSnapshot = owner.GetSnapshot();
-            Assert.Equal(3, owner.Generation);
-            Assert.Equal("replacement.package", Assert.Single(owner.State.GetActivePackages()).PackageId);
-            Assert.Equal(newerSnapshot.SessionGeneration, finalSnapshot.SessionGeneration);
-            Assert.Equal(newerSnapshot.ActivePackages, finalSnapshot.ActivePackages);
-            Assert.False(staleCommitApplied);
+            Assert.True(faultCommitApplied);
+            var capturedFaultPublication = Assert.IsType<PackageSessionState.SessionPublicationSnapshot>(
+                faultPublicationSnapshot);
+            Assert.Equal(2, capturedFaultPublication.Generation);
+            Assert.Empty(capturedFaultPublication.ActivePackages);
+            Assert.Equal(
+                PackageReadinessState.Failed,
+                Assert.Single(capturedFaultPublication.SessionPackages).Readiness);
             Assert.Equal(3, events.GetSnapshot().SessionGeneration);
             var publishedGenerations = events.GetSnapshot().Events
                 .Where(runtimeEvent => runtimeEvent.Kind == RuntimeEventKind.SessionGenerationChanged)
                 .Select(runtimeEvent => runtimeEvent.SessionGeneration)
                 .ToArray();
-            Assert.Equal([1L, 3L], publishedGenerations);
+            Assert.Equal([1L, 2L, 3L], publishedGenerations);
             Assert.Equal(publishedGenerations.Order(), publishedGenerations);
             Assert.Equal("replacement.package", Assert.Single(owner.Sources.Snapshot().ActiveDevOverlays).PackageId);
         }
@@ -2058,21 +2154,24 @@ public sealed class ActivePackageSessionTests
         var startedService = new TestBackgroundService();
         var failingService = new FailingStartBackgroundService();
         var session = CreateSession("test.package", startedService, failingService);
+        Task<PackageSessionPublicationResult>? commit = null;
 
         try
         {
             var candidate = publisher.Prepare(session, owner.Sources.Snapshot(), [], [], baseGeneration: 0);
             var pending = await publisher.BeginPublishAsync(candidate, CancellationToken.None);
 
-            var commit = publisher.CommitAsync(pending);
-            await failingService.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            commit = publisher.CommitAsync(pending);
+            await Task.WhenAll(
+                    startedService.StopEntered.Task,
+                    failingService.StopEntered.Task)
+                .WaitAsync(TimeSpan.FromSeconds(2));
 
             Assert.Equal(0, owner.Generation);
             Assert.Equal(1, startedService.StopCount);
             Assert.Equal(1, failingService.StopCount);
             Assert.Throws<RuntimeUnavailableException>(() => owner.State.AcquireLease());
-            await Assert.ThrowsAsync<TimeoutException>(
-                () => commit.WaitAsync(TimeSpan.FromMilliseconds(100)));
+            Assert.False(commit.IsCompleted);
 
             failingService.Release();
             await Assert.ThrowsAsync<InvalidOperationException>(() => commit);
@@ -2083,6 +2182,11 @@ public sealed class ActivePackageSessionTests
         finally
         {
             failingService.Release();
+            var pendingCommit = commit;
+            if (pendingCommit is not null)
+            {
+                _ = await Record.ExceptionAsync(() => pendingCommit);
+            }
             await owner.State.ClearActiveSessionAsync();
             TryDeleteDirectory(rootPath);
         }
@@ -2121,6 +2225,147 @@ public sealed class ActivePackageSessionTests
             disposalWorker: null,
             workersStarted: false,
             workers: workers);
+
+    private static async Task AssertFaultPublicationSurvivesConcurrentClearAsync(
+        bool runtimeGenerationFault)
+    {
+        const string packageId = "faulting.package";
+        var events = new RuntimeEventStreamService();
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            events);
+        var session = CreateSession(packageId, new RecordingGenerationBackgroundService());
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance);
+        var publicationEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePublication = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? fault = null;
+        Task<IReadOnlyList<string>>? clear = null;
+        PackageSessionState.SessionPublicationSnapshot? faultPublicationSnapshot = null;
+
+        try
+        {
+            await publisher.PublishAsync(
+                session,
+                null,
+                [],
+                [],
+                owner.Generation,
+                CancellationToken.None);
+            PackageActivationIdentity activationIdentity;
+            RuntimePackageGeneration runtimeGeneration;
+            using (var lease = owner.State.AcquireLease())
+            {
+                var package = Assert.IsType<ActiveLoadedPackage>(
+                    owner.State.GetLoadedPackage(lease, packageId));
+                activationIdentity = lease.GetPackageActivationIdentity(package);
+                runtimeGeneration = new RuntimePackageGeneration(
+                    package.RuntimeActivationId,
+                    lease.Generation);
+            }
+            var exception = new InvalidOperationException(
+                runtimeGenerationFault ? "Runtime generation failed." : "App package failed.");
+            var origin = runtimeGenerationFault
+                ? PackageFailureOrigin.RuntimeBackgroundService
+                : PackageFailureOrigin.RuntimeRpcProvider;
+
+            fault = Task.Run(() =>
+            {
+                Task Publish(long generation)
+                {
+                    var publicationSnapshot = owner.State.CapturePublicationSnapshot(generation);
+                    faultPublicationSnapshot = publicationSnapshot;
+                    publicationEntered.TrySetResult();
+                    releasePublication.Task.GetAwaiter().GetResult();
+                    Assert.True(owner.CommitGeneration(
+                        publicationSnapshot.Generation,
+                        publicationSnapshot.ActivePackages,
+                        publicationSnapshot.SessionPackages,
+                        owner.Sources.Snapshot(),
+                        [],
+                        [$"Package '{packageId}' failed: {exception.Message}"]));
+                    return Task.CompletedTask;
+                }
+
+                return runtimeGenerationFault
+                    ? owner.State.HandleRuntimeGenerationFault(
+                        packageId,
+                        runtimeGeneration,
+                        expectedGeneration: 1,
+                        origin,
+                        exception,
+                        "test Runtime generation fault publication",
+                        Publish)
+                    : owner.State.HandlePackageFault(
+                        packageId,
+                        activationIdentity,
+                        expectedGeneration: 1,
+                        origin,
+                        exception,
+                        "test app package fault publication",
+                        Publish);
+            });
+            await publicationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Equal(2, owner.Generation);
+            Assert.Equal(1, owner.GetSnapshot().SessionGeneration);
+            clear = owner.State.ClearActiveSessionAsync();
+
+            Assert.False(clear.IsCompleted);
+            Assert.Same(session, owner.State.ActiveSession);
+            Assert.Throws<RuntimeUnavailableException>(() => owner.State.AcquireLease());
+            releasePublication.TrySetResult();
+
+            Assert.True(await fault.WaitAsync(TimeSpan.FromSeconds(2)));
+            await clear.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var snapshot = owner.GetSnapshot();
+            Assert.Equal(2, snapshot.SessionGeneration);
+            Assert.Empty(snapshot.ActivePackages);
+            var failedPackage = Assert.Single(snapshot.SessionPackages);
+            Assert.Equal(packageId, failedPackage.PackageId);
+            Assert.Equal(PackageReadinessState.Failed, failedPackage.Readiness);
+            Assert.Equal(origin, failedPackage.FailureOrigin);
+            Assert.Equal(exception.Message, failedPackage.LastError);
+            Assert.Contains(
+                $"Package '{packageId}' failed: {exception.Message}",
+                snapshot.Errors);
+            Assert.Equal(2, events.GetSnapshot().SessionGeneration);
+            Assert.Equal(
+                [1L, 2L],
+                events.GetSnapshot().Events
+                    .Where(runtimeEvent => runtimeEvent.Kind == RuntimeEventKind.SessionGenerationChanged)
+                    .Select(runtimeEvent => runtimeEvent.SessionGeneration));
+            Assert.True(owner.State.ActiveSession.IsEmpty);
+            var capturedFaultPublication = Assert.IsType<PackageSessionState.SessionPublicationSnapshot>(
+                faultPublicationSnapshot);
+            Assert.Equal(2, capturedFaultPublication.Generation);
+            Assert.Empty(capturedFaultPublication.ActivePackages);
+            Assert.Equal(
+                PackageReadinessState.Failed,
+                Assert.Single(capturedFaultPublication.SessionPackages).Readiness);
+        }
+        finally
+        {
+            releasePublication.TrySetResult();
+            if (fault is not null)
+            {
+                await fault.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            if (clear is not null)
+            {
+                await clear.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            else if (!owner.State.ActiveSession.IsEmpty)
+            {
+                await owner.State.ClearActiveSessionAsync();
+            }
+            await session.DisposeAsync();
+        }
+    }
 
     private static ActivePackageSession CreateSession(
         string packageId,
@@ -2459,6 +2704,8 @@ public sealed class ActivePackageSessionTests
 
         public int StopCount { get; private set; }
 
+        public TaskCompletionSource StopEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public long? GenerationObservedAtStart { get; private set; }
 
         public override async Task StartAsync(CancellationToken cancellationToken = default)
@@ -2476,6 +2723,7 @@ public sealed class ActivePackageSessionTests
         public override Task StopAsync(CancellationToken cancellationToken = default)
         {
             StopCount++;
+            StopEntered.TrySetResult();
             return Task.CompletedTask;
         }
     }
@@ -2663,9 +2911,12 @@ public sealed class ActivePackageSessionTests
 
     private sealed class RecordingGenerationBackgroundService : TestRuntimePackageWorker
     {
+        private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public int StartCount { get; private set; }
         public int StopCount { get; private set; }
         public int CommitCount { get; private set; }
+        public Task Stopped => _stopped.Task;
 
         public override Task StartAsync(CancellationToken cancellationToken = default)
         {
@@ -2684,6 +2935,7 @@ public sealed class ActivePackageSessionTests
         public override Task StopAsync(CancellationToken cancellationToken = default)
         {
             StopCount++;
+            _stopped.TrySetResult();
             return Task.CompletedTask;
         }
     }
@@ -2841,8 +3093,10 @@ public sealed class ActivePackageSessionTests
     private sealed class FaultingGenerationBackgroundService : TestRuntimePackageWorker
     {
         private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public override Task GenerationCompletion => _completion.Task;
+        public Task Stopped => _stopped.Task;
 
         public int StopCount { get; private set; }
 
@@ -2856,6 +3110,7 @@ public sealed class ActivePackageSessionTests
         {
             StopCount++;
             _completion.TrySetResult();
+            _stopped.TrySetResult();
             return Task.CompletedTask;
         }
 
@@ -3104,19 +3359,6 @@ public sealed class ActivePackageSessionTests
             if (DateTimeOffset.UtcNow >= deadline)
             {
                 throw new TimeoutException($"Timed out waiting for package '{packageId}' state.");
-            }
-            await Task.Delay(20);
-        }
-    }
-
-    private static async Task WaitForGenerationAsync(RuntimeSessionOwner owner, long generation)
-    {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-        while (owner.GetSnapshot().SessionGeneration != generation)
-        {
-            if (DateTimeOffset.UtcNow >= deadline)
-            {
-                throw new TimeoutException($"Timed out waiting for Runtime generation {generation}.");
             }
             await Task.Delay(20);
         }

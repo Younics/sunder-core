@@ -236,6 +236,8 @@ Descriptor hashes use deterministic JCS-compatible canonical JSON, while ABI has
 
 Runtime validates requests and responses/events against the same parsed descriptor. Grants are explicit, default-deny, durable, and fenced to the caller package version plus manifest hash. Revocation immediately removes discovery visibility and cancels active calls and subscriptions. Use `SunderRpcException` for bounded domain failures, `SunderRpcContentReference` for host-mediated large content, and the typed client extensions or `SunderRpcCSharpGenerator` for generated bindings.
 
+`SunderRpcCSharpGenerator.Generate(descriptor, namespaceName)` preserves the public generated surface. The overload accepting `SunderRpcCSharpAccessibility` can instead emit every top-level generated declaration as `Internal`; undefined enum values are rejected. Accessibility is uniform for one generated binding, so use internal mode only when its DTOs, provider interface, client, and handler stay in the same assembly behind intentional handwritten public contracts.
+
 The designated Agent orchestrator may call `ISunderRpcClient.TryReportInvariantViolationAsync` when a package-local adapter detects malformed provider behavior that Host schema validation cannot observe. The endpoint reference attributes the report to one exact active provider; stale, invisible, or unauthorized reports return `false`, and accepted reports fault only the owning package activation under the Host's normal RPC fault policy.
 
 ## Settings Navigation

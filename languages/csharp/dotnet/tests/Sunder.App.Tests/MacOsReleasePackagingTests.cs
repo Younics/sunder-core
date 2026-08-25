@@ -50,7 +50,8 @@ public sealed class MacOsReleasePackagingTests
         Assert.Contains("Sunder-app-osx-x64-$RELEASE_CHANNEL.dmg", workflow, StringComparison.Ordinal);
         Assert.Contains("Sunder-app-osx-arm64-$RELEASE_CHANNEL.dmg", workflow, StringComparison.Ordinal);
         Assert.Contains("*-Setup.pkg|*-Portable.zip", workflow, StringComparison.Ordinal);
-        Assert.Contains("vpk \"${upload_args[@]}\"", workflow, StringComparison.Ordinal);
+        Assert.Contains("vpk upload local", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("vpk upload github", workflow, StringComparison.Ordinal);
         Assert.Contains("Sunder-app-osx-x64-stable.dmg", installer, StringComparison.Ordinal);
         Assert.Contains("Sunder-app-osx-arm64-stable.dmg", installer, StringComparison.Ordinal);
     }

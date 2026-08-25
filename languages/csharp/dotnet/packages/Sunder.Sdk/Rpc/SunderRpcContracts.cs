@@ -11,11 +11,14 @@ namespace Sunder.Sdk.Rpc;
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public static class SunderRpcProtocol
 {
-    /// <summary>The original contract descriptor version retained for compatibility.</summary>
-    public const int DescriptorVersion = 1;
+    /// <summary>The standalone V1 contract descriptor version retained for compatibility utilities.</summary>
+    public const int DescriptorVersionV1 = 1;
 
     /// <summary>The Sunder RPC V2 contract descriptor version.</summary>
     public const int DescriptorVersionV2 = 2;
+
+    /// <summary>The current deployable contract descriptor version.</summary>
+    public const int DescriptorVersion = DescriptorVersionV2;
 
     /// <summary>The Draft 2020-12 metaschema URI accepted on descriptors.</summary>
     public const string JsonSchemaDialect = "https://json-schema.org/draft/2020-12/schema";
@@ -246,9 +249,18 @@ public sealed class SunderRpcContractDescriptor
     public bool IsValid(string schemaReference, JsonElement value, out string? error)
         => SunderRpcSchemaProfile.IsInstanceValid(this, schemaReference, value, out error);
 
+    internal bool IsValidDetailed(
+        string schemaReference,
+        JsonElement value,
+        out string? error,
+        out SunderRpcValidationFailure? failure)
+        => SunderRpcSchemaProfile.IsInstanceValid(this, schemaReference, value, out error, out failure);
+
     internal bool TryGetDefinition(string name, out JsonElement schema)
         => _definitions.TryGetValue(name, out schema);
 }
+
+internal sealed record SunderRpcValidationFailure(string Code, string Path);
 
 /// <summary>Reports an invalid contract descriptor or unsupported schema construct.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]

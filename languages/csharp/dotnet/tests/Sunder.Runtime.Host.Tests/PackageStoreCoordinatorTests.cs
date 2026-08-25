@@ -8,6 +8,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
+[Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class PackageStoreCoordinatorTests
 {
     [Fact]

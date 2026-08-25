@@ -9,6 +9,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
+[Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class PackageSessionOverlayTests
 {
     [Fact]
@@ -208,6 +209,7 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
+            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -245,6 +247,7 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
+            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -274,6 +277,7 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
+            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -310,6 +314,7 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
+            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -356,6 +361,7 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
+            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -409,6 +415,7 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
+            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -439,6 +446,7 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
+            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -477,6 +485,7 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
+            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }

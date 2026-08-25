@@ -4,6 +4,30 @@
     "identity": "sunder.worker.v3",
     "version": 3
   },
+  "envelopePropertySets": {
+    "worker.generation-committed": ["type", "activationId", "sessionGeneration"],
+    "worker.migration-keys": ["type", "id", "store"],
+    "worker.migration-apply": ["type", "id", "store", "rules"],
+    "worker.state-set": ["type", "id", "key", "value"],
+    "worker.state-get": ["type", "id", "key", "mode"],
+    "worker.state-delete": ["type", "id", "key"],
+    "worker.activated": ["type", "sessionGeneration"],
+    "worker.result": ["type", "id", "value"],
+    "worker.event": ["type", "id", "value"],
+    "worker.complete": ["type", "id"],
+    "worker.error": ["type", "id", "error"],
+    "worker.provider-fault-diagnostic": [
+      "type",
+      "id",
+      "invocationId",
+      "providerId",
+      "serviceId",
+      "methodId",
+      "exceptionType",
+      "exceptionFingerprint"
+    ],
+    "worker.shutdown-ack": ["type", "shutdownId"]
+  },
   "categories": {
     "shutdown-order": {
       "requirements": [

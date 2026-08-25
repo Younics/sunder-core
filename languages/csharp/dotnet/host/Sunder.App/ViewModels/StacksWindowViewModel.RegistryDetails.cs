@@ -203,7 +203,8 @@ public sealed partial class StacksWindowViewModel
 
     private void ApplyRegistryStackProfile(RegistryStackProfile? profile)
     {
-        var shortDescription = _registryProfile.Apply(profile);
+        TryResolveRegistryUrlForRegistryAction(out var registryOrigin);
+        var shortDescription = _registryProfile.Apply(profile, registryOrigin);
         if (!string.IsNullOrWhiteSpace(shortDescription))
         {
             SelectedRegistryStackSummary = shortDescription;

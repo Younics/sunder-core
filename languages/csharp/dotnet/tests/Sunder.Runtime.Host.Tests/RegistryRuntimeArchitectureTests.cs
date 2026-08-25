@@ -16,6 +16,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
+[Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class RegistryRuntimeArchitectureTests
 {
     [Fact]
@@ -803,9 +804,10 @@ public sealed class RegistryRuntimeArchitectureTests
     [Fact]
     public async Task RegistryHttpClient_RejectsOversizedJsonBeforeDeserialization()
     {
+        var body = new TrackingReadStream("123456789"u8.ToArray());
         var handler = new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent("{\"value\":true}"),
+            Content = new StreamContent(body),
         });
         var client = new RegistryHttpClient(
             new FakeHttpClientFactory(handler),
@@ -813,10 +815,33 @@ public sealed class RegistryRuntimeArchitectureTests
             TimeProvider.System);
         using var response = await client.SendAsync(
             new HttpRequestMessage(HttpMethod.Get, "https://registry.example/test"),
-            HttpCompletionOption.ResponseContentRead,
             CancellationToken.None);
 
         await Assert.ThrowsAsync<InvalidDataException>(() => client.ReadJsonAsync<object>(response, CancellationToken.None));
+        Assert.Equal(5, body.BytesRead);
+        Assert.True(body.IsDisposed);
+    }
+
+    [Fact]
+    public async Task RegistryHttpClient_AcceptsJsonAtExactLimit()
+    {
+        var body = new TrackingReadStream("\"ok\""u8.ToArray());
+        var client = new RegistryHttpClient(
+            new FakeHttpClientFactory(new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(body),
+            })),
+            new RuntimeTransportPolicyOptions { MaxRegistryJsonBytes = 4 },
+            TimeProvider.System);
+        using var response = await client.SendAsync(
+            new HttpRequestMessage(HttpMethod.Get, "https://registry.example/test"),
+            CancellationToken.None);
+
+        var result = await client.ReadJsonAsync<string>(response, CancellationToken.None);
+
+        Assert.Equal("ok", result);
+        Assert.Equal(4, body.BytesRead);
+        Assert.True(body.IsDisposed);
     }
 
     [Fact]
@@ -834,7 +859,6 @@ public sealed class RegistryRuntimeArchitectureTests
             TimeProvider.System);
         using var response = await problemClient.SendAsync(
             new HttpRequestMessage(HttpMethod.Get, "https://registry.example/test"),
-            HttpCompletionOption.ResponseContentRead,
             CancellationToken.None);
         Assert.Equal("Package version already exists.", await problemClient.ReadErrorAsync(response, CancellationToken.None));
 
@@ -849,10 +873,68 @@ public sealed class RegistryRuntimeArchitectureTests
         using var cancellation = new CancellationTokenSource();
         var pending = cancellationClient.SendAsync(
             new HttpRequestMessage(HttpMethod.Get, "https://registry.example/test"),
-            HttpCompletionOption.ResponseHeadersRead,
             cancellation.Token);
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+    }
+
+    [Fact]
+    public async Task RegistryHttpClient_BodyTimeoutAndCallerCancellationDisposeStreams()
+    {
+        var timedOutBody = new CancellationBlockingResponseStream();
+        var timeoutClient = new RegistryHttpClient(
+            new FakeHttpClientFactory(new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(timedOutBody),
+            })),
+            new RuntimeTransportPolicyOptions { RegistryRequestTimeout = TimeSpan.FromMilliseconds(50) },
+            TimeProvider.System);
+        using (var response = await timeoutClient.SendAsync(
+                   new HttpRequestMessage(HttpMethod.Get, "https://registry.example/test"),
+                   CancellationToken.None))
+        {
+            await Assert.ThrowsAsync<TimeoutException>(() =>
+                timeoutClient.ReadJsonAsync<object>(response, CancellationToken.None));
+        }
+        Assert.True(timedOutBody.IsDisposed);
+
+        var cancelledBody = new CancellationBlockingResponseStream();
+        var cancellationClient = new RegistryHttpClient(
+            new FakeHttpClientFactory(new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(cancelledBody),
+            })),
+            new RuntimeTransportPolicyOptions(),
+            TimeProvider.System);
+        using var cancellation = new CancellationTokenSource();
+        using var cancelledResponse = await cancellationClient.SendAsync(
+            new HttpRequestMessage(HttpMethod.Get, "https://registry.example/test"),
+            cancellation.Token);
+        var read = cancellationClient.ReadJsonAsync<object>(cancelledResponse, cancellation.Token);
+        await cancelledBody.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+        Assert.True(cancelledBody.IsDisposed);
+    }
+
+    [Fact]
+    public async Task RegistryHttpClient_RejectsResponseFromChangedOrigin()
+    {
+        var client = new RegistryHttpClient(
+            new FakeHttpClientFactory(new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://other.example/test"),
+                Content = JsonContent.Create(new { value = true }),
+            })),
+            new RuntimeTransportPolicyOptions(),
+            TimeProvider.System);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => client.SendAsync(
+            new HttpRequestMessage(HttpMethod.Get, "https://registry.example/test"),
+            CancellationToken.None));
+
+        Assert.Contains("untrusted origin", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -1121,6 +1203,7 @@ public sealed class RegistryRuntimeArchitectureTests
     public async Task RegistryUpdate_IncludePrereleaseOverrideIsResolverOnlyAndPreservesStoredPolicy()
     {
         var root = CreateTempDirectory();
+        ServiceProvider? provider = null;
         try
         {
             const string origin = "https://registry.example/";
@@ -1164,7 +1247,7 @@ public sealed class RegistryRuntimeArchitectureTests
             services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
             services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
 
-            await using var provider = services.BuildServiceProvider();
+            provider = services.BuildServiceProvider();
             await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
             var result = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().UpdateAsync(
                 new RuntimeRegistryUpdateRequest(IncludePrerelease: true),
@@ -1181,6 +1264,11 @@ public sealed class RegistryRuntimeArchitectureTests
         }
         finally
         {
+            if (provider is not null)
+            {
+                await ShutdownPackageLifecycleAsync(provider);
+                await provider.DisposeAsync();
+            }
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1189,6 +1277,7 @@ public sealed class RegistryRuntimeArchitectureTests
     public async Task RegistryInstall_PersistsExplicitPrereleasePolicy()
     {
         var root = CreateTempDirectory();
+        ServiceProvider? provider = null;
         try
         {
             const string origin = "https://registry.example/";
@@ -1208,7 +1297,7 @@ public sealed class RegistryRuntimeArchitectureTests
             services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
             services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
 
-            await using var provider = services.BuildServiceProvider();
+            provider = services.BuildServiceProvider();
             await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
             var result = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().InstallAsync(
                 new RuntimeRegistryPackageRequest(
@@ -1226,6 +1315,11 @@ public sealed class RegistryRuntimeArchitectureTests
         }
         finally
         {
+            if (provider is not null)
+            {
+                await ShutdownPackageLifecycleAsync(provider);
+                await provider.DisposeAsync();
+            }
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1234,6 +1328,7 @@ public sealed class RegistryRuntimeArchitectureTests
     public async Task RegistryInstall_SensitiveCapabilityConsentUsesVerifiedUniversalSourceManifestFence()
     {
         var root = CreateTempDirectory();
+        ServiceProvider? provider = null;
         try
         {
             const string origin = "https://registry.example/";
@@ -1262,7 +1357,7 @@ public sealed class RegistryRuntimeArchitectureTests
             services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
             services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
 
-            await using var provider = services.BuildServiceProvider();
+            provider = services.BuildServiceProvider();
             await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
             var orchestrator = provider.GetRequiredService<RegistryPackageChangeOrchestrator>();
             var plan = await orchestrator.ResolveAsync(
@@ -1298,6 +1393,11 @@ public sealed class RegistryRuntimeArchitectureTests
         }
         finally
         {
+            if (provider is not null)
+            {
+                await ShutdownPackageLifecycleAsync(provider);
+                await provider.DisposeAsync();
+            }
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1306,6 +1406,7 @@ public sealed class RegistryRuntimeArchitectureTests
     public async Task RegistryExecution_BlockedResolutionRejectsConcurrentSourceAdoptionWithoutMutation()
     {
         var root = CreateTempDirectory();
+        ServiceProvider? provider = null;
         try
         {
             const string firstOrigin = "https://first.example/";
@@ -1360,7 +1461,7 @@ public sealed class RegistryRuntimeArchitectureTests
             services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
             services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
 
-            await using var provider = services.BuildServiceProvider();
+            provider = services.BuildServiceProvider();
             await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
             var orchestrator = provider.GetRequiredService<RegistryPackageChangeOrchestrator>();
             var staleTask = orchestrator.AdoptSourceAsync(
@@ -1402,6 +1503,11 @@ public sealed class RegistryRuntimeArchitectureTests
         }
         finally
         {
+            if (provider is not null)
+            {
+                await ShutdownPackageLifecycleAsync(provider);
+                await provider.DisposeAsync();
+            }
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1872,6 +1978,10 @@ public sealed class RegistryRuntimeArchitectureTests
             .Select(part => part.Split('=', 2))
             .ToDictionary(part => Uri.UnescapeDataString(part[0]), part => Uri.UnescapeDataString(part[1]), StringComparer.OrdinalIgnoreCase);
 
+    private static Task ShutdownPackageLifecycleAsync(IServiceProvider provider)
+        => provider.GetRequiredService<InstalledPackageLifecycleService>().ShutdownAsync(
+            provider.GetRequiredService<PackageSessionLifecycleService>());
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
@@ -1938,6 +2048,74 @@ public sealed class RegistryRuntimeArchitectureTests
                 RequestMessage = new HttpRequestMessage(HttpMethod.Get, uri),
             };
             return true;
+        }
+    }
+
+    private sealed class TrackingReadStream(byte[] content) : Stream
+    {
+        private int _offset;
+        private int _disposed;
+        public int BytesRead => Volatile.Read(ref _offset);
+        public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _offset; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count)
+            => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            var count = Math.Min(buffer.Length, content.Length - _offset);
+            content.AsSpan(_offset, count).CopyTo(buffer);
+            _offset += count;
+            return count;
+        }
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(Read(buffer.Span));
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Volatile.Write(ref _disposed, 1);
+            base.Dispose(disposing);
+        }
+    }
+
+    private sealed class CancellationBlockingResponseStream : Stream
+    {
+        private int _disposed;
+        public TaskCompletionSource ReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            ReadStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Volatile.Write(ref _disposed, 1);
+            base.Dispose(disposing);
         }
     }
 

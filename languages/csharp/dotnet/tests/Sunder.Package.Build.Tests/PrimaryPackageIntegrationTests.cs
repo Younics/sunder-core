@@ -86,6 +86,15 @@ public sealed class PrimaryPackageIntegrationTests
                 Path.Combine(root, "universal-validation"));
             Assert.True(universalValidation.Success, string.Join(Environment.NewLine, universalValidation.Errors));
             Assert.Equal(6, universalValidation.Manifest!.Targets!.Count);
+            var universalPaths = universalValidation.ContentIndex!.Files!
+                .Select(static file => file!.Path!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain(universalPaths, path =>
+                path.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
+                && universalPaths.Contains(Path.ChangeExtension(path, ".dll").Replace('\\', '/')));
+            Assert.Contains(universalPaths, static path => path.EndsWith("/Sunder.Sdk.pdb", StringComparison.Ordinal));
+            Assert.Contains(universalPaths, static path => path.EndsWith("/Sunder.Sdk.Worker.pdb", StringComparison.Ordinal));
+            Assert.Contains(universalPaths, static path => path.EndsWith("/WorkerV3Executable.pdb", StringComparison.Ordinal));
             var universalBytes = await File.ReadAllBytesAsync(archivePath);
 
             var prebuiltTrace = Path.Combine(root, "prebuilt.trace");

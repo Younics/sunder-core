@@ -27,7 +27,7 @@ internal sealed partial class RegistryClient
             packagePath,
             "package",
             "application/vnd.sunder.package",
-            $"{ApiRoot}/packages/publish",
+            RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.PackagePublish),
             MaxPackagePublishBytes,
             credential,
             expectedPackageId,
@@ -51,7 +51,7 @@ internal sealed partial class RegistryClient
             stackPath,
             "stack",
             "application/vnd.sunder.stack",
-            $"{ApiRoot}/stacks/publish",
+            RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.StackPublish),
             MaxStackPublishBytes,
             credential,
             expectedStackId,
@@ -102,11 +102,7 @@ internal sealed partial class RegistryClient
             request.Headers.Add(RegistryPublishRequestHeaders.SetLatest, setLatest.Value ? "true" : "false");
         }
 
-        using var response = await _httpClient.SendAsync(
-            request,
-            HttpCompletionOption.ResponseHeadersRead,
-            token).ConfigureAwait(false);
-        RegistryTransportSecurity.RequireSameOrigin(RegistryApiUrl, response.RequestMessage?.RequestUri);
+        using var response = await SendAsync(request, token).ConfigureAwait(false);
         return await ReadRequiredAsync<TResponse>(response, token, acceptErrorPayload: true)
             .ConfigureAwait(false);
     }

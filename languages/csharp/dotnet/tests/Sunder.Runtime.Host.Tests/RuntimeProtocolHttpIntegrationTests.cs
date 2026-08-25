@@ -19,6 +19,7 @@ using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Runtime.Host.Services;
 using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Storage;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -279,6 +280,79 @@ public sealed class RuntimeProtocolHttpIntegrationTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
         Assert.Equal("runtime.v1.validation", problem.GetProperty("code").GetString());
+        Assert.Equal(
+            response.Headers.GetValues(RuntimeProblemDetailsMiddleware.CorrelationHeader).Single(),
+            problem.GetProperty("correlationId").GetString());
+    }
+
+    [Fact]
+    public async Task PayloadTooLargeBadHttpRequest_PreservesCanonicalProblemDetails()
+    {
+        const string correlationId = "payload-too-large-correlation";
+        const string detail = "Request body too large.";
+        var middleware = new RuntimeProblemDetailsMiddleware(
+            _ => throw new BadHttpRequestException(detail, StatusCodes.Status413PayloadTooLarge),
+            NullLogger<RuntimeProblemDetailsMiddleware>.Instance);
+        var context = new DefaultHttpContext();
+        context.Request.Headers[RuntimeProblemDetailsMiddleware.CorrelationHeader] = correlationId;
+        context.Response.Body = new MemoryStream();
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.Body.Position = 0;
+        using var problem = await JsonDocument.ParseAsync(context.Response.Body);
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, context.Response.StatusCode);
+        Assert.Equal("application/problem+json", context.Response.ContentType);
+        Assert.Equal(
+            $"https://sunder.dev/problems/{RuntimeErrorCodes.UploadLimit}",
+            problem.RootElement.GetProperty("type").GetString());
+        Assert.Equal("Upload limit exceeded", problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, problem.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(detail, problem.RootElement.GetProperty("detail").GetString());
+        Assert.Equal(RuntimeErrorCodes.UploadLimit, problem.RootElement.GetProperty("code").GetString());
+        Assert.Equal(correlationId, problem.RootElement.GetProperty("correlationId").GetString());
+        Assert.Equal(correlationId, context.Response.Headers[RuntimeProblemDetailsMiddleware.CorrelationHeader]);
+    }
+
+    [Fact]
+    public void DefaultRequestBodyLimit_MatchesMaximumPackageFileSize()
+    {
+        Assert.Equal(
+            PackageStorageValidation.MaximumFileBytes,
+            RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OversizedRequestBody_ReturnsPayloadTooLargeForFixedAndChunkedBodies(bool chunked)
+    {
+        await using var server = await RuntimeHttpServer.StartAsync(
+            app => app.MapPost("/api/v1/body-limit", async (HttpRequest request, CancellationToken cancellationToken) =>
+            {
+                await request.Body.CopyToAsync(Stream.Null, cancellationToken);
+                return Results.NoContent();
+            }),
+            maxRequestBodyBytes: 3);
+        using var client = new HttpClient { BaseAddress = server.BaseUri };
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            RuntimeHttpServer.Token);
+        using HttpContent content = chunked
+            ? new UnknownLengthContent([1, 2, 3, 4])
+            : new ByteArrayContent([1, 2, 3, 4]);
+
+        using var response = await client.PostAsync("api/v1/body-limit", content);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(
+            $"https://sunder.dev/problems/{RuntimeErrorCodes.UploadLimit}",
+            problem.GetProperty("type").GetString());
+        Assert.Equal("Upload limit exceeded", problem.GetProperty("title").GetString());
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, problem.GetProperty("status").GetInt32());
+        Assert.Equal(RuntimeErrorCodes.UploadLimit, problem.GetProperty("code").GetString());
         Assert.Equal(
             response.Headers.GetValues(RuntimeProblemDetailsMiddleware.CorrelationHeader).Single(),
             problem.GetProperty("correlationId").GetString());
@@ -647,10 +721,14 @@ public sealed class RuntimeProtocolHttpIntegrationTests
 
         public static async Task<RuntimeHttpServer> StartAsync(
             Action<WebApplication>? map = null,
-            Action<IServiceCollection>? configureServices = null)
+            Action<IServiceCollection>? configureServices = null,
+            long? maxRequestBodyBytes = null)
         {
             var builder = WebApplication.CreateSlimBuilder();
             builder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");
+            builder.WebHost.ConfigureKestrel(options =>
+                options.Limits.MaxRequestBodySize = maxRequestBodyBytes
+                    ?? RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes);
             builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
             builder.Services.AddSingleton(new RuntimeBearerTokenValidator(Token));
             builder.Services.AddSingleton<RuntimeProtocolDescriptor>();
@@ -671,6 +749,18 @@ public sealed class RuntimeProtocolHttpIntegrationTests
         {
             await app.StopAsync();
             await app.DisposeAsync();
+        }
+    }
+
+    private sealed class UnknownLengthContent(byte[] bytes) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            => stream.WriteAsync(bytes, 0, bytes.Length);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
         }
     }
 }

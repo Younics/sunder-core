@@ -107,13 +107,17 @@ internal sealed class RegistryPackageArtifactDownloader(
         CancellationToken cancellationToken)
     {
         var artifactUri = ValidateArtifactUri(registryOrigin, artifact.DownloadUrl, allowedOrigins);
+        if (artifact.Size < 0 || artifact.Size > MaxArtifactBytes)
+        {
+            throw new RegistryArtifactTooLargeException(
+                $"Package '{item.PackageId}' projection '{ProjectionKey(artifact)}' exceeds the {MaxArtifactBytes} byte download limit.");
+        }
         using var timeout = new CancellationTokenSource(policy.RegistryRequestTimeout, timeProvider);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         try
         {
             using var response = await registryClient.SendAsync(
                 new HttpRequestMessage(HttpMethod.Get, artifactUri),
-                HttpCompletionOption.ResponseHeadersRead,
                 linked.Token);
             ValidateArtifactUri(registryOrigin, response.RequestMessage?.RequestUri, allowedOrigins);
             await registryClient.EnsureSuccessAsync(response, linked.Token);
@@ -122,9 +126,18 @@ internal sealed class RegistryPackageArtifactDownloader(
                 throw new RegistryArtifactTooLargeException(
                     $"Package '{item.PackageId}' projection '{ProjectionKey(artifact)}' exceeds the {MaxArtifactBytes} byte download limit.");
             }
+            if (response.Content.Headers.ContentLength is { } contentLength
+                && contentLength != artifact.Size)
+            {
+                throw new InvalidDataException(
+                    $"Package '{item.PackageId}' projection '{ProjectionKey(artifact)}' has an invalid content length.");
+            }
 
             await using var source = await response.Content.ReadAsStreamAsync(linked.Token);
-            await using var bounded = new BoundedReadStream(source, MaxArtifactBytes);
+            await using var bounded = new BoundedReadStream(
+                source,
+                artifact.Size,
+                $"Package '{item.PackageId}' projection '{ProjectionKey(artifact)}' exceeds its declared {artifact.Size} byte size.");
             var upload = await transfers.CreateUploadAsync(
                 RuntimeUploadKind.Package,
                 bounded,
@@ -528,7 +541,7 @@ internal sealed class RegistryPackageArtifactDownloader(
         }
     }
 
-    private sealed class BoundedReadStream(Stream inner, long maxLength) : Stream
+    private sealed class BoundedReadStream(Stream inner, long maxLength, string limitMessage) : Stream
     {
         private long _length;
         public override bool CanRead => true;
@@ -546,13 +559,16 @@ internal sealed class RegistryPackageArtifactDownloader(
             Memory<byte> buffer,
             CancellationToken cancellationToken = default)
         {
-            var read = await inner.ReadAsync(buffer, cancellationToken);
-            _length += read;
-            if (_length > maxLength)
+            if (buffer.Length == 0) return 0;
+            var remaining = maxLength - _length;
+            var read = await inner.ReadAsync(
+                buffer[..(int)Math.Min(buffer.Length, remaining + 1)],
+                cancellationToken);
+            if (read > remaining)
             {
-                throw new RegistryArtifactTooLargeException(
-                    $"Registry artifact exceeds the {maxLength} byte download limit.");
+                throw new RegistryArtifactTooLargeException(limitMessage);
             }
+            _length += read;
             return read;
         }
 

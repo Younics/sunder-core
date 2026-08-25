@@ -76,7 +76,8 @@ internal sealed class StackDetailLoadCoordinator(
                         string.IsNullOrWhiteSpace(package.Name) ? packageId : package.Name,
                         null,
                         ResolveRegistryPackageIconUri(registryClient.RegistryUrl, package.IconUrl),
-                        PackageIconTransport.AnonymousMedia);
+                        PackageIconTransport.Registry,
+                        registryClient.RegistryUrl);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -107,15 +108,11 @@ internal sealed class StackDetailLoadCoordinator(
             return null;
         }
 
-        var trimmed = iconUrl.Trim();
-        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri))
-        {
-            return HttpMediaUriValidator.IsValid(absoluteUri) ? absoluteUri : null;
-        }
-
-        return Uri.TryCreate(registryUrl, trimmed, out var relativeUri)
-               && HttpMediaUriValidator.IsValid(relativeUri)
-            ? relativeUri
+        return RemoteImageService.TryResolveRegistryImageUri(
+            registryUrl,
+            iconUrl,
+            out var iconUri)
+            ? iconUri
             : null;
     }
 }

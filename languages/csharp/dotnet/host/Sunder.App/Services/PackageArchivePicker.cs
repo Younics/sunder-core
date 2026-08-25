@@ -11,6 +11,12 @@ namespace Sunder.App.Services;
 
 public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
 {
+    internal const long MaxArchiveBytes = SunderPackageFormat.MaxArchiveBytes;
+
+    private static readonly string ReviewSnapshotRootPath = Path.Combine(
+        Path.GetTempPath(),
+        "sunder-package-review");
+
     public async Task<PackageArchiveSelection?> PickPackageAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -132,23 +138,40 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
 
     internal static async Task<string> CreateReviewSnapshotAsync(
         string packagePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? snapshotRootPath = null)
     {
+        await using var source = new FileStream(
+            packagePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await CreateReviewSnapshotAsync(
+            source,
+            source.Length,
+            cancellationToken,
+            snapshotRootPath);
+    }
+
+    internal static async Task<string> CreateReviewSnapshotAsync(
+        Stream source,
+        long? sourceLength,
+        CancellationToken cancellationToken,
+        string? snapshotRootPath = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var rootPath = snapshotRootPath ?? ReviewSnapshotRootPath;
+        CleanupStaleReviewSnapshots(rootPath);
+        EnsureArchiveLengthWithinLimit(sourceLength);
         var snapshotDirectory = Path.Combine(
-            Path.GetTempPath(),
-            "sunder-package-review",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(snapshotDirectory);
+            rootPath,
+            $"{Environment.ProcessId}-{Guid.NewGuid():N}");
         var snapshotPath = Path.Combine(snapshotDirectory, "package.sunderpkg");
         try
         {
-            await using var source = new FileStream(
-                packagePath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize: 81920,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            Directory.CreateDirectory(snapshotDirectory);
             await using var destination = new FileStream(
                 snapshotPath,
                 FileMode.CreateNew,
@@ -156,7 +179,7 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
                 FileShare.None,
                 bufferSize: 81920,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await source.CopyToAsync(destination, cancellationToken);
+            await CopyReviewSnapshotAsync(source, destination, sourceLength, cancellationToken);
             await destination.FlushAsync(cancellationToken);
             return snapshotPath;
         }
@@ -164,6 +187,51 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
         {
             DeleteReviewSnapshot(snapshotPath);
             throw;
+        }
+    }
+
+    internal static async Task CopyReviewSnapshotAsync(
+        Stream source,
+        Stream destination,
+        long? sourceLength,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(destination);
+        EnsureArchiveLengthWithinLimit(sourceLength);
+
+        var buffer = new byte[81920];
+        long copiedBytes = 0;
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken);
+            if (read == 0) break;
+            if (read > MaxArchiveBytes - copiedBytes)
+            {
+                throw CreateArchiveTooLargeException();
+            }
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            copiedBytes += read;
+        }
+    }
+
+    internal static void CleanupStaleReviewSnapshots(string snapshotRootPath)
+    {
+        try
+        {
+            if (!Directory.Exists(snapshotRootPath)) return;
+            foreach (var directory in Directory.EnumerateDirectories(snapshotRootPath))
+            {
+                if (TryReadOwnerProcessId(Path.GetFileName(directory), out var processId)
+                    && IsProcessRunning(processId))
+                {
+                    continue;
+                }
+                TryDeleteDirectory(directory);
+            }
+        }
+        catch
+        {
         }
     }
 
@@ -183,9 +251,56 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
         }
         catch
         {
-            // Stale review snapshots remain confined to the operating-system temp directory.
+            // A later review pass retries cleanup of snapshots left by terminated processes.
         }
     }
+
+    private static bool TryReadOwnerProcessId(string directoryName, out int processId)
+    {
+        processId = 0;
+        var separator = directoryName.IndexOf('-');
+        return separator > 0 && int.TryParse(directoryName[..separator], out processId);
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        if (processId <= 0) return false;
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void EnsureArchiveLengthWithinLimit(long? sourceLength)
+    {
+        if (sourceLength is > MaxArchiveBytes)
+        {
+            throw CreateArchiveTooLargeException();
+        }
+    }
+
+    private static InvalidDataException CreateArchiveTooLargeException()
+        => new($"Package archive exceeds the {MaxArchiveBytes} byte limit.");
 
     private static async Task<string> ComputeSha256Async(
         string packagePath,

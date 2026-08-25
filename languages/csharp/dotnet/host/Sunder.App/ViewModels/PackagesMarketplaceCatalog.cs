@@ -5,7 +5,8 @@ using Sunder.Runtime.Contracts;
 namespace Sunder.App.ViewModels;
 
 internal sealed class PackagesMarketplaceCatalog(
-    PackageRegistryClientProvider registryClientProvider)
+    PackageRegistryClientProvider registryClientProvider,
+    RemoteImageService? remoteImageService)
 {
     public async Task<PackagesMarketplaceSearchResult> SearchAsync(
         string searchText,
@@ -27,7 +28,9 @@ internal sealed class PackagesMarketplaceCatalog(
                 packages,
                 installedCatalog.InstalledPackages,
                 installedCatalog.AvailableUpdates,
-                selectPackageAsync);
+                selectPackageAsync,
+                registryClient.RegistryUrl,
+                remoteImageService);
             return PackagesMarketplaceSearchResult.Succeeded(packageItems);
         }
     }

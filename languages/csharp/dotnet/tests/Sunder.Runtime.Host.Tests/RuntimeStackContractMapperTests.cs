@@ -181,7 +181,7 @@ public sealed class RuntimeStackContractMapperTests
                 new StackRpcPayloadFile("nested/value.bin", ContentReference(payload.Length)),
             ]);
 
-        var response = await builder.BuildAsync(
+        var operation = await builder.BuildAsync(
             new RuntimeStackExportRequest("test.stack", "Test Stack", null, []),
             [],
             [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(4), fragment)],
@@ -191,6 +191,8 @@ public sealed class RuntimeStackContractMapperTests
             [],
             CancellationToken.None);
 
+        var response = operation.Response;
+        Assert.Null(operation.Failure);
         Assert.True(response.Success, string.Join(Environment.NewLine, response.Errors));
         Assert.NotNull(response.Download);
         var download = response.Download!;
@@ -285,7 +287,7 @@ public sealed class RuntimeStackContractMapperTests
         var builder = new StackExportArchiveBuilder(transfers, paths, TimeProvider.System);
         var fragment = new StackRpcFragmentExport(fragmentId, "schema", 1, "Fragment", "{}");
 
-        var response = await builder.BuildAsync(
+        var operation = await builder.BuildAsync(
             new RuntimeStackExportRequest("test.stack", "Test Stack", null, []),
             [],
             [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(), fragment)],
@@ -295,6 +297,8 @@ public sealed class RuntimeStackContractMapperTests
             [],
             CancellationToken.None);
 
+        var response = operation.Response;
+        Assert.Equal(RuntimeStackFailureCategory.Validation, operation.Failure?.Category);
         Assert.False(response.Success);
         Assert.Contains(response.Errors, error => error.Contains("fragment id", StringComparison.OrdinalIgnoreCase));
         Assert.False(Directory.Exists(Path.Combine(root, "escape")));
@@ -315,7 +319,7 @@ public sealed class RuntimeStackContractMapperTests
             "{}",
             Files: [new StackRpcPayloadFile("../escape", ContentReference())]);
 
-        var response = await builder.BuildAsync(
+        var operation = await builder.BuildAsync(
             new RuntimeStackExportRequest("test.stack", "Test Stack", null, []),
             [],
             [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(), fragment)],
@@ -325,8 +329,39 @@ public sealed class RuntimeStackContractMapperTests
             [],
             CancellationToken.None);
 
+        var response = operation.Response;
+        Assert.Equal(RuntimeStackFailureCategory.Validation, operation.Failure?.Category);
         Assert.False(response.Success);
         Assert.Contains(response.Errors, error => error.Contains("unsafe", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ExportArchiveBuilder_WhenMediaUploadHandleIsMissing_ReturnsTypedStaleFailure()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(root);
+        using var transfers = new RuntimeContentTransferStore(paths);
+        var builder = new StackExportArchiveBuilder(transfers, paths, TimeProvider.System);
+        var fragment = new StackRpcFragmentExport("fragment", "schema", 1, "Fragment", "{}");
+
+        var operation = await builder.BuildAsync(
+            new RuntimeStackExportRequest(
+                "test.stack",
+                "Test Stack",
+                null,
+                [],
+                Media: [new RuntimeStackMediaInput("missing-upload", "payload/media/icon.png", "icon.png", "image/png")]),
+            [],
+            [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(), fragment)],
+            new Dictionary<string, SunderStackFragmentPreview>(),
+            new TestCallScope(),
+            generation: 1,
+            [],
+            CancellationToken.None);
+
+        Assert.False(operation.Response.Success);
+        Assert.Equal(RuntimeStackFailureCategory.StaleGeneration, operation.Failure?.Category);
+        Assert.Equal("A Stack media upload was not found or is stale.", operation.Failure?.Detail);
     }
 
     [Fact]
@@ -345,7 +380,7 @@ public sealed class RuntimeStackContractMapperTests
             "{}",
             Files: [new StackRpcPayloadFile("value.bin", ContentReference(length: 5))]);
 
-        var response = await builder.BuildAsync(
+        var operation = await builder.BuildAsync(
             new RuntimeStackExportRequest("test.stack", "Test Stack", null, []),
             [],
             [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(), fragment)],
@@ -355,6 +390,8 @@ public sealed class RuntimeStackContractMapperTests
             [],
             CancellationToken.None);
 
+        var response = operation.Response;
+        Assert.Equal(RuntimeStackFailureCategory.Validation, operation.Failure?.Category);
         Assert.False(response.Success);
         Assert.Contains(response.Errors, error => error.Contains("per-file limit", StringComparison.OrdinalIgnoreCase));
     }

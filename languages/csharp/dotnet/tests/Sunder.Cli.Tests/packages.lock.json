@@ -104,6 +104,9 @@
           "System.CommandLine": "[2.0.10, )"
         }
       },
+      "sunder.core.testsupport": {
+        "type": "Project"
+      },
       "sunder.host.client": {
         "type": "Project",
         "dependencies": {

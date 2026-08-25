@@ -183,14 +183,143 @@ public sealed class PackageSessionStateTests
         }
     }
 
+    [Fact]
+    public async Task PublicationHandle_FromDifferentState_IsRejectedBeforeMutation()
+    {
+        var owner = CreateState();
+        var other = CreateState();
+        var sessionFolder = CreateTempDirectory();
+        var session = CreateSession(sessionFolder);
+        PackageSessionState.SessionPublication? publication = null;
+
+        try
+        {
+            publication = await owner.PreparePublicationAsync(
+                session,
+                expectedGeneration: 0,
+                CancellationToken.None);
+
+            var exception = Assert.Throws<InvalidOperationException>(
+                () => other.RejectPublication(publication));
+
+            Assert.Contains("does not belong", exception.Message, StringComparison.Ordinal);
+            Assert.False(publication.Completed);
+            Assert.Same(session, publication.Session);
+        }
+        finally
+        {
+            if (publication is not null)
+            {
+                if (!publication.Completed)
+                {
+                    owner.DiscardPublication(publication);
+                }
+                await owner.WaitForDiscardedCandidateDrainAsync(publication);
+            }
+            await session.DisposeAsync();
+            await owner.ClearActiveSessionAsync();
+            await other.ClearActiveSessionAsync();
+            TryDeleteDirectory(sessionFolder);
+        }
+    }
+
+    [Fact]
+    public async Task PublicationSnapshot_RemainsImmutableAcrossLaterSessionMutation()
+    {
+        var state = CreateState();
+        var sessionFolder = CreateTempDirectory();
+        var views = new List<PackageViewDescriptor>
+        {
+            new(
+                "main",
+                "snapshot.package",
+                "Main",
+                new PackageIconDescriptor("S", null),
+                "main"),
+        };
+        var contractUse = new PackageRpcContractUseDescriptor(
+            "consumer",
+            "snapshot.contract",
+            "1.0.0",
+            new string('a', 64),
+            Required: true,
+            Actions: ["read"]);
+        var descriptor = new SessionPackageDescriptor(
+            "snapshot.package",
+            "Snapshot Package",
+            "1.0.0",
+            PackageHostRoles.Runtime,
+            new PackageIconDescriptor("S", null),
+            IsEnabled: true,
+            Readiness: PackageReadinessState.Ready,
+            Views: views,
+            FailureOrigin: null,
+            LastError: null,
+            LastFailureAtUtc: null,
+            FailureCount: 0,
+            RpcContractUses: [contractUse]);
+        var session = CreateSession(sessionFolder, descriptor);
+
+        try
+        {
+            await state.PublishSessionAsync(session);
+            var snapshot = state.CapturePublicationSnapshot(expectedGeneration: 1);
+            Assert.Throws<RuntimeStaleGenerationException>(
+                () => state.CapturePublicationSnapshot(expectedGeneration: 0));
+
+            views.Add(new PackageViewDescriptor(
+                "later",
+                "snapshot.package",
+                "Later",
+                Icon: null,
+                DefaultPlacement: null));
+            Assert.True(session.MarkPackageFailed(
+                "snapshot.package",
+                PackageFailureOrigin.RuntimeBackgroundService,
+                "Later failure.",
+                out _));
+
+            Assert.Equal(1, snapshot.Generation);
+            var activePackage = Assert.Single(snapshot.ActivePackages);
+            Assert.True(activePackage.IsEnabled);
+            Assert.Equal(PackageReadinessState.Ready, activePackage.Readiness);
+            Assert.Single(activePackage.Views);
+            var sessionPackage = Assert.Single(snapshot.SessionPackages);
+            Assert.NotSame(descriptor, sessionPackage);
+            Assert.NotSame(descriptor.Icon, sessionPackage.Icon);
+            Assert.NotSame(descriptor.Views[0], sessionPackage.Views[0]);
+            Assert.NotSame(contractUse, Assert.Single(sessionPackage.RpcContractUses));
+            Assert.True(sessionPackage.IsEnabled);
+            Assert.Equal(PackageReadinessState.Ready, sessionPackage.Readiness);
+            Assert.Single(sessionPackage.Views);
+            Assert.Empty(session.GetActivePackages());
+            Assert.Equal(
+                PackageReadinessState.Failed,
+                Assert.Single(session.GetSessionPackages()).Readiness);
+            Assert.Throws<NotSupportedException>(
+                () => ((IList<ActivePackageDescriptor>)snapshot.ActivePackages).Clear());
+            Assert.Throws<NotSupportedException>(
+                () => ((IList<PackageViewDescriptor>)sessionPackage.Views).Clear());
+        }
+        finally
+        {
+            await state.ClearActiveSessionAsync();
+            TryDeleteDirectory(sessionFolder);
+        }
+    }
+
     private static PackageSessionState CreateState()
         => new(NullLogger.Instance, static () => { }, static _ => { });
 
-    private static ActivePackageSession CreateSession(string folder)
+    private static ActivePackageSession CreateSession(
+        string folder,
+        params SessionPackageDescriptor[] packages)
         => new(
             folder,
             new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase));
+            packages.ToDictionary(
+                package => package.PackageId,
+                StringComparer.OrdinalIgnoreCase));
 
     private static string CreateTempDirectory()
     {

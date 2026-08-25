@@ -20,7 +20,7 @@ internal static class RegistryTransportSecurity
             || uri.Port != registryApiUrl.Port
             || !string.IsNullOrEmpty(uri.UserInfo))
         {
-            throw new InvalidDataException("Registry Stack artifact URL must remain on the trusted Registry origin.");
+            throw new InvalidDataException("Registry URL must remain on the trusted Registry origin.");
         }
     }
 }

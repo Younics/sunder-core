@@ -27,6 +27,10 @@ internal static class BoundedHttpContentReader
         long maxBytes,
         CancellationToken cancellationToken)
     {
+        if (maxBytes < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        }
         if (content.Headers.ContentLength is long declaredLength && declaredLength > maxBytes)
         {
             throw new InvalidDataException($"HTTP content exceeds the {maxBytes} byte limit.");
@@ -37,18 +41,22 @@ internal static class BoundedHttpContentReader
         long total = 0;
         while (true)
         {
-            var read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            var remaining = maxBytes - total;
+            var readLength = (int)Math.Min(buffer.Length, remaining + 1);
+            var read = await source.ReadAsync(
+                buffer.AsMemory(0, readLength),
+                cancellationToken).ConfigureAwait(false);
             if (read == 0)
             {
                 return;
             }
 
-            total += read;
-            if (total > maxBytes)
+            if (read > remaining)
             {
                 throw new InvalidDataException($"HTTP content exceeds the {maxBytes} byte limit.");
             }
 
+            total += read;
             await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
         }
     }

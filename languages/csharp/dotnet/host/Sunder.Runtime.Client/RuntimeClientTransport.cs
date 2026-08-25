@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Client;
@@ -93,7 +94,7 @@ public sealed class RuntimeClientTransport : IDisposable
 
     public Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
-        HttpCompletionOption completionOption = HttpCompletionOption.ResponseContentRead,
+        HttpCompletionOption completionOption = HttpCompletionOption.ResponseHeadersRead,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -102,14 +103,51 @@ public sealed class RuntimeClientTransport : IDisposable
 
     public Task<HttpResponseMessage> GetAsync(
         Uri requestUri,
-        HttpCompletionOption completionOption = HttpCompletionOption.ResponseContentRead,
+        HttpCompletionOption completionOption = HttpCompletionOption.ResponseHeadersRead,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         return _httpClient.GetAsync(requestUri, completionOption, cancellationToken);
     }
 
-    internal HttpClient HttpClient => _httpClient;
+    internal Task<HttpResponseMessage> PostAsync(
+        Uri requestUri,
+        HttpContent? content,
+        CancellationToken cancellationToken)
+        => SendAsync(HttpMethod.Post, requestUri, content, cancellationToken);
+
+    internal Task<HttpResponseMessage> PutAsync(
+        Uri requestUri,
+        HttpContent? content,
+        CancellationToken cancellationToken)
+        => SendAsync(HttpMethod.Put, requestUri, content, cancellationToken);
+
+    internal Task<HttpResponseMessage> DeleteAsync(
+        Uri requestUri,
+        CancellationToken cancellationToken)
+        => SendAsync(HttpMethod.Delete, requestUri, content: null, cancellationToken);
+
+    internal Task<HttpResponseMessage> PostAsJsonAsync<TValue>(
+        Uri requestUri,
+        TValue value,
+        CancellationToken cancellationToken)
+        => SendAsync(HttpMethod.Post, requestUri, JsonContent.Create(value), cancellationToken);
+
+    internal Task<HttpResponseMessage> PutAsJsonAsync<TValue>(
+        Uri requestUri,
+        TValue value,
+        CancellationToken cancellationToken)
+        => SendAsync(HttpMethod.Put, requestUri, JsonContent.Create(value), cancellationToken);
+
+    private async Task<HttpResponseMessage> SendAsync(
+        HttpMethod method,
+        Uri requestUri,
+        HttpContent? content,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(method, requestUri) { Content = content };
+        return await SendAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
 
     private RuntimeClientResourceLimits GetResourceLimits() => ResourceLimits;
 

@@ -23,6 +23,8 @@ if (startupOptions.WaitForDebugger)
 }
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options =>
+    options.Limits.MaxRequestBodySize = RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes);
 if (builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any())
 {
     throw new InvalidOperationException(
@@ -47,6 +49,7 @@ Environment.SetEnvironmentVariable(RuntimeLocalState.StateRootEnvironmentVariabl
 RuntimeLocalState.Validate(packagePaths.RootPath);
 using var runtimeRootLease = RuntimeRootLease.Acquire(packagePaths);
 RuntimeLocalState.EnsureInitialized(packagePaths.RootPath);
+RuntimeContentTransferStore.CleanupCrashLeftTransfers(packagePaths);
 LogStartupPhase("local state and lease", ref startupPhaseStarted);
 
 var bearerToken = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_BEARER_TOKEN");

@@ -38,6 +38,7 @@ public static class VerifiedFileTransfer
         try
         {
             long length = 0;
+            var allowedLength = Math.Min(maxBytes, expectedLength ?? maxBytes);
             byte[] actualHash;
             using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
             {
@@ -52,14 +53,18 @@ public static class VerifiedFileTransfer
                     var buffer = new byte[BufferSize];
                     while (true)
                     {
-                        var read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                        var remaining = allowedLength - length;
+                        var readLength = (int)Math.Min(buffer.Length, remaining + 1);
+                        var read = await source.ReadAsync(
+                            buffer.AsMemory(0, readLength),
+                            cancellationToken).ConfigureAwait(false);
                         if (read == 0)
                         {
                             break;
                         }
 
                         length += read;
-                        if (length > maxBytes || expectedLength is { } declaredLength && length > declaredLength)
+                        if (length > allowedLength)
                         {
                             throw new InvalidDataException($"{description} exceeds its allowed length.");
                         }

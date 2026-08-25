@@ -8,20 +8,26 @@ internal sealed class RollingSyslogLogWriter : IDisposable
     private readonly string _logsRootPath;
     private readonly string _filePrefix;
     private readonly TimeSpan _retentionPeriod;
+    private readonly TimeProvider _timeProvider;
     private DateOnly _currentDate;
     private bool _isDisabled;
 
-    public RollingSyslogLogWriter(string logsRootPath, string filePrefix, TimeSpan retentionPeriod)
+    public RollingSyslogLogWriter(
+        string logsRootPath,
+        string filePrefix,
+        TimeSpan retentionPeriod,
+        TimeProvider? timeProvider = null)
     {
         _logsRootPath = logsRootPath;
         _filePrefix = filePrefix;
         _retentionPeriod = retentionPeriod;
-        _currentDate = DateOnly.FromDateTime(DateTime.Now);
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        var now = _timeProvider.GetLocalNow().DateTime;
+        _currentDate = DateOnly.FromDateTime(now);
         try
         {
             Directory.CreateDirectory(_logsRootPath);
-            DeleteLegacyJsonLinesFiles();
-            ApplyRetention(_currentDate);
+            ApplyRetention(_currentDate, now);
         }
         catch
         {
@@ -40,11 +46,12 @@ internal sealed class RollingSyslogLogWriter : IDisposable
         {
             try
             {
-                var today = DateOnly.FromDateTime(DateTime.Now);
+                var now = _timeProvider.GetLocalNow().DateTime;
+                var today = DateOnly.FromDateTime(now);
                 if (today != _currentDate)
                 {
                     _currentDate = today;
-                    ApplyRetention(today);
+                    ApplyRetention(today, now);
                 }
 
                 File.AppendAllText(BuildFilePath(today), line + Environment.NewLine);
@@ -64,9 +71,9 @@ internal sealed class RollingSyslogLogWriter : IDisposable
     private string BuildFilePath(DateOnly date)
         => Path.Combine(_logsRootPath, string.Create(CultureInfo.InvariantCulture, $"{_filePrefix}-{date:yyyy-MM-dd}.log"));
 
-    private void ApplyRetention(DateOnly today)
+    private void ApplyRetention(DateOnly today, DateTime now)
     {
-        var oldestDate = DateOnly.FromDateTime(DateTime.Now.Subtract(_retentionPeriod));
+        var oldestDate = DateOnly.FromDateTime(now.Subtract(_retentionPeriod));
         foreach (var filePath in Directory.EnumerateFiles(_logsRootPath, $"{_filePrefix}-*.log"))
         {
             var fileName = Path.GetFileNameWithoutExtension(filePath);
@@ -84,14 +91,6 @@ internal sealed class RollingSyslogLogWriter : IDisposable
             {
                 TryDelete(filePath);
             }
-        }
-    }
-
-    private void DeleteLegacyJsonLinesFiles()
-    {
-        foreach (var filePath in Directory.EnumerateFiles(_logsRootPath, $"{_filePrefix}-*.jsonl"))
-        {
-            TryDelete(filePath);
         }
     }
 

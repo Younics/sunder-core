@@ -35,15 +35,10 @@ public sealed class RuntimePersistentLauncherTests
             StringComparison.OrdinalIgnoreCase));
     }
 
-    [Fact]
+    [MacOsFact]
     [SupportedOSPlatform("macos")]
     public async Task MacSessionLauncher_BootstrapsPrivateCurrentSessionAgent()
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            return;
-        }
-
         var root = Path.Combine(Path.GetTempPath(), "sunder-launchd-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var commands = new List<(string FileName, string[] Arguments)>();
@@ -113,15 +108,10 @@ public sealed class RuntimePersistentLauncherTests
         }
     }
 
-    [Fact]
+    [MacOsFact]
     [SupportedOSPlatform("macos")]
     public async Task MacSessionLauncher_WhenReplacementBootstrapFails_PreservesSubmittedCandidateDefinition()
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            return;
-        }
-
         var root = Path.Combine(Path.GetTempPath(), "sunder-launchd-tests", Guid.NewGuid().ToString("N"));
         var definitionPath = Path.Combine(root, "launchd", "dev.sunder.host.plist");
         Directory.CreateDirectory(Path.GetDirectoryName(definitionPath)!);
@@ -174,15 +164,10 @@ public sealed class RuntimePersistentLauncherTests
         }
     }
 
-    [Fact]
+    [MacOsFact]
     [SupportedOSPlatform("macos")]
     public async Task MacSessionLauncher_WhenUnloadedBootstrapFails_PreservesSubmittedCandidateDefinition()
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            return;
-        }
-
         var root = Path.Combine(Path.GetTempPath(), "sunder-launchd-tests", Guid.NewGuid().ToString("N"));
         var definitionPath = Path.Combine(root, "launchd", "dev.sunder.host.plist");
         Directory.CreateDirectory(Path.GetDirectoryName(definitionPath)!);
@@ -223,15 +208,10 @@ public sealed class RuntimePersistentLauncherTests
         }
     }
 
-    [Fact]
+    [MacOsFact]
     [SupportedOSPlatform("macos")]
     public async Task MacSessionLauncher_WhenSubmittedReplacementFails_DoesNotReportPreLaunchDisplacement()
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            return;
-        }
-
         var root = Path.Combine(Path.GetTempPath(), "sunder-launchd-tests", Guid.NewGuid().ToString("N"));
         var definitionPath = Path.Combine(root, "launchd", "dev.sunder.host.plist");
         Directory.CreateDirectory(Path.GetDirectoryName(definitionPath)!);
@@ -274,7 +254,7 @@ public sealed class RuntimePersistentLauncherTests
         }
     }
 
-    [Theory]
+    [MacOsTheory]
     [InlineData("\"PID\" = 4330;\n\"LastExitStatus\" = 17;\n", (int)HostServiceState.Running, 4330, null)]
     [InlineData("\"LastExitStatus\" = 17;\n", (int)HostServiceState.Starting, null, 17)]
     [InlineData("\"LastExitStatus\" = 0;\n", (int)HostServiceState.Stopped, null, 0)]
@@ -285,11 +265,6 @@ public sealed class RuntimePersistentLauncherTests
         int? expectedProcessId,
         int? expectedExitCode)
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            return;
-        }
-
         var launcher = new MacOsSessionRuntimeLauncher(
             (_, arguments, _) => Task.FromResult(
                 arguments[0] == "print"
@@ -307,15 +282,10 @@ public sealed class RuntimePersistentLauncherTests
         Assert.Equal(expectedExitCode, observation.ExitCode);
     }
 
-    [Fact]
+    [MacOsFact]
     [SupportedOSPlatform("macos")]
     public async Task MacSessionLauncher_RealLaunchdReplacementRemainsObservable()
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            return;
-        }
-
         var root = Path.Combine(Path.GetTempPath(), "sunder-launchd-integration", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var label = $"dev.sunder.host.tests.{Guid.NewGuid():N}";
@@ -363,15 +333,10 @@ public sealed class RuntimePersistentLauncherTests
         }
     }
 
-    [Fact]
+    [MacOsFact]
     [SupportedOSPlatform("macos")]
     public async Task MacSessionLauncher_ReplacementObservesBootoutBeforeBootstrap()
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            return;
-        }
-
         var root = Path.Combine(Path.GetTempPath(), "sunder-launchd-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var commands = new List<string[]>();
@@ -638,15 +603,10 @@ public sealed class RuntimePersistentLauncherTests
         Assert.Equal("\"a\\\"b\"", WindowsBreakawayRuntimeLauncher.QuoteWindowsArgument("a\"b"));
     }
 
-    [Fact]
+    [WindowsFact]
     [SupportedOSPlatform("windows")]
     public async Task WindowsLauncher_ObservesExactProcessExit()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var root = Path.Combine(Path.GetTempPath(), "sunder-windows-launcher-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var suffix = Guid.NewGuid().ToString("N");
@@ -687,14 +647,9 @@ public sealed class RuntimePersistentLauncherTests
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task HostServiceCommandRunner_ReturnsBoundedSanitizedOutputAndExitCode()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var runner = new HostServiceCommandRunner(maxCapturedCharacters: 64);
 
         var result = await runner.RunAsync(
@@ -717,14 +672,9 @@ public sealed class RuntimePersistentLauncherTests
         Assert.DoesNotContain("stderr-secret", result.StandardError, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task HostServiceCommandRunner_TimeoutTerminatesChildProcess()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var runner = new HostServiceCommandRunner();
         var started = Stopwatch.StartNew();
 
@@ -736,14 +686,9 @@ public sealed class RuntimePersistentLauncherTests
         Assert.True(started.Elapsed < TimeSpan.FromSeconds(5));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task DirectLauncher_ObservesTerminalProcessExit()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         using var launcher = new DirectRuntimeLauncher();
         var startInfo = new ProcessStartInfo("/bin/sh")
         {
@@ -775,14 +720,9 @@ public sealed class RuntimePersistentLauncherTests
         Assert.Equal("process-exit", observation.Result);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task LauncherCommandCancellationTerminatesChildProcess()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         var started = Stopwatch.StartNew();
 
@@ -794,24 +734,16 @@ public sealed class RuntimePersistentLauncherTests
         Assert.True(started.Elapsed < TimeSpan.FromSeconds(5));
     }
 
-    [Fact]
+    [LinuxFact]
+    [SupportedOSPlatform("linux")]
     public async Task LinuxDetachedFallback_HelperExitLeavesServiceReachable()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
-        if (!File.Exists("/bin/sh")
-            || (!File.Exists("/usr/bin/setsid") && !File.Exists("/bin/setsid")))
-        {
-            return;
-        }
+        Assert.True(File.Exists("/bin/sh"), "Required Linux fixture executable is missing: /bin/sh");
+        Assert.True(
+            File.Exists("/usr/bin/setsid") || File.Exists("/bin/setsid"),
+            "Required Linux fixture executable is missing: setsid");
         var python = new[] { "/usr/bin/python3", "/usr/local/bin/python3" }.FirstOrDefault(File.Exists);
-        if (python is null)
-        {
-            return;
-        }
+        Assert.False(string.IsNullOrWhiteSpace(python), "Required Linux fixture executable is missing: python3");
 
         var root = Path.Combine(Path.GetTempPath(), "sunder-detached-launcher-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -825,7 +757,7 @@ public sealed class RuntimePersistentLauncherTests
         startInfo.ArgumentList.Add("-c");
         startInfo.ArgumentList.Add("\"$1\" -m http.server \"$2\" --bind 127.0.0.1 >/dev/null 2>&1 & printf '%s' \"$!\" > \"$3\"");
         startInfo.ArgumentList.Add("sunder-runtime-parent-helper");
-        startInfo.ArgumentList.Add(python);
+        startInfo.ArgumentList.Add(python!);
         startInfo.ArgumentList.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
         startInfo.ArgumentList.Add(pidPath);
         using var launcher = new UnixDetachedRuntimeLauncher(Path.Combine(root, "launcher.json"));
@@ -911,24 +843,20 @@ public sealed class RuntimePersistentLauncherTests
         }
     }
 
-    [Fact]
+    [LinuxFact]
     [SupportedOSPlatform("linux")]
     public async Task LinuxDetachedFallback_ReconcilesAcrossLauncherInstances()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
         var sleep = new[] { "/usr/bin/sleep", "/bin/sleep" }.FirstOrDefault(File.Exists);
-        if (sleep is null || (!File.Exists("/usr/bin/setsid") && !File.Exists("/bin/setsid")))
-        {
-            return;
-        }
+        Assert.False(string.IsNullOrWhiteSpace(sleep), "Required Linux fixture executable is missing: sleep");
+        Assert.True(
+            File.Exists("/usr/bin/setsid") || File.Exists("/bin/setsid"),
+            "Required Linux fixture executable is missing: setsid");
 
         var root = Path.Combine(Path.GetTempPath(), "sunder-detached-launcher-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var markerPath = Path.Combine(root, "launcher.json");
-        var startInfo = new ProcessStartInfo(sleep)
+        var startInfo = new ProcessStartInfo(sleep!)
         {
             WorkingDirectory = root,
             UseShellExecute = false,

@@ -225,8 +225,10 @@ internal sealed class RuntimePackageSessionTestHost
         _rpcCatalog.Dispose();
     }
     public Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken token = default) => _stackExport.ListItemsAsync(token);
-    public Task<RuntimeStackExportResponse> ExportStackAsync(RuntimeStackExportRequest request, CancellationToken token = default) => _stackExport.ExportAsync(request, token);
-    public Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(RuntimeStackImportPreviewRequest request, CancellationToken token = default) => _stackImport.PreviewAsync(request, token);
+    public async Task<RuntimeStackExportResponse> ExportStackAsync(RuntimeStackExportRequest request, CancellationToken token = default)
+        => (await _stackExport.ExportAsync(request, token)).Response;
+    public async Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(RuntimeStackImportPreviewRequest request, CancellationToken token = default)
+        => (await _stackImport.PreviewAsync(request, token)).Response;
     public Task<RuntimeStackImportResponse> ImportStackAsync(RuntimeStackImportRequest request, CancellationToken token = default) => _stackImport.ImportAsync(request, token);
 
     public async Task<PackageSessionOperationResult> LoadPackageSessionAsync(PackageSessionLoadRequest request, CancellationToken token = default)

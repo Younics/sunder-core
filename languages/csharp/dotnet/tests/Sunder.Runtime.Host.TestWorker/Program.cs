@@ -202,8 +202,16 @@ while (true)
     if (type == "host.activate")
     {
         if (mode == "crash") return 42;
-        if (mode == "activation-hang") continue;
-        if (mode == "activation-delay") await Task.Delay(250);
+        if (mode is "activation-hang" or "activation-delay")
+        {
+            await WriteStatusAsync("activation-entered.json", new
+            {
+                mode,
+                sessionGeneration = root.GetProperty("sessionGeneration").GetInt64(),
+            });
+            if (mode == "activation-hang") continue;
+            await Task.Delay(250);
+        }
         if (mode is "v3-transaction-migration" or "v3-transaction-migration-fail")
         {
             await ApplyExactMigrationAsync(
@@ -570,7 +578,11 @@ while (true)
             if (response.RootElement.GetProperty("type").GetString() is not ("host.result" or "host.error")) return 65;
             await WriteFrameAsync(output, new { type = "worker.cancel", id = "lateCancel1" });
         }
-        if (method == "wait") continue;
+        if (method == "wait")
+        {
+            await WriteStatusAsync("host-invoke-wait-entered.json", new { id, kind, method });
+            continue;
+        }
         if (mode == "response-limit"
             && root.GetProperty("request").TryGetProperty("message", out var requestMessage)
             && requestMessage.GetString() == "oversized")

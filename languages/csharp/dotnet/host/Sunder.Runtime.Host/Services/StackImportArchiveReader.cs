@@ -14,7 +14,10 @@ internal sealed class StackImportArchiveReader
         var validation = await SunderStackArchiveInspector.ExtractAndValidateAsync(stackPath, stagingPath, cancellationToken);
         if (!validation.Success || validation.Manifest is null)
         {
-            return new StackFragmentLoadResult(false, [], [], validation.Warnings, validation.Errors);
+            var category = validation.ErrorCategories.FirstOrDefault() == SunderStackArchiveErrorCategory.MissingEntry
+                ? RuntimeStackFailureCategory.NotFound
+                : RuntimeStackFailureCategory.PackageValidation;
+            return new StackFragmentLoadResult(false, [], [], validation.Warnings, validation.Errors, category);
         }
 
         var availableIds = (validation.Manifest.Fragments ?? [])
@@ -27,7 +30,13 @@ internal sealed class StackImportArchiveReader
             .ToArray();
         if (unknownIds.Length > 0)
         {
-            return new StackFragmentLoadResult(false, [], [], validation.Warnings, [$"Stack import selected unknown fragment id(s): {string.Join(", ", unknownIds)}."]);
+            return new StackFragmentLoadResult(
+                false,
+                [],
+                [],
+                validation.Warnings,
+                [$"Stack import selected unknown fragment id(s): {string.Join(", ", unknownIds)}."],
+                RuntimeStackFailureCategory.PackageValidation);
         }
 
         var selected = selectedIds.Count == 0
@@ -52,7 +61,7 @@ internal sealed class StackImportArchiveReader
                 fragment.Description,
                 ResolveFiles(stagingPath, fragment.FragmentId)));
         }
-        return new StackFragmentLoadResult(true, fragments.AsReadOnly(), selected.ToArray(), validation.Warnings, []);
+        return new StackFragmentLoadResult(true, fragments.AsReadOnly(), selected.ToArray(), validation.Warnings, [], null);
     }
 
     private static IReadOnlyList<StackImportPayloadHandle> ResolveFiles(string stagingPath, string fragmentId)
@@ -85,4 +94,5 @@ internal sealed record StackFragmentLoadResult(
     IReadOnlyList<StackFragmentImport> Fragments,
     IReadOnlyList<string> SelectedFragmentIds,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    RuntimeStackFailureCategory? FailureCategory);

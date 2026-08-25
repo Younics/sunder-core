@@ -14,7 +14,7 @@ internal sealed class StackExportArchiveBuilder(
 {
     private readonly RuntimeStackPolicyOptions _policy = policy ?? new RuntimeStackPolicyOptions();
 
-    public async Task<RuntimeStackExportResponse> BuildAsync(
+    public async Task<RuntimeStackOperationResult<RuntimeStackExportResponse>> BuildAsync(
         RuntimeStackExportRequest request,
         IReadOnlyList<StackPackageRequirement> packageRequirements,
         IReadOnlyList<StackOwnedFragment> fragments,
@@ -35,7 +35,7 @@ internal sealed class StackExportArchiveBuilder(
             ValidateFragments(fragments, errors);
             if (errors.Count > 0)
             {
-                return new RuntimeStackExportResponse(false, null, warnings, errors);
+                return Failed(warnings, errors, RuntimeStackFailureCategory.Validation);
             }
 
             var payloadFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -82,8 +82,15 @@ internal sealed class StackExportArchiveBuilder(
                 }
             }
 
-            var media = BuildMedia(request.Media ?? [], payloadFiles, mediaLeases, errors, generation);
-            if (errors.Count > 0) return new RuntimeStackExportResponse(false, null, warnings, errors);
+            var mediaResult = BuildMedia(request.Media ?? [], payloadFiles, mediaLeases, errors, generation);
+            if (errors.Count > 0)
+            {
+                return Failed(
+                    warnings,
+                    errors,
+                    mediaResult.FailureCategory ?? RuntimeStackFailureCategory.Validation);
+            }
+            var media = mediaResult.Media;
             var now = timeProvider.GetUtcNow();
             var manifest = new SunderStackManifest
             {
@@ -102,7 +109,13 @@ internal sealed class StackExportArchiveBuilder(
             await SunderStackArchiveWriter.WriteAsync(manifest, outputPath, payloadFiles, cancellationToken);
             var validation = await SunderStackArchiveInspector.ExtractAndValidateAsync(outputPath, Path.Combine(stagingPath, "validate"), cancellationToken);
             warnings.AddRange(validation.Warnings);
-            if (!validation.Success) return new RuntimeStackExportResponse(false, null, warnings, validation.Errors);
+            if (!validation.Success)
+            {
+                var category = validation.ErrorCategories.FirstOrDefault() == SunderStackArchiveErrorCategory.MissingEntry
+                    ? RuntimeStackFailureCategory.NotFound
+                    : RuntimeStackFailureCategory.Validation;
+                return Failed(warnings, validation.Errors, category);
+            }
 
             var downloadPath = Path.Combine(paths.TransferRootPath, Guid.NewGuid().ToString("N") + ".download");
             unownedDownload = downloadPath;
@@ -112,15 +125,16 @@ internal sealed class StackExportArchiveBuilder(
             var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
             var download = transfers.RegisterDownload(downloadPath, hash, stream.Length, request.StackId + ".sunderstack", "application/vnd.sunder.stack", generation);
             unownedDownload = null;
-            return new RuntimeStackExportResponse(true, download, warnings, []);
+            return RuntimeStackOperationResult<RuntimeStackExportResponse>.Succeeded(
+                new RuntimeStackExportResponse(true, download, warnings, []));
         }
         catch (InvalidDataException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            return new RuntimeStackExportResponse(false, null, warnings, [exception.Message]);
+            return Failed(warnings, [exception.Message], RuntimeStackFailureCategory.Validation);
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
-            return new RuntimeStackExportResponse(false, null, warnings, ["Failed to write Stack archive."]);
+            return Failed(warnings, ["Failed to write Stack archive."], RuntimeStackFailureCategory.Validation);
         }
         finally
         {
@@ -292,7 +306,7 @@ internal sealed class StackExportArchiveBuilder(
         }
     }
 
-    private IReadOnlyList<SunderStackMediaManifest> BuildMedia(
+    private StackMediaBuildResult BuildMedia(
         IReadOnlyList<RuntimeStackMediaInput> media,
         IDictionary<string, string> payloadFiles,
         ICollection<RuntimeUploadLease> leases,
@@ -301,12 +315,14 @@ internal sealed class StackExportArchiveBuilder(
     {
         var manifests = new List<SunderStackMediaManifest>();
         var pathsSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        RuntimeStackFailureCategory? failureCategory = null;
         foreach (var item in media)
         {
             var archivePath = item.ContentPath.Replace('\\', '/');
             var upload = transfers.AcquireUpload(item.UploadId, RuntimeUploadKind.StackMedia, generation, consume: true);
             if (upload is null)
             {
+                if (errors.Count == 0) failureCategory = RuntimeStackFailureCategory.StaleGeneration;
                 errors.Add("A Stack media upload was not found or is stale.");
                 continue;
             }
@@ -316,6 +332,7 @@ internal sealed class StackExportArchiveBuilder(
                 || archivePath.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(segment => segment == "..")
                 || !pathsSeen.Add(archivePath))
             {
+                if (errors.Count == 0) failureCategory = RuntimeStackFailureCategory.Validation;
                 errors.Add($"Stack media content path must be unique and under {SunderStackFormat.MediaPayloadRoot}.");
                 continue;
             }
@@ -330,7 +347,19 @@ internal sealed class StackExportArchiveBuilder(
                 SortOrder = item.SortOrder,
             });
         }
-        return manifests;
+        return new StackMediaBuildResult(manifests, failureCategory);
+    }
+
+    private static RuntimeStackOperationResult<RuntimeStackExportResponse> Failed(
+        IReadOnlyList<string> warnings,
+        IReadOnlyList<string> errors,
+        RuntimeStackFailureCategory category)
+    {
+        var response = new RuntimeStackExportResponse(false, null, warnings, errors);
+        return RuntimeStackOperationResult<RuntimeStackExportResponse>.Failed(
+            response,
+            category,
+            response.Errors.FirstOrDefault());
     }
 
     private static SunderStackFragmentManifest ToManifest(StackOwnedFragment owned, SunderStackFragmentPreview? preview)
@@ -360,6 +389,10 @@ internal sealed class StackExportArchiveBuilder(
     private static void TryDeleteFile(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
     private static void TryDeleteDirectory(string path) { try { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); } catch { } }
 }
+
+internal sealed record StackMediaBuildResult(
+    IReadOnlyList<SunderStackMediaManifest> Media,
+    RuntimeStackFailureCategory? FailureCategory);
 
 internal sealed record StackOwnedFragment(
     string OwnerPackageId,

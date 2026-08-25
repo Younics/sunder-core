@@ -15,11 +15,13 @@ concurrency:
 
 env:
   DOTNET_VERSION: "10.0.100"
+  NODE_VERSION: "24.18.1"
 
 jobs:
   build-test-pack:
     name: Build, test, and inspect V1 packages
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     outputs:
       npm_version: ${{ steps.sdk-metadata.outputs.npm_version }}
       npm_version_range: ${{ steps.sdk-metadata.outputs.npm_version_range }}
@@ -28,28 +30,84 @@ jobs:
       vite_version: ${{ steps.sdk-metadata.outputs.vite_version }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: languages/typescript/node/package-lock.json
 
       - name: Read and verify coordinated package metadata
         id: sdk-metadata
         run: node scripts/release/check-sdk-version.mjs
 
+      - name: Install exact packageManager npm
+        env:
+          NPM_VERSION: ${{ steps.sdk-metadata.outputs.npm_version }}
+        run: |
+          npm install --global "npm@$NPM_VERSION" --registry=https://registry.npmjs.org
+          [[ "$(npm --version)" == "$NPM_VERSION" ]]
+
+      - name: Install Node dependencies
+        run: npm ci --prefix languages/typescript/node
+
       - name: Check Markdown links and anchors
         run: python3 scripts/release/check-markdown-links.py .
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Run release verification fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest scripts/release/test_verify_nuget_package_set.py
+          bash scripts/release/verify-nuget-source.fixture.sh
+          bash scripts/release/preflight-npm-trusted-publishing.fixture.sh
+          bash scripts/release/verify-github-release-assets.fixture.sh
+          bash scripts/release/verify-release-tag.fixture.sh
+          bash scripts/release/verify-nuget-package.fixture.sh
 
       - name: Restore
         run: dotnet restore Sunder.Core.slnx --locked-mode
 
       - name: Build forced Release
-        run: dotnet build Sunder.Core.slnx -c Release --no-restore --no-incremental -p:GeneratePackageOnBuild=false
+        run: dotnet build Sunder.Core.slnx -c Release --no-restore --no-incremental -m:1 -p:GeneratePackageOnBuild=false
 
-      - name: Test
-        run: dotnet test Sunder.Core.slnx -c Release --no-restore --no-build
+      - name: Require OS-neutral .NET lane
+        run: node scripts/test-oracles/run-core-test-lane.mjs --primary-lane dotnet-linux
+
+      - name: Test OS-neutral .NET behavior once
+        run: >-
+          node scripts/test-oracles/run-dotnet-tests-with-results.mjs
+          --primary-lane dotnet-linux
+          --results-directory artifacts/test-results/dotnet-linux
+          --configuration Release
+
+      - name: Summarize OS-neutral .NET results
+        if: always()
+        run: >-
+          node scripts/test-oracles/summarize-core-test-results.mjs
+          artifacts/test-results/dotnet-linux
+          --allow-partial
+          --require-primary-lane dotnet-linux
+
+      - name: Upload OS-neutral .NET results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-core-dotnet-linux-results
+          path: artifacts/test-results/dotnet-linux
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: CLI smoke
         shell: bash
@@ -57,6 +115,9 @@ jobs:
           set -euo pipefail
           dotnet languages/csharp/dotnet/host/Sunder.Cli/bin/Release/net10.0/sunder.dll --help >/dev/null
           dotnet languages/csharp/dotnet/host/Sunder.Cli/bin/Release/net10.0/sunder.dll --help --json | grep -q '"exitCode":0'
+
+      - name: Verify compatibility candidate
+        run: node scripts/compatibility/generate-core-compatibility-candidate.mjs --check
 
       - name: Pack coordinated V1 packages
         shell: bash
@@ -91,6 +152,7 @@ jobs:
           for package in "${expected[@]}"; do
             test -f "$output/$package"
           done
+          python3 scripts/release/verify-nuget-package-set.py "$SDK_VERSION" "$output" "$GITHUB_SHA"
 
           for package in Sunder.Sdk.Avalonia Sunder.Sdk.Stacks; do
             nuspec="$(unzip -p "$output/$package.$SDK_VERSION.nupkg" '*.nuspec')"
@@ -117,16 +179,23 @@ jobs:
           fi
 
       - name: Upload local V1 feed
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sunder-sdk-v1-feed
-          path: artifacts/sdk/*.nupkg
+          path: |
+            artifacts/sdk/Sunder.Sdk.${{ steps.sdk-metadata.outputs.version }}.nupkg
+            artifacts/sdk/Sunder.Sdk.Avalonia.${{ steps.sdk-metadata.outputs.version }}.nupkg
+            artifacts/sdk/Sunder.Sdk.Stacks.${{ steps.sdk-metadata.outputs.version }}.nupkg
+            artifacts/sdk/Sunder.Sdk.Worker.${{ steps.sdk-metadata.outputs.version }}.nupkg
+            artifacts/sdk/Sunder.Package.Build.${{ steps.sdk-metadata.outputs.version }}.nupkg
+            artifacts/sdk/Sunder.Package.Templates.${{ steps.sdk-metadata.outputs.version }}.nupkg
           if-no-files-found: error
 
   template-smoke:
     name: Template smoke (${{ matrix.variant }})
     needs: build-test-pack
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -141,12 +210,12 @@ jobs:
             arguments: "--withAvalonia --withStacks"
     steps:
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Download local V1 feed
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: sunder-sdk-v1-feed
           path: local-feed

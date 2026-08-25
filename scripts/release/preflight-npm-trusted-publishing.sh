@@ -1,30 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-expected_version="${1:?Usage: preflight-npm-trusted-publishing.sh <version> <npm-tag> <package.tgz>...}"
-npm_tag="${2:?Usage: preflight-npm-trusted-publishing.sh <version> <npm-tag> <package.tgz>...}"
+[[ $# -eq 5 ]] || { printf 'Usage: preflight-npm-trusted-publishing.sh <version> <npm-tag> <package.tgz>...\n' >&2; exit 2; }
+expected_version="$1"
+npm_tag="$2"
 shift 2
-[[ $# -eq 3 ]] || { printf 'Expected exactly three npm package archives.\n' >&2; exit 2; }
-[[ "$npm_tag" == "latest" || "$npm_tag" == "next" ]] \
-  || { printf 'Unexpected npm dist-tag: %s\n' "$npm_tag" >&2; exit 2; }
 
-for command_name in curl jq node npm tar; do
+for command_name in curl jq mktemp node npm tar; do
   command -v "$command_name" >/dev/null 2>&1 \
     || { printf '%s is required for npm trusted-publishing preflight.\n' "$command_name" >&2; exit 127; }
 done
 
-: "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub Actions id-token: write permission is required.}"
-: "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub Actions id-token: write permission is required.}"
-: "${GITHUB_REF:?GITHUB_REF is required.}"
-: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required.}"
-: "${GITHUB_SHA:?GITHUB_SHA is required.}"
-: "${GITHUB_WORKFLOW_REF:?GITHUB_WORKFLOW_REF is required.}"
+[[ "$expected_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+)(\.[0-9A-Za-z-]+)*)?$ ]] \
+  || { printf 'Expected a strict SemVer package version, received %s.\n' "$expected_version" >&2; exit 2; }
+if [[ "$expected_version" == *-* ]]; then
+  IFS='.' read -r -a prerelease_identifiers <<< "${expected_version#*-}"
+  for identifier in "${prerelease_identifiers[@]}"; do
+    if [[ "$identifier" =~ ^[0-9]+$ && ${#identifier} -gt 1 && "$identifier" == 0* ]]; then
+      printf 'Numeric SemVer prerelease identifier %s contains a leading zero.\n' "$identifier" >&2
+      exit 2
+    fi
+  done
+fi
+expected_npm_tag="accept-v$expected_version"
+[[ "$npm_tag" == "$expected_npm_tag" ]] \
+  || { printf 'Expected version-specific npm acceptance tag %s, received %s.\n' "$expected_npm_tag" "$npm_tag" >&2; exit 2; }
 
-expected_workflow_ref="$GITHUB_REPOSITORY/.github/workflows/sunder-sdk-release.yml@$GITHUB_REF"
-[[ "$GITHUB_WORKFLOW_REF" == "$expected_workflow_ref" ]] || {
-  printf 'Trusted publishing must run from %s, not %s.\n' "$expected_workflow_ref" "$GITHUB_WORKFLOW_REF" >&2
-  exit 1
-}
+readonly npm_registry='https://registry.npmjs.org'
+readonly expected_repository='git+https://github.com/Younics/sunder-core.git'
+temp_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/sunder-npm-preflight.XXXXXX")"
+trap 'rm -rf "$temp_dir"' EXIT
+archives=()
+package_names=()
+package_versions=()
+seen_sdk=false
+seen_tool=false
+seen_create=false
 
 request_id_token() {
   local request_separator='&'
@@ -33,7 +44,11 @@ request_id_token() {
   local jwt_payload
 
   [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *'?'* ]] || request_separator='?'
+  [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == https://* ]] || return 1
   if ! oidc_response="$(curl --fail --silent --show-error \
+      --proto '=https' \
+      --tlsv1.2 \
+      --max-redirs 0 \
       -H 'Accept: application/json' \
       -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
       "${ACTIONS_ID_TOKEN_REQUEST_URL}${request_separator}audience=npm%3Aregistry.npmjs.org")"; then
@@ -72,13 +87,6 @@ request_id_token() {
   printf '%s' "$id_token"
 }
 
-temp_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/sunder-npm-preflight.XXXXXX")"
-trap 'rm -rf "$temp_dir"' EXIT
-seen_sdk=false
-seen_tool=false
-seen_create=false
-unset NODE_AUTH_TOKEN NPM_TOKEN
-
 for archive in "$@"; do
   [[ -f "$archive" ]] || { printf 'npm package archive not found: %s\n' "$archive" >&2; exit 1; }
   manifest="$(tar -xOf "$archive" package/package.json)"
@@ -90,21 +98,99 @@ for archive in "$@"; do
   }
 
   case "$package_name" in
-    '@sunder/sdk') [[ "$seen_sdk" == false ]] || exit 1; seen_sdk=true ;;
-    '@sunder/package-tool') [[ "$seen_tool" == false ]] || exit 1; seen_tool=true ;;
-    'create-sunder-package') [[ "$seen_create" == false ]] || exit 1; seen_create=true ;;
+    '@sunder/sdk') [[ "$seen_sdk" == false ]] || { printf 'Duplicate npm package identity: %s\n' "$package_name" >&2; exit 1; }; seen_sdk=true ;;
+    '@sunder/package-tool') [[ "$seen_tool" == false ]] || { printf 'Duplicate npm package identity: %s\n' "$package_name" >&2; exit 1; }; seen_tool=true ;;
+    'create-sunder-package') [[ "$seen_create" == false ]] || { printf 'Duplicate npm package identity: %s\n' "$package_name" >&2; exit 1; }; seen_create=true ;;
     *) printf 'Unexpected npm release package: %s\n' "$package_name" >&2; exit 1 ;;
   esac
+
+  archives+=("$archive")
+  package_names+=("$package_name")
+  package_versions+=("$package_version")
+done
+
+[[ "$seen_sdk" == true && "$seen_tool" == true && "$seen_create" == true ]] \
+  || { printf 'The coordinated npm package set is incomplete.\n' >&2; exit 1; }
+
+# Coordinate bootstrap is owner-authenticated external work. Prove every real
+# coordinate and its public identity before attempting GitHub OIDC exchange.
+missing_coordinates=()
+for index in "${!package_names[@]}"; do
+  package_name="${package_names[$index]}"
+  escaped_name="$(jq -rn --arg value "$package_name" '$value | @uri')"
+  coordinate_path="$temp_dir/coordinate-$index.json"
+  status="$(curl --silent --show-error \
+    --proto '=https' \
+    --tlsv1.2 \
+    --max-redirs 0 \
+    --connect-timeout 10 \
+    --max-time 45 \
+    --output "$coordinate_path" \
+    --write-out '%{http_code}' \
+    --request GET \
+    -H 'Accept: application/json' \
+    "$npm_registry/$escaped_name")"
+  case "$status" in
+    200)
+      jq -e \
+        --arg name "$package_name" \
+        --arg repository "$expected_repository" '
+          .name == $name
+          and .license == "MIT"
+          and ((.repository.url // .repository) == $repository)
+          and (.versions | type == "object" and length > 0)
+        ' "$coordinate_path" >/dev/null \
+        || { printf "npm coordinate '%s' exists with an unexpected public identity.\n" "$package_name" >&2; exit 1; }
+      ;;
+    404)
+      missing_coordinates+=("$package_name")
+      ;;
+    *)
+      message="$(jq -r '.error // .message // "unknown npm registry error"' "$coordinate_path" 2>/dev/null || true)"
+      printf "npm coordinate lookup failed for '%s' (HTTP %s): %s\n" "$package_name" "$status" "$message" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ ${#missing_coordinates[@]} -gt 0 ]]; then
+  printf 'npm coordinate bootstrap is required before trusted-publishing preflight:' >&2
+  printf ' %s' "${missing_coordinates[@]}" >&2
+  printf '\nUse npm owner-authenticated first publication, then configure each coordinate to trust sunder-sdk-release.yml. No bootstrap publication was attempted.\n' >&2
+  exit 3
+fi
+
+: "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub Actions id-token: write permission is required.}"
+: "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub Actions id-token: write permission is required.}"
+: "${GITHUB_REF:?GITHUB_REF is required.}"
+: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required.}"
+: "${GITHUB_SHA:?GITHUB_SHA is required.}"
+: "${GITHUB_WORKFLOW_REF:?GITHUB_WORKFLOW_REF is required.}"
+
+expected_workflow_ref="$GITHUB_REPOSITORY/.github/workflows/sunder-sdk-release.yml@$GITHUB_REF"
+[[ "$GITHUB_WORKFLOW_REF" == "$expected_workflow_ref" ]] || {
+  printf 'Trusted publishing must run from %s, not %s.\n' "$expected_workflow_ref" "$GITHUB_WORKFLOW_REF" >&2
+  exit 1
+}
+unset NODE_AUTH_TOKEN NPM_TOKEN
+
+for index in "${!package_names[@]}"; do
+  archive="${archives[$index]}"
+  package_name="${package_names[$index]}"
+  package_version="${package_versions[$index]}"
 
   escaped_name="$(jq -rn --arg value "$package_name" '$value | @uri')"
   id_token="$(request_id_token)"
   response_path="$temp_dir/$(basename "$archive").oidc.json"
   status="$(curl --silent --show-error \
+    --proto '=https' \
+    --tlsv1.2 \
+    --max-redirs 0 \
     --output "$response_path" \
     --write-out '%{http_code}' \
     --request POST \
     -H "Authorization: Bearer $id_token" \
-    "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$escaped_name")"
+    "$npm_registry/-/npm/v1/oidc/token/exchange/package/$escaped_name")"
   if [[ "$status" != 201 ]]; then
     message="$(jq -r '.message // "unknown npm OIDC exchange error"' "$response_path" 2>/dev/null || true)"
     printf "npm trusted-publisher preflight failed for '%s' (HTTP %s): %s\n" "$package_name" "$status" "$message" >&2
@@ -123,9 +209,7 @@ for archive in "$@"; do
     --ignore-scripts \
     --access public \
     --tag "$npm_tag" \
+    --registry "$npm_registry" \
     --provenance >/dev/null
   printf "Preflighted npm OIDC exchange and local publish dry-run for '%s@%s'; no registry write was attempted.\n" "$package_name" "$package_version"
 done
-
-[[ "$seen_sdk" == true && "$seen_tool" == true && "$seen_create" == true ]] \
-  || { printf 'The coordinated npm package set is incomplete.\n' >&2; exit 1; }

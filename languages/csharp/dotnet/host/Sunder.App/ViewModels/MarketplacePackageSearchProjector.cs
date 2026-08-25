@@ -1,3 +1,4 @@
+using Sunder.App.Services;
 using Sunder.Runtime.Contracts;
 using Sunder.Registry.Contracts;
 
@@ -9,7 +10,9 @@ internal static class MarketplacePackageSearchProjector
         IReadOnlyList<RegistryPackageSummary> packages,
         IReadOnlyList<InstalledPackageDescriptor> installedPackages,
         IReadOnlyList<RegistryPackageUpdate> availableUpdates,
-        Func<RegistryPackageSearchItemViewModel, Task> selectPackageAsync)
+        Func<RegistryPackageSearchItemViewModel, Task> selectPackageAsync,
+        Uri? registryOrigin = null,
+        RemoteImageService? remoteImageService = null)
     {
         var installationIndex = new PackageCatalogInstallationIndex(installedPackages, availableUpdates);
 
@@ -25,6 +28,8 @@ internal static class MarketplacePackageSearchProjector
                 package,
                 installationIndex.GetInstalledPackage(package.PackageId)?.Version,
                 installationIndex.GetUpdate(package.PackageId),
-                selectPackageAsync));
+                selectPackageAsync,
+                registryOrigin: registryOrigin,
+                remoteImageService: remoteImageService));
     }
 }

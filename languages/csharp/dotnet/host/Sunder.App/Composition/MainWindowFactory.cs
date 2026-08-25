@@ -10,7 +10,7 @@ public sealed class MainWindowFactory(
     ShellStateService shellStateService,
     RuntimeConnectionState runtimeConnectionState,
     IRuntimeApiClientFactory runtimeApiClientFactory,
-    RuntimeHostProcessManager runtimeHostProcessManager,
+    RuntimeAvailabilityManager runtimeAvailabilityManager,
     NotificationCenterService notificationCenter,
     DeveloperLogService developerLog,
     AppPackageShellViewService shellViewService,
@@ -18,6 +18,7 @@ public sealed class MainWindowFactory(
     BackgroundProcessQueueService backgroundProcessQueue,
     RegistryAuthService registryAuthService,
     ExternalBrowserService externalBrowserService,
+    RemoteImageService remoteImageService,
     IShellCompositionService shellCompositionService,
     IUiDispatcher uiDispatcher)
 {
@@ -35,7 +36,7 @@ public sealed class MainWindowFactory(
             packageViewHostService,
             runtimeConnectionState,
             runtimeApiClientFactory,
-            runtimeHostProcessManager,
+            runtimeAvailabilityManager,
             initialSystemStatus,
             notificationCenter,
             shellViewService,
@@ -46,6 +47,7 @@ public sealed class MainWindowFactory(
             developerLog: developerLog,
             registryAuthService: registryAuthService,
             externalBrowserService: externalBrowserService,
+            remoteImageService: remoteImageService,
             uiDispatcher: uiDispatcher);
 
         var window = new MainWindow { DataContext = viewModel };

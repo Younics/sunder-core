@@ -14,7 +14,9 @@ public sealed partial class RuntimeManagementClient
 
     public async Task<RuntimeRegistryAuthSessionStatus?> GetRegistryAuthSessionAsync(string sessionId, CancellationToken token = default)
     {
-        using var response = await _httpClient.GetAsync(CreateUri($"registry/auth/sessions/{Uri.EscapeDataString(sessionId)}"), token).ConfigureAwait(false);
+        using var response = await _transport.GetAsync(
+            CreateUri($"registry/auth/sessions/{Uri.EscapeDataString(sessionId)}"),
+            cancellationToken: token).ConfigureAwait(false);
         return response.StatusCode == HttpStatusCode.NotFound
             ? null
             : await _responses.ReadRequiredJsonAsync<RuntimeRegistryAuthSessionStatus>(response, token).ConfigureAwait(false);

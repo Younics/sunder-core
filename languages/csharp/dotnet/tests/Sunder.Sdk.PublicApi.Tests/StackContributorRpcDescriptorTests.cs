@@ -1,9 +1,9 @@
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
-using Sunder.Sdk.Worker;
 using Xunit;
 
 namespace Sunder.Sdk.PublicApi.Tests;
@@ -55,6 +55,7 @@ public sealed class StackContributorRpcDescriptorTests
     {
         var descriptor = SunderStackContributorRpc.Descriptor;
         var source = SunderRpcCSharpGenerator.Generate(descriptor, "Sunder.Stacks.Generated");
+        var sourceHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant();
         var trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
                                 ?? throw new InvalidOperationException("Trusted platform assemblies are unavailable.");
         var referencePaths = trustedAssemblies.Split(Path.PathSeparator).ToHashSet(StringComparer.Ordinal);
@@ -73,6 +74,9 @@ public sealed class StackContributorRpcDescriptorTests
         Assert.True(
             result.Success,
             string.Join(Environment.NewLine, result.Diagnostics.Select(static diagnostic => diagnostic.ToString())));
+        Assert.True(
+            string.Equals("afba64ffe12464db28ecffd2a95d9eb19d2ea1c8ec09ce6a6a6ce518e2643fc4", sourceHash, StringComparison.Ordinal),
+            $"Stack generator golden changed to {sourceHash}.");
         Assert.Contains(
             $"public const string AbiSha256 = \"{SunderStackContributorRpc.AbiSha256}\";",
             source,
@@ -116,23 +120,17 @@ public sealed class StackContributorRpcDescriptorTests
             typeof(IPackageStackContributor),
             typeof(SunderStackContributorRpc).GetMethod(nameof(SunderStackContributorRpc.CreateHandler))!
                 .GetParameters()[0].ParameterType);
-        var workerFactory = typeof(SunderStackContributorRpc).GetMethod(
-            nameof(SunderStackContributorRpc.CreateWorkerProviderRegistration))!;
-        Assert.Equal(typeof(SunderWorkerProviderRegistration), workerFactory.ReturnType);
-        Assert.Equal(typeof(IPackageStackContributor), workerFactory.GetParameters()[1].ParameterType);
+        Assert.Null(typeof(SunderStackContributorRpc).GetMethod("CreateWorkerProviderRegistration"));
+        Assert.DoesNotContain(
+            typeof(SunderStackContributorRpc).Assembly.GetReferencedAssemblies(),
+            assembly => string.Equals(assembly.Name, "Sunder.Sdk.Worker", StringComparison.Ordinal));
 
-        var registration = SunderStackContributorRpc.CreateWorkerProviderRegistration(
-            "test.stack",
-            new TestContributor());
-        Assert.Equal("test.stack", registration.ProviderId);
-        Assert.Equal(SunderStackContributorRpc.ContractId, registration.ContractId);
-        Assert.Equal(SunderStackContributorRpc.ContractVersion, registration.ContractVersion);
-        Assert.Equal(SunderStackContributorRpc.DescriptorSha256, registration.DescriptorSha256);
-        Assert.Equal(SunderStackContributorRpc.AbiSha256, registration.AbiSha256);
-        Assert.Empty(registration.DeclaredErrors[SunderStackContributorRpc.ServiceId]["metadata"]);
+        var handler = Assert.IsAssignableFrom<ISunderRpcDeclaredErrorMetadata>(
+            SunderStackContributorRpc.CreateHandler(new TestContributor()));
+        Assert.Empty(handler.DeclaredErrors[SunderStackContributorRpc.ServiceId]["metadata"]);
         Assert.Equal(
             ["stack.method.unsupported"],
-            registration.DeclaredErrors[SunderStackContributorRpc.ServiceId]["import-applied"]);
+            handler.DeclaredErrors[SunderStackContributorRpc.ServiceId]["import-applied"]);
     }
 
     private sealed class TestContributor : IPackageStackImportAppliedHandler

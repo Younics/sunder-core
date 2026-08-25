@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using Sunder.Runtime.Client;
 using Xunit;
 
@@ -64,14 +65,10 @@ public sealed class RuntimeConnectionInfoStoreTests
         }
     }
 
-    [Fact]
+    [UnixFact]
+    [UnsupportedOSPlatform("windows")]
     public void Load_WhenUnixFileIsAccessibleByOtherUsers_FailsClosed()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-connection-tests", Guid.NewGuid().ToString("N"));
         var path = Path.Combine(rootPath, "connection-v1.json");
         try

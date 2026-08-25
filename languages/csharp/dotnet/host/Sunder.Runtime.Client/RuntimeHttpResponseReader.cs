@@ -4,7 +4,10 @@ namespace Sunder.Runtime.Client;
 
 public sealed class RuntimeHttpResponseReader
 {
-    private static readonly JsonSerializerOptions ErrorJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions ErrorJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        MaxDepth = 16,
+    };
     private readonly RuntimeClientPolicyOptions _policy;
     private readonly Func<RuntimeClientResourceLimits> _getResourceLimits;
 
@@ -115,6 +118,10 @@ public sealed class RuntimeHttpResponseReader
         long maxBytes,
         CancellationToken cancellationToken)
     {
+        if (maxBytes < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        }
         if (content.Headers.ContentLength is long declaredLength && declaredLength > maxBytes)
         {
             throw new InvalidDataException($"Runtime response payload exceeds the {maxBytes} byte limit.");
@@ -124,9 +131,11 @@ public sealed class RuntimeHttpResponseReader
         var buffer = new byte[16 * 1024];
         while (true)
         {
-            var read = await source.ReadAsync(buffer, cancellationToken);
+            var remaining = maxBytes - destination.Length;
+            var readLength = (int)Math.Min(buffer.Length, remaining + 1);
+            var read = await source.ReadAsync(buffer.AsMemory(0, readLength), cancellationToken);
             if (read == 0) return destination.ToArray();
-            if (destination.Length + read > maxBytes)
+            if (read > remaining)
             {
                 throw new InvalidDataException($"Runtime response payload exceeds the {maxBytes} byte limit.");
             }

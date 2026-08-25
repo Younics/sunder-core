@@ -24,6 +24,8 @@ SDK-backed targets contain distinct V1-form capability ids. Targets built on the
 
 Published Sunder-to-Sunder NuGet dependencies use `[1.1.0,1.2.0)`. Coordinated npm package dependencies, generated Node templates, and runtime package dependencies use `>=1.1.0 <1.2.0`. Because `1.1.0-beta.*` sorts before the stable lower bound, the initial 1.1 baseline does not publish prereleases. Prereleases after a stable 1.1 baseline may use the same minor range.
 
+The six public developer NuGets exclude generated assembly XML documentation companions. Runtime package archives apply the same exclusion after publish-file computation while retaining explicitly authored XML content and PDBs for authored managed payload assemblies. Release package-set verification rejects a NuGet that reintroduces a DLL-matched XML companion.
+
 ## Registry Resolution Profile
 
 Installable Registry resolution is filtered against the requesting Host, not only against the Registry's publication baseline. `RegistryClientCompatibilityProfile` carries bounded, non-empty sets of supported manifest versions, Runtime target kinds, and Worker capabilities plus one Worker protocol capability, one SDK baseline capability, and the exact current RID. The current Runtime sends Manifest V3, Runtime kind `worker`, `worker-protocol.v3`, `sdk-baseline-1-1.v1`, its complete Worker V3 capability allowlist, and the RID returned by the Runtime process.
@@ -111,6 +113,8 @@ RPC server-stream methods use descriptor-validated events and exact provider-gen
 ## Schema-First RPC
 
 Cross-package Runtime contracts are strict, versioned JSON descriptors bundled in package content and identified by canonical SHA-256. Manifests declare imported contracts, requested actions, and provided endpoints. Installing or updating consents to every declared action for that exact package version and manifest; undeclared actions remain default-deny. Runtime validates descriptor compatibility and payload schemas before dispatch.
+
+Descriptor schema version and contract semantic version are separate identities. Descriptor V2 is the current deployable schema and the unversioned `SunderRpcProtocol.DescriptorVersion` constant selects V2. Descriptor V1 parsing and generation remain supported only as explicit standalone compatibility utilities; Manifest V3 package authoring rejects V1 descriptors. The value-schema profile remains the current `sunder.rpc.values.v1` contract and is not an obsolete descriptor alias.
 
 Discovery and watch results contain Host-stamped package, provider, contract, and activation identities. An endpoint reference remains bound to that exact activation and never retargets a replacement provider.
 

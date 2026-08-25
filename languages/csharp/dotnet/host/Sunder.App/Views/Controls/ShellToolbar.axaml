@@ -4,7 +4,6 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:Sunder.App.ViewModels"
              xmlns:controls="using:Sunder.App.Views.Controls"
-             xmlns:asyncImageLoader="clr-namespace:AsyncImageLoader;assembly=AsyncImageLoader.Avalonia"
              x:Class="Sunder.App.Views.Controls.ShellToolbar"
              x:DataType="vm:MainWindowViewModel"
              mc:Ignorable="d">
@@ -21,10 +20,10 @@
             <Grid>
               <TextBlock Classes="registry-avatar-text"
                          Text="{Binding RegistryAccountAvatarText}" />
-              <Image Classes="registry-avatar-image"
-                     Width="22"
-                     Height="22"
-                     asyncImageLoader:ImageLoader.Source="{Binding RegistryAccountAvatarUrl}" />
+               <Image Classes="registry-avatar-image"
+                      Width="22"
+                      Height="22"
+                      Source="{Binding RegistryAccountAvatarImage}" />
             </Grid>
           </Border>
         </Button.Content>
@@ -47,10 +46,10 @@
                   <Grid>
                     <TextBlock Classes="registry-avatar-text large"
                                Text="{Binding RegistryAccountAvatarText}" />
-                    <Image Classes="registry-avatar-image"
-                           Width="42"
-                           Height="42"
-                           asyncImageLoader:ImageLoader.Source="{Binding RegistryAccountAvatarUrl}" />
+                     <Image Classes="registry-avatar-image"
+                            Width="42"
+                            Height="42"
+                            Source="{Binding RegistryAccountAvatarImage}" />
                   </Grid>
                 </Border>
                 <StackPanel Grid.Column="1"

@@ -18,18 +18,18 @@ internal static class StackEndpoints
             "export",
             async (RuntimeStackExportRequest request, RuntimeStackExportService stackExport, CancellationToken cancellationToken) =>
             {
-                var result = await stackExport.ExportAsync(request, cancellationToken);
-                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Errors.FirstOrDefault());
-                return Results.Ok(result);
+                var operation = await stackExport.ExportAsync(request, cancellationToken);
+                if (operation.Failure is not null) RuntimeEndpointErrors.ThrowFailure(operation.Failure);
+                return Results.Ok(operation.Response);
             });
 
         group.MapPost(
             "import/preview",
             async (RuntimeStackImportPreviewRequest request, RuntimeStackImportService stackImport, CancellationToken cancellationToken) =>
             {
-                var result = await stackImport.PreviewAsync(request, cancellationToken);
-                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Errors.FirstOrDefault(), packageValidation: true);
-                return Results.Ok(result);
+                var operation = await stackImport.PreviewAsync(request, cancellationToken);
+                if (operation.Failure is not null) RuntimeEndpointErrors.ThrowFailure(operation.Failure);
+                return Results.Ok(operation.Response);
             });
 
         group.MapPost(

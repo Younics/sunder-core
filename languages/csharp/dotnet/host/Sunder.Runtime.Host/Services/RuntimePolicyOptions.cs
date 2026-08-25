@@ -1,5 +1,6 @@
 using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Callbacks;
+using Sunder.Package.Format;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -17,6 +18,8 @@ internal sealed record RuntimeTransportPolicyOptions
     public long MaxRegistryErrorBytes { get; init; } = 64 * 1024;
     public TimeSpan ContentTransferLifetime { get; init; } = TimeSpan.FromMinutes(30);
     public TimeSpan ContentTransferSweepInterval { get; init; } = TimeSpan.FromMinutes(1);
+    public int MaxPendingContentTransfers { get; init; } = 32;
+    public long MaxPendingContentTransferBytes { get; init; } = 2 * SunderPackageFormat.MaxArchiveBytes;
     public long MaxRpcContentBytes { get; init; } = RuntimeResourcePolicies.Standard.MaximumContentReferenceBytes;
     public long MaxRpcContentBytesPerCall { get; init; } = 256L * 1024 * 1024;
     public long MaxRpcContentBytesPerPackage { get; init; } = 1024L * 1024 * 1024;
@@ -88,6 +91,8 @@ internal sealed record RuntimeStackPolicyOptions
 {
     public TimeSpan ImportPlanLifetime { get; init; } = TimeSpan.FromMinutes(15);
     public TimeSpan ImportPlanSweepInterval { get; init; } = TimeSpan.FromMinutes(1);
+    public int MaxImportPlans { get; init; } = 16;
+    public long MaxImportPlanExtractedBytes { get; init; } = 2L * 1024 * 1024 * 1024;
     public long MaxExportPayloadFileBytes { get; init; } = 64L * 1024 * 1024;
     public long MaxExportPayloadTotalBytes { get; init; } = 256L * 1024 * 1024;
 }

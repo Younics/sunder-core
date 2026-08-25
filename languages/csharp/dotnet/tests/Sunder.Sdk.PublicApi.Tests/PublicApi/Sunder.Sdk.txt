@@ -579,8 +579,14 @@ type interface Sunder.Sdk.Rpc.ISunderRpcServiceHandler
   method abstract System.Collections.Generic.IAsyncEnumerable<System.Text.Json.JsonElement> InvokeServerStreamAsync(Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<System.Text.Json.JsonElement> InvokeUnaryAsync(Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type enum Sunder.Sdk.Rpc.SunderRpcCSharpAccessibility : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Sdk.Rpc.SunderRpcCSharpAccessibility Internal = 1
+  field static Sunder.Sdk.Rpc.SunderRpcCSharpAccessibility Public = 0
+  field System.Int32 value__
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcCSharpGenerator
   method static System.String Generate(Sunder.Sdk.Rpc.SunderRpcContractDescriptor descriptor, System.String namespaceName)
+  method static System.String Generate(Sunder.Sdk.Rpc.SunderRpcContractDescriptor descriptor, System.String namespaceName, Sunder.Sdk.Rpc.SunderRpcCSharpAccessibility accessibility)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcCallOptions : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcCallOptions>
   method .ctor(System.DateTimeOffset? DeadlineUtc = null)
@@ -803,7 +809,8 @@ type struct Sunder.Sdk.Rpc.SunderRpcOptional<T>
   method System.Boolean TryGetValue(out T? value)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcProtocol
-  field static System.Int32 DescriptorVersion = 1
+  field static System.Int32 DescriptorVersion = 2
+  field static System.Int32 DescriptorVersionV1 = 1
   field static System.Int32 DescriptorVersionV2 = 2
   field static System.String DiscoverAction = "discover"
   field static System.String InvokeAction = "invoke"

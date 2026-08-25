@@ -368,7 +368,6 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var shellLifecycleApplied = false;
         if (_mainWindowViewModel is not null)
         {
             await _mainWindowViewModel.ApplyPackageLifecycleSnapshotAsync(
@@ -376,22 +375,15 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 packageSources,
                 retryDisabledPackageIds,
                 cancellationToken,
-                detachAuxiliaryPackageViews: DetachSettingsWindowPackageView).ConfigureAwait(false);
-            shellLifecycleApplied = true;
+                detachAuxiliaryPackageViews: DetachSettingsWindowPackageView,
+                refreshAuxiliaryPackageViewsAsync: operationCancellation =>
+                    ApplyAuxiliaryWindowPackageSnapshotAsync(
+                        snapshot,
+                        operationCancellation)).ConfigureAwait(false);
+            return;
         }
 
-        try
-        {
-            await ApplyAuxiliaryWindowPackageSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException exception) when (
-            shellLifecycleApplied
-            && cancellationToken.IsCancellationRequested
-            && AppPackageUiFaultPolicy.IsRecoverable(exception))
-        {
-            AppSessionLog.WriteInfo(
-                "Skipped auxiliary package-window refresh after the shell lifecycle commit was applied.");
-        }
+        await ApplyAuxiliaryWindowPackageSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
     }
 
     internal async Task ApplyPackageMetadataSnapshotAsync(
@@ -401,8 +393,14 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         if (_mainWindowViewModel is not null)
         {
-            await _mainWindowViewModel.ApplyPackageMetadataSnapshotAsync(snapshot, cancellationToken)
+            await _mainWindowViewModel.ApplyPackageMetadataSnapshotAsync(
+                    snapshot,
+                    cancellationToken,
+                    operationCancellation => ApplyAuxiliaryWindowPackageSnapshotAsync(
+                        snapshot,
+                        operationCancellation))
                 .ConfigureAwait(false);
+            return;
         }
         await ApplyAuxiliaryWindowPackageSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
     }

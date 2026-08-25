@@ -1,0 +1,61 @@
+{
+  "formatVersion": 1,
+  "descriptor": "valid/value-profile.rpc.json",
+  "cases": [
+    { "name": "uuid-lowercase", "schema": "Uuid", "value": "0192c4f0-8d3c-7a61-9b3f-6a9b89f4b8d2", "valid": true },
+    { "name": "uuid-uppercase", "schema": "Uuid", "value": "0192C4F0-8D3C-7A61-9B3F-6A9B89F4B8D2", "valid": false },
+    { "name": "leap-date", "schema": "Date", "value": "2000-02-29", "valid": true },
+    { "name": "invalid-leap-date", "schema": "Date", "value": "1900-02-29", "valid": false },
+    { "name": "nanosecond-instant", "schema": "OffsetDateTime", "value": "2000-02-29T23:59:59.000000001Z", "valid": true },
+    { "name": "instant-without-offset", "schema": "OffsetDateTime", "value": "2030-01-02T03:04:05", "valid": false },
+    { "name": "canonical-duration", "schema": "Duration", "value": "P1Y2M3DT4H5M6.7S", "valid": true },
+    { "name": "duration-leading-zero", "schema": "Duration", "value": "P01D", "valid": false },
+    { "name": "absolute-uri", "schema": "Uri", "value": "https://example.test/a%20b", "valid": true },
+    { "name": "relative-uri", "schema": "Uri", "value": "relative/path", "valid": false },
+    { "name": "big-integer-maximum", "schema": "BigInteger", "value": "9999999999999999999999999999999999999999", "valid": true },
+    { "name": "big-integer-leading-zero", "schema": "BigInteger", "value": "01", "valid": false },
+    { "name": "canonical-decimal", "schema": "Decimal", "value": "-999.00000001", "valid": true },
+    { "name": "decimal-trailing-zero", "schema": "Decimal", "value": "1.20", "valid": false },
+    { "name": "base64", "schema": "Bytes", "value": "AQI=", "valid": true },
+    { "name": "noncanonical-base64", "schema": "Bytes", "value": "AQ", "valid": false },
+    { "name": "safe-integer-maximum", "schema": "SafeInteger", "value": 9007199254740991, "valid": true },
+    { "name": "safe-integer-overflow", "schema": "SafeInteger", "value": 9007199254740992, "valid": false },
+    { "name": "float32-enum", "schema": "Float32", "value": 3.5, "valid": true },
+    { "name": "float32-not-enum", "schema": "Float32", "value": 1.5, "valid": false },
+    { "name": "float64-const", "schema": "Float64", "value": 0.000001, "valid": true },
+    { "name": "float64-not-const", "schema": "Float64", "value": 0.000002, "valid": false },
+    { "name": "json-nested", "schema": "JSON", "value": [null, true, "text", 1.5], "valid": true },
+    { "name": "bounded-object", "schema": "JSONObject", "value": { "a": 1, "b": 2 }, "valid": true },
+    { "name": "unit", "schema": "Unit", "value": {}, "valid": true },
+    { "name": "unit-extra-property", "schema": "Unit", "value": { "extra": true }, "valid": false },
+    {
+      "name": "content-reference",
+      "schema": "Content",
+      "value": {
+        "id": "opaque",
+        "length": 42,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "mediaType": "application/octet-stream",
+        "fileName": "display-name.bin",
+        "expiresAtUtc": "2030-01-02T03:04:05Z",
+        "repeatability": "single-use"
+      },
+      "valid": true
+    },
+    {
+      "name": "content-reference-extra-property",
+      "schema": "Content",
+      "value": {
+        "id": "opaque",
+        "length": 42,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "mediaType": "application/octet-stream",
+        "fileName": "display-name.bin",
+        "expiresAtUtc": "2030-01-02T03:04:05Z",
+        "repeatability": "single-use",
+        "extra": true
+      },
+      "valid": false
+    }
+  ]
+}

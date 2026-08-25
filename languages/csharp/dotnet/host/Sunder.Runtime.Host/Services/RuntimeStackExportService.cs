@@ -65,7 +65,9 @@ internal sealed class RuntimeStackExportService
         return new RuntimeStackExportDiscoveryResponse(items, [], errors);
     }
 
-    public async Task<RuntimeStackExportResponse> ExportAsync(RuntimeStackExportRequest request, CancellationToken cancellationToken = default)
+    public async Task<RuntimeStackOperationResult<RuntimeStackExportResponse>> ExportAsync(
+        RuntimeStackExportRequest request,
+        CancellationToken cancellationToken = default)
     {
         using var lease = _sessions.State.AcquireLease();
         using var linked = lease.CreateLinkedCancellation(cancellationToken);
@@ -145,8 +147,18 @@ internal sealed class RuntimeStackExportService
                 errors.Add($"Stack exporter '{registration.ContributorId}' export failed.");
             }
         }
-        if (errors.Count > 0) return new RuntimeStackExportResponse(false, null, warnings, errors);
-        if (fragments.Count == 0 && packageRequirements.Count == 0) return new RuntimeStackExportResponse(false, null, warnings, ["Selected setup items did not produce Stack content."]);
+        if (errors.Count > 0)
+        {
+            var response = new RuntimeStackExportResponse(false, null, warnings, errors);
+            return RuntimeStackOperationResult<RuntimeStackExportResponse>.Failed(
+                response,
+                RuntimeStackFailureCategory.Validation,
+                response.Errors.FirstOrDefault());
+        }
+        if (fragments.Count == 0 && packageRequirements.Count == 0)
+        {
+            return Failed("Selected setup items did not produce Stack content.");
+        }
 
         return await _archiveBuilder.BuildAsync(
             request,
@@ -168,5 +180,12 @@ internal sealed class RuntimeStackExportService
     private StackPackageRequirement BuildPackageRequirement(PackageSessionLease lease, string packageId)
         => new(packageId, CreatedWithVersion: _sessions.State.GetLoadedPackage(lease, packageId)?.Descriptor.Version, MinimumVersion: "1.0.0");
 
-    private static RuntimeStackExportResponse Failed(string message) => new(false, null, [], [message]);
+    private static RuntimeStackOperationResult<RuntimeStackExportResponse> Failed(string message)
+    {
+        var response = new RuntimeStackExportResponse(false, null, [], [message]);
+        return RuntimeStackOperationResult<RuntimeStackExportResponse>.Failed(
+            response,
+            RuntimeStackFailureCategory.Validation,
+            message);
+    }
 }

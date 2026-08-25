@@ -15,4 +15,7 @@ public sealed partial class RuntimeApiClient
 
     public Task<RuntimeStackImportResponse> ImportStackAsync(RuntimeStackImportRequest request, CancellationToken cancellationToken = default)
         => _management.ImportStackAsync(request, cancellationToken);
+
+    public Task DiscardStackImportPlanAsync(string planId, CancellationToken cancellationToken = default)
+        => _management.DiscardStackImportPlanAsync(planId, cancellationToken);
 }

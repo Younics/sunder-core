@@ -14,7 +14,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "templates:generate": "node packages/package-tool/dist/cli.js generate --project packages/create-sunder-package/template && node packages/package-tool/dist/cli.js generate --project packages/create-sunder-package/template-react-node",
     "templates:typecheck": "npm run templates:generate && tsc -p packages/create-sunder-package/template/tsconfig.json && tsc -p packages/create-sunder-package/template-react-node/tsconfig.worker.json && tsc -p packages/create-sunder-package/template-react-node/tsconfig.browser.json",
-    "test": "npm run test --workspace @sunder/sdk && npm run test --workspace @sunder/package-tool && npm run test --workspace create-sunder-package && npm run templates:typecheck",
+    "test": "node --test ../../../scripts/release/*.test.mjs ../../../scripts/test-oracles/*.test.mjs && npm run test --workspace @sunder/sdk && npm run test --workspace @sunder/package-tool && npm run test --workspace create-sunder-package && npm run templates:typecheck",
+    "test:oracles": "node --test ../../../scripts/test-oracles/*.test.mjs",
     "sea:build": "node packages/package-tool/dist/cli.js build --project fixtures/sea-smoke",
     "sea:smoke": "node packages/package-tool/dist/cli.js smoke --project fixtures/sea-smoke",
     "sea:package": "node packages/package-tool/dist/cli.js package --project fixtures/sea-smoke"
@@ -30,5 +31,12 @@
     "react-dom": "19.2.8",
     "typescript": "6.0.3",
     "vite": "8.2.0"
+  },
+  "overrides": {
+    "nanoid": "3.3.18"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "fsevents": false
   }
 }

@@ -181,6 +181,66 @@ public sealed class SunderRpcContractDescriptorTests
     }
 
     [Fact]
+    public void CSharpGenerator_AccessibilityModesAreDeterministicGoldenOutputsAndCompile()
+    {
+        var descriptor = SunderRpcContractDescriptor.Parse(Descriptor());
+
+        var defaultSource = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated");
+        var publicSource = SunderRpcCSharpGenerator.Generate(
+            descriptor,
+            "Example.Generated",
+            SunderRpcCSharpAccessibility.Public);
+        var internalSource = SunderRpcCSharpGenerator.Generate(
+            descriptor,
+            "Example.Generated",
+            SunderRpcCSharpAccessibility.Internal);
+
+        Assert.Equal(defaultSource, publicSource);
+        var publicHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(publicSource))).ToLowerInvariant();
+        var internalHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(internalSource))).ToLowerInvariant();
+        Assert.True(
+            string.Equals("2e5f144fa3a221ad88edd36e93658d5b8b86c784432db8299768c64247c49d9c", publicHash, StringComparison.Ordinal),
+            $"Public generator golden changed to {publicHash}.");
+        Assert.True(
+            string.Equals("b9d735e57bbb94c6b4be7cc6b16d7bda51bba6bec2dc06fa4c6dc55cc4991d03", internalHash, StringComparison.Ordinal),
+            $"Internal generator golden changed to {internalHash}.");
+        Assert.Equal(
+            internalSource,
+            SunderRpcCSharpGenerator.Generate(
+                descriptor,
+                "Example.Generated",
+                SunderRpcCSharpAccessibility.Internal));
+
+        Assert.Contains("public sealed class Request", publicSource, StringComparison.Ordinal);
+        Assert.Contains("public interface IMessagesProvider", publicSource, StringComparison.Ordinal);
+        Assert.Contains("public sealed class MessagesClient", publicSource, StringComparison.Ordinal);
+        Assert.Contains("public sealed class ExampleMessagesRpcHandler", publicSource, StringComparison.Ordinal);
+        Assert.Contains("internal sealed class Request", internalSource, StringComparison.Ordinal);
+        Assert.Contains("internal interface IMessagesProvider", internalSource, StringComparison.Ordinal);
+        Assert.Contains("internal sealed class MessagesClient", internalSource, StringComparison.Ordinal);
+        Assert.Contains("internal sealed class ExampleMessagesRpcHandler", internalSource, StringComparison.Ordinal);
+
+        AssertCompiles(publicSource);
+        AssertCompiles(internalSource);
+        Assert.Empty(CompileAndLoad(internalSource).GetExportedTypes());
+    }
+
+    [Fact]
+    public void CSharpGenerator_RejectsUndefinedAccessibility()
+    {
+        var descriptor = SunderRpcContractDescriptor.Parse(Descriptor());
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SunderRpcCSharpGenerator.Generate(
+                descriptor,
+                "Example.Generated",
+                (SunderRpcCSharpAccessibility)42));
+
+        Assert.Equal("accessibility", exception.ParamName);
+        Assert.Contains("must be Public or Internal", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CSharpGenerator_IdentityTypeNamesDoNotCollideAcrossContractsInOneNamespace()
     {
         var first = SunderRpcContractDescriptor.Parse(Descriptor());
@@ -297,7 +357,11 @@ public sealed class SunderRpcContractDescriptorTests
         var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(fixturePath));
 
         var source = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated");
+        var sourceHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant();
 
+        Assert.True(
+            string.Equals("7a931339b6e43629e23687af5dccf75b29f0ad67f854462e66ba12f02f23eaf0", sourceHash, StringComparison.Ordinal),
+            $"Complete V2 generator golden changed to {sourceHash}.");
         Assert.Contains("public required global::System.Guid CorrelationId", source, StringComparison.Ordinal);
         Assert.Contains(
             "public required global::Sunder.Sdk.Rpc.SunderRpcOffsetDateTime ObservedAt",
@@ -313,6 +377,12 @@ public sealed class SunderRpcContractDescriptorTests
         Assert.Contains("public static class ExampleNotFoundRpcError", source, StringComparison.Ordinal);
         Assert.Contains("public static global::Sunder.Sdk.Rpc.SunderRpcException Create(ErrorDetails details", source, StringComparison.Ordinal);
         Assert.Contains("public static bool TryGetDetails", source, StringComparison.Ordinal);
+        var internalSource = SunderRpcCSharpGenerator.Generate(
+            descriptor,
+            "Example.Generated.Internal",
+            SunderRpcCSharpAccessibility.Internal);
+        Assert.Contains("internal static class ExampleNotFoundRpcError", internalSource, StringComparison.Ordinal);
+        Assert.Empty(CompileAndLoad(internalSource).GetExportedTypes());
         var assembly = CompileAndLoad(source);
         var detailsType = assembly.GetType("Example.Generated.ErrorDetails", throwOnError: true)!;
         var details = Activator.CreateInstance(detailsType)!;

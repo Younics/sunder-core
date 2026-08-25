@@ -1,16 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <IsPackable>false</IsPackable>
-  </PropertyGroup>
-
   <ItemGroup>
+    <ProjectReference Include="..\..\host\Sunder.Host.Contracts\Sunder.Host.Contracts.csproj" />
     <ProjectReference Include="..\..\host\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
     <ProjectReference Include="..\..\libraries\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Worker\Sunder.Sdk.Worker.csproj" />
+    <ProjectReference Include="..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj" />
     <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
   </ItemGroup>
 
@@ -27,6 +24,7 @@
 
   <ItemGroup>
     <None Include="PublicApi\*.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="ApiFidelity\*.txt" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\..\..\..\specs\rpc\v2\conformance\**\*.json"
           Link="RpcV2Conformance\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />

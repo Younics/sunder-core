@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "coordinatedVersion": "1.1.0",
+  "nuget": [
+    {
+      "packageId": "Sunder.Sdk",
+      "project": "languages/csharp/dotnet/packages/Sunder.Sdk/Sunder.Sdk.csproj",
+      "role": "contract-library",
+      "packageType": "",
+      "includeBuildOutput": true,
+      "maximumBytes": 2097152,
+      "requiredEntries": ["lib/net10.0/Sunder.Sdk.dll"]
+    },
+    {
+      "packageId": "Sunder.Sdk.Avalonia",
+      "project": "languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj",
+      "role": "app-contract-library",
+      "packageType": "",
+      "includeBuildOutput": true,
+      "maximumBytes": 2097152,
+      "requiredEntries": ["lib/net10.0/Sunder.Sdk.Avalonia.dll"]
+    },
+    {
+      "packageId": "Sunder.Sdk.Stacks",
+      "project": "languages/csharp/dotnet/packages/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj",
+      "role": "stack-contract-library",
+      "packageType": "",
+      "includeBuildOutput": true,
+      "maximumBytes": 2097152,
+      "requiredEntries": [
+        "lib/net10.0/Sunder.Sdk.Stacks.dll",
+        "contracts/sunder.stack.contributor.rpc.json",
+        "buildTransitive/Sunder.Sdk.Stacks.props"
+      ]
+    },
+    {
+      "packageId": "Sunder.Sdk.Worker",
+      "project": "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Sunder.Sdk.Worker.csproj",
+      "role": "worker-authoring-library",
+      "packageType": "",
+      "includeBuildOutput": true,
+      "maximumBytes": 3145728,
+      "requiredEntries": ["lib/net10.0/Sunder.Sdk.Worker.dll"]
+    },
+    {
+      "packageId": "Sunder.Package.Build",
+      "project": "languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj",
+      "role": "msbuild-tool",
+      "packageType": "",
+      "includeBuildOutput": false,
+      "maximumBytes": 5242880,
+      "requiredEntries": [
+        "buildTransitive/Sunder.Package.Build.targets",
+        "tasks/net10.0/Sunder.Package.Build.dll",
+        "tasks/net10.0/Sunder.Package.Format.dll",
+        "tasks/net10.0/Sunder.Sdk.dll"
+      ]
+    },
+    {
+      "packageId": "Sunder.Package.Templates",
+      "project": "languages/csharp/dotnet/packages/Sunder.Package.Templates/Sunder.Package.Templates.csproj",
+      "role": "dotnet-template",
+      "packageType": "Template",
+      "includeBuildOutput": true,
+      "maximumBytes": 5242880,
+      "requiredEntries": [
+        "lib/net10.0/Sunder.Package.Templates.dll",
+        "content/sunder-package/.template.config/template.json"
+      ]
+    }
+  ],
+  "npm": [
+    {
+      "name": "@sunder/sdk",
+      "project": "languages/typescript/node/packages/sdk",
+      "role": "contract-and-worker-library",
+      "maximumBytes": 3145728,
+      "requiredEntries": ["dist/index.js", "dist/index.d.ts", "dist/browser.js", "dist/browser.d.ts", "dist/worker.js"]
+    },
+    {
+      "name": "@sunder/package-tool",
+      "project": "languages/typescript/node/packages/package-tool",
+      "role": "node-package-tool",
+      "maximumBytes": 5242880,
+      "requiredEntries": ["dist/index.js", "dist/index.d.ts", "dist/cli.js", "node-distributions.json"]
+    },
+    {
+      "name": "create-sunder-package",
+      "project": "languages/typescript/node/packages/create-sunder-package",
+      "role": "node-template-tool",
+      "maximumBytes": 5242880,
+      "requiredEntries": [
+        "dist/cli.js",
+        "template/sunder.package.json",
+        "template-react-node/sunder.package.json"
+      ]
+    }
+  ],
+  "runtimePackageManifest": {
+    "archiveFormatVersion": 1,
+    "manifestVersion": 3,
+    "roles": ["app", "runtime"],
+    "runtimeKind": "worker",
+    "workerProtocol": "sunder.worker.v3",
+    "workerCapability": "worker-protocol.v3",
+    "workerProtocolVersion": 3,
+    "runtimeRequiresExactRid": true,
+    "appHasNoWorkerAuthority": true,
+    "runtimeHasNoAppAuthority": true
+  }
+}

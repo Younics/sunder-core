@@ -1,5 +1,7 @@
+using Sunder.App.Features.Shell.Lifecycle;
 using Sunder.App.Models;
 using Sunder.App.Services;
+using Sunder.App.ViewModels;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -108,6 +110,31 @@ public sealed class PresentationLifecycleArchitectureTests
 
         Assert.DoesNotContain("CalculateTopColumnWidths", source, StringComparison.Ordinal);
         Assert.DoesNotContain("CalculateResizableExtent", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MainWindowPackageViewPresentation_HasSingleCoordinatorAuthority()
+    {
+        var instanceFields = typeof(MainWindowViewModel).GetFields(
+            System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.NonPublic);
+        Assert.Single(
+            instanceFields,
+            field => field.FieldType == typeof(ShellPackageViewPresentationCoordinator));
+        Assert.DoesNotContain(
+            typeof(MainWindowViewModel).GetNestedTypes(
+                System.Reflection.BindingFlags.NonPublic),
+            type => type.Name is "ViewPresentationRequest" or "PackageNavigationStage");
+
+        var coordinatorFields = typeof(ShellPackageViewPresentationCoordinator).GetFields(
+            System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.NonPublic);
+        Assert.Contains(coordinatorFields, field => field.Name == "_requestRevisions");
+        Assert.Contains(coordinatorFields, field => field.Name == "_requestCancellations");
+        Assert.Contains(coordinatorFields, field => field.Name == "_navigationStages");
+        Assert.DoesNotContain(
+            coordinatorFields,
+            field => field.FieldType == typeof(AppPackageGenerationPublisher));
     }
 
     [Fact]
@@ -503,7 +530,7 @@ public sealed class PresentationLifecycleArchitectureTests
     {
         var services = Path.Combine(GetRepositoryRoot(), "languages", "csharp", "dotnet", "host", "Sunder.App", "Services");
         var singleInstance = File.ReadAllText(Path.Combine(services, "AppSingleInstanceCoordinator.cs"));
-        var asyncImages = File.ReadAllText(Path.Combine(services, "SunderAsyncImageLoader.cs"));
+        var remoteImages = File.ReadAllText(Path.Combine(services, "RemoteImageService.cs"));
         var runtimeClient = File.ReadAllText(Path.Combine(services, "RuntimeApiClient.cs"));
         var runtimeResponseReader = File.ReadAllText(Path.Combine(
             GetRepositoryRoot(),
@@ -517,8 +544,8 @@ public sealed class PresentationLifecycleArchitectureTests
 
         Assert.Contains("MaxLaunchPayloadCharacters", singleInstance, StringComparison.Ordinal);
         Assert.DoesNotContain("ReadToEndAsync", singleInstance, StringComparison.Ordinal);
-        Assert.Contains("BoundedImageContentLoader.LoadAsync", asyncImages, StringComparison.Ordinal);
-        Assert.DoesNotContain("ReadAsByteArrayAsync", asyncImages, StringComparison.Ordinal);
+        Assert.Contains("ReadBoundedAsync", remoteImages, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadAsByteArrayAsync", remoteImages, StringComparison.Ordinal);
         Assert.Contains("RuntimeManagementClient", runtimeClient, StringComparison.Ordinal);
         Assert.Contains("ReadBoundedAsync", runtimeResponseReader, StringComparison.Ordinal);
         Assert.Contains("BoundedHttpContentReader", registryClient, StringComparison.Ordinal);

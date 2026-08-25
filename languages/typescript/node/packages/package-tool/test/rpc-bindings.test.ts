@@ -9,6 +9,12 @@ import { generateRpcBindings } from "../src/index";
 import { currentRid, loadProject } from "../src/model";
 import { markerPath, withOutputLocks } from "../src/output";
 import { buildDevPackage, buildWebTarget, bundleProduction, prepareProject } from "../src/package";
+import {
+  assertPendingAfterTurn,
+  observeOutputLockAttempt,
+  startOutputLockContender,
+  waitForProcessOutputLockAttempt,
+} from "./observable-barriers";
 
 test("rpcBindings config validates bounded exact entries and portable collision-free TypeScript outputs", async () => {
   const root = await createProject();
@@ -370,7 +376,7 @@ test("a stale generator cannot overwrite a newer plan after waiting for the publ
 
     const cli = resolve(__dirname, "..", "..", "dist", "cli.js");
     staleProcess = spawn(process.execPath, [cli, "generate", "--project", root], { stdio: ["pipe", "pipe", "pipe"] });
-    await delay(500);
+    await waitForProcessOutputLockAttempt(staleProcess.pid, () => `exitCode=${staleProcess?.exitCode ?? "running"}`);
     assert.equal(staleProcess.exitCode, null);
     await suspendOutsideTransitionGuard(staleProcess, generatedRoot(root));
 
@@ -527,10 +533,17 @@ test("generated identity, Vite build, and web leaf emission share one immutable 
       ...(v2Descriptor() as Record<string, unknown>),
       version: "2.0.1",
     }), "utf8");
-    let generationSettled = false;
-    generationTask = generateRpcBindings(root).finally(() => { generationSettled = true; });
-    await delay(200);
-    assert.equal(generationSettled, false, "External generation must wait for Vite and web leaf emission.");
+    const generationContender = startOutputLockContender(
+      generatedRoot(root),
+      () => generateRpcBindings(root),
+      () => "External generation did not attempt the generated-output lock.",
+    );
+    generationTask = generationContender.completion;
+    await generationContender.attempting;
+    await assertPendingAfterTurn(
+      generationTask,
+      () => "External generation did not wait for Vite and web leaf emission.",
+    );
     assert.equal(await readFile(resolve(generatedRoot(root), "shared.ts"), "utf8"), generatedDuringBuild);
 
     await writeFile(releasePath, "release\n", "utf8");
@@ -588,8 +601,11 @@ test("watch treats RPC binding descriptors as structural inputs before recreatin
     await waitUntil(async () => (await readTextIfPresent(bundlePath)).includes("7.0.0"), "initial generated watch binding", () => output);
 
     await withOutputLocks([generatedRoot(root)], async () => {
-      await writeFile(descriptorPath, descriptorText(v2Descriptor("watch.binding", "7.0.1")), "utf8");
-      await delay(250);
+      await observeOutputLockAttempt(
+        generatedRoot(root),
+        () => writeFile(descriptorPath, descriptorText(v2Descriptor("watch.binding", "7.0.1")), "utf8"),
+        () => output,
+      );
       assert.match(await readFile(bundlePath, "utf8"), /7\.0\.0/u);
       assert.match(await readFile(resolve(generatedRoot(root), "watch.ts"), "utf8"), /7\.0\.0/u);
     });

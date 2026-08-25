@@ -9,6 +9,7 @@ using System.Text.Json;
 using Avalonia.Controls;
 using Microsoft.Build.Framework;
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.Core.TestSupport;
 using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
 using Sunder.Sdk.Abstractions;
@@ -140,6 +141,9 @@ public sealed class PackageBuildManifestTests
         var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
         var buildEngine = new TestBuildEngine();
         var task = CreateTask(manifestPath, buildEngine);
+        Assert.Contains(
+            task.ReferencePaths,
+            reference => Path.GetFileNameWithoutExtension(reference.ItemSpec) == "Sunder.Sdk.Stacks");
 
         var success = task.Execute();
 
@@ -150,6 +154,112 @@ public sealed class PackageBuildManifestTests
             capabilities,
             SunderSdkCapabilities.StacksV1,
             SunderSdkCapabilities.StacksRpcV1);
+    }
+
+    [Fact]
+    public void SdkCapabilityCatalog_SeparatesResolutionFromDeclaredCapabilities()
+    {
+        var diagnostics = new List<string>();
+        var catalog = SdkCapabilityCatalog.Create(
+            [GetFixtureAssemblyPath("SourceReferenceSdk", "Sunder.Sdk")],
+            diagnostics);
+
+        Assert.Empty(diagnostics);
+        var annotated = catalog.ResolveType(
+            "Sunder.Sdk",
+            "Sunder.Sdk.Abstractions",
+            "IPackageStorageKeyMigrator");
+        Assert.True(annotated.IsResolved);
+        Assert.Equal(
+            new[] { SunderSdkCapabilities.StorageV1, SunderSdkCapabilities.StorageKeyMigrationV1 }
+                .Order(StringComparer.Ordinal),
+            annotated.DeclaredCapabilities.Order(StringComparer.Ordinal));
+
+        var unannotatedType = catalog.ResolveType(
+            "Sunder.Sdk",
+            "Sunder.Sdk.Abstractions",
+            "IPackageSettings");
+        Assert.True(unannotatedType.IsResolved);
+        Assert.Empty(unannotatedType.DeclaredCapabilities);
+
+        var unannotatedMember = catalog.ResolveMember(
+            "Sunder.Sdk",
+            "Sunder.Sdk.Abstractions",
+            "IPackageContext",
+            "get_Settings");
+        Assert.True(unannotatedMember.IsResolved);
+        Assert.Empty(unannotatedMember.DeclaredCapabilities);
+
+        var unresolved = catalog.ResolveType(
+            "Sunder.Sdk",
+            "Sunder.Sdk.Abstractions",
+            "MissingContract");
+        Assert.False(unresolved.IsResolved);
+        Assert.Empty(unresolved.DeclaredCapabilities);
+    }
+
+    [Theory]
+    [InlineData("IPackageSettingsNavigationService", SunderSdkCapabilities.SettingsNavigationV1)]
+    [InlineData("IBackgroundProcessQueue", SunderSdkCapabilities.BackgroundProcessesV1)]
+    public void SdkCapabilityCatalog_ResolvesCurrentAnnotatedServiceCapabilities(
+        string typeName,
+        string expectedCapability)
+    {
+        var diagnostics = new List<string>();
+        var catalog = SdkCapabilityCatalog.Create(
+            [typeof(SunderPackageAttribute).Assembly.Location],
+            diagnostics);
+
+        var resolved = catalog.ResolveType(
+            "Sunder.Sdk",
+            "Sunder.Sdk.Abstractions",
+            typeName);
+
+        Assert.Empty(diagnostics);
+        Assert.True(resolved.IsResolved);
+        Assert.Contains(expectedCapability, resolved.DeclaredCapabilities);
+    }
+
+    [Fact]
+    public void CapabilityInference_DoesNotUseNameFallbackForResolvedUnannotatedContracts()
+    {
+        var assemblyPath = GetFixtureAssemblyPath("SourceReferencePackage");
+        var inference = new PackageCapabilityInference(
+            [],
+            [GetFixtureAssemblyPath("SourceReferenceSdk", "Sunder.Sdk")],
+            [],
+            [],
+            [],
+            Path.GetDirectoryName(assemblyPath)!);
+
+        var capabilities = inference.Infer(assemblyPath);
+
+        Assert.True(inference.IsComplete, string.Join(Environment.NewLine, inference.Diagnostics));
+        Assert.Empty(inference.Diagnostics);
+        Assert.DoesNotContain(SunderSdkCapabilities.SettingsV1, capabilities);
+    }
+
+    [Fact]
+    public void CapabilityInference_ReportsUnresolvedSdkContractsOnceInDeterministicOrder()
+    {
+        var assemblyPath = GetFixtureAssemblyPath("SourceReferencePackage");
+        var inference = new PackageCapabilityInference(
+            [],
+            [typeof(SunderPackageAttribute).Assembly.Location],
+            [],
+            [],
+            [],
+            Path.GetDirectoryName(assemblyPath)!);
+
+        _ = inference.Infer(assemblyPath);
+
+        Assert.False(inference.IsComplete);
+        Assert.Equal(
+            [
+                "Referenced Sunder SDK type contract 'Sunder.Sdk.Abstractions.UnresolvedSdkContract, Sunder.Sdk' could not be resolved from SDK capability annotations; capability inference cannot safely determine its SDK usage.",
+                "Referenced Sunder SDK member contract 'Sunder.Sdk.Abstractions.IPackageContext::get_UnresolvedMember, Sunder.Sdk' could not be resolved from SDK capability annotations; capability inference cannot safely determine its SDK usage.",
+            ],
+            inference.Diagnostics);
     }
 
     [Fact]
@@ -1065,12 +1175,19 @@ public sealed class PackageBuildManifestTests
         Assert.All(
             document.RootElement.GetProperty("targets").EnumerateArray(),
             target => Assert.Equal("1.1.0", target.GetProperty("sdkVersion").GetString()));
-        AssertContainsCapabilities(
-            ReadCapabilities(document.RootElement),
-            SunderSdkCapabilities.StorageV1,
-            SunderSdkCapabilities.StorageKeyMigrationV1,
-            SunderSdkCapabilities.ShellViewV1,
-            SunderSdkCapabilities.ViewNavigationPreparationV1);
+        Assert.Equal(
+            new[]
+            {
+                SunderSdkCapabilities.ContributionsV1,
+                SunderSdkCapabilities.CoreV1,
+                SunderSdkCapabilities.PackagingV1,
+                SunderSdkCapabilities.Baseline11V1,
+                SunderSdkCapabilities.ShellViewV1,
+                SunderSdkCapabilities.StorageKeyMigrationV1,
+                SunderSdkCapabilities.StorageV1,
+                SunderSdkCapabilities.ViewNavigationPreparationV1,
+            }.Order(StringComparer.Ordinal),
+            ReadCapabilities(document.RootElement).Order(StringComparer.Ordinal));
     }
 
     [Theory]
@@ -1415,23 +1532,6 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
-    public void PackTask_ValidatesTheWrittenArchiveAfterDeterministicCreation()
-    {
-        var source = File.ReadAllText(Path.Combine(FindTaskDirectory(), "PackSunderPackageTask.cs"));
-        var writeIndex = source.IndexOf(
-            "DeterministicPackageArchiveWriter.Write(devPackagePath, stagedPackagePath)",
-            StringComparison.Ordinal);
-        var archiveValidationIndex = source.IndexOf(
-            "ExtractAndValidateAsync(stagedPackagePath, archiveValidationPath)",
-            StringComparison.Ordinal);
-
-        Assert.True(writeIndex >= 0, "The deterministic package archive write was not found.");
-        Assert.True(
-            archiveValidationIndex > writeIndex,
-            "The exact written archive must be consumer-validated after deterministic creation.");
-    }
-
-    [Fact]
     public void GenerateManifest_IsByteStableAcrossEquivalentExecutions()
     {
         var directory = CreateTempDirectory();
@@ -1539,22 +1639,88 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
-    public void PackageTargets_ExposeWorkerSigningExtensionAfterPublishCollectionAndBeforeIndexing()
+    public async Task PackageTargets_WorkerSigningRunsAfterPublishCollectionAndBeforeContentIndexing()
     {
-        var targets = File.ReadAllText(Path.Combine(
+        var root = CreateTempDirectory();
+        var project = Path.Combine(root, "project");
+        var targetDirectory = Path.Combine(project, "target");
+        var sourceDirectory = Path.Combine(root, "publish");
+        Directory.CreateDirectory(project);
+        Directory.CreateDirectory(targetDirectory);
+        Directory.CreateDirectory(sourceDirectory);
+        var rid = RuntimeInformation.RuntimeIdentifier;
+        var appHostName = CSharpAppHostName(rid);
+        var sourceAppHost = Path.Combine(sourceDirectory, appHostName);
+        await File.WriteAllTextAsync(sourceAppHost, "unsigned-worker");
+
+        var manifestPath = Path.Combine(root, "sunder-package.json");
+        var manifestEngine = new TestBuildEngine();
+        var manifestTask = CreateTask(manifestPath, manifestEngine);
+        ConfigureWorkerTask(manifestTask, rid);
+        Assert.True(manifestTask.Execute(), string.Join(Environment.NewLine, manifestEngine.Errors));
+
+        var targetsPath = Path.GetFullPath(Path.Combine(
             FindTaskDirectory(),
             "..",
             "build",
             "Sunder.Package.Build.targets"));
+        var devPackage = Path.Combine(targetDirectory, "sunder-dev");
+        var projectFile = Path.Combine(project, "SigningOrder.proj");
+        await File.WriteAllTextAsync(projectFile, $$"""
+            <Project>
+              <PropertyGroup>
+                <Configuration>Debug</Configuration>
+                <TargetFramework>net10.0</TargetFramework>
+                <BaseIntermediateOutputPath>obj/</BaseIntermediateOutputPath>
+                <IntermediateOutputPath>obj/</IntermediateOutputPath>
+                <TargetDir>{{targetDirectory}}{{Path.DirectorySeparatorChar}}</TargetDir>
+                <SunderGeneratedPackageManifest>{{manifestPath}}</SunderGeneratedPackageManifest>
+                <SunderDevOutputPath>{{devPackage}}</SunderDevOutputPath>
+                <SunderDevOutputDiscoveryRoot>{{targetDirectory}}</SunderDevOutputDiscoveryRoot>
+                <SunderPackageWorkerSigningTargets>TestSignWorker</SunderPackageWorkerSigningTargets>
+                <SunderPackageBuildProject>{{Path.Combine(root, "missing.csproj")}}</SunderPackageBuildProject>
+                <SunderPackageBuildTaskAssembly>{{typeof(PackSunderPackageTask).Assembly.Location}}</SunderPackageBuildTaskAssembly>
+              </PropertyGroup>
+              <Target Name="ComputeFilesToPublish">
+                <ItemGroup>
+                  <ResolvedFileToPublish Include="{{sourceAppHost}}" RelativePath="{{appHostName}}" />
+                </ItemGroup>
+              </Target>
+              <Target Name="TestSignWorker">
+                <WriteLinesToFile File="%(SunderPackageWorkerSigningFile.Identity)"
+                                  Lines="signed"
+                                  Overwrite="false"
+                                  Encoding="UTF-8" />
+              </Target>
+              <Import Project="{{targetsPath}}" />
+              <Target Name="GenerateSunderPackageManifest">
+                <PropertyGroup>
+                  <_SunderHasWorkerTarget>true</_SunderHasWorkerTarget>
+                </PropertyGroup>
+              </Target>
+              <Target Name="Run" DependsOnTargets="EmitSunderDevOutput" />
+            </Project>
+            """);
 
-        Assert.Contains("SunderPackageWorkerSigningTargets", targets, StringComparison.Ordinal);
-        Assert.Contains("<_SunderWorkerSourceFile Include=\"@(ResolvedFileToPublish)\"", targets, StringComparison.Ordinal);
-        Assert.Contains("sunder-worker-signing", targets, StringComparison.Ordinal);
-        Assert.Contains("<RemoveDir Directories=\"$(_SunderPackageWorkerSigningDirectory)\"", targets, StringComparison.Ordinal);
-        Assert.Contains("DestinationFiles=\"@(_SunderWorkerSourceFile->'$(_SunderPackageWorkerSigningDirectory)%(RelativePath)')\"", targets, StringComparison.Ordinal);
-        Assert.Contains("SunderPackageWorkerSigningFile Include=\"@(_SunderWorkerFile)\"", targets, StringComparison.Ordinal);
-        Assert.Contains("DependsOnTargets=\"_CollectSunderWorkerFiles;$(SunderPackageWorkerSigningTargets)\"", targets, StringComparison.Ordinal);
-        Assert.Contains("GenerateSunderPackageManifest;_RunSunderPackageWorkerSigning;_ValidateSunderDevOutputPath", targets, StringComparison.Ordinal);
+        var result = await ReadProcessAsync(StartMsbuild(projectFile, project));
+
+        Assert.True(result.ExitCode == 0, result.Output);
+        Assert.Equal("unsigned-worker", await File.ReadAllTextAsync(sourceAppHost));
+        var packagedAppHost = Path.Combine(devPackage, "payload", "runtime", rid, "lib", appHostName);
+        Assert.EndsWith(
+            "signed" + Environment.NewLine,
+            await File.ReadAllTextAsync(packagedAppHost),
+            StringComparison.Ordinal);
+        var contentIndex = JsonSerializer.Deserialize<SunderPackageContentIndex>(await File.ReadAllTextAsync(
+            Path.Combine(devPackage, "manifest", "content-index.json")))!;
+        var indexedAppHost = Assert.Single(
+            contentIndex.Files!,
+            entry => entry!.Path == $"payload/runtime/{rid}/lib/{appHostName}")!;
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(packagedAppHost))).ToLowerInvariant(),
+            indexedAppHost.Sha256);
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(devPackage);
+        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
     }
 
     [Fact]
@@ -1566,8 +1732,14 @@ public sealed class PackageBuildManifestTests
         Directory.CreateDirectory(project);
         Directory.CreateDirectory(cache);
         var appHost = Path.Combine(cache, "Worker");
+        var managedAssembly = Path.Combine(cache, "Authored.Dependency.dll");
+        var documentation = Path.Combine(cache, "Authored.Dependency.xml");
+        var runtimeConfiguration = Path.Combine(cache, "runtime.settings.xml");
         var runtimeLibrary = Path.Combine(cache, "libSystem.Native.dylib");
         await File.WriteAllTextAsync(appHost, "source-apphost");
+        await File.WriteAllTextAsync(managedAssembly, "source-assembly");
+        await File.WriteAllTextAsync(documentation, "source-documentation");
+        await File.WriteAllTextAsync(runtimeConfiguration, "source-configuration");
         await File.WriteAllTextAsync(runtimeLibrary, "source-runtime");
         var targetsPath = Path.GetFullPath(Path.Combine(
             FindTaskDirectory(),
@@ -1587,6 +1759,9 @@ public sealed class PackageBuildManifestTests
               <Target Name="ComputeFilesToPublish">
                 <ItemGroup>
                   <ResolvedFileToPublish Include="{{appHost}}" RelativePath="Worker" />
+                  <ResolvedFileToPublish Include="{{managedAssembly}}" RelativePath="Authored.Dependency.dll" />
+                  <ResolvedFileToPublish Include="{{documentation}}" RelativePath="Authored.Dependency.xml" />
+                  <ResolvedFileToPublish Include="{{runtimeConfiguration}}" RelativePath="runtime.settings.xml" />
                   <ResolvedFileToPublish Include="{{runtimeLibrary}}" RelativePath="runtimes/osx-arm64/native/libSystem.Native.dylib" />
                 </ItemGroup>
               </Target>
@@ -1615,9 +1790,21 @@ public sealed class PackageBuildManifestTests
 
         Assert.True(process.ExitCode == 0, output + error);
         Assert.Equal("source-apphost", await File.ReadAllTextAsync(appHost));
+        Assert.Equal("source-assembly", await File.ReadAllTextAsync(managedAssembly));
+        Assert.Equal("source-documentation", await File.ReadAllTextAsync(documentation));
+        Assert.Equal("source-configuration", await File.ReadAllTextAsync(runtimeConfiguration));
         Assert.Equal("source-runtime", await File.ReadAllTextAsync(runtimeLibrary));
         var signingRoot = Path.Combine(project, "obj", "sunder-worker-signing");
         Assert.EndsWith("signed" + Environment.NewLine, await File.ReadAllTextAsync(Path.Combine(signingRoot, "Worker")), StringComparison.Ordinal);
+        Assert.EndsWith(
+            "signed" + Environment.NewLine,
+            await File.ReadAllTextAsync(Path.Combine(signingRoot, "Authored.Dependency.dll")),
+            StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(signingRoot, "Authored.Dependency.xml")));
+        Assert.EndsWith(
+            "signed" + Environment.NewLine,
+            await File.ReadAllTextAsync(Path.Combine(signingRoot, "runtime.settings.xml")),
+            StringComparison.Ordinal);
         Assert.EndsWith(
             "signed" + Environment.NewLine,
             await File.ReadAllTextAsync(Path.Combine(signingRoot, "runtimes", "osx-arm64", "native", "libSystem.Native.dylib")),
@@ -1765,12 +1952,11 @@ public sealed class PackageBuildManifestTests
         Assert.True(Directory.Exists(lockPath));
     }
 
-    [Theory]
+    [LinuxTheory]
     [InlineData(true)]
     [InlineData(false)]
     public void SharedOutputLock_LinuxBootOrPidNamespaceMismatchTimesOutWithoutReclamation(bool mismatchBoot)
     {
-        if (!OperatingSystem.IsLinux()) return;
         var root = CreateTempDirectory();
         var output = Path.Combine(root, "shared-output");
         var lockPath = output + GeneratedOutputLock.LockSuffix;
@@ -1815,11 +2001,14 @@ public sealed class PackageBuildManifestTests
         var holder = AcquireGeneratedOutputLock(output);
         var heartbeatPath = Path.Combine(output + ".sunder-output.lock", "owner.json");
         File.SetLastWriteTimeUtc(heartbeatPath, DateTime.UtcNow.AddMinutes(-10));
-        var waiterTask = Task.Run(() => AcquireGeneratedOutputLock(output));
-        await Task.Delay(300);
-        Assert.False(waiterTask.IsCompleted, "A stale heartbeat must not override a live same-host PID.");
+        using var waiter = OutputLockContenderBarrier<IDisposable>.Start(
+            output,
+            () => AcquireGeneratedOutputLock(output),
+            () => $"lock={output + GeneratedOutputLock.LockSuffix}; owner={File.ReadAllText(heartbeatPath)}");
+        await waiter.WaitForAttemptAsync(TimeSpan.FromSeconds(5));
+        await waiter.AssertContendedAsync();
         holder.Dispose();
-        using (await waiterTask.WaitAsync(TimeSpan.FromSeconds(5)))
+        using (await waiter.Completion.WaitAsync(TimeSpan.FromSeconds(5)))
         {
         }
 
@@ -1829,31 +2018,42 @@ public sealed class PackageBuildManifestTests
             int.MaxValue,
             Environment.MachineName,
             DateTime.UtcNow.AddMinutes(-1));
-        var acquired = new SemaphoreSlim(0, 2);
+        var acquired = new[]
+        {
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         var order = new System.Collections.Concurrent.ConcurrentQueue<int>();
         var release = new[] { new ManualResetEventSlim(), new ManualResetEventSlim() };
-        var reclaimers = Enumerable.Range(0, 2).Select(index => Task.Run(() =>
-        {
-            using var outputLock = AcquireGeneratedOutputLock(output);
-            order.Enqueue(index);
-            acquired.Release();
-            release[index].Wait(TimeSpan.FromSeconds(10));
-        })).ToArray();
-        Assert.True(await acquired.WaitAsync(TimeSpan.FromSeconds(5)));
-        await Task.Delay(250);
-        Assert.Single(order);
+        var reclaimers = Enumerable.Range(0, 2).Select(index =>
+            OutputLockContenderBarrier<object?>.Start(output, () =>
+            {
+                using var outputLock = AcquireGeneratedOutputLock(output);
+                order.Enqueue(index);
+                acquired[index].TrySetResult();
+                release[index].Wait(TimeSpan.FromSeconds(10));
+                return null;
+            }, () => $"reclaimer={index}; acquired={string.Join(',', order)}; lock={output + GeneratedOutputLock.LockSuffix}"))
+            .ToArray();
+        await Task.WhenAll(reclaimers.Select(reclaimer => reclaimer.WaitForAttemptAsync(TimeSpan.FromSeconds(5))));
+        await Task.WhenAny(acquired.Select(signal => signal.Task)).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(order.TryPeek(out var first));
+        await Eventually.AssertPendingAsync(
+            acquired[first == 0 ? 1 : 0].Task,
+            () => $"Both stale-lock reclaimers acquired before release; order={string.Join(',', order)}");
+        Assert.Single(order);
         release[first].Set();
-        Assert.True(await acquired.WaitAsync(TimeSpan.FromSeconds(5)));
+        await acquired[first == 0 ? 1 : 0].Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(2, order.Count);
         release[first == 0 ? 1 : 0].Set();
-        await Task.WhenAll(reclaimers).WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.WhenAll(reclaimers.Select(reclaimer => reclaimer.Completion)).WaitAsync(TimeSpan.FromSeconds(10));
         Assert.False(Directory.Exists(output + ".sunder-output.lock"));
         Assert.False(Directory.Exists(output + ".sunder-output.lock.transition"));
         Assert.Single(Directory.EnumerateDirectories(root, "shared-output.sunder-output.lock.transition.stale-*"));
     }
 
-    [Fact]
+    [ExternalArtifactFact("SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP")]
+    [Trait("Category", "ExternalArtifact")]
     public async Task SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable()
     {
         var helper = Path.Combine(
@@ -1866,48 +2066,163 @@ public sealed class PackageBuildManifestTests
             "dist-test",
             "test",
             "output-child.js");
-        if (!File.Exists(helper) || !CanStartNode()) return;
-        var root = CreateTempDirectory();
+        Assert.True(File.Exists(helper), $"Required Node output-lock helper does not exist: {helper}");
+        Assert.True(CanStartNode(), "The selected output-lock interop lane cannot start Node.");
+        var scope = TemporaryDirectoryScope.Create("sunder-output-lock-interop");
+        var root = scope.RootPath;
         var output = Path.Combine(root, "shared-output");
         var ready = Path.Combine(root, "node.ready");
         var release = Path.Combine(root, "node.release");
-        var holder = AcquireGeneratedOutputLock(output);
-        var node = StartNode(helper, "hold", output, ready, release);
-        await Task.Delay(300);
-        Assert.False(File.Exists(ready));
-        holder.Dispose();
-        await WaitForFileAsync(ready, TimeSpan.FromSeconds(5));
-        File.WriteAllText(release, "release");
-        var result = await ReadProcessAsync(node);
-        Assert.True(result.ExitCode == 0, result.Output);
-        Assert.False(Directory.Exists(output + ".sunder-output.lock"));
-
-        using (CreateDeadOwnerLock(output))
+        var attempting = Path.Combine(root, "node.attempting");
+        IDisposable? holder = null;
+        CapturedProcess? node = null;
+        CapturedProcess? crashedNode = null;
+        OutputLockContenderBarrier<IDisposable>? reclaimer = null;
+        IDisposable? reclaimed = null;
+        try
         {
-            var nodeRecovery = StartNode(helper, "recover", output);
-            var recoveryResult = await ReadProcessAsync(nodeRecovery);
-            Assert.True(recoveryResult.ExitCode == 0, recoveryResult.Output);
+            holder = AcquireGeneratedOutputLock(output);
+            node = StartCapturedNode(helper, "hold", output, ready, release, attempting);
+            var nodeResult = node.WaitForExitAsync(TimeSpan.FromSeconds(15));
+            await FileSignal.WaitForAsync(attempting, TimeSpan.FromSeconds(5), () => $"ready={File.Exists(ready)}; {node.Diagnostics}");
+            await Eventually.AssertPendingAsync(nodeResult, () => $"attempting={File.Exists(attempting)}; ready={File.Exists(ready)}; {node.Diagnostics}");
+            Assert.False(File.Exists(ready));
+            holder.Dispose();
+            holder = null;
+            await FileSignal.WaitForAsync(ready, TimeSpan.FromSeconds(5), () => node.Diagnostics);
+            File.WriteAllText(release, "release");
+            var result = await nodeResult;
+            Assert.True(result.ExitCode == 0, result.CombinedOutput);
+            await node.DisposeAsync();
+            node = null;
             Assert.False(Directory.Exists(output + ".sunder-output.lock"));
+
+            using (CreateDeadOwnerLock(output))
+            {
+                await using var nodeRecovery = StartCapturedNode(helper, "recover", output);
+                var recoveryResult = await nodeRecovery.WaitForExitAsync(TimeSpan.FromSeconds(10));
+                Assert.True(recoveryResult.ExitCode == 0, recoveryResult.CombinedOutput);
+                Assert.False(Directory.Exists(output + ".sunder-output.lock"));
+            }
+
+            var crashedReady = Path.Combine(root, "crashed-node.ready");
+            var crashedRelease = Path.Combine(root, "crashed-node.release");
+            var crashedAttempting = Path.Combine(root, "crashed-node.attempting");
+            crashedNode = StartCapturedNode(helper, "hold", output, crashedReady, crashedRelease, crashedAttempting);
+            await FileSignal.WaitForAsync(crashedReady, TimeSpan.FromSeconds(5), () => crashedNode.Diagnostics);
+            using var ownerDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+                output + GeneratedOutputLock.LockSuffix,
+                GeneratedOutputLock.OwnerFileName)));
+            using var crashedNodeMarker = new TemporaryProcessMarker(
+                ownerDocument.RootElement.GetProperty("processMarkerPath").GetString()
+                ?? throw new InvalidDataException("Node lock owner omitted its process marker path."));
+            reclaimer = OutputLockContenderBarrier<IDisposable>.Start(
+                output,
+                () => GeneratedOutputLock.Acquire([output], TimeSpan.FromSeconds(5)),
+                () => $"nodePid={crashedNode.Id}; lock={output + GeneratedOutputLock.LockSuffix}; {crashedNode.Diagnostics}");
+            await reclaimer.WaitForAttemptAsync(TimeSpan.FromSeconds(5));
+            await reclaimer.AssertContendedAsync();
+            crashedNode.Process.Kill(entireProcessTree: true);
+            var crashedResult = await crashedNode.WaitForExitAsync(TimeSpan.FromSeconds(10));
+            Assert.NotEqual(0, crashedResult.ExitCode);
+            Assert.True(File.Exists(crashedNodeMarker.Path));
+            reclaimed = await reclaimer.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            var cleanupErrors = new List<Exception>();
+            TryWriteReleaseSignal(release);
+            TryWriteReleaseSignal(Path.Combine(root, "crashed-node.release"));
+            CaptureCleanup(cleanupErrors, () => holder?.Dispose());
+            if (crashedNode is not null)
+            {
+                await CaptureCleanupAsync(cleanupErrors, () => crashedNode.DisposeAsync());
+            }
+            if (node is not null)
+            {
+                await CaptureCleanupAsync(cleanupErrors, () => node.DisposeAsync());
+            }
+            if (reclaimed is null && reclaimer is not null)
+            {
+                try
+                {
+                    reclaimed = await reclaimer.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+                }
+                catch (Exception exception)
+                {
+                    cleanupErrors.Add(exception);
+                }
+            }
+            CaptureCleanup(cleanupErrors, () => reclaimed?.Dispose());
+            CaptureCleanup(cleanupErrors, () => reclaimer?.Dispose());
+            await CaptureCleanupAsync(cleanupErrors, () => scope.DisposeAsync());
+            if (cleanupErrors.Count > 0)
+            {
+                throw new AggregateException("Output-lock interop cleanup did not complete.", cleanupErrors);
+            }
+        }
+        Assert.False(Directory.Exists(root), $"Output-lock interop temporary root was retained: {root}");
+    }
+
+    [Fact]
+    [Trait("Category", "Conformance")]
+    [Trait("Capability", "Filesystem")]
+    [Trait("Size", "Small")]
+    public void SharedOutputDocuments_MatchCrossLanguagePropertyCorpusAndRecoverTransaction()
+    {
+        using var corpus = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+            AppContext.BaseDirectory,
+            "GeneratedOutputConformance",
+            "documents.json")));
+        var documents = corpus.RootElement.GetProperty("documents");
+        Assert.Equal(1, corpus.RootElement.GetProperty("formatVersion").GetInt32());
+        var root = CreateTempDirectory();
+        var output = Path.Combine(root, "shared-output");
+        using (AcquireGeneratedOutputLock(output))
+        {
+            using var owner = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+                output + GeneratedOutputLock.LockSuffix,
+                GeneratedOutputLock.OwnerFileName)));
+            AssertDocumentProperties(owner.RootElement, documents.GetProperty("owner"));
+            var markerPath = owner.RootElement.GetProperty("processMarkerPath").GetString()!;
+            using var marker = JsonDocument.Parse(File.ReadAllBytes(markerPath));
+            AssertDocumentProperties(marker.RootElement, documents.GetProperty("processMarker"));
         }
 
-        var crashedReady = Path.Combine(root, "crashed-node.ready");
-        var crashedRelease = Path.Combine(root, "crashed-node.release");
-        var crashedNode = StartNode(helper, "hold", output, crashedReady, crashedRelease);
-        await WaitForFileAsync(crashedReady, TimeSpan.FromSeconds(5));
-        using var ownerDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(
-            output + GeneratedOutputLock.LockSuffix,
-            GeneratedOutputLock.OwnerFileName)));
-        using var crashedNodeMarker = new TemporaryProcessMarker(
-            ownerDocument.RootElement.GetProperty("processMarkerPath").GetString()
-            ?? throw new InvalidDataException("Node lock owner omitted its process marker path."));
-        var reclaimerTask = Task.Run(() => GeneratedOutputLock.Acquire([output], TimeSpan.FromSeconds(5)));
-        await Task.Delay(250);
-        Assert.False(reclaimerTask.IsCompleted, "A live Node owner must remain ambiguous on inexact process identity.");
-        crashedNode.Kill();
-        var crashedResult = await ReadProcessAsync(crashedNode);
-        Assert.NotEqual(0, crashedResult.ExitCode);
-        Assert.True(File.Exists(crashedNodeMarker.Path));
-        using var reclaimed = await reclaimerTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Directory.CreateDirectory(output);
+        File.WriteAllText(Path.Combine(output, "generation.txt"), "old");
+        var token = Guid.NewGuid().ToString("D");
+        var staged = output + ".stage-" + Guid.NewGuid().ToString("N");
+        var backup = output + ".backup-" + token;
+        Directory.CreateDirectory(staged);
+        File.WriteAllText(Path.Combine(staged, "generation.txt"), "new");
+        var journal = output + GeneratedOutputTransaction.TransactionSuffix;
+        File.WriteAllText(journal, JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            token,
+            coordinatorPath = output,
+            outputs = new[] { new { finalPath = output, stagedPath = staged, backupPath = backup, existed = true } },
+        }));
+        using (var transaction = JsonDocument.Parse(File.ReadAllBytes(journal)))
+        {
+            AssertDocumentProperties(transaction.RootElement, documents.GetProperty("transaction"));
+            AssertDocumentProperties(
+                transaction.RootElement.GetProperty("outputs")[0],
+                documents.GetProperty("transactionOutput"));
+        }
+        Directory.Move(output, backup);
+        Directory.Move(staged, output);
+
+        GeneratedOutputTransaction.RecoverAndCleanup(output);
+
+        Assert.Equal("old", File.ReadAllText(Path.Combine(output, "generation.txt")));
+        Assert.False(File.Exists(journal));
+
+        using var mutated = JsonDocument.Parse("""{"schemaVersion":1,"token":"x","coordinatorPath":"x","outputs":[],"seeded":true}""");
+        Assert.ThrowsAny<Exception>(() => AssertDocumentProperties(
+            mutated.RootElement,
+            documents.GetProperty("transaction")));
     }
 
     [Fact]
@@ -2107,11 +2422,15 @@ public sealed class PackageBuildManifestTests
             [GeneratedOutputLock.TargetLeafDiscoveryKey(discoveryRoot, leaf)],
             []);
         Directory.Move(leaf, backup);
-        var aggregateTask = Task.Run(aggregate.Execute);
+        using var aggregateContender = OutputLockContenderBarrier<bool>.Start(
+            GeneratedOutputLock.TargetLeafDiscoveryKey(discoveryRoot, leaf),
+            aggregate.Execute,
+            () => $"discoveryRoot={discoveryRoot}; leafPresent={Directory.Exists(leaf)}; backupPresent={Directory.Exists(backup)}");
+        var aggregateTask = aggregateContender.Completion;
         try
         {
-            await Task.Delay(200);
-            Assert.False(aggregateTask.IsCompleted, "Aggregation must not inspect a nested leaf during its discovery-root swap gap.");
+            await aggregateContender.WaitForAttemptAsync(TimeSpan.FromSeconds(5));
+            await aggregateContender.AssertContendedAsync();
             Directory.Move(backup, leaf);
             gapLock.Dispose();
             Assert.True(await aggregateTask.WaitAsync(TimeSpan.FromSeconds(5)), string.Join(Environment.NewLine, buildEngine.Errors));
@@ -2466,53 +2785,98 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
-    public void ManifestGeneration_UsesFocusedCollaboratorsAndSizeRatchets()
+    public async Task ManifestGeneration_UsesEvaluatedBindingSnapshotInValidatedOutput()
     {
-        var taskDirectory = FindTaskDirectory();
-        var taskPath = Path.Combine(taskDirectory, "GenerateSunderPackageManifestTask.cs");
-        var taskSource = File.ReadAllText(taskPath);
-        var targetsSource = File.ReadAllText(Path.GetFullPath(Path.Combine(
-            taskDirectory,
+        var root = CreateTempDirectory();
+        var project = Path.Combine(root, "project");
+        var targetDirectory = Path.Combine(project, "target");
+        Directory.CreateDirectory(project);
+        Directory.CreateDirectory(targetDirectory);
+        var targetAssembly = Path.Combine(targetDirectory, Path.GetFileName(Assembly.GetExecutingAssembly().Location));
+        File.Copy(Assembly.GetExecutingAssembly().Location, targetAssembly);
+        var descriptorPath = Path.Combine(project, "snapshot.rpc.json");
+        WriteSnapshotDescriptor(descriptorPath, "original");
+
+        var targetsPath = Path.GetFullPath(Path.Combine(
+            FindTaskDirectory(),
             "..",
             "build",
-            "Sunder.Package.Build.targets")));
-        var expectedFiles = new[]
-        {
-            "PackageMetadataDecoder.cs",
-            "PackageDependencyExtractor.cs",
-            "PackageCapabilityInference.cs",
-            "ManagedAssemblyPath.cs",
-            "PackageAuthoredCallSite.cs",
-            "SdkCapabilityCatalog.cs",
-            "ResolvedSdkPackageVersion.cs",
-            "PackageAssetDiscovery.cs",
-            "PackageManifestValidator.cs",
-            "PackageTargetBuilder.cs",
-            "PackageContractBuilder.cs",
-        };
+            "Sunder.Package.Build.targets"));
+        var manifestPath = Path.Combine(project, "obj", "sunder-package.json");
+        var devPackage = Path.Combine(targetDirectory, "sunder-dev");
+        var projectFile = Path.Combine(project, "ManifestPipeline.proj");
+        await File.WriteAllTextAsync(projectFile, $$"""
+            <Project>
+              <PropertyGroup>
+                <Configuration>Debug</Configuration>
+                <TargetFramework>net10.0</TargetFramework>
+                <Version>1.2.3</Version>
+                <BaseIntermediateOutputPath>obj/</BaseIntermediateOutputPath>
+                <IntermediateOutputPath>obj/</IntermediateOutputPath>
+                <TargetPath>{{targetAssembly}}</TargetPath>
+                <TargetFileName>{{Path.GetFileName(targetAssembly)}}</TargetFileName>
+                <TargetDir>{{targetDirectory}}{{Path.DirectorySeparatorChar}}</TargetDir>
+                <SunderGeneratedPackageManifest>{{manifestPath}}</SunderGeneratedPackageManifest>
+                <SunderDevOutputPath>{{devPackage}}</SunderDevOutputPath>
+                <SunderDevOutputDiscoveryRoot>{{targetDirectory}}</SunderDevOutputDiscoveryRoot>
+                <SunderPackageBuildProject>{{Path.Combine(root, "missing.csproj")}}</SunderPackageBuildProject>
+                <SunderPackageBuildTaskAssembly>{{typeof(PackSunderPackageTask).Assembly.Location}}</SunderPackageBuildTaskAssembly>
+              </PropertyGroup>
+              <ItemGroup>
+                <ReferencePath Include="{{typeof(SunderPackageAttribute).Assembly.Location}}" />
+                <ReferencePath Include="{{typeof(IAvaloniaPackageContributionRegistry).Assembly.Location}}" />
+                <ReferencePath Include="{{typeof(IPackageStackExporter).Assembly.Location}}" />
+                <SunderSdkCapability Include="callbacks.v1" />
+                <SunderRpcBinding Include="{{descriptorPath}}"
+                                  Namespace="Test.Snapshot.Generated"
+                                  OutputFile="Snapshot.g.cs" />
+                <SunderContractBundle Include="{{descriptorPath}}"
+                                      ContractId="test.snapshot"
+                                      Version="1.0.0"
+                                      DescriptorPath="contracts/snapshot.rpc.json"
+                                      Exposure="package" />
+              </ItemGroup>
+              <Import Project="{{targetsPath}}" />
+              <Target Name="MutateRpcDescriptor" AfterTargets="GenerateSunderRpcBindings">
+                <WriteLinesToFile File="{{descriptorPath}}"
+                                  Lines="mutated-after-binding-generation"
+                                  Overwrite="true"
+                                  Encoding="UTF-8" />
+              </Target>
+              <Target Name="Run" DependsOnTargets="EmitSunderDevOutput" />
+            </Project>
+            """);
 
-        Assert.True(File.ReadLines(taskPath).Count() < 180);
-        Assert.False(File.Exists(Path.Combine(taskDirectory, "GenerateSunderPackageManifestTaskAdapter.cs")));
-        Assert.DoesNotContain("SdkApiVersion { get; set; }", taskSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("SdkVersion { get; set; }", taskSource, StringComparison.Ordinal);
-        Assert.Contains(
-            "GlobalPropertiesToRemove=\"Version;VersionPrefix;VersionSuffix;PackageVersion;InformationalVersion\"",
-            targetsSource,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("'@(SunderRpcBinding)' != ''", targetsSource, StringComparison.Ordinal);
-        Assert.Contains(
-            "<Output TaskParameter=\"BindingSnapshots\" ItemName=\"_SunderRpcBindingSnapshot\" />",
-            targetsSource,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "BindingSnapshots=\"@(_SunderRpcBindingSnapshot)\"",
-            targetsSource,
-            StringComparison.Ordinal);
-        foreach (var file in expectedFiles)
+        var result = await ReadProcessAsync(StartMsbuild(projectFile, project));
+
+        Assert.True(result.ExitCode == 0, result.Output);
+        var snapshotPath = Assert.Single(Directory.GetFiles(
+            Path.Combine(project, "obj", "sunder-rpc", ".snapshots"),
+            "*.json",
+            SearchOption.TopDirectoryOnly));
+        var canonicalDescriptor = await File.ReadAllBytesAsync(snapshotPath);
+        var mutatedDescriptor = await File.ReadAllBytesAsync(descriptorPath);
+        Assert.False(canonicalDescriptor.SequenceEqual(mutatedDescriptor));
+        Assert.True(File.Exists(Path.Combine(project, "obj", "sunder-rpc", "Snapshot.g.cs")));
+        var bundledDescriptor = Path.Combine(
+            devPackage,
+            "payload",
+            "shared",
+            "contracts",
+            "snapshot.rpc.json");
+        var bundledDescriptorBytes = await File.ReadAllBytesAsync(bundledDescriptor);
+        Assert.Equal(canonicalDescriptor, bundledDescriptorBytes);
+        using (var manifest = JsonDocument.Parse(await File.ReadAllBytesAsync(
+                   Path.Combine(devPackage, "manifest", "sunder-package.json"))))
         {
-            Assert.True(File.Exists(Path.Combine(taskDirectory, file)), $"Missing manifest-generation collaborator {file}.");
-            Assert.True(File.ReadLines(Path.Combine(taskDirectory, file)).Count() < 950, $"{file} exceeded its size ratchet.");
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(canonicalDescriptor)).ToLowerInvariant(),
+                Assert.Single(manifest.RootElement.GetProperty("contractBundles").EnumerateArray())
+                    .GetProperty("descriptorSha256")
+                    .GetString());
         }
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(devPackage);
+        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
     }
 
     private static GenerateSunderPackageManifestTask CreateTask(string manifestPath, IBuildEngine buildEngine)
@@ -2526,8 +2890,24 @@ public sealed class PackageBuildManifestTests
             ProjectDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!,
             TargetFramework = "net10.0",
             SdkCapabilities = [new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1)],
-            ReferencePaths = SdkReferencePaths(includeAvalonia: true),
+            ReferencePaths = SdkReferencePaths(includeAvalonia: true, includeStacks: true),
         };
+
+    private static void AssertDocumentProperties(JsonElement document, JsonElement specification)
+    {
+        if (specification.TryGetProperty("schemaVersion", out var schemaVersion))
+        {
+            Assert.Equal(schemaVersion.GetInt32(), document.GetProperty("schemaVersion").GetInt32());
+        }
+        var expected = specification.GetProperty("properties").EnumerateArray()
+            .Select(static property => property.GetString()!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var actual = document.EnumerateObject().Select(static property => property.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(expected, actual);
+    }
 
     private static Process StartMsbuild(string projectFile, string workingDirectory)
     {
@@ -2659,6 +3039,58 @@ public sealed class PackageBuildManifestTests
         startInfo.ArgumentList.Add(helper);
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
         return Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start Node lock helper.");
+    }
+
+    private static CapturedProcess StartCapturedNode(string helper, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "node",
+            WorkingDirectory = FindRepositoryRoot(),
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add(helper);
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        return CapturedProcess.Start(startInfo);
+    }
+
+    private static void TryWriteReleaseSignal(string path)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "release");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Process-tree cleanup below remains authoritative if the signal cannot be written.
+        }
+    }
+
+    private static void CaptureCleanup(ICollection<Exception> errors, Action cleanup)
+    {
+        try
+        {
+            cleanup();
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+    }
+
+    private static async Task CaptureCleanupAsync(
+        ICollection<Exception> errors,
+        Func<ValueTask> cleanup)
+    {
+        try
+        {
+            await cleanup();
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
     }
 
     private static async Task WaitForFileAsync(string path, TimeSpan timeout)
@@ -2880,11 +3312,15 @@ public sealed class PackageBuildManifestTests
         => Path.GetFileNameWithoutExtension(Assembly.GetExecutingAssembly().Location)
            + (rid.StartsWith("win-", StringComparison.Ordinal) ? ".exe" : string.Empty);
 
-    private static MSBuildTaskItem[] SdkReferencePaths(bool includeAvalonia = false)
-        => (includeAvalonia
-                ? new[] { typeof(SunderPackageAttribute).Assembly.Location, typeof(IAvaloniaPackageContributionRegistry).Assembly.Location }
-                : new[] { typeof(SunderPackageAttribute).Assembly.Location })
-            .Select(static path => new MSBuildTaskItem(path))
+    private static MSBuildTaskItem[] SdkReferencePaths(bool includeAvalonia = false, bool includeStacks = false)
+        => new[]
+            {
+                typeof(SunderPackageAttribute).Assembly.Location,
+                includeAvalonia ? typeof(IAvaloniaPackageContributionRegistry).Assembly.Location : null,
+                includeStacks ? typeof(IPackageStackExporter).Assembly.Location : null,
+            }
+            .Where(static path => path is not null)
+            .Select(static path => new MSBuildTaskItem(path!))
             .ToArray();
 
     private static string[] GetAssemblyCompanionPaths(string assemblyPath)
@@ -2925,7 +3361,7 @@ public sealed class PackageBuildManifestTests
         return destinationPath;
     }
 
-    private static string GetFixtureAssemblyPath(string fixtureName)
+    private static string GetFixtureAssemblyPath(string fixtureName, string? assemblyName = null)
         => Path.Combine(
             FindRepositoryRoot(),
             "languages",
@@ -2937,7 +3373,7 @@ public sealed class PackageBuildManifestTests
             "bin",
             ResolveConfiguration(),
             "net10.0",
-            fixtureName + ".dll");
+            (assemblyName ?? fixtureName) + ".dll");
 
     private static string ResolveConfiguration()
         => new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)).Parent?.Name

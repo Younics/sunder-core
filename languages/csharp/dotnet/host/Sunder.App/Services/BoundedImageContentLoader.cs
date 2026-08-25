@@ -18,6 +18,7 @@ internal static class BoundedImageContentLoader
             loadSemaphore,
             uri,
             maxBytes,
+            httpClient.Timeout,
             cancellationToken).ConfigureAwait(false);
 
     public static async Task<BoundedImageContentLoadResult> LoadAsync(
@@ -34,13 +35,15 @@ internal static class BoundedImageContentLoader
             loadSemaphore,
             uri,
             maxBytes,
-            cancellationToken).ConfigureAwait(false);
+            requestTimeout: null,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
     private static async Task<BoundedImageContentLoadResult> LoadAsync(
         Func<Uri, CancellationToken, Task<HttpResponseMessage>> sendAsync,
         SemaphoreSlim loadSemaphore,
         Uri uri,
         long maxBytes,
+        TimeSpan? requestTimeout,
         CancellationToken cancellationToken)
     {
         if (!HttpMediaUriValidator.IsValid(uri))
@@ -49,11 +52,21 @@ internal static class BoundedImageContentLoader
         }
 
         var semaphoreAcquired = false;
+        CancellationTokenSource? timeout = null;
+        CancellationTokenSource? linked = null;
         try
         {
             await loadSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
             semaphoreAcquired = true;
-            using var response = await sendAsync(uri, cancellationToken).ConfigureAwait(false);
+            var effectiveToken = cancellationToken;
+            if (requestTimeout is { } duration && duration != Timeout.InfiniteTimeSpan)
+            {
+                timeout = new CancellationTokenSource(duration);
+                linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+                effectiveToken = linked.Token;
+            }
+
+            using var response = await sendAsync(uri, effectiveToken).ConfigureAwait(false);
             if (!HttpMediaUriValidator.HasSameOrigin(uri, response.RequestMessage?.RequestUri))
             {
                 return BoundedImageContentLoadResult.Failed($"Image '{uri}' redirected to an untrusted origin.");
@@ -65,16 +78,23 @@ internal static class BoundedImageContentLoader
                 return BoundedImageContentLoadResult.Failed($"Image '{uri}' exceeds the {maxBytes} byte limit.");
             }
 
-            await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            var memory = await ReadBoundedContentAsync(source, maxBytes, cancellationToken).ConfigureAwait(false);
+            await using var source = await response.Content.ReadAsStreamAsync(effectiveToken).ConfigureAwait(false);
+            var memory = await ReadBoundedContentAsync(source, maxBytes, effectiveToken).ConfigureAwait(false);
             memory.Position = 0;
             return BoundedImageContentLoadResult.Success(
                 memory,
                 response.Content.Headers.ContentType?.MediaType,
                 response.Content.Headers.ContentEncoding.ToArray());
         }
+        catch (OperationCanceledException exception)
+            when (timeout?.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Image request exceeded the {requestTimeout} timeout.", exception);
+        }
         finally
         {
+            linked?.Dispose();
+            timeout?.Dispose();
             if (semaphoreAcquired)
             {
                 loadSemaphore.Release();
@@ -87,6 +107,10 @@ internal static class BoundedImageContentLoader
         long maxBytes,
         CancellationToken cancellationToken)
     {
+        if (maxBytes < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        }
         var memory = new MemoryStream();
         var buffer = new byte[81920];
         long totalBytes = 0;
@@ -94,19 +118,23 @@ internal static class BoundedImageContentLoader
         {
             while (true)
             {
-                var bytesRead = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                var remaining = maxBytes - totalBytes;
+                var readLength = (int)Math.Min(buffer.Length, remaining + 1);
+                var bytesRead = await source.ReadAsync(
+                    buffer.AsMemory(0, readLength),
+                    cancellationToken).ConfigureAwait(false);
                 if (bytesRead == 0)
                 {
                     memory.Position = 0;
                     return memory;
                 }
 
-                totalBytes += bytesRead;
-                if (totalBytes > maxBytes)
+                if (bytesRead > remaining)
                 {
                     throw new InvalidOperationException($"Image content exceeds the {maxBytes} byte limit.");
                 }
 
+                totalBytes += bytesRead;
                 memory.Write(buffer, 0, bytesRead);
             }
         }

@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 2,
+  "targets": [
+    {
+      "type": "ProcessRuntimeWorker",
+      "ownerProject": "Sunder.Runtime.Host",
+      "requiredBehaviors": [
+        { "id": "handshake", "category": "inputs", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.Worker_HandshakeInvokeStreamCancellationAndShutdown"] },
+        { "id": "compose", "category": "ordering", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.WorkerV3_ComposesStartsCommitsActivatesInvokesAndShutsDown"] },
+        { "id": "recovery-candidate-authority", "category": "ordering", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.WorkerV3_RecoveryCandidateUsesPackageDataUntilExactAuthorityIsRevoked"] },
+        { "id": "commit", "category": "ordering", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.WorkerV3_ComposesStartsCommitsActivatesInvokesAndShutsDown"] },
+        { "id": "activate", "category": "ordering", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.WorkerV3_ProviderDispatchWaitsForActivationAcknowledgement"] },
+        { "id": "callbacks-auth", "category": "errors", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.WorkerV3_MismatchedCallbackIdentityFaultsExactGeneration"] },
+        { "id": "package-data", "category": "outputs", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.WorkerV3_SettingsStateSchemaAndPayloadsUseHostAuthority"] },
+        { "id": "content", "category": "cleanup", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.Worker_ContentRegisterOpenAndReleaseRemainBoundToHostInvocation"] },
+        { "id": "payload-handles", "category": "cleanup", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.WorkerV3_StaleActivationConsumesSubmittedUploadHandle"] },
+        { "id": "cancellation", "category": "cancellation", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.Worker_PreCancelledInvocationIsOrderedBeforeCancellation"] },
+        { "id": "crash", "category": "errors", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.Worker_ProtocolViolationCrashAndCallerSpoofFaultExactGeneration"] },
+        { "id": "shutdown", "category": "cleanup", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.Worker_BoundsStartupShutdownAndStderr"] },
+        { "id": "exact-generation-fault", "category": "errors", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.WorkerV3_ReportedGenerationFaultFaultsOnlyItsExactGenerationCompletion"] },
+        { "id": "lifecycle-envelope-codec", "category": "inputs", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerLifecycleEnvelopeCodecTests.Parse_ValidLifecycleEnvelopes_ReturnsTypedPayloads", "Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerLifecycleEnvelopeCodecTests.Parse_MalformedLifecycleEnvelope_ThrowsDeterministicProtocolError"] }
+      ]
+    },
+    {
+      "type": "RuntimeRpcBroker",
+      "ownerProject": "Sunder.Runtime.Host",
+      "requiredBehaviors": [
+        { "id": "scope-ownership", "category": "ordering", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallScope_RequestContentIsBoundToExactSiblingEndpoint"] },
+        { "id": "permission", "category": "errors", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.Permission_DefaultDenyGrantDomainErrorAndSpoofProtection"] },
+        { "id": "lease-order", "category": "ordering", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.SessionRetirement_CancelsCallAndDrainsBeforeReplacementDisposal"] },
+        { "id": "request-and-stream-output-schema", "category": "outputs", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.RequestAndStreamOutput_AreSchemaValidated"] },
+        { "id": "retry-metadata", "category": "errors", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.IdempotentUnary_DispatchedFailureIsRetrySafeButIsNotRetried"] },
+        { "id": "retirement", "category": "cancellation", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallerAndCalleeRetirement_CancelExactActiveCall"] },
+        { "id": "content-expiry", "category": "cleanup", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallScope_DeadlineRevokesWatchContentAndReleasesCapacity"] },
+        { "id": "provider-fault-fencing", "category": "errors", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.ExactProviderFault_CancelsOldGenerationContentStreamWithoutFaultingHealthySibling"] },
+        { "id": "call-acquisition-policy", "category": "errors", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcCallAcquisitionPolicyTests.EndpointAndProviderGeneration_ExposeExactAcquisitionFailures", "Sunder.Runtime.Host.Tests.RuntimeRpcCallAcquisitionPolicyTests.CallerAction_ResolvesContractBeforeSelectingAuthoritativePermissionSource", "Sunder.Runtime.Host.Tests.RuntimeRpcCallAcquisitionPolicyTests.FrameAcquisition_RejectsDepthBeforeReadingClockThenAppliesDeadline", "Sunder.Runtime.Host.Tests.RuntimeRpcCallAcquisitionPolicyTests.LeaseAcquisition_ReportsExactBoundedAuthority", "Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallAcquisition_UnaryAndStreamPreservePermissionAndShapeFailureParity"] },
+        { "id": "call-frame-deadline-calculation", "category": "ordering", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcCallFrameCalculatorTests.Merge_PreservesSingleFrameAndCombinesMaximumDepthWithEarliestDeadline", "Sunder.Runtime.Host.Tests.RuntimeRpcCallFrameCalculatorTests.CalculateScopeDeadline_AppliesDefaultMaximumAndParentPrecedence", "Sunder.Runtime.Host.Tests.RuntimeRpcCallFrameCalculatorTests.CalculateInvocationDeadline_AppliesCapabilityParentAndScopePrecedence"] },
+        { "id": "call-lease-teardown-order", "category": "cleanup", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallLease_DisposesAuthorityThenCalleeCallerAndSessionLeases"] },
+        { "id": "call-scope-acquisition-outcomes", "category": "errors", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcCallAcquisitionPolicyTests.ScopeRegistration_MapsBoundedRegistryOutcomes", "Sunder.Runtime.Host.Tests.RuntimeRpcCallAcquisitionPolicyTests.ScopeValidation_PreservesDeadlineBeforeUnavailableMapping"] },
+        { "id": "call-scope-teardown-order", "category": "cleanup", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallScopeRegistry_PreservesPathSpecificTeardownOrder"] },
+        { "id": "call-scope-teardown-races", "category": "cleanup", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallScopeRegistry_AlreadyRetiredRegistrationReturnsNullAndReleasesCapacity", "Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallScopeRegistry_RevocationDuringTimerCreationIsNotPublished", "Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallScopeRegistry_CompetingRetireDeadlineAndCloseTeardownExactlyOnce", "Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallScope_ExpiryDuringRegistrationCleansPartialContentAndScope", "Sunder.Runtime.Host.Tests.RuntimeRpcBrokerTests.CallScope_DeadlineAndDisposeRaceLeavesNoTimersOrScopeSlots"] }
+      ]
+    },
+    {
+      "type": "PackageSessionState",
+      "ownerProject": "Sunder.Runtime.Host",
+      "requiredBehaviors": [
+        { "id": "generation-publication", "category": "ordering", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.PackageSessionStateTests.PublishSessionAsync_DrainsBeforePublishingReplacement"] },
+        { "id": "recovery-after-aborted-publication", "category": "errors", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.PackageSessionStateTests.PublishSessionAsync_WhenLeaseIgnoresRetirement_FailsAndReopensAdmission"] },
+        { "id": "committed-candidate-survives-post-swap-fault", "category": "errors", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.PackageSessionStateTests.PublishSessionAsync_WhenPostSwapCallbackFails_KeepsCommittedCandidateActive"] },
+        { "id": "publication-candidate-ownership", "category": "ordering", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.PackageSessionStateTests.PublicationHandle_FromDifferentState_IsRejectedBeforeMutation"] },
+        { "id": "immutable-publication-snapshot", "category": "outputs", "status": "covered", "evidence": ["Sunder.Runtime.Host.Tests.PackageSessionStateTests.PublicationSnapshot_RemainsImmutableAcrossLaterSessionMutation"] }
+      ]
+    },
+    {
+      "type": "PackageViewHostService",
+      "ownerProject": "Sunder.App",
+      "requiredBehaviors": [
+        { "id": "load-unload", "category": "outputs", "status": "covered", "evidence": ["Sunder.App.Tests.PackageViewHostServiceTests.DisablePackageAsync_WhenPackageLoaded_UnloadsResourcesAndKeepsPackageDisabled"] },
+        { "id": "quarantine", "category": "errors", "status": "covered", "evidence": ["Sunder.App.Tests.PackageViewHostServiceTests.AttributedPackageFault_AutomaticRecoveryIsFreshOnceAndReplacementFaultIsTerminal"] },
+        { "id": "candidate-registration-ownership", "category": "ordering", "status": "covered", "evidence": ["Sunder.App.Tests.PackageViewHostServiceTests.ApplyPackageGenerationAsync_KeepsCandidateRegistrationsInvisibleUntilCommit"] },
+        { "id": "boundary-cleanup-gates-recovery", "category": "cleanup", "status": "covered", "evidence": ["Sunder.App.Tests.PackageViewHostServiceTests.AttributedPackageFault_WhenBoundaryDetachmentFails_DoesNotStartOverlappingRecovery"] },
+        { "id": "timed-out-cleanup-retention", "category": "cleanup", "status": "covered", "evidence": ["Sunder.App.Tests.AppPackageUiRecoveryCoordinatorTests.Recovery_CleanupTimeoutPublishesWithoutStartingPresentation", "Sunder.App.Tests.PackageViewHostServiceTests.ApplyPackageGenerationAsync_WhenRetirementHangs_ReturnsAfterCommitAndQuarantinesCleanup"] },
+        { "id": "replacement", "category": "ordering", "status": "covered", "evidence": ["Sunder.App.Tests.PackageViewHostServiceTests.ApplyPackageGenerationAsync_CommitsReplacementBeforeRetiringDetachedGeneration"] },
+        { "id": "navigation", "category": "ordering", "status": "covered", "evidence": ["Sunder.App.Tests.PackageViewHostServiceTests.GenerationFencedNavigation_RevalidatesRequestAfterWaitingForViewGate"] },
+        { "id": "notification-outcome", "category": "logging", "status": "covered", "evidence": ["Sunder.App.Tests.PackageViewHostServiceTests.DisablePackageAsync_PublishesSanitizedDeduplicatedNotification"] },
+        { "id": "load-context-release", "category": "cleanup", "status": "covered", "evidence": ["Sunder.App.Tests.PackageViewHostServiceTests.DisposeAsync_UnloadsCurrentGenerationLoadContext"] }
+      ]
+    },
+    {
+      "type": "MainWindowViewModel",
+      "ownerProject": "Sunder.App",
+      "requiredBehaviors": [
+        { "id": "presentation-revision", "category": "ordering", "status": "covered", "evidence": ["Sunder.App.Tests.MainWindowViewModelShellViewTests.DeferredPresentation_OnlyLatestRequestNavigatesWithItsParameters"] },
+        { "id": "staged-navigation", "category": "ordering", "status": "covered", "evidence": ["Sunder.App.Tests.MainWindowViewModelShellViewTests.PreparedNavigation_StagesClosedDockAndSelectionUntilCommit"] },
+        { "id": "supersession", "category": "cancellation", "status": "covered", "evidence": ["Sunder.App.Tests.MainWindowViewModelShellViewTests.PreparedNavigation_SupersededCandidateIsUnstagedWithoutPresentation"] },
+        { "id": "commit-rollback", "category": "errors", "status": "covered", "evidence": ["Sunder.App.Tests.MainWindowViewModelShellViewTests.PreparedNavigation_RejectionRestoresSelectionPanelAndDock"] },
+        { "id": "lifecycle-candidate-before-visible-commit", "category": "ordering", "status": "covered", "evidence": ["Sunder.App.Tests.MainWindowViewModelShellViewTests.ApplyPackageLifecycleSnapshotAsync_StabilizesSelectedCandidateBeforeVisibleCommit"] },
+        { "id": "auxiliary-refresh-result", "category": "cancellation", "status": "covered", "evidence": ["Sunder.App.Tests.MainWindowViewModelShellViewTests.ApplyPackageLifecycleSnapshotAsync_CancellationDuringAuxiliaryRefreshPreservesCommittedShellSuccess"] }
+      ]
+    },
+    {
+      "type": "AppWebBridge",
+      "ownerProject": "Sunder.App",
+      "requiredBehaviors": [
+        { "id": "nonce-origin", "category": "inputs", "status": "covered", "evidence": ["Sunder.App.Tests.AppWebBridgeTests.Admission_RejectsWrongNonceAndOriginBeforeCreatingPendingRequest"] },
+        { "id": "admission", "category": "errors", "status": "covered", "evidence": ["Sunder.App.Tests.AppWebBridgeTests.Admission_RejectsWrongNonceAndOriginBeforeCreatingPendingRequest"] },
+        { "id": "pending-request-registry-ownership", "category": "ordering", "status": "covered", "evidence": ["Sunder.App.Tests.AppWebPendingRequestRegistryTests.Reserve_EnforcesExactCapacityAndBoundsRequestIdHistory", "Sunder.App.Tests.AppWebPendingRequestRegistryTests.Completion_DuplicateAndLateResponsesCannotRemoveReplacement"] },
+        { "id": "pending-request-registry-cleanup", "category": "cleanup", "status": "covered", "evidence": ["Sunder.App.Tests.AppWebPendingRequestRegistryTests.NavigationReset_CancelsDetachedRequestsAndAllowsEventualCleanup", "Sunder.App.Tests.AppWebPendingRequestRegistryTests.Disposal_CancelsAndDisposesEveryRequestWithoutLeaks"] },
+        { "id": "navigation", "category": "ordering", "status": "covered", "evidence": ["Sunder.App.Tests.AppWebBridgeTests.Navigation_RotatesTrustAndDoesNotLetLateResponsesRemoveNewDocumentRequests"] },
+        { "id": "browser-deadline", "category": "cancellation", "status": "covered", "evidence": ["Sunder.App.Tests.AppWebBridgeTests.BrowserDeadline_IsCarriedForEveryCallAndCompletesAsAuthenticatedDeadlineExceeded"] },
+        { "id": "javascript-bootstrap-parity", "category": "outputs", "status": "covered", "evidence": ["Sunder.App.Tests.AppWebBridgeTests.BootstrapJavaScriptCrossLanguageVm_ExecutesExactNativeContractAcrossNavigation", "Sunder.App.Tests.AppWebBridgeTests.BootstrapJavaScriptCrossLanguageVm_RejectsSeededNonceOwnershipMutation"] },
+        { "id": "resource-bounds", "category": "inputs", "status": "covered", "evidence": ["Sunder.App.Tests.AppWebBridgeTests.NativeRequestPreflight_UsesExactEscapedUtf8BytesAndValueDepth"] }
+      ]
+    },
+    {
+      "type": "RuntimeWorkerCoordinator",
+      "ownerProject": "Sunder.Host.Supervisor",
+      "requiredBehaviors": [
+        { "id": "durable-desired-state", "category": "persistence", "status": "covered", "evidence": ["Sunder.Host.Supervisor.Tests.HostSupervisorFoundationTests.RuntimeWorkerCoordinator_StopMutationIsDurableAndIdempotentAcrossRestart"] },
+        { "id": "payload-candidate-persistence-boundary", "category": "persistence", "status": "covered", "evidence": ["Sunder.Host.Supervisor.Tests.HostSupervisorFoundationTests.RuntimeWorkerCoordinator_PayloadReplacementPersistenceFaultRetainsPreviousStateAndAbandonsCandidate"] },
+        { "id": "runtime-host-payload-compensation", "category": "cleanup", "status": "covered", "evidence": ["Sunder.Host.Supervisor.Tests.HostSupervisorFoundationTests.RuntimeWorkerCoordinator_PayloadReplacementLaunchFaultAdvancesCandidateWithoutDuplicateOwner", "Sunder.Host.Supervisor.Tests.HostSupervisorFoundationTests.RuntimeWorkerCoordinator_PayloadReplacementOracleRejectsLostDesiredIntentMutation"] },
+        { "id": "readiness", "category": "outputs", "status": "covered", "evidence": ["Sunder.Host.Supervisor.Tests.HostSupervisorProcessIntegrationTests.SupervisorProcess_GatewaysToNestedRuntimeAndOwnsResetDrain"] },
+        { "id": "crash-loop", "category": "errors", "status": "covered", "evidence": ["Sunder.Host.Supervisor.Tests.HostSupervisorFoundationTests.RuntimeWorkerCoordinator_RetriesPreLaunchFailuresUntilCrashLoop"] },
+        { "id": "ledger-recovery", "category": "persistence", "status": "covered", "evidence": ["Sunder.Host.Supervisor.Tests.HostSupervisorFoundationTests.RuntimeWorkerCoordinator_ReconcilesInterruptedOperationWithSameIdentity"] },
+        { "id": "durable-order", "category": "ordering", "status": "covered", "evidence": ["Sunder.Host.Supervisor.Tests.HostSupervisorFoundationTests.RuntimeWorkerCoordinator_DurableStopPersistsIntentBeforeLeaseRelease"] },
+        { "id": "desired-state-submission-transitions", "category": "ordering", "status": "covered", "evidence": ["Sunder.Host.Supervisor.Tests.HostLifecycleTransitionsTests.CalculateSubmission_MapsEveryOperationKindAndAdvancesGenerationOnce", "Sunder.Host.Supervisor.Tests.HostLifecycleTransitionsTests.CalculateSubmission_PreservesRetryAndConflictPrecedence"] },
+        { "id": "launch-completion-transitions", "category": "ordering", "status": "covered", "evidence": ["Sunder.Host.Supervisor.Tests.HostLifecycleTransitionsTests.CompleteOperation_FailedStartPreservesRunningIntentAndAcceptedGeneration", "Sunder.Host.Supervisor.Tests.HostLifecycleTransitionsTests.PromoteReady_ForClientOperationDoesNotAdvanceGenerationTwice", "Sunder.Host.Supervisor.Tests.HostLifecycleTransitionsTests.PromoteReady_ForRecoveryAdvancesGenerationOnce"] },
+        { "id": "readiness-probe-outcomes", "category": "errors", "status": "covered", "evidence": ["Sunder.Host.Supervisor.Tests.RuntimeWorkerLaunchProbeTests.WaitForReadyWorkerAsync_DecodesTypedStartupDiagnostic", "Sunder.Host.Supervisor.Tests.RuntimeWorkerLaunchProbeTests.ReadStartupDiagnosticAsync_RejectsMalformedAndOversizedPayloads", "Sunder.Host.Supervisor.Tests.RuntimeWorkerLaunchProbeTests.WaitForReadyWorkerAsync_TimesOutWithoutMatchingPublication", "Sunder.Host.Supervisor.Tests.RuntimeWorkerLaunchProbeTests.WaitForReadyWorkerAsync_PreservesCallerCancellation"] }
+      ]
+    }
+  ]
+}

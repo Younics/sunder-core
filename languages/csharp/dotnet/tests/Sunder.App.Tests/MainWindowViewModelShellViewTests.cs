@@ -627,6 +627,59 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public async Task SamePlacementSupersession_CancelsPriorRequestBeforeLatestWorkStarts()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.workspaces"),
+            ("agent", "agent.subsessions"));
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        Assert.True(await harness.ViewModel.AddPackageViewToDefaultHotbarAsync(
+            "agent.subsessions"));
+        var firstWorkStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var latestWorkStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken firstRequestCancellation = default;
+        var priorCancellationObservedAtLatestStart = 0;
+        var workIndex = 0;
+        harness.ViewModel.ConfigurePackageViewWorkScheduler(async (work, cancellationToken) =>
+        {
+            if (Interlocked.Increment(ref workIndex) == 1)
+            {
+                firstRequestCancellation = cancellationToken;
+                firstWorkStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return;
+            }
+
+            if (firstRequestCancellation.IsCancellationRequested)
+            {
+                Interlocked.Exchange(ref priorCancellationObservedAtLatestStart, 1);
+            }
+            latestWorkStarted.TrySetResult();
+            await work(cancellationToken);
+        });
+
+        var superseded = harness.ViewModel.OpenPackageViewPanelAsync(
+            "agent.workspaces").AsTask();
+        await firstWorkStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var latest = harness.ViewModel.OpenPackageViewPanelAsync(
+            "agent.subsessions").AsTask();
+        await latestWorkStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, Volatile.Read(ref priorCancellationObservedAtLatestStart));
+        Assert.False(await superseded.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(await latest.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal("agent.subsessions", harness.ViewModel.RightTopPanel.ActiveViewId);
+    }
+
+    [Fact]
     public async Task ClosePanel_DetachesImmediatelyWithSingleGeometryCommit()
     {
         var rootPath = CreateTempDirectory();
@@ -1487,6 +1540,35 @@ public sealed class MainWindowViewModelShellViewTests
         {
             File.WriteAllText(navigationGatePath + ".release", string.Empty);
         }
+    }
+
+    [Fact]
+    public async Task ApplyPackageLifecycleSnapshotAsync_CancellationDuringAuxiliaryRefreshPreservesCommittedShellSuccess()
+    {
+        using var harness = CreateHarness(new EmptyRuntimeApiClientFactory());
+        using var cancellation = new CancellationTokenSource();
+        var auxiliaryRefreshStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var apply = harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
+            CreateRuntimeSnapshot([], [], generation: 2),
+            [],
+            retryDisabledPackageIds: null,
+            cancellationToken: cancellation.Token,
+            refreshAuxiliaryPackageViewsAsync: async operationCancellation =>
+            {
+                auxiliaryRefreshStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, operationCancellation);
+            });
+        await auxiliaryRefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Empty(harness.ViewModel.ListHotbarViews());
+        Assert.Equal("No packages loaded", harness.ViewModel.SyncStatusText);
+        cancellation.Cancel();
+
+        await apply.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Empty(harness.ViewModel.ListHotbarViews());
+        Assert.Equal("No packages loaded", harness.ViewModel.SyncStatusText);
     }
 
     [Fact]
@@ -2665,7 +2747,7 @@ public sealed class MainWindowViewModelShellViewTests
             packageViewHostService,
             new RuntimeConnectionState(AppStartupOptions.DefaultRuntimeUrl),
             runtimeApiClientFactory,
-            new RuntimeHostProcessManager(new AppStartupOptions()),
+            new RuntimeAvailabilityManager(new AppStartupOptions()),
             new SystemStatusResponse("Runtime", "1.0.0", true, DateTimeOffset.UtcNow),
             new NotificationCenterService(Path.Combine(rootPath, "notifications.json")),
             shellViewService,

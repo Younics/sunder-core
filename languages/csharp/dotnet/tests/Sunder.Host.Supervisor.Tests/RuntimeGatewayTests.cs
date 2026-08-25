@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Sunder.Host.Supervisor;
 using Sunder.Runtime.Client;
@@ -11,6 +12,24 @@ namespace Sunder.Host.Supervisor.Tests;
 
 public sealed partial class HostSupervisorFoundationTests
 {
+    [Theory]
+    [InlineData("POST", "/api/v1/uploads/packages", RuntimeRequestSizeLimits.PackageUploadMaxRequestBodyBytes)]
+    [InlineData("POST", "/api/v1/uploads/stacks/", RuntimeRequestSizeLimits.StackUploadMaxRequestBodyBytes)]
+    [InlineData("POST", "/API/V1/UPLOADS/STACK-MEDIA", RuntimeRequestSizeLimits.StackMediaUploadMaxRequestBodyBytes)]
+    [InlineData("PUT", "/api/v1/uploads/packages", RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes)]
+    [InlineData("POST", "/api/v1/packages/demo/settings/values", RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes)]
+    public void Gateway_ResolvesCanonicalRequestLimitForExactTransferRoutes(
+        string method,
+        string path,
+        long expectedLimit)
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = method;
+        context.Request.Path = path;
+
+        Assert.Equal(expectedLimit, RuntimeGateway.GetMaximumRequestBodyBytes(context.Request));
+    }
+
     [Fact]
     public async Task Gateway_ForwardsStreamingBodyWithPrivateWorkerCredential()
     {
@@ -52,6 +71,137 @@ public sealed partial class HostSupervisorFoundationTests
         Assert.Equal(StatusCodes.Status202Accepted, context.Response.StatusCode);
         context.Response.Body.Position = 0;
         Assert.Equal("forwarded", await new StreamReader(context.Response.Body).ReadToEndAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Gateway_ForwardsFixedAndChunkedBodiesAndPreservesRuntimePayloadTooLarge(bool chunked)
+    {
+        var workerConnection = CreateWorkerConnection(
+            new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5276/"), "worker-secret"));
+        byte[]? forwardedBody = null;
+        using var gateway = new RuntimeGateway(
+            new StubConnectionSource(workerConnection),
+            new RecordingHandler(async request =>
+            {
+                Assert.NotNull(request.Content);
+                Assert.False(request.Headers.Contains("Transfer-Encoding"));
+                Assert.Equal(4L, request.Content.Headers.ContentLength);
+                forwardedBody = await request.Content.ReadAsByteArrayAsync();
+                return new HttpResponseMessage(HttpStatusCode.RequestEntityTooLarge)
+                {
+                    Content = new StringContent("too large", Encoding.UTF8, "application/problem+json"),
+                };
+            }));
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/api/v1/uploads/stack-media";
+        if (chunked)
+        {
+            context.Request.Headers.TransferEncoding = "chunked";
+        }
+        else
+        {
+            context.Request.ContentLength = 4;
+        }
+        using Stream requestBody = chunked
+            ? new NonSeekableReadStream([1, 2, 3, 4])
+            : new MemoryStream([1, 2, 3, 4]);
+        context.Request.Body = requestBody;
+        context.Response.Body = new MemoryStream();
+
+        await gateway.ForwardAsync(context);
+
+        Assert.Equal([1, 2, 3, 4], forwardedBody);
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, context.Response.StatusCode);
+        context.Response.Body.Position = 0;
+        Assert.Equal("too large", await new StreamReader(context.Response.Body).ReadToEndAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Gateway_RejectsOversizedFixedAndChunkedBodiesWithoutContactingWorker(bool chunked)
+    {
+        var workerConnection = CreateWorkerConnection(
+            new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5276/"), "worker-secret"));
+        var forwarded = false;
+        using var gateway = new RuntimeGateway(
+            new StubConnectionSource(workerConnection),
+            new RecordingHandler(_ =>
+            {
+                forwarded = true;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
+            }));
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/api/v1/packages/missing/settings/values";
+        context.Request.Headers["X-Correlation-ID"] = "supervisor-upload-limit";
+        if (chunked)
+        {
+            context.Request.Headers.TransferEncoding = "chunked";
+        }
+        else
+        {
+            context.Request.ContentLength = RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes + 1;
+        }
+        context.Request.Body = chunked
+            ? new NonSeekableReadStream(new byte[RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes + 1])
+            : Stream.Null;
+        context.Response.Body = new MemoryStream();
+
+        await gateway.ForwardAsync(context);
+
+        Assert.False(forwarded);
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, context.Response.StatusCode);
+        Assert.Equal("application/problem+json", context.Response.ContentType);
+        Assert.Equal("supervisor-upload-limit", context.Response.Headers["X-Correlation-ID"]);
+        context.Response.Body.Position = 0;
+        using var problem = await JsonDocument.ParseAsync(context.Response.Body);
+        Assert.Equal(
+            "https://sunder.dev/problems/runtime.v1.upload-limit",
+            problem.RootElement.GetProperty("type").GetString());
+        Assert.Equal("Upload limit exceeded", problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, problem.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("runtime.v1.upload-limit", problem.RootElement.GetProperty("code").GetString());
+        Assert.Equal("supervisor-upload-limit", problem.RootElement.GetProperty("correlationId").GetString());
+    }
+
+    [Theory]
+    [InlineData("/api/v1/uploads/packages", RuntimeRequestSizeLimits.PackageUploadMaxRequestBodyBytes)]
+    [InlineData("/api/v1/uploads/stacks", RuntimeRequestSizeLimits.StackUploadMaxRequestBodyBytes)]
+    [InlineData("/api/v1/uploads/stack-media", RuntimeRequestSizeLimits.StackMediaUploadMaxRequestBodyBytes)]
+    public async Task Gateway_RejectsDeclaredTransferOverflowWithoutForwarding(
+        string path,
+        long maximumBytes)
+    {
+        var workerConnection = CreateWorkerConnection(
+            new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5276/"), "worker-secret"));
+        var forwarded = false;
+        using var gateway = new RuntimeGateway(
+            new StubConnectionSource(workerConnection),
+            new RecordingHandler(_ =>
+            {
+                forwarded = true;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
+            }));
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = path;
+        context.Request.ContentLength = maximumBytes + 1;
+        context.Request.Body = Stream.Null;
+        context.Response.Body = new MemoryStream();
+
+        await gateway.ForwardAsync(context);
+
+        Assert.False(forwarded);
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, context.Response.StatusCode);
+        context.Response.Body.Position = 0;
+        using var problem = await JsonDocument.ParseAsync(context.Response.Body);
+        Assert.Equal(
+            $"Request body too large. The max request body size is {maximumBytes} bytes.",
+            problem.RootElement.GetProperty("detail").GetString());
     }
 
     [Fact]
@@ -191,4 +341,20 @@ public sealed partial class HostSupervisorFoundationTests
             return true;
         }
     }
+
+    private sealed class NonSeekableReadStream(byte[] bytes) : MemoryStream(bytes, writable: false)
+    {
+        public override bool CanSeek => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override long Seek(long offset, SeekOrigin loc) => throw new NotSupportedException();
+    }
+
 }

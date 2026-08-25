@@ -33,6 +33,9 @@ public sealed class LocalStackLibraryServiceTests
         Assert.True(File.Exists(media.LocalPath));
         var listedMedia = Assert.Single(stacks[0].Media ?? []);
         Assert.True(File.Exists(listedMedia.LocalPath));
+        var persistedIndex = System.Text.Json.JsonSerializer.Deserialize<LocalStackLibraryIndex>(
+            await File.ReadAllTextAsync(Path.Combine(libraryRoot, "local-stacks.json")));
+        Assert.Equal(LocalStackLibraryIndex.CurrentSchemaVersion, persistedIndex?.SchemaVersion);
     }
 
     [Fact]
@@ -105,12 +108,50 @@ public sealed class LocalStackLibraryServiceTests
             null);
         await File.WriteAllTextAsync(
             Path.Combine(libraryRoot, "local-stacks.json"),
-            System.Text.Json.JsonSerializer.Serialize(new LocalStackLibraryIndex([malicious])));
+            System.Text.Json.JsonSerializer.Serialize(new LocalStackLibraryIndex(
+                LocalStackLibraryIndex.CurrentSchemaVersion,
+                [malicious])));
         var service = new LocalStackLibraryService(libraryRoot);
 
         Assert.Empty(await service.ListAsync());
         await Assert.ThrowsAsync<InvalidDataException>(() => service.DeleteAsync(malicious));
         Assert.True(File.Exists(outside));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task ListAsync_WhenIndexVersionIsNotCurrent_RejectsAndPreservesIndex(int schemaVersion)
+    {
+        var root = CreateTempDirectory();
+        var libraryRoot = Path.Combine(root, "library");
+        Directory.CreateDirectory(libraryRoot);
+        var indexPath = Path.Combine(libraryRoot, "local-stacks.json");
+        await File.WriteAllTextAsync(
+            indexPath,
+            System.Text.Json.JsonSerializer.Serialize(new LocalStackLibraryIndex(schemaVersion, [])));
+        var service = new LocalStackLibraryService(libraryRoot);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => service.ListAsync());
+
+        Assert.Contains("unsupported schema", exception.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(indexPath));
+    }
+
+    [Fact]
+    public async Task ListAsync_WhenIndexIsMalformed_RejectsAndPreservesIndex()
+    {
+        var root = CreateTempDirectory();
+        var libraryRoot = Path.Combine(root, "library");
+        Directory.CreateDirectory(libraryRoot);
+        var indexPath = Path.Combine(libraryRoot, "local-stacks.json");
+        await File.WriteAllTextAsync(indexPath, "{\"schemaVersion\":1,\"items\":[");
+        var service = new LocalStackLibraryService(libraryRoot);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => service.ListAsync());
+
+        Assert.Contains("is invalid", exception.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(indexPath));
     }
 
     private static async Task<string> CreateStackArchiveAsync(string root, string name = "Fullstack Agent Dev")

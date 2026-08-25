@@ -60,6 +60,16 @@ public sealed class SunderRpcGeneratedValueBindingsTests
         Assert.Contains("SunderRpcOptional<Event?> OptionalEvent", source, StringComparison.Ordinal);
         Assert.Contains("SunderRpcOptional<global::System.Text.Json.JsonElement> Value", source, StringComparison.Ordinal);
 
+        var internalSource = SunderRpcCSharpGenerator.Generate(
+            descriptor,
+            "Example.Generated.InternalStructured",
+            SunderRpcCSharpAccessibility.Internal);
+        Assert.Contains("internal enum Status", internalSource, StringComparison.Ordinal);
+        Assert.Contains("internal abstract record Event", internalSource, StringComparison.Ordinal);
+        Assert.Contains("internal sealed record Added : Event", internalSource, StringComparison.Ordinal);
+        Assert.Contains("internal abstract record EnvelopeInlineEventUnion", internalSource, StringComparison.Ordinal);
+        Assert.Empty(CompileAndLoad(internalSource).GetExportedTypes());
+
         var assembly = CompileAndLoad(source);
         var eventType = assembly.GetType("Example.Generated.Structured.Event", throwOnError: true)!;
         var addedType = assembly.GetType("Example.Generated.Structured.Added", throwOnError: true)!;

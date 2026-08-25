@@ -93,6 +93,9 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "sunder.core.testsupport": {
+        "type": "Project"
+      },
       "sunder.registry.contracts": {
         "type": "Project"
       },

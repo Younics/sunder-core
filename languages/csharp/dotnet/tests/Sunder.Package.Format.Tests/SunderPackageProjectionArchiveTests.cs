@@ -373,6 +373,58 @@ public sealed class SunderPackageProjectionArchiveTests
         Assert.Contains(result.Errors, error => error.Contains("projectionSha256", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task Inspector_RejectsOldAndFutureProjectionFormatVersions(int version)
+    {
+        var fixture = await CreateDefaultPackageAsync();
+        var original = await WriteProjectionAsync(fixture, SunderPackageProjectionKey.Shared, "projection-version");
+        var tampered = await MutateProjectionAsync(
+            fixture.Root,
+            original,
+            "projection-version-" + version,
+            staging => MutateJson(
+                staging,
+                SunderPackageProjectionFormat.DescriptorPath,
+                json => json["projectionFormatVersion"] = version));
+
+        var result = await InspectAsync(fixture.Root, tampered, "projection-version-result-" + version);
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            result.Errors,
+            error => error.Contains(
+                $"projectionFormatVersion {SunderPackageProjectionFormat.CurrentProjectionFormatVersion}",
+                StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task Inspector_RejectsOldAndFutureProjectionContentIndexVersions(int version)
+    {
+        var fixture = await CreateDefaultPackageAsync();
+        var original = await WriteProjectionAsync(fixture, SunderPackageProjectionKey.Shared, "projection-index-version");
+        var tampered = await MutateProjectionAsync(
+            fixture.Root,
+            original,
+            "projection-index-version-" + version,
+            staging => MutateJson(
+                staging,
+                SunderPackageProjectionFormat.ContentIndexPath,
+                json => json["schemaVersion"] = version));
+
+        var result = await InspectAsync(fixture.Root, tampered, "projection-index-version-result-" + version);
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            result.Errors,
+            error => error.Contains(
+                $"schemaVersion {SunderPackageProjectionFormat.CurrentContentIndexVersion}",
+                StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Inspector_RejectsManifestHashAndIdentityTampering()
     {

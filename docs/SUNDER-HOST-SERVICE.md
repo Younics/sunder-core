@@ -54,7 +54,7 @@ Runtime-worker and package state defaults to:
 
 The Host Supervisor creates a stable Host identity and a new external bearer credential when it starts. The private connection document is available only to the current user. Windows protects its token with DPAPI CurrentUser; Unix connection directories and files use current-user-only modes. App and CLI clients resolve this Host connection before the direct standalone Runtime connection.
 
-The Host Supervisor owns the Runtime worker, private IPC endpoint, worker credential, durable desired state, crash recovery, and lifecycle operations. Authenticated Host shutdown remains available for App-owned payload replacement.
+`RuntimeWorkerCoordinator` is the sole mutable owner of the Runtime worker process, private IPC and pipe leases, worker connection publication, durable lifecycle state, termination, and crash recovery. The stateless `RuntimeWorkerLaunchProbe` creates launch metadata, returns a launched process for immediate coordinator adoption, and borrows process and diagnostic handles only while probing readiness; it never retains or disposes those resources or mutates lifecycle state. Authenticated Host shutdown remains available for App-owned payload replacement.
 
 ## Distribution And Removal
 

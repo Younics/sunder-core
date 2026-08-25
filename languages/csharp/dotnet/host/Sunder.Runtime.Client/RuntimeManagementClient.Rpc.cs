@@ -72,7 +72,7 @@ public sealed partial class RuntimeManagementClient
         using var request = CreateRpcRequest(
             "rpc/app-sessions/close",
             new RuntimeRpcAppSessionCloseRequest(sessionId));
-        using var response = await _httpClient.SendAsync(request, token).ConfigureAwait(false);
+        using var response = await _transport.SendAsync(request, cancellationToken: token).ConfigureAwait(false);
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
     }
 
@@ -81,7 +81,7 @@ public sealed partial class RuntimeManagementClient
         CancellationToken token = default)
     {
         using var message = CreateRpcRequest("rpc/app/call-scopes/open", request);
-        using var response = await _httpClient.SendAsync(message, token).ConfigureAwait(false);
+        using var response = await _transport.SendAsync(message, cancellationToken: token).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.Conflict
             && string.Equals(
                 response.Content.Headers.ContentType?.MediaType,
@@ -107,7 +107,7 @@ public sealed partial class RuntimeManagementClient
         CancellationToken token = default)
     {
         using var request = CreateRpcRequest("rpc/app/call-scopes/close", closeRequest);
-        using var response = await _httpClient.SendAsync(request, token).ConfigureAwait(false);
+        using var response = await _transport.SendAsync(request, cancellationToken: token).ConfigureAwait(false);
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
     }
 
@@ -161,7 +161,7 @@ public sealed partial class RuntimeManagementClient
         CancellationToken token = default)
     {
         using var message = CreateRpcRequest("rpc/app/invoke", request);
-        using var httpResponse = await _httpClient.SendAsync(message, token).ConfigureAwait(false);
+        using var httpResponse = await _transport.SendAsync(message, cancellationToken: token).ConfigureAwait(false);
         var result = await _responses.ReadRequiredJsonAsync<RuntimeRpcAppInvokeResponse>(httpResponse, token)
             .ConfigureAwait(false);
         if (result.Value is { } value)
@@ -207,7 +207,7 @@ public sealed partial class RuntimeManagementClient
         request.Options.Set(
             RuntimeAuthenticatedHttpMessageHandler.RequiredFeaturesKey,
             new[] { RuntimeProtocolFeatures.AppWebRpcV2 });
-        using var response = await _httpClient.SendAsync(request, token).ConfigureAwait(false);
+        using var response = await _transport.SendAsync(request, cancellationToken: token).ConfigureAwait(false);
         var result = await _responses.ReadRequiredJsonAsync<RuntimeRpcAppContentRegisterResponse>(response, token)
             .ConfigureAwait(false);
         EnsureRpcErrorDetails(result.Error, "Runtime RPC content registration error details");
@@ -218,8 +218,15 @@ public sealed partial class RuntimeManagementClient
         RuntimeRpcAppContentOpenRequest openRequest,
         CancellationToken token = default)
     {
+        await _transport.NegotiateAsync(token).ConfigureAwait(false);
+        var maximumContentBytes = _transport.ResourceLimits.EffectivePolicy.MaximumContentReferenceBytes;
+        if (openRequest.Reference.Length < 0 || openRequest.Reference.Length > maximumContentBytes)
+        {
+            throw new InvalidDataException(
+                $"Runtime RPC content length exceeds the {maximumContentBytes} byte limit.");
+        }
         using var request = CreateRpcRequest("rpc/app/call-scopes/content/open", openRequest);
-        var response = await _httpClient.SendAsync(
+        var response = await _transport.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             token).ConfigureAwait(false);
@@ -239,9 +246,14 @@ public sealed partial class RuntimeManagementClient
         }
         try
         {
+            if (response.Content.Headers.ContentLength is { } contentLength
+                && contentLength != openRequest.Reference.Length)
+            {
+                throw new InvalidDataException("Runtime RPC content length does not match its reference.");
+            }
             var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
             return new RuntimeRpcAppContentOpenResult(
-                new RpcResponseReadStream(stream, response),
+                new RpcResponseReadStream(stream, response, openRequest.Reference.Length),
                 null);
         }
         catch
@@ -282,7 +294,7 @@ public sealed partial class RuntimeManagementClient
         [EnumeratorCancellation] CancellationToken token)
     {
         using var request = CreateRpcRequest(path, payload);
-        using var response = await _httpClient.SendAsync(
+        using var response = await _transport.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             token).ConfigureAwait(false);
@@ -355,23 +367,58 @@ internal sealed class NonDisposingReadStream(Stream inner) : Stream
     public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
-internal sealed class RpcResponseReadStream(Stream inner, HttpResponseMessage response) : Stream
+internal sealed class RpcResponseReadStream(
+    Stream inner,
+    HttpResponseMessage response,
+    long maximumLength) : Stream
 {
     private int _disposed;
+    private long _length;
     public override bool CanRead => inner.CanRead;
-    public override bool CanSeek => inner.CanSeek;
+    public override bool CanSeek => false;
     public override bool CanWrite => false;
-    public override long Length => inner.Length;
-    public override long Position { get => inner.Position; set => inner.Position = value; }
+    public override long Length => maximumLength;
+    public override long Position { get => _length; set => throw new NotSupportedException(); }
     public override void Flush() => inner.Flush();
     public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
-    public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
-    public override int Read(Span<byte> buffer) => inner.Read(buffer);
-    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        => inner.ReadAsync(buffer, cancellationToken);
-    public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+    public override int Read(byte[] buffer, int offset, int count)
+        => Read(buffer.AsSpan(offset, count));
+    public override int Read(Span<byte> buffer)
+    {
+        if (buffer.Length == 0) return 0;
+        var remaining = maximumLength - _length;
+        var read = inner.Read(buffer[..(int)Math.Min(buffer.Length, remaining + 1)]);
+        return ValidateRead(read, remaining);
+    }
+    public override async ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        if (buffer.Length == 0) return 0;
+        var remaining = maximumLength - _length;
+        var read = await inner.ReadAsync(
+            buffer[..(int)Math.Min(buffer.Length, remaining + 1)],
+            cancellationToken).ConfigureAwait(false);
+        return ValidateRead(read, remaining);
+    }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
     public override void SetLength(long value) => throw new NotSupportedException();
     public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    private int ValidateRead(int read, long remaining)
+    {
+        if (read == 0 && _length != maximumLength)
+        {
+            throw new InvalidDataException("Runtime RPC content ended before its declared length.");
+        }
+        if (read > remaining)
+        {
+            throw new InvalidDataException(
+                $"Runtime RPC content exceeds the {maximumLength} byte limit.");
+        }
+        _length += read;
+        return read;
+    }
 
     protected override void Dispose(bool disposing)
     {

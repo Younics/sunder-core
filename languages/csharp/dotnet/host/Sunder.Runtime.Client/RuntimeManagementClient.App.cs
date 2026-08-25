@@ -15,7 +15,9 @@ public sealed partial class RuntimeManagementClient
     {
         try
         {
-            using var response = await _httpClient.GetAsync(CreateUri("health"), token).ConfigureAwait(false);
+            using var response = await _transport.GetAsync(
+                CreateUri("health"),
+                cancellationToken: token).ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -30,7 +32,7 @@ public sealed partial class RuntimeManagementClient
 
     public async Task ShutdownAsync(CancellationToken token = default)
     {
-        using var response = await _httpClient.PostAsync(CreateUri("system/shutdown"), null, token).ConfigureAwait(false);
+        using var response = await _transport.PostAsync(CreateUri("system/shutdown"), null, token).ConfigureAwait(false);
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
     }
 
@@ -72,7 +74,7 @@ public sealed partial class RuntimeManagementClient
             HttpMethod.Post,
             $"dev-package-owners/{Uri.EscapeDataString(ownerId)}/release",
             request);
-        using var response = await _httpClient.SendAsync(message, token).ConfigureAwait(false);
+        using var response = await _transport.SendAsync(message, cancellationToken: token).ConfigureAwait(false);
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
     }
 
@@ -124,7 +126,7 @@ public sealed partial class RuntimeManagementClient
         long maxBytes,
         CancellationToken token = default)
     {
-        using var response = await _httpClient.GetAsync(
+        using var response = await _transport.GetAsync(
             CreateUri(snapshot.SnapshotUri),
             HttpCompletionOption.ResponseHeadersRead,
             token).ConfigureAwait(false);
@@ -145,7 +147,7 @@ public sealed partial class RuntimeManagementClient
             throw new InvalidDataException("Runtime download declared an invalid length.");
         }
 
-        using var response = await _httpClient.GetAsync(
+        using var response = await _transport.GetAsync(
             CreateUri(download.DownloadUri),
             HttpCompletionOption.ResponseHeadersRead,
             token).ConfigureAwait(false);
@@ -168,9 +170,9 @@ public sealed partial class RuntimeManagementClient
         string packageId,
         CancellationToken token = default)
     {
-        using var response = await _httpClient.GetAsync(
+        using var response = await _transport.GetAsync(
             CreateUri($"packages/{Uri.EscapeDataString(packageId)}/settings/values"),
-            token).ConfigureAwait(false);
+            cancellationToken: token).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
@@ -183,7 +185,7 @@ public sealed partial class RuntimeManagementClient
         IReadOnlyDictionary<string, string?> values,
         CancellationToken token = default)
     {
-        using var response = await _httpClient.PutAsJsonAsync(
+        using var response = await _transport.PutAsJsonAsync(
             CreateUri($"packages/{Uri.EscapeDataString(packageId)}/settings/values"),
             new UpdatePackageSettingsRequest(values),
             token).ConfigureAwait(false);
@@ -204,7 +206,7 @@ public sealed partial class RuntimeManagementClient
         string value,
         CancellationToken token = default)
     {
-        using var response = await _httpClient.PutAsJsonAsync(
+        using var response = await _transport.PutAsJsonAsync(
             CreateUri($"packages/{Uri.EscapeDataString(packageId)}/settings/{Uri.EscapeDataString(key)}"),
             new SetPackageSettingValueRequest(value),
             token).ConfigureAwait(false);
@@ -216,7 +218,7 @@ public sealed partial class RuntimeManagementClient
         string key,
         CancellationToken token = default)
     {
-        using var response = await _httpClient.DeleteAsync(
+        using var response = await _transport.DeleteAsync(
             CreateUri($"packages/{Uri.EscapeDataString(packageId)}/settings/{Uri.EscapeDataString(key)}"),
             token).ConfigureAwait(false);
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
@@ -227,7 +229,7 @@ public sealed partial class RuntimeManagementClient
 
     public async Task<PackageAuthSessionStartResponse> StartPackageAuthAsync(string packageId, CancellationToken token = default)
     {
-        using var response = await _httpClient.PostAsync(
+        using var response = await _transport.PostAsync(
             CreateUri($"packages/{Uri.EscapeDataString(packageId)}/auth/start"),
             null,
             token).ConfigureAwait(false);
@@ -244,7 +246,7 @@ public sealed partial class RuntimeManagementClient
 
     public async Task<PackageAuthStatusResponse> DisconnectPackageAuthAsync(string packageId, CancellationToken token = default)
     {
-        using var response = await _httpClient.PostAsync(
+        using var response = await _transport.PostAsync(
             CreateUri($"packages/{Uri.EscapeDataString(packageId)}/auth/disconnect"),
             null,
             token).ConfigureAwait(false);
@@ -256,7 +258,7 @@ public sealed partial class RuntimeManagementClient
         string authSessionId,
         CancellationToken token = default)
     {
-        using var response = await _httpClient.DeleteAsync(
+        using var response = await _transport.DeleteAsync(
             CreateUri($"packages/{Uri.EscapeDataString(packageId)}/callbacks/sessions/{Uri.EscapeDataString(authSessionId)}"),
             token).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<bool>(response, token).ConfigureAwait(false);
@@ -278,7 +280,7 @@ public sealed partial class RuntimeManagementClient
 
     public async Task DiscardStackImportPlanAsync(string planId, CancellationToken token = default)
     {
-        using var response = await _httpClient.DeleteAsync(
+        using var response = await _transport.DeleteAsync(
             CreateUri($"stacks/import/plans/{Uri.EscapeDataString(planId)}"),
             token).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.NotFound)
@@ -303,7 +305,7 @@ public sealed partial class RuntimeManagementClient
                 afterSequenceId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
 
-        using var response = await _httpClient.SendAsync(
+        using var response = await _transport.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             token).ConfigureAwait(false);
@@ -364,7 +366,7 @@ public sealed partial class RuntimeManagementClient
         CancellationToken token)
     {
         using var request = CreateDevPackageOwnerRequest(method, path, payload);
-        using var response = await _httpClient.SendAsync(request, token).ConfigureAwait(false);
+        using var response = await _transport.SendAsync(request, cancellationToken: token).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<TResponse>(response, token).ConfigureAwait(false);
     }
 
@@ -389,7 +391,11 @@ public sealed partial class RuntimeManagementClient
         long maxBytes,
         CancellationToken token)
     {
-        if (content.Headers.ContentLength is > 0 and var contentLength && contentLength > maxBytes)
+        if (maxBytes < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        }
+        if (content.Headers.ContentLength is { } contentLength && contentLength > maxBytes)
         {
             throw new InvalidDataException($"Runtime response payload exceeds the {maxBytes} byte limit.");
         }
@@ -399,16 +405,18 @@ public sealed partial class RuntimeManagementClient
         long total = 0;
         while (true)
         {
-            var read = await source.ReadAsync(buffer, token).ConfigureAwait(false);
+            var remaining = maxBytes - total;
+            var readLength = (int)Math.Min(buffer.Length, remaining + 1);
+            var read = await source.ReadAsync(buffer.AsMemory(0, readLength), token).ConfigureAwait(false);
             if (read == 0)
             {
                 return;
             }
-            total += read;
-            if (total > maxBytes)
+            if (read > remaining)
             {
                 throw new InvalidDataException($"Runtime response payload exceeds the {maxBytes} byte limit.");
             }
+            total += read;
             await destination.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
         }
     }

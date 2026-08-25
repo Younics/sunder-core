@@ -5,32 +5,44 @@ on:
     paths:
       - ".github/workflows/sunder-app-packaging-ci.yml"
       - ".github/workflows/sunder-app-release.yml"
+      - ".github/workflows/sunder-cli-release.yml"
+      - ".github/workflows/sunder-host-release.yml"
+      - ".github/workflows/sunder-release-promotion.yml"
+      - ".github/workflows/sunder-sdk-release.yml"
       - ".github/workflows/sunder-host-validation.yml"
       - "scripts/install/**"
       - "scripts/release/**"
-      - "languages/csharp/dotnet/host/Sunder.App/**"
-      - "languages/csharp/dotnet/host/Sunder.Cli/**"
-      - "languages/csharp/dotnet/host/Sunder.Host.Supervisor/**"
-      - "languages/csharp/dotnet/host/Sunder.Runtime.Host/**"
-      - "languages/csharp/dotnet/tests/Sunder.App.Tests/BundledBuildOutputTests.cs"
-      - "languages/csharp/dotnet/tests/Sunder.App.Tests/MacOsReleasePackagingTests.cs"
-      - "languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj"
+      - "scripts/test-oracles/**"
+      - "eng/test-oracles/**"
+      - "languages/csharp/dotnet/Directory.Build.props"
+      - "languages/csharp/dotnet/Directory.Packages.props"
+      - "languages/csharp/dotnet/host/**"
+      - "languages/csharp/dotnet/libraries/**"
+      - "languages/csharp/dotnet/packages/**"
+      - "languages/csharp/dotnet/tests/Directory.Build.props"
+      - "languages/csharp/dotnet/tests/Sunder.App.Tests/**"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/sunder-app-packaging-ci.yml"
       - ".github/workflows/sunder-app-release.yml"
+      - ".github/workflows/sunder-cli-release.yml"
+      - ".github/workflows/sunder-host-release.yml"
+      - ".github/workflows/sunder-release-promotion.yml"
+      - ".github/workflows/sunder-sdk-release.yml"
       - ".github/workflows/sunder-host-validation.yml"
       - "scripts/install/**"
       - "scripts/release/**"
-      - "languages/csharp/dotnet/host/Sunder.App/**"
-      - "languages/csharp/dotnet/host/Sunder.Cli/**"
-      - "languages/csharp/dotnet/host/Sunder.Host.Supervisor/**"
-      - "languages/csharp/dotnet/host/Sunder.Runtime.Host/**"
-      - "languages/csharp/dotnet/tests/Sunder.App.Tests/BundledBuildOutputTests.cs"
-      - "languages/csharp/dotnet/tests/Sunder.App.Tests/MacOsReleasePackagingTests.cs"
-      - "languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj"
+      - "scripts/test-oracles/**"
+      - "eng/test-oracles/**"
+      - "languages/csharp/dotnet/Directory.Build.props"
+      - "languages/csharp/dotnet/Directory.Packages.props"
+      - "languages/csharp/dotnet/host/**"
+      - "languages/csharp/dotnet/libraries/**"
+      - "languages/csharp/dotnet/packages/**"
+      - "languages/csharp/dotnet/tests/Directory.Build.props"
+      - "languages/csharp/dotnet/tests/Sunder.App.Tests/**"
 
 permissions:
   contents: read
@@ -39,45 +51,121 @@ concurrency:
   group: sunder-app-packaging-ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  DOTNET_VERSION: "10.0.100"
+  NODE_VERSION: "24.18.1"
+  VELOPACK_VERSION: "0.0.1298"
+
 jobs:
   bundled-app-validation:
     name: Bundled App output (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+          - ubuntu-24.04
+          - windows-2022
+          - macos-14
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Setup .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
-          dotnet-version: "10.0.100"
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Restore App tests
         run: dotnet restore languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj --locked-mode
 
+      - name: Require bundled App execution owner
+        run: >-
+          node scripts/test-oracles/run-core-test-lane.mjs
+          --test Sunder.App.Tests.BundledBuildOutputTests.AppBuildContainsSupervisorRuntimeAndCliExecutables
+
       - name: Validate bundled executables
-        run: dotnet test languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~BundledBuildOutputTests"
+        run: >-
+          dotnet test languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj
+          --configuration Release
+          --no-restore
+          -m:1
+          --filter "FullyQualifiedName~BundledBuildOutputTests"
+          --logger "trx;LogFileName=Sunder.App.Tests.trx"
+          --results-directory artifacts/test-results/app-packaging-${{ runner.os }}
+
+      - name: Summarize bundled App results
+        if: always()
+        run: >-
+          node scripts/test-oracles/summarize-core-test-results.mjs
+          artifacts/test-results/app-packaging-${{ runner.os }}
+          --allow-partial
+          --require-test Sunder.App.Tests.BundledBuildOutputTests.AppBuildContainsSupervisorRuntimeAndCliExecutables
+
+      - name: Upload bundled App results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-app-packaging-results-${{ runner.os }}
+          path: artifacts/test-results/app-packaging-${{ runner.os }}
+          if-no-files-found: warn
+          retention-days: 14
 
   release-script-validation:
     name: Release script and evidence validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
-          dotnet-version: "10.0.100"
+          dotnet-version: |
+            ${{ env.DOTNET_VERSION }}
+            9.0.100
+
+      - name: Smoke unsigned Linux RID release packaging under CI locked defaults
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes squashfs-tools
+          tool_dir="$RUNNER_TEMP/velopack"
+          tool_sdk_dir="$RUNNER_TEMP/velopack-sdk"
+          output_root="$RUNNER_TEMP/sunder-linux-release-smoke"
+          dotnet new globaljson \
+            --sdk-version 9.0.100 \
+            --roll-forward disable \
+            --output "$tool_sdk_dir"
+          (
+            cd "$tool_sdk_dir"
+            test "$(dotnet --version)" = "9.0.100"
+            dotnet tool install --tool-path "$tool_dir" vpk --version "$VELOPACK_VERSION"
+          )
+          CI=true PATH="$tool_dir:$PATH" \
+            bash scripts/release/package-sunder.sh \
+              --version 1.0.0-smoke.1 \
+              --runtime linux-x64 \
+              --output-root "$output_root" \
+              --strict-release
+          git diff --exit-code -- ':(glob)languages/csharp/dotnet/**/packages.lock.json'
+          release_dir="$output_root/velopack/stable/linux-x64"
+          test -f "$release_dir/Sunder-app-linux-x64-stable.AppImage"
+          test -f "$release_dir/Sunder-1.0.0-smoke.1-app-linux-x64-stable-full.nupkg"
 
       - name: Validate Bash scripts and release evidence fixture
         shell: bash
@@ -85,7 +173,23 @@ jobs:
           set -euo pipefail
           bash -n scripts/install/install.sh
           bash -n scripts/release/package-sunder.sh
+          bash -n scripts/release/download-github-release-assets.sh
           bash -n scripts/release/generate-release-evidence.sh
+          bash -n scripts/release/preflight-npm-trusted-publishing.sh
+          bash -n scripts/release/resolve-github-release.sh
+          bash -n scripts/release/resolve-github-release.fixture.sh
+          bash -n scripts/release/upload-github-release-assets.sh
+          bash -n scripts/release/upload-github-release-assets.fixture.sh
+          bash -n scripts/release/verify-github-release-assets.sh
+          bash -n scripts/release/verify-github-release-assets.fixture.sh
+          bash -n scripts/release/verify-nuget-package.sh
+          bash -n scripts/release/verify-nuget-source.sh
+          bash -n scripts/release/verify-production-acceptance.sh
+          bash -n scripts/release/verify-production-acceptance.fixture.sh
+          bash -n scripts/release/verify-release-tag.sh
+          bash -n scripts/release/verify-release-tag.fixture.sh
+          bash -n scripts/release/verify-release-promotion.sh
+          bash -n scripts/release/verify-release-promotion.fixture.sh
           bash -n scripts/release/macos/create-sunder-dmg.sh
 
           fixture="$RUNNER_TEMP/release-evidence-fixture"
@@ -98,6 +202,14 @@ jobs:
           jq -e --arg source_sha "$source_sha" '
             .schemaVersion == 1
             and .sources == [{name: "sunder-core", sha: $source_sha}]
+            and .invocation.repository == env.GITHUB_REPOSITORY
+            and .invocation.workflow == env.GITHUB_WORKFLOW
+            and .invocation.workflowRef == env.GITHUB_WORKFLOW_REF
+            and .invocation.runId == env.GITHUB_RUN_ID
+            and .invocation.runAttempt == env.GITHUB_RUN_ATTEMPT
+            and .invocation.ref == env.GITHUB_REF
+            and .invocation.refName == env.GITHUB_REF_NAME
+            and .invocation.sha == env.GITHUB_SHA
             and (.artifacts | length == 2)
             and all(.artifacts[]; .path | test("^[A-Za-z0-9][A-Za-z0-9._+-]*$"))
             and all(.artifacts[]; .sha256 | test("^[0-9a-f]{64}$"))
@@ -111,12 +223,30 @@ jobs:
             exit 1
           fi
 
+      - name: Run release publication and promotion regression fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/release/resolve-github-release.fixture.sh
+          bash scripts/release/upload-github-release-assets.fixture.sh
+          bash scripts/release/verify-github-release-assets.fixture.sh
+          bash scripts/release/verify-release-tag.fixture.sh
+          bash scripts/release/verify-release-promotion.fixture.sh
+          bash scripts/release/verify-production-acceptance.fixture.sh
+
+      - name: Run release workflow policy tests
+        run: node --test scripts/release/*.test.mjs
+
   powershell-script-validation:
     name: PowerShell release script syntax
-    runs-on: windows-latest
+    runs-on: windows-2022
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Parse PowerShell scripts
         shell: pwsh
@@ -143,9 +273,13 @@ jobs:
   dmg-layout-smoke:
     name: Branded DMG layout smoke
     runs-on: macos-14
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Validate shell scripts
         shell: bash
@@ -220,7 +354,7 @@ jobs:
           grep -q 'Image Width: 1640 Image Length: 920' <<< "$tiff_info"
 
       - name: Upload DMG smoke artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sunder-themed-dmg-smoke
           path: ${{ runner.temp }}/Sunder.dmg

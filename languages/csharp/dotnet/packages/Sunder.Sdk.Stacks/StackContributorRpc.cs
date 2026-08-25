@@ -4,7 +4,6 @@ using System.Text.Json.Serialization;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Rpc;
-using Sunder.Sdk.Worker;
 
 namespace Sunder.Sdk.Stacks;
 
@@ -48,22 +47,6 @@ public static class SunderStackContributorRpc
         ISunderRpcCallScope scope,
         SunderRpcEndpointReference endpoint)
         => new(scope, endpoint);
-
-    /// <summary>Creates a Worker V3 provider registration for a package-local Stack contributor.</summary>
-    public static SunderWorkerProviderRegistration CreateWorkerProviderRegistration(
-        string providerId,
-        IPackageStackContributor contributor)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
-        ArgumentNullException.ThrowIfNull(contributor);
-        return new SunderWorkerProviderRegistration(
-            providerId,
-            ContractId,
-            ContractVersion,
-            DescriptorSha256,
-            AbiSha256,
-            CreateHandler(contributor));
-    }
 
     private static SunderRpcContractDescriptor LoadDescriptor()
     {

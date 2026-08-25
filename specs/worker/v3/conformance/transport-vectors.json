@@ -1,0 +1,73 @@
+{
+  "formatVersion": 1,
+  "vectors": [
+    {
+      "name": "fragmented-unicode-frame",
+      "valid": true,
+      "header": "Content-Length: {{length}}\r\n\r\n",
+      "bodyUtf8": "{\"type\":\"worker.result\",\"id\":\"one\",\"value\":{\"text\":\"snowman \\u2603\"}}"
+    },
+    {
+      "name": "ascii-only-property-folding",
+      "valid": true,
+      "header": "Content-Length: {{length}}\r\n\r\n",
+      "bodyUtf8": "{\"type\":\"host.result\",\"id\":\"unicode\",\"value\":{\"k\":true,\"\\u212a\":false,\"\\u00e9\":1,\"\\u00c9\":2}}"
+    },
+    {
+      "name": "lowercase-content-length",
+      "valid": false,
+      "header": "content-length: {{length}}\r\n\r\n",
+      "bodyUtf8": "{}"
+    },
+    {
+      "name": "leading-zero-content-length",
+      "valid": false,
+      "header": "Content-Length: 02\r\n\r\n",
+      "bodyUtf8": "{}"
+    },
+    {
+      "name": "extra-header",
+      "valid": false,
+      "header": "Content-Length: {{length}}\r\nX-Test: forbidden\r\n\r\n",
+      "bodyUtf8": "{}"
+    },
+    {
+      "name": "invalid-utf8",
+      "valid": false,
+      "header": "Content-Length: {{length}}\r\n\r\n",
+      "bodyBase64": "wyg="
+    },
+    {
+      "name": "ascii-case-collision",
+      "valid": false,
+      "header": "Content-Length: {{length}}\r\n\r\n",
+      "bodyUtf8": "{\"id\":\"a\",\"ID\":\"b\"}"
+    },
+    {
+      "name": "nested-ascii-case-collision",
+      "valid": false,
+      "header": "Content-Length: {{length}}\r\n\r\n",
+      "bodyUtf8": "{\"type\":\"host.result\",\"value\":{\"a\":1,\"A\":2}}"
+    },
+    {
+      "name": "nonfinite-number",
+      "valid": false,
+      "header": "Content-Length: {{length}}\r\n\r\n",
+      "bodyUtf8": "{\"value\":1e400}"
+    },
+    {
+      "name": "message-depth-overflow",
+      "valid": false,
+      "header": "Content-Length: {{length}}\r\n\r\n",
+      "bodyUtf8": "[[[[null]]]]",
+      "maxMessageDepth": 3
+    },
+    {
+      "name": "frame-byte-overflow",
+      "valid": false,
+      "header": "Content-Length: {{length}}\r\n\r\n",
+      "bodyUtf8": "{}x",
+      "maxFrameBytes": 2
+    }
+  ]
+}

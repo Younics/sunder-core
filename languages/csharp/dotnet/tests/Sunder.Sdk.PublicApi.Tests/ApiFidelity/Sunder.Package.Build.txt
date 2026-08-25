@@ -1,0 +1,73 @@
+type Sunder.Package.Build.Tasks.AggregateSunderPackageTask
+  property System.String ExpectedPackageVersion { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String NormalizedOutputPath { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+  property System.String OutputDiscoveryRoot { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String OutputPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String ProjectDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String TargetDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] TargetLeaves { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+type Sunder.Package.Build.Tasks.CleanSunderPackageOutputTask
+  property System.String OutputDiscoveryRoot { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String OutputPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String ProjectDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String TargetDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+type Sunder.Package.Build.Tasks.EmitSunderDevOutputTask
+  property Microsoft.Build.Framework.ITaskItem[] AssetFiles { public get; public set; }
+  property System.String AssetsDirectory { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] ContractFiles { public get; public set; }
+  property System.String DevPackagePath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String DiscoveryRoot { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] ManagedFiles { public get; public set; }
+  property System.String ManifestPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] NativeRuntimeFiles { public get; public set; }
+  property System.String TargetDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] WorkerFiles { public get; public set; }
+type Sunder.Package.Build.Tasks.GenerateSunderPackageManifestTask
+  property System.String AssetsDirectory { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] AuthoredAssemblyPaths { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] BindingSnapshots { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] ContractBundles { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] DynamicAccessAcknowledgements { public get; public set; }
+  property System.String EntryAssembly { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.Boolean HasWorkerTarget { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+  property System.String ManifestOutputPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String OutputType { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] PackageTargets { public get; public set; }
+  property System.String PackageVersion { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] PackageViews { public get; public set; }
+  property System.String ProjectDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.Boolean PublishSingleFile { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] ResolvedContractFiles { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] ResolvedTargets { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] RpcProviders { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] RuntimeCopyLocalPaths { public get; public set; }
+  property System.String RuntimeIdentifier { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] RuntimeIdentifiers { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] SdkCapabilities { public get; public set; }
+  property System.String SdkPackageVersion { public get; public set; }
+  property System.Boolean SelfContained { public get; public set; }
+  property System.String TargetAssemblyPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String TargetFramework { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.Boolean UseAppHost { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] UsesContracts { public get; public set; }
+  property System.String WorkerEntryPointRelativePath { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+type Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask
+  property Microsoft.Build.Framework.ITaskItem[] BindingSnapshots { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] Bindings { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] CompileItems { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] FileWrites { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+  property System.String IntermediateOutputPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String ProjectDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+type Sunder.Package.Build.Tasks.PackSunderPackageTask
+  property System.String DevPackageDiscoveryRoot { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String DevPackagePath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String PackageOutputPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String ProjectDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+type Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask
+  property System.String DevOutputPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String DiscoveryRoot { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String NormalizedDevOutputPath { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+  property System.String OwnershipMarkerPath { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+  property System.String ProjectDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String TargetDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]

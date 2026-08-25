@@ -1,5 +1,8 @@
+using Sunder.Sdk.Compatibility;
+
 namespace Sunder.Sdk.Packaging;
 
+[SunderSdkCapability("packaging.v1")]
 [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]
 public sealed class SunderPackageAttribute : Attribute
 {

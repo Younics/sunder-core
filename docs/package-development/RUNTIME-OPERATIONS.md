@@ -21,6 +21,8 @@ Keep the descriptor in a non-packable package-local Protocol project:
 
 The descriptor defines closed request and response schemas, method kind, idempotency, and declared domain errors. `Sunder.Package.Build` validates and canonicalizes it, derives descriptor and ABI hashes, and generates deterministic DTOs, a typed client, a provider interface, and an `ISunderRpcServiceHandler` adapter.
 
+Generated declarations are public by default. Set `Accessibility="Internal"` on `SunderRpcBinding` when the complete generated binding stays in this assembly behind handwritten public contracts. The setting is uniform across generated DTOs, provider interfaces, clients, and handlers; keep `Public` when another assembly directly implements or consumes those types.
+
 The compiled Quickstart's [descriptor](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.Protocol/Contracts/greeting.rpc.json) demonstrates the complete unary shape. Keep Protocol code free of Avalonia and Host implementation types.
 
 ## Declare Owner Access

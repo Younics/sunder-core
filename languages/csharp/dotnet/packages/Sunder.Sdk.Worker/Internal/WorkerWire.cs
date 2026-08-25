@@ -26,7 +26,7 @@ internal sealed record WorkerResourceProfile(
     int InlineDecodedBytes,
     int ContentReferenceBytes);
 
-internal static partial class WorkerWire
+internal static class WorkerWire
 {
     public static WorkerResourceProfile ReadResourceProfile(JsonElement value, string expectedHash)
     {

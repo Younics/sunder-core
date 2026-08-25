@@ -18,6 +18,19 @@ test("all advertised browser calls use the host round-trip deadline shape", asyn
   const received = new Map<string, BrowserCallOptions | undefined>();
   const candidate: SunderBrowserApi = {
     version: 2,
+    resourceProfile: {
+      reportedByRuntime: true,
+      runtimeInstanceId: "11111111-1111-1111-1111-111111111111",
+      effectiveProfileHash: "0".repeat(64),
+      effectivePolicy: {
+        rpcValueBytes: 8 * 1024 * 1024,
+        valueDepth: 64,
+        valueNodes: 100_000,
+        objectMembers: 4_096,
+        inlineDecodedBytes: 8 * 1024 * 1024,
+        contentReferenceBytes: 512 * 1024 * 1024,
+      },
+    },
     rpc: {
       discover: async (_contractId, options) => {
         received.set("discover", options);
@@ -65,6 +78,7 @@ test("all advertised browser calls use the host round-trip deadline shape", asyn
   try {
     const options = { deadline: new Date("2026-08-01T12:34:56.789Z") };
     const api = getSunder();
+    assert.equal(api.resourceProfile, candidate.resourceProfile);
     await api.rpc.discover("contract", options);
     api.rpc.watch(0, 0, options);
     await api.rpc.invoke("provider", "service", "method", null, options);

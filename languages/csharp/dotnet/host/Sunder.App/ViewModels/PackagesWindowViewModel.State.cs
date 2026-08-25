@@ -60,7 +60,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         double backgroundProcessPopoverWidth = ShellState.DefaultBackgroundProcessPopoverWidth,
         double backgroundProcessPopoverHeight = ShellState.DefaultBackgroundProcessPopoverHeight,
         Action<double, double>? persistBackgroundProcessPopoverSize = null,
-        IUiDispatcher? uiDispatcher = null)
+        IUiDispatcher? uiDispatcher = null,
+        RemoteImageService? remoteImageService = null)
     {
         _runtimeApiClient = runtimeApiClient;
         _packageOperationExecutor = packageOperationExecutor;
@@ -73,7 +74,9 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             new PackagesInstalledCatalog(_runtimeApiClient),
             CreatePackageIconUri,
             SelectInstalledPackage);
-        _marketplace = new MarketplacePackagesPaneViewModel(new PackagesMarketplaceCatalog(_registryClientProvider));
+        _marketplace = new MarketplacePackagesPaneViewModel(
+            new PackagesMarketplaceCatalog(_registryClientProvider, remoteImageService),
+            remoteImageService);
         Installed = _installedPackages;
         Marketplace = _marketplace;
         Operations = new PackageOperationPresentationViewModel(_packageOperationExecutor);

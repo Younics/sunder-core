@@ -1560,19 +1560,21 @@ public sealed class RuntimeRpcBrokerTests
         Assert.Empty(fixture.Catalog.GetSnapshot().Providers);
     }
 
-    [Theory]
-    [InlineData("$.value has 9 characters outside its declared length bounds.", "string-length")]
-    [InlineData("$.value has 9 properties outside its declared property-count bounds.", "object-size")]
-    [InlineData("$.value has 9 items outside its declared item-count bounds.", "array-size")]
-    public void SemanticValidationDiagnosticClassifiesOptionalFacetBounds(
-        string error,
-        string expectedCode)
+    [Fact]
+    public void SemanticValidationDiagnosticUsesStructuredValidatorCodeAndPath()
     {
+        var contract = Contract(requestMaximumLength: 3);
+        Assert.False(contract.IsValidDetailed(
+            "#/$defs/Request",
+            JsonSerializer.SerializeToElement(new { message = "too long" }),
+            out _,
+            out var failure));
+
         var exception = RuntimeRpcSemanticValidationException.Schema(
-            error,
+            failure,
             new RuntimeRpcValueMeasurement(1, 1, 1, 1));
 
-        Assert.Equal(expectedCode, exception.ValidationCode);
+        Assert.Equal("string-length", exception.ValidationCode);
         Assert.Equal("$.*", exception.ValidationPath);
     }
 
@@ -1709,6 +1711,140 @@ public sealed class RuntimeRpcBrokerTests
             Assert.Equal(SunderRpcErrorKind.ResourceExhausted, depth.Error.Kind);
             Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
         }
+    }
+
+    [Fact]
+    public async Task CallAcquisition_UnaryAndStreamPreservePermissionAndShapeFailureParity()
+    {
+        await using var fixture = new RpcFixture();
+        var activation = await fixture.PublishAsync(new TestHandler());
+        var client = fixture.CreateClient(activation.Caller);
+        var endpoint = Assert.Single(fixture.Catalog.GetSnapshot().Providers).Endpoint;
+        var request = JsonSerializer.SerializeToElement(new { message = "hello" });
+
+        var unaryDenied = await Assert.ThrowsAsync<SunderRpcException>(() => client.InvokeAsync(
+            endpoint,
+            "missing",
+            "missing",
+            request).AsTask());
+        await using var deniedSubscription = client.SubscribeAsync(
+            endpoint,
+            "missing",
+            "missing",
+            request).GetAsyncEnumerator();
+        var streamDenied = await Assert.ThrowsAsync<SunderRpcException>(() =>
+            deniedSubscription.MoveNextAsync().AsTask());
+
+        AssertSetupParity(unaryDenied, streamDenied, SunderRpcErrorKind.PermissionDenied, "rpc.permission.denied");
+        Assert.Contains("'invoke'", unaryDenied.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("'subscribe'", streamDenied.Error.Message, StringComparison.Ordinal);
+
+        await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+        await fixture.GrantAsync(SunderRpcProtocol.SubscribeAction);
+        var unaryShape = await Assert.ThrowsAsync<SunderRpcException>(() => client.InvokeAsync(
+            endpoint,
+            "messages",
+            "watch",
+            request).AsTask());
+        await using var shapeSubscription = client.SubscribeAsync(
+            endpoint,
+            "messages",
+            "send",
+            request).GetAsyncEnumerator();
+        var streamShape = await Assert.ThrowsAsync<SunderRpcException>(() =>
+            shapeSubscription.MoveNextAsync().AsTask());
+
+        AssertSetupParity(unaryShape, streamShape, SunderRpcErrorKind.Validation, "rpc.method.kind-mismatch");
+        Assert.Equal(unaryShape.Error.Message, streamShape.Error.Message);
+
+        var expiredOptions = new SunderRpcCallOptions(DateTimeOffset.UnixEpoch);
+        var unaryDeadline = await Assert.ThrowsAsync<SunderRpcException>(() => client.InvokeAsync(
+            endpoint,
+            "messages",
+            "send",
+            request,
+            expiredOptions).AsTask());
+        await using var deadlineSubscription = client.SubscribeAsync(
+            endpoint,
+            "messages",
+            "watch",
+            request,
+            expiredOptions).GetAsyncEnumerator();
+        var streamDeadline = await Assert.ThrowsAsync<SunderRpcException>(() =>
+            deadlineSubscription.MoveNextAsync().AsTask());
+
+        AssertSetupParity(
+            unaryDeadline,
+            streamDeadline,
+            SunderRpcErrorKind.DeadlineExceeded,
+            "rpc.call.deadline-exceeded");
+        Assert.Equal(unaryDeadline.Error.Message, streamDeadline.Error.Message);
+
+        static void AssertSetupParity(
+            SunderRpcException unary,
+            SunderRpcException stream,
+            SunderRpcErrorKind expectedKind,
+            string expectedCode)
+        {
+            Assert.Equal(expectedKind, unary.Error.Kind);
+            Assert.Equal(unary.Error.Kind, stream.Error.Kind);
+            Assert.Equal(expectedCode, unary.Error.Code);
+            Assert.Equal(unary.Error.Code, stream.Error.Code);
+            Assert.Equal(SunderRpcDispatchState.NotDispatched, unary.Error.DispatchState);
+            Assert.Equal(unary.Error.DispatchState, stream.Error.DispatchState);
+            Assert.Equal(SunderRpcRetrySafety.Safe, unary.Error.RetrySafety);
+            Assert.Equal(unary.Error.RetrySafety, stream.Error.RetrySafety);
+        }
+    }
+
+    [Fact]
+    public async Task CallLease_DisposesAuthorityThenCalleeCallerAndSessionLeases()
+    {
+        await using var fixture = new RpcFixture();
+        var activation = await fixture.PublishAsync(new TestHandler());
+        var snapshot = Assert.Single(fixture.Catalog.GetSnapshot().Providers);
+        Assert.True(fixture.Catalog.TryGetActiveEndpoint(snapshot.Endpoint, out var foundProvider, out _));
+        var provider = Assert.IsType<RuntimeRpcProviderActivation>(foundProvider);
+        var contract = Contract();
+        var method = contract.FindService("messages")!.FindMethod("send")!;
+        var order = new List<string>();
+        var linked = new CancellationTokenSource();
+        var deadline = new CancellationTokenSource();
+        var authority = new RecordingInvocationAuthority(order);
+        var sessionLease = new PackageSessionLease(
+            activation.Session,
+            snapshot.SessionGeneration,
+            1,
+            new object(),
+            new object(),
+            CancellationToken.None,
+            CancellationToken.None,
+            () => order.Add("session"));
+        var call = new RuntimeRpcCallLease(
+            sessionLease,
+            new RuntimeRpcHostCallerActivation(contract, CancellationToken.None),
+            new RuntimeRpcActivationLease(CancellationToken.None, () => order.Add("caller")),
+            new RuntimeRpcActivationLease(CancellationToken.None, () => order.Add("callee")),
+            null,
+            linked,
+            deadline,
+            provider,
+            "messages",
+            method,
+            contract,
+            new RuntimeRpcCallFrame(1, DateTimeOffset.UtcNow.AddMinutes(1)),
+            new SunderRpcInvocationContext(
+                "caller.package",
+                "1.0.0",
+                snapshot,
+                DateTimeOffset.UtcNow.AddMinutes(1),
+                1,
+                linked.Token,
+                authority));
+
+        call.Dispose();
+
+        Assert.Equal(new[] { "authority", "callee", "caller", "session" }, order);
     }
 
     [Fact]
@@ -2712,6 +2848,415 @@ public sealed class RuntimeRpcBrokerTests
     }
 
     [Fact]
+    public async Task AppCallScope_UsesExactCallerIdentityAndReclaimsExplicitlyClosedCapacity()
+    {
+        var clock = new ManualTimeProvider();
+        await using var fixture = new RpcFixture(
+            new RuntimeRpcPolicyOptions
+            {
+                DefaultDeadline = TimeSpan.FromMinutes(5),
+                MaxCallScopesPerCaller = 1,
+            },
+            clock);
+        await fixture.PublishAsync(new TestHandler(), webCaller: true);
+        var firstApp = await fixture.OpenAppCallerAsync();
+        var secondApp = await fixture.OpenAppCallerAsync();
+        var firstCaller = fixture.AppSessions.GetRequired(firstApp.Session.SessionId);
+        var secondCaller = fixture.AppSessions.GetRequired(secondApp.Session.SessionId);
+        var firstScope = fixture.Broker.CreateAppCallScope(
+            firstApp.Session.SessionId,
+            options: null,
+            CancellationToken.None);
+        var secondScope = fixture.Broker.CreateAppCallScope(
+            secondApp.Session.SessionId,
+            options: null,
+            CancellationToken.None);
+
+        Assert.Same(firstCaller, firstScope.Caller);
+        Assert.NotSame(secondCaller, firstScope.Caller);
+        Assert.StartsWith("rpc-scope-", firstScope.Id, StringComparison.Ordinal);
+        Assert.True(Guid.TryParseExact(firstScope.Id["rpc-scope-".Length..], "N", out _));
+        Assert.Equal(firstScope.Id, firstScope.ContentAuthority.Id);
+        using (var lease = fixture.Owner.State.AcquireLease())
+        {
+            Assert.Equal(lease.Generation, firstScope.SessionGeneration);
+            Assert.Same(lease.GenerationIdentity, firstScope.SessionGenerationIdentity);
+        }
+        Assert.Same(
+            firstScope,
+            fixture.Broker.GetAppCallScope(firstApp.Session.SessionId, firstScope.Id));
+
+        var limited = Assert.Throws<SunderRpcException>(() => fixture.Broker.CreateAppCallScope(
+            firstApp.Session.SessionId,
+            options: null,
+            CancellationToken.None));
+        Assert.Equal(SunderRpcErrorKind.ResourceExhausted, limited.Error.Kind);
+        Assert.Equal("rpc.scope.limit", limited.Error.Code);
+        Assert.Equal("The caller RPC call-scope limit was reached.", limited.Error.Message);
+        Assert.Equal(SunderRpcDispatchState.NotDispatched, limited.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Safe, limited.Error.RetrySafety);
+
+        AssertScopeUnavailable(Assert.Throws<SunderRpcException>(() => fixture.Broker.GetAppCallScope(
+            secondApp.Session.SessionId,
+            firstScope.Id)));
+        AssertScopeUnavailable(await Assert.ThrowsAsync<SunderRpcException>(async () =>
+            await fixture.Broker.CloseAppCallScopeAsync(secondApp.Session.SessionId, firstScope.Id)));
+
+        await fixture.Broker.CloseAppCallScopeAsync(firstApp.Session.SessionId, firstScope.Id);
+        var replacement = fixture.Broker.CreateAppCallScope(
+            firstApp.Session.SessionId,
+            options: null,
+            CancellationToken.None);
+        await fixture.Broker.CloseAppCallScopeAsync(firstApp.Session.SessionId, replacement.Id);
+        await fixture.Broker.CloseAppCallScopeAsync(secondApp.Session.SessionId, secondScope.Id);
+        fixture.AppSessions.Close(firstApp.Session.SessionId);
+        fixture.AppSessions.Close(secondApp.Session.SessionId);
+        Assert.Equal(0, clock.ActiveTimerCount);
+
+        static void AssertScopeUnavailable(SunderRpcException failure)
+        {
+            Assert.Equal(SunderRpcErrorKind.Unavailable, failure.Error.Kind);
+            Assert.Equal("rpc.scope.unavailable", failure.Error.Code);
+            Assert.Equal("The RPC call scope is stale or unavailable.", failure.Error.Message);
+            Assert.Equal(SunderRpcDispatchState.NotDispatched, failure.Error.DispatchState);
+            Assert.Equal(SunderRpcRetrySafety.Safe, failure.Error.RetrySafety);
+        }
+    }
+
+    [Theory]
+    [InlineData("retirement", false)]
+    [InlineData("deadline", true)]
+    [InlineData("explicit-close", true)]
+    public async Task CallScopeRegistry_PreservesPathSpecificTeardownOrder(
+        string path,
+        bool authorityRevokedBeforeDiscard)
+    {
+        var clock = new ManualTimeProvider();
+        using var sessionRetirement = new CancellationTokenSource();
+        using var replacementSessionRetirement = new CancellationTokenSource();
+        var caller = new RuntimeRpcHostCallerActivation(Contract(), CancellationToken.None);
+        var generationIdentity = new object();
+        RuntimeRpcCallScopeRegistry? registry = null;
+        RuntimeRpcCallerScopeState? replacement = null;
+        var replacementOutcome = RuntimeRpcCallScopeRegistry.Outcome.Unavailable;
+        var discardObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var discardCount = 0;
+        var observedAuthorityRevoked = false;
+        registry = new RuntimeRpcCallScopeRegistry(
+            maxScopesPerCaller: 1,
+            clock,
+            CancellationToken.None,
+            authority =>
+            {
+                if (Interlocked.Increment(ref discardCount) != 1)
+                {
+                    authority.Revoke();
+                    return;
+                }
+                observedAuthorityRevoked = authority.IsRevoked;
+                replacementOutcome = registry!.Register(
+                    caller,
+                    sessionGeneration: 7,
+                    generationIdentity,
+                    clock.GetUtcNow().AddMinutes(5),
+                    parentFrame: null,
+                    requirePermission: false,
+                    replacementSessionRetirement.Token,
+                    generationRetirement: CancellationToken.None,
+                    deadlineDelay: TimeSpan.FromMinutes(5),
+                    out replacement);
+                authority.Revoke();
+                discardObserved.TrySetResult();
+            });
+        var registration = registry.Register(
+            caller,
+            sessionGeneration: 7,
+            generationIdentity,
+            clock.GetUtcNow().AddMinutes(1),
+            parentFrame: null,
+            requirePermission: false,
+            sessionRetirement.Token,
+            generationRetirement: CancellationToken.None,
+            deadlineDelay: TimeSpan.FromMinutes(1),
+            out var registeredScope);
+        Assert.Equal(RuntimeRpcCallScopeRegistry.Outcome.Success, registration);
+        var scope = Assert.IsType<RuntimeRpcCallerScopeState>(registeredScope);
+        using var callbackRelease = new ManualResetEventSlim();
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationTokenRegistration callbackRegistration = default;
+        Task? close = null;
+
+        try
+        {
+            switch (path)
+            {
+                case "retirement":
+                    sessionRetirement.Cancel();
+                    break;
+                case "deadline":
+                    clock.Advance(TimeSpan.FromMinutes(1));
+                    break;
+                case "explicit-close":
+                    callbackRegistration = scope.RevocationToken.Register(() =>
+                    {
+                        callbackStarted.TrySetResult();
+                        callbackRelease.Wait();
+                    });
+                    close = Task.Run(async () => await registry.CloseAsync(scope));
+                    await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown call-scope teardown path '{path}'.");
+            }
+
+            await discardObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(authorityRevokedBeforeDiscard, observedAuthorityRevoked);
+            Assert.Equal(RuntimeRpcCallScopeRegistry.Outcome.Success, replacementOutcome);
+            var replacementScope = Assert.IsType<RuntimeRpcCallerScopeState>(replacement);
+            Assert.Equal(
+                RuntimeRpcCallScopeRegistry.Outcome.Unavailable,
+                registry.Get(caller, scope.Id, out _));
+            Assert.Equal(
+                RuntimeRpcCallScopeRegistry.Outcome.Success,
+                registry.Get(caller, replacementScope.Id, out var foundReplacement));
+            Assert.Same(replacementScope, foundReplacement);
+
+            if (close is not null)
+            {
+                Assert.False(close.IsCompleted);
+                callbackRelease.Set();
+                await close.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        finally
+        {
+            callbackRelease.Set();
+            callbackRegistration.Dispose();
+            await registry.CloseAsync(scope);
+            Assert.Equal(1, discardCount);
+            if (replacement is not null) await registry.CloseAsync(replacement);
+        }
+
+        Assert.Equal(2, discardCount);
+        Assert.Equal(0, clock.ActiveTimerCount);
+    }
+
+    [Fact]
+    public async Task CallScopeRegistry_AlreadyRetiredRegistrationReturnsNullAndReleasesCapacity()
+    {
+        var clock = new ManualTimeProvider();
+        using var retired = new CancellationTokenSource();
+        using var replacementRetirement = new CancellationTokenSource();
+        retired.Cancel();
+        var caller = new RuntimeRpcHostCallerActivation(Contract(), CancellationToken.None);
+        var generationIdentity = new object();
+        var discardCount = 0;
+        var registry = new RuntimeRpcCallScopeRegistry(
+            maxScopesPerCaller: 1,
+            clock,
+            CancellationToken.None,
+            authority =>
+            {
+                Interlocked.Increment(ref discardCount);
+                authority.Revoke();
+            });
+
+        var outcome = registry.Register(
+            caller,
+            sessionGeneration: 7,
+            generationIdentity,
+            clock.GetUtcNow().AddMinutes(1),
+            parentFrame: null,
+            requirePermission: false,
+            retired.Token,
+            generationRetirement: CancellationToken.None,
+            deadlineDelay: TimeSpan.FromMinutes(1),
+            out var failedScope);
+
+        Assert.Equal(RuntimeRpcCallScopeRegistry.Outcome.Unavailable, outcome);
+        Assert.Null(failedScope);
+        Assert.Equal(1, discardCount);
+        Assert.Equal(0, clock.ActiveTimerCount);
+
+        var replacementOutcome = registry.Register(
+            caller,
+            sessionGeneration: 7,
+            generationIdentity,
+            clock.GetUtcNow().AddMinutes(1),
+            parentFrame: null,
+            requirePermission: false,
+            replacementRetirement.Token,
+            generationRetirement: CancellationToken.None,
+            deadlineDelay: TimeSpan.FromMinutes(1),
+            out var replacement);
+        Assert.Equal(RuntimeRpcCallScopeRegistry.Outcome.Success, replacementOutcome);
+        await registry.CloseAsync(Assert.IsType<RuntimeRpcCallerScopeState>(replacement));
+
+        Assert.Equal(2, discardCount);
+        Assert.Equal(0, clock.ActiveTimerCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CallScopeRegistry_RevocationDuringTimerCreationIsNotPublished(
+        bool deadlineElapsed)
+    {
+        var clock = new ManualTimeProvider();
+        using var sessionRetirement = new CancellationTokenSource();
+        using var replacementRetirement = new CancellationTokenSource();
+        var caller = new RuntimeRpcHostCallerActivation(Contract(), CancellationToken.None);
+        var generationIdentity = new object();
+        var discardCount = 0;
+        var registry = new RuntimeRpcCallScopeRegistry(
+            maxScopesPerCaller: 1,
+            clock,
+            CancellationToken.None,
+            authority =>
+            {
+                Interlocked.Increment(ref discardCount);
+                authority.Revoke();
+            });
+        clock.OnTimerCreated = () =>
+        {
+            clock.OnTimerCreated = null;
+            if (deadlineElapsed)
+            {
+                clock.Advance(TimeSpan.FromMinutes(1));
+            }
+            else
+            {
+                sessionRetirement.Cancel();
+            }
+        };
+
+        var outcome = registry.Register(
+            caller,
+            sessionGeneration: 7,
+            generationIdentity,
+            clock.GetUtcNow().AddMinutes(1),
+            parentFrame: null,
+            requirePermission: false,
+            sessionRetirement.Token,
+            generationRetirement: CancellationToken.None,
+            deadlineDelay: TimeSpan.FromMinutes(1),
+            out var failedScope);
+
+        Assert.Equal(
+            deadlineElapsed
+                ? RuntimeRpcCallScopeRegistry.Outcome.DeadlineExceeded
+                : RuntimeRpcCallScopeRegistry.Outcome.Unavailable,
+            outcome);
+        Assert.Null(failedScope);
+        Assert.Equal(1, discardCount);
+        Assert.Equal(0, clock.ActiveTimerCount);
+
+        var replacementOutcome = registry.Register(
+            caller,
+            sessionGeneration: 7,
+            generationIdentity,
+            clock.GetUtcNow().AddMinutes(1),
+            parentFrame: null,
+            requirePermission: false,
+            replacementRetirement.Token,
+            generationRetirement: CancellationToken.None,
+            deadlineDelay: TimeSpan.FromMinutes(1),
+            out var replacement);
+        Assert.Equal(RuntimeRpcCallScopeRegistry.Outcome.Success, replacementOutcome);
+        await registry.CloseAsync(Assert.IsType<RuntimeRpcCallerScopeState>(replacement));
+
+        Assert.Equal(2, discardCount);
+        Assert.Equal(0, clock.ActiveTimerCount);
+    }
+
+    [Fact]
+    public async Task CallScopeRegistry_CompetingRetireDeadlineAndCloseTeardownExactlyOnce()
+    {
+        var clock = new ManualTimeProvider();
+        using var sessionRetirement = new CancellationTokenSource();
+        using var replacementRetirement = new CancellationTokenSource();
+        using var releaseDiscard = new ManualResetEventSlim();
+        var discardStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var caller = new RuntimeRpcHostCallerActivation(Contract(), CancellationToken.None);
+        var generationIdentity = new object();
+        RuntimeRpcContentAuthority? retiringAuthority = null;
+        var retiringDiscardCount = 0;
+        var totalDiscardCount = 0;
+        var registry = new RuntimeRpcCallScopeRegistry(
+            maxScopesPerCaller: 1,
+            clock,
+            CancellationToken.None,
+            authority =>
+            {
+                Interlocked.Increment(ref totalDiscardCount);
+                if (ReferenceEquals(authority, retiringAuthority))
+                {
+                    Interlocked.Increment(ref retiringDiscardCount);
+                    discardStarted.TrySetResult();
+                    releaseDiscard.Wait();
+                }
+                authority.Revoke();
+            });
+        var registration = registry.Register(
+            caller,
+            sessionGeneration: 7,
+            generationIdentity,
+            clock.GetUtcNow().AddMinutes(1),
+            parentFrame: null,
+            requirePermission: false,
+            sessionRetirement.Token,
+            generationRetirement: CancellationToken.None,
+            deadlineDelay: TimeSpan.FromMinutes(1),
+            out var registeredScope);
+        Assert.Equal(RuntimeRpcCallScopeRegistry.Outcome.Success, registration);
+        var scope = Assert.IsType<RuntimeRpcCallerScopeState>(registeredScope);
+        retiringAuthority = scope.ContentAuthority;
+        RuntimeRpcCallerScopeState? replacement = null;
+        var retirement = Task.Run(() => sessionRetirement.Cancel());
+        Task close;
+
+        try
+        {
+            await discardStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            close = registry.CloseAsync(scope).AsTask();
+            clock.Advance(TimeSpan.FromMinutes(1));
+
+            Assert.False(retirement.IsCompleted);
+            Assert.False(close.IsCompleted);
+            Assert.Equal(1, retiringDiscardCount);
+            Assert.Equal(1, totalDiscardCount);
+
+            var replacementOutcome = registry.Register(
+                caller,
+                sessionGeneration: 7,
+                generationIdentity,
+                clock.GetUtcNow().AddMinutes(5),
+                parentFrame: null,
+                requirePermission: false,
+                replacementRetirement.Token,
+                generationRetirement: CancellationToken.None,
+                deadlineDelay: TimeSpan.FromMinutes(5),
+                out replacement);
+            Assert.Equal(RuntimeRpcCallScopeRegistry.Outcome.Success, replacementOutcome);
+            Assert.NotNull(replacement);
+        }
+        finally
+        {
+            releaseDiscard.Set();
+        }
+
+        await retirement.WaitAsync(TimeSpan.FromSeconds(5));
+        await close.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, retiringDiscardCount);
+        Assert.Equal(1, totalDiscardCount);
+        await registry.CloseAsync(Assert.IsType<RuntimeRpcCallerScopeState>(replacement));
+
+        Assert.Equal(1, retiringDiscardCount);
+        Assert.Equal(2, totalDiscardCount);
+        Assert.Equal(0, clock.ActiveTimerCount);
+    }
+
+    [Fact]
     public async Task CallScope_DeadlineRevokesWatchContentAndReleasesCapacity()
     {
         var clock = new ManualTimeProvider();
@@ -3692,6 +4237,8 @@ public sealed class RuntimeRpcBrokerTests
         private readonly List<ManualTimer> _timers = [];
         private DateTimeOffset _utcNow = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
+        public Action? OnTimerCreated { get; set; }
+
         public int ActiveTimerCount
         {
             get
@@ -3717,6 +4264,7 @@ public sealed class RuntimeRpcBrokerTests
                 _timers.Add(timer);
                 ChangeLocked(timer, dueTime, period);
             }
+            OnTimerCreated?.Invoke();
             return timer;
         }
 
@@ -3887,6 +4435,30 @@ public sealed class RuntimeRpcBrokerTests
             yield return JsonSerializer.SerializeToElement(new { accepted = true });
             await Task.CompletedTask;
         }
+    }
+
+    private sealed class RecordingInvocationAuthority(List<string> order) : ISunderRpcInvocationAuthority
+    {
+        public CancellationToken RevocationToken => CancellationToken.None;
+
+        public ValueTask<SunderRpcContentReference> RegisterContentAsync(
+            Stream source,
+            SunderRpcContentRegistrationOptions options,
+            CancellationToken cancellationToken)
+            => ValueTask.FromException<SunderRpcContentReference>(new NotSupportedException());
+
+        public ValueTask<SunderRpcContentReference> RegisterContentFileAsync(
+            string filePath,
+            SunderRpcContentRegistrationOptions options,
+            CancellationToken cancellationToken)
+            => ValueTask.FromException<SunderRpcContentReference>(new NotSupportedException());
+
+        public ValueTask<Stream> OpenContentAsync(
+            SunderRpcContentReference reference,
+            CancellationToken cancellationToken)
+            => ValueTask.FromException<Stream>(new NotSupportedException());
+
+        public void Revoke() => order.Add("authority");
     }
 
     private sealed class SecretBearingProviderException(string message) : Exception(message);

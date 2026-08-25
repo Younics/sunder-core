@@ -37,7 +37,7 @@ public sealed partial class RuntimeManagementClient
             ? PackageStoreMutationKind.Upgrade
             : PackageStoreMutationKind.Install;
         var upload = await UploadAsync(packagePath, "uploads/packages", "application/vnd.sunder.package", token).ConfigureAwait(false);
-        using var stageResponse = await _httpClient.PostAsJsonAsync(
+        using var stageResponse = await _transport.PostAsJsonAsync(
             CreateUri("packages/store/stage"),
             new PackageStoreStageRequest([new PackageStoreMutationRequest(
                 kind,
@@ -66,7 +66,7 @@ public sealed partial class RuntimeManagementClient
         content.Headers.ContentLength = stream.Length;
         content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment") { FileNameStar = Path.GetFileName(filePath) };
         content.Headers.Add("X-Content-SHA256", hash);
-        using var response = await _httpClient.PostAsync(CreateUri(endpoint), content, token).ConfigureAwait(false);
+        using var response = await _transport.PostAsync(CreateUri(endpoint), content, token).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<ContentUploadDescriptor>(response, token).ConfigureAwait(false);
     }
 

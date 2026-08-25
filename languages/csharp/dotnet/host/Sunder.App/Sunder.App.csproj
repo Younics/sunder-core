@@ -1,8 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\Images\app.ico</ApplicationIcon>
@@ -21,7 +19,6 @@
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Fonts.Inter" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" />
-    <PackageReference Include="AsyncImageLoader.Avalonia" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="LiveMarkdown.Avalonia" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
@@ -112,7 +109,7 @@
           AfterTargets="Publish"
           Condition="'$(DesignTimeBuild)' != 'true'">
     <MSBuild Projects="..\Sunder.Host.Supervisor\Sunder.Host.Supervisor.csproj"
-             Targets="Restore;Publish"
+             Targets="Publish"
              Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);IncludeSourceRevisionInInformationalVersion=false;ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishDir=$(PublishDir)RuntimeHost\"
              RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
   </Target>
@@ -126,7 +123,7 @@
     </PropertyGroup>
 
     <MSBuild Projects="..\Sunder.Cli\Sunder.Cli.csproj"
-             Targets="Restore;Publish"
+             Targets="Publish"
              Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);IncludeSourceRevisionInInformationalVersion=false;ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishSingleFile=$(BundledCliPublishSingleFile);PublishTrimmed=false;PublishDir=$(PublishDir)Cli\"
              RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
   </Target>

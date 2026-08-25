@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using Sunder.Host.Contracts;
 using Sunder.Runtime.Client;
-using Sunder.Runtime.Contracts;
 using Sunder.Runtime.LocalState;
 
 namespace Sunder.Host.Supervisor;
@@ -14,9 +13,6 @@ internal interface IRuntimeWorkerConnectionSource
 
 internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource, IAsyncDisposable
 {
-    private const int MaximumOperationMessageLength = 2048;
-    private const int MaximumStartupDiagnosticBytes = 4096;
-    private const string StartupDiagnosticPipeEnvironmentVariable = "SUNDER_RUNTIME_STARTUP_DIAGNOSTIC_PIPE";
     // The worker owns one 15-second cleanup deadline; keep grace outside that bound.
     private static readonly TimeSpan DefaultWorkerShutdownTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan DefaultTerminationWaitTimeout = TimeSpan.FromSeconds(5);
@@ -44,9 +40,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
     private RuntimeWorkerConnection? _connection;
     private long _workerEpoch;
     private HostLifecyclePersistentState _persistentState;
-    private HostRuntimeDesiredState _desiredState;
     private HostRuntimeState _state = HostRuntimeState.Stopped;
-    private long _deploymentGeneration;
     private Guid? _runtimeInstanceId;
     private string? _failureCode;
     private string? _failureMessage;
@@ -83,8 +77,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             reportResourcePolicyDiagnostic);
         _lifecycleStore = lifecycleStore;
         _persistentState = lifecycleStore.LoadOrCreate();
-        _desiredState = _persistentState.DesiredState;
-        _deploymentGeneration = _persistentState.DeploymentGeneration;
     }
 
     public RuntimeWorkerConnection? GetWorkerConnection()
@@ -112,9 +104,9 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         lock (_stateGate)
         {
             return new HostRuntimeStatus(
-                _desiredState,
+                _persistentState.DesiredState,
                 _state,
-                _deploymentGeneration,
+                _persistentState.DeploymentGeneration,
                 _runtimeInstanceId,
                 _failureCode,
                 _failureMessage,
@@ -128,7 +120,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         => SubmitOperationAsync(
             request,
             HostOperationKinds.RuntimeStart,
-            HostRuntimeDesiredState.Running,
             cancellationToken);
 
     public Task<HostLifecycleSubmission> SubmitStopAsync(
@@ -137,7 +128,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         => SubmitOperationAsync(
             request,
             HostOperationKinds.RuntimeStop,
-            HostRuntimeDesiredState.Stopped,
             cancellationToken);
 
     public Task<HostLifecycleSubmission> SubmitRestartAsync(
@@ -146,7 +136,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         => SubmitOperationAsync(
             request,
             HostOperationKinds.RuntimeRestart,
-            HostRuntimeDesiredState.Running,
             cancellationToken);
 
     public bool TryGetOperation(string operationId, out HostOperationDescriptor? operation)
@@ -237,7 +226,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                     return;
                 }
 
-                if (_desiredState == HostRuntimeDesiredState.Running)
+                if (GetPersistentDesiredState() == HostRuntimeDesiredState.Running)
                 {
                     await StartCoreAsync(completingOperationId: null, cancellationToken).ConfigureAwait(false);
                     return;
@@ -272,7 +261,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                await StopCoreAsync(_desiredState, cancellationToken).ConfigureAwait(false);
+                await StopCoreAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -288,7 +277,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
     private async Task<HostLifecycleSubmission> SubmitOperationAsync(
         HostLifecycleRequest request,
         string kind,
-        HostRuntimeDesiredState desiredState,
         CancellationToken cancellationToken)
     {
         await _submissionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -296,64 +284,33 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         {
             cancellationToken.ThrowIfCancellationRequested();
             HostLifecycleSubmission submission;
-            var schedule = false;
             lock (_stateGate)
             {
-                var existing = _persistentState.Operations.FirstOrDefault(operation =>
-                    operation.MutationId == request.MutationId);
-                if (existing is not null)
+                var transition = HostLifecycleTransitions.CalculateSubmission(
+                    _persistentState,
+                    request,
+                    kind,
+                    Guid.NewGuid().ToString("N"),
+                    DateTimeOffset.UtcNow);
+                if (transition is HostLifecycleRetrySubmissionResult retry)
                 {
-                    if (!string.Equals(existing.Kind, kind, StringComparison.Ordinal)
-                        || existing.ExpectedDeploymentGeneration != request.ExpectedDeploymentGeneration)
-                    {
-                        throw new HostLifecycleConflictException(
-                            "host.mutation-reuse",
-                            $"Mutation '{request.MutationId:D}' was already used for a different lifecycle request.");
-                    }
-                    submission = new HostLifecycleSubmission(existing);
-                    return submission;
+                    return new HostLifecycleSubmission(retry.Operation);
                 }
-
-                ValidateGeneration(request.ExpectedDeploymentGeneration);
-                if (_persistentState.ActiveOperationId is not null)
+                if (transition is HostLifecycleSubmissionConflictResult conflict)
                 {
                     throw new HostLifecycleConflictException(
-                        "host.operation-active",
-                        $"Lifecycle operation '{_persistentState.ActiveOperationId}' is already active.",
-                        _persistentState.ActiveOperationId);
+                        conflict.Code,
+                        conflict.Message,
+                        conflict.ActiveOperationId);
                 }
-
-                var now = DateTimeOffset.UtcNow;
-                var operation = new HostOperationDescriptor(
-                    Guid.NewGuid().ToString("N"),
-                    request.MutationId,
-                    kind,
-                    request.ExpectedDeploymentGeneration,
-                    HostOperationState.Accepted,
-                    now,
-                    now,
-                    null,
-                    null);
-                var updated = _persistentState with
-                {
-                    DesiredState = desiredState,
-                    DeploymentGeneration = _deploymentGeneration + 1,
-                    ActiveOperationId = operation.OperationId,
-                    Operations = [.. _persistentState.Operations, operation],
-                };
-                _lifecycleStore.Save(updated);
-                _persistentState = updated;
-                _desiredState = desiredState;
-                _deploymentGeneration = updated.DeploymentGeneration;
+                var accepted = (HostLifecycleAcceptedSubmissionResult)transition;
+                _lifecycleStore.Save(accepted.State);
+                _persistentState = accepted.State;
                 _failureCode = null;
                 _failureMessage = null;
-                submission = new HostLifecycleSubmission(operation);
-                schedule = true;
+                submission = new HostLifecycleSubmission(accepted.Operation);
             }
-            if (schedule)
-            {
-                ScheduleOperation(submission.Operation.OperationId);
-            }
+            ScheduleOperation(submission.Operation.OperationId);
             return submission;
         }
         finally
@@ -418,12 +375,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         {
             if (operation.State == HostOperationState.Accepted)
             {
-                operation = PersistOperation(
-                    operation with
-                    {
-                        State = HostOperationState.Running,
-                        UpdatedAtUtc = DateTimeOffset.UtcNow,
-                    });
+                operation = MarkAcceptedOperationRunning(operation.OperationId);
             }
 
             switch (operation.Kind)
@@ -433,7 +385,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                     CompleteOperationIfActive(operation.OperationId, "Runtime worker is ready.");
                     break;
                 case HostOperationKinds.RuntimeStop:
-                    await StopCoreAsync(HostRuntimeDesiredState.Stopped, cancellationToken).ConfigureAwait(false);
+                    await StopCoreAsync(cancellationToken).ConfigureAwait(false);
                     CompleteOperationIfActive(operation.OperationId, "Runtime worker is stopped.");
                     break;
                 case HostOperationKinds.RuntimeRestart:
@@ -443,7 +395,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                     }
                     try
                     {
-                        await StopCoreAsync(HostRuntimeDesiredState.Running, cancellationToken).ConfigureAwait(false);
+                        await StopCoreAsync(cancellationToken).ConfigureAwait(false);
                     }
                     catch (Exception exception)
                     {
@@ -469,7 +421,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 CompleteOperation(
                     operationId,
                     HostOperationState.Failed,
-                    Truncate(exception.Message),
+                    exception.Message,
                     failureCode);
             }
             catch (Exception persistenceException)
@@ -533,11 +485,15 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             endpointLease = RuntimeWorkerEndpointLease.Create();
             lifetimePipe = CreateSupervisorLifetimePipe();
             startupDiagnosticPipe = CreateStartupDiagnosticPipe();
-            process = StartWorkerProcess(
+            process = RuntimeWorkerLaunchProbe.StartWorkerProcess(
+                _runtimeHostPath,
+                _connectionInfoPath,
+                _runtimeStateRoot,
+                _resourcePolicyLaunchResolver,
                 workerToken,
                 endpointLease.Endpoint,
-                lifetimePipe,
-                startupDiagnosticPipe);
+                lifetimePipe.GetClientHandleAsString(),
+                startupDiagnosticPipe.GetClientHandleAsString());
         }
         catch (Exception exception)
         {
@@ -560,11 +516,13 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         {
             lifetimePipe.DisposeLocalCopyOfClientHandle();
             startupDiagnosticPipe.DisposeLocalCopyOfClientHandle();
-            var (connection, handshake) = await WaitForReadyWorkerAsync(
+            var (connection, handshake) = await RuntimeWorkerLaunchProbe.WaitForReadyWorkerAsync(
                 process,
                 workerToken,
+                _connectionInfoPath,
                 endpointLease.Endpoint,
                 startupDiagnosticPipe,
+                _startupTimeout,
                 cancellationToken).ConfigureAwait(false);
             startupDiagnosticPipe.Dispose();
             lock (_stateGate)
@@ -573,31 +531,12 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 {
                     throw new InvalidOperationException("Runtime worker exited or changed while startup was being verified.");
                 }
-                var updated = _persistentState with
-                {
-                    DeploymentGeneration = completingOperationId is null
-                        ? _deploymentGeneration + 1
-                        : _deploymentGeneration,
-                };
-                if (completingOperationId is not null
-                    && string.Equals(updated.ActiveOperationId, completingOperationId, StringComparison.Ordinal))
-                {
-                    var operation = GetRequiredOperationCore(updated, completingOperationId);
-                    updated = ReplaceOperation(
-                        updated,
-                        operation with
-                        {
-                            State = HostOperationState.Succeeded,
-                            UpdatedAtUtc = DateTimeOffset.UtcNow,
-                            Message = "Runtime worker is ready.",
-                            FailureCode = null,
-                        },
-                        activeOperationId: null);
-                }
-                _lifecycleStore.Save(updated);
-                _persistentState = updated;
-                _desiredState = updated.DesiredState;
-                _deploymentGeneration = updated.DeploymentGeneration;
+                var promotion = HostLifecycleTransitions.PromoteReady(
+                    _persistentState,
+                    completingOperationId,
+                    DateTimeOffset.UtcNow);
+                _lifecycleStore.Save(promotion.State);
+                _persistentState = promotion.State;
                 _connection = new RuntimeWorkerConnection(
                     connection,
                     endpointLease.Endpoint,
@@ -677,9 +616,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         }
     }
 
-    private async Task StopCoreAsync(
-        HostRuntimeDesiredState desiredStateAfterStop,
-        CancellationToken cancellationToken)
+    private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Process? process;
@@ -689,7 +626,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         var processAlreadyExited = false;
         lock (_stateGate)
         {
-            _desiredState = desiredStateAfterStop;
             process = _process;
             connection = _connection;
             lifetimePipe = _supervisorLifetimePipe;
@@ -804,168 +740,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             PipeDirection.In,
             HandleInheritability.Inheritable);
 
-    private Process StartWorkerProcess(
-        string workerToken,
-        RuntimeIpcEndpoint endpoint,
-        AnonymousPipeServerStream lifetimePipe,
-        AnonymousPipeServerStream startupDiagnosticPipe)
-    {
-        if (_runtimeHostPath is null)
-        {
-            throw new FileNotFoundException("Sunder.Runtime.Host is not installed in this Host distribution.");
-        }
-
-        var startInfo = CreateWorkerStartInfo(
-            workerToken,
-            endpoint,
-            lifetimePipe.GetClientHandleAsString(),
-            startupDiagnosticPipe.GetClientHandleAsString());
-        return Process.Start(startInfo)
-               ?? throw new InvalidOperationException("Failed to start Sunder.Runtime.Host.");
-    }
-
-    internal ProcessStartInfo CreateWorkerStartInfo(
-        string workerToken,
-        RuntimeIpcEndpoint endpoint,
-        string supervisorLifetimePipeHandle,
-        string startupDiagnosticPipeHandle)
-    {
-        if (_runtimeHostPath is null)
-        {
-            throw new FileNotFoundException("Sunder.Runtime.Host is not installed in this Host distribution.");
-        }
-
-        var isDotnetAssembly = string.Equals(Path.GetExtension(_runtimeHostPath), ".dll", StringComparison.OrdinalIgnoreCase);
-        var startInfo = new ProcessStartInfo(isDotnetAssembly ? "dotnet" : _runtimeHostPath)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(_runtimeHostPath)!,
-        };
-        if (isDotnetAssembly)
-        {
-            startInfo.ArgumentList.Add(_runtimeHostPath);
-        }
-        RuntimeResourcePolicyEnvironment.RemovePolicyVariables(startInfo.Environment);
-        startInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"] = _connectionInfoPath;
-        startInfo.Environment["SUNDER_RUNTIME_BEARER_TOKEN"] = workerToken;
-        startInfo.Environment["SUNDER_RUNTIME_SUPERVISOR_PIPE"] = supervisorLifetimePipeHandle;
-        startInfo.Environment[StartupDiagnosticPipeEnvironmentVariable] =
-            startupDiagnosticPipeHandle;
-        startInfo.Environment[RuntimeLocalState.StateRootEnvironmentVariable] = _runtimeStateRoot;
-        startInfo.Environment[RuntimeIpcEndpoint.EnvironmentVariable] = endpoint.ToEnvironmentValue();
-        startInfo.Environment[RuntimeResourcePolicyEnvironment.LaunchPayloadVariable] =
-            _resourcePolicyLaunchResolver.ResolveLaunchPayload();
-        return startInfo;
-    }
-
-    private async Task<(RuntimeConnectionInfo Connection, RuntimeHandshakeResponse Handshake)> WaitForReadyWorkerAsync(
-        Process process,
-        string workerToken,
-        RuntimeIpcEndpoint endpoint,
-        AnonymousPipeServerStream startupDiagnosticPipe,
-        CancellationToken cancellationToken)
-    {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(_startupTimeout);
-        try
-        {
-            var diagnosticTask = ReadStartupDiagnosticAsync(startupDiagnosticPipe, deadline.Token);
-            while (true)
-            {
-                deadline.Token.ThrowIfCancellationRequested();
-                if (diagnosticTask.IsCompletedSuccessfully
-                    && diagnosticTask.Result is { } startupDiagnostic)
-                {
-                    throw new RuntimeWorkerStartupException(
-                        startupDiagnostic.Code,
-                        startupDiagnostic.Message);
-                }
-                if (process.HasExited)
-                {
-                    var exitDiagnostic = await diagnosticTask.ConfigureAwait(false);
-                    if (exitDiagnostic is not null)
-                    {
-                        throw new RuntimeWorkerStartupException(
-                            exitDiagnostic.Code,
-                            exitDiagnostic.Message);
-                    }
-                    throw new InvalidOperationException($"Runtime worker exited with code {process.ExitCode} during startup.");
-                }
-
-                var connection = RuntimeConnectionInfoStore.Load(_connectionInfoPath);
-                if (connection is not null && FixedTimeTokenEquals(connection.BearerToken, workerToken))
-                {
-                    try
-                    {
-                        using var transport = new RuntimeClientTransport(
-                            () => connection,
-                            RuntimeIpcHttpMessageHandlerFactory.Create(endpoint));
-                        var handshake = await transport.ProbeHandshakeAsync(deadline.Token).ConfigureAwait(false);
-                        if (RuntimeProtocolCompatibility.GetIncompatibility(
-                                handshake,
-                                RuntimeProtocolFeatures.StartupDiagnosticsV1) is not { } incompatibility)
-                        {
-                            using var management = new RuntimeManagementClient(transport);
-                            var status = await management.GetSystemStatusAsync(deadline.Token).ConfigureAwait(false);
-                            if (status?.IsReady == true)
-                            {
-                                return (connection, handshake);
-                            }
-                            if (status?.State == RuntimeBootstrapState.Failed)
-                            {
-                                throw new RuntimeWorkerStartupException(
-                                    status.StartupFailure?.Code ?? "runtime.v1.internal",
-                                    status.StartupFailure?.Message
-                                    ?? "Runtime startup failed without a diagnostic message.");
-                            }
-                            await Task.Delay(TimeSpan.FromMilliseconds(200), deadline.Token).ConfigureAwait(false);
-                            continue;
-                        }
-                        throw new InvalidOperationException(incompatibility);
-                    }
-                    catch (HttpRequestException)
-                    {
-                    }
-                }
-                await Task.Delay(TimeSpan.FromMilliseconds(200), deadline.Token).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new TimeoutException($"Runtime worker did not become ready within {_startupTimeout.TotalSeconds:0} seconds.");
-        }
-    }
-
-    private static async Task<RuntimeStartupDiagnostic?> ReadStartupDiagnosticAsync(
-        AnonymousPipeServerStream pipe,
-        CancellationToken cancellationToken)
-    {
-        using var buffer = new MemoryStream(MaximumStartupDiagnosticBytes);
-        var chunk = new byte[512];
-        while (buffer.Length <= MaximumStartupDiagnosticBytes)
-        {
-            var read = await pipe.ReadAsync(chunk, cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-            {
-                break;
-            }
-            buffer.Write(chunk, 0, read);
-        }
-        if (buffer.Length == 0 || buffer.Length > MaximumStartupDiagnosticBytes)
-        {
-            return null;
-        }
-        try
-        {
-            return System.Text.Json.JsonSerializer.Deserialize<RuntimeStartupDiagnostic>(buffer.ToArray());
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return null;
-        }
-    }
-
     private async Task MonitorWorkerExitAsync(
         Process process,
         AnonymousPipeServerStream lifetimePipe)
@@ -1016,7 +790,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 {
                     _failureCode = "host.worker-exited";
                     _failureMessage = $"Runtime worker exited with code {exitCode}.";
-                    if (_desiredState == HostRuntimeDesiredState.Running && !_recoveryScheduled)
+                    if (_persistentState.DesiredState == HostRuntimeDesiredState.Running && !_recoveryScheduled)
                     {
                         var delay = RecordWorkerFailureForRecoveryCore();
                         if (delay is not null)
@@ -1060,7 +834,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                     lock (_stateGate)
                     {
                         if (_disposing
-                            || _desiredState != HostRuntimeDesiredState.Running
+                            || _persistentState.DesiredState != HostRuntimeDesiredState.Running
                             || _state != HostRuntimeState.Failed)
                         {
                             return;
@@ -1092,7 +866,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
     private TimeSpan? RecordWorkerFailureForRecoveryCore()
     {
         if (_disposing
-            || _desiredState != HostRuntimeDesiredState.Running
+            || _persistentState.DesiredState != HostRuntimeDesiredState.Running
             || _process is not null)
         {
             return null;
@@ -1178,16 +952,11 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             TaskScheduler.Default);
     }
 
-    private void ValidateGeneration(long expectedDeploymentGeneration)
+    private HostRuntimeDesiredState GetPersistentDesiredState()
     {
         lock (_stateGate)
         {
-            if (expectedDeploymentGeneration != _deploymentGeneration)
-            {
-                throw new HostLifecycleConflictException(
-                    "host.deployment-generation-conflict",
-                    $"Expected deployment generation {expectedDeploymentGeneration}, but the current generation is {_deploymentGeneration}.");
-            }
+            return _persistentState.DesiredState;
         }
     }
 
@@ -1216,31 +985,22 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                string.Equals(operation.OperationId, operationId, StringComparison.Ordinal))
            ?? throw new KeyNotFoundException($"Host lifecycle operation '{operationId}' was not found.");
 
-    private HostOperationDescriptor PersistOperation(HostOperationDescriptor operation)
+    private HostOperationDescriptor MarkAcceptedOperationRunning(string operationId)
     {
         lock (_stateGate)
         {
-            var updated = ReplaceOperation(
+            var transition = HostLifecycleTransitions.MarkAcceptedOperationRunning(
                 _persistentState,
-                operation,
-                _persistentState.ActiveOperationId);
-            _lifecycleStore.Save(updated);
-            _persistentState = updated;
-            return operation;
+                operationId,
+                DateTimeOffset.UtcNow);
+            _lifecycleStore.Save(transition.State);
+            _persistentState = transition.State;
+            return transition.Operation;
         }
     }
 
     private void CompleteOperationIfActive(string operationId, string message)
-    {
-        lock (_stateGate)
-        {
-            if (!string.Equals(_persistentState.ActiveOperationId, operationId, StringComparison.Ordinal))
-            {
-                return;
-            }
-        }
-        CompleteOperation(operationId, HostOperationState.Succeeded, message, failureCode: null);
-    }
+        => CompleteOperation(operationId, HostOperationState.Succeeded, message, failureCode: null);
 
     private void CompleteOperation(
         string operationId,
@@ -1250,54 +1010,26 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
     {
         lock (_stateGate)
         {
-            if (!string.Equals(_persistentState.ActiveOperationId, operationId, StringComparison.Ordinal))
+            var transition = HostLifecycleTransitions.CompleteOperation(
+                _persistentState,
+                operationId,
+                state,
+                DateTimeOffset.UtcNow,
+                message,
+                failureCode);
+            if (!transition.Applied)
             {
                 return;
             }
-            var operation = GetRequiredOperationCore(_persistentState, operationId);
-            var completed = operation with
-            {
-                State = state,
-                UpdatedAtUtc = DateTimeOffset.UtcNow,
-                Message = Truncate(message),
-                FailureCode = Truncate(failureCode),
-            };
-            var updated = ReplaceOperation(_persistentState, completed, activeOperationId: null);
-            _lifecycleStore.Save(updated);
-            _persistentState = updated;
+            _lifecycleStore.Save(transition.State);
+            _persistentState = transition.State;
             if (state == HostOperationState.Failed && _state != HostRuntimeState.CrashLoop)
             {
                 _state = HostRuntimeState.Failed;
                 _failureCode = failureCode;
-                _failureMessage = message;
+                _failureMessage = transition.Operation!.Message;
             }
         }
-    }
-
-    private static HostLifecyclePersistentState ReplaceOperation(
-        HostLifecyclePersistentState state,
-        HostOperationDescriptor replacement,
-        string? activeOperationId)
-    {
-        var replaced = false;
-        var operations = state.Operations.Select(operation =>
-        {
-            if (!string.Equals(operation.OperationId, replacement.OperationId, StringComparison.Ordinal))
-            {
-                return operation;
-            }
-            replaced = true;
-            return replacement;
-        }).ToArray();
-        if (!replaced)
-        {
-            throw new KeyNotFoundException($"Host lifecycle operation '{replacement.OperationId}' was not found.");
-        }
-        return state with
-        {
-            ActiveOperationId = activeOperationId,
-            Operations = Array.AsReadOnly(operations),
-        };
     }
 
     private string? GetFailureCode()
@@ -1343,11 +1075,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         _state = state;
     }
 
-    private static string? Truncate(string? value)
-        => value is null || value.Length <= MaximumOperationMessageLength
-            ? value
-            : value[..MaximumOperationMessageLength];
-
     private void DeleteStaleConnection()
     {
         var stale = RuntimeConnectionInfoStore.Load(_connectionInfoPath);
@@ -1364,11 +1091,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             RuntimeConnectionInfoStore.DeleteIfMatches(connection.ConnectionInfo, _connectionInfoPath);
         }
     }
-
-    private static bool FixedTimeTokenEquals(string left, string right)
-        => System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
-            System.Text.Encoding.UTF8.GetBytes(left),
-            System.Text.Encoding.UTF8.GetBytes(right));
 
     private static void TryTerminate(Process process)
     {
@@ -1522,11 +1244,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         _submissionGate.Dispose();
         _lifecycleGate.Dispose();
     }
-}
-
-internal sealed class RuntimeWorkerStartupException(string code, string message) : InvalidOperationException(message)
-{
-    public string Code { get; } = code;
 }
 
 internal sealed class HostLifecycleConflictException(

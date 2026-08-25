@@ -13,6 +13,11 @@ import { hashFile, verifyCachedNode, writeNodeCacheVerification } from "../src/n
 import { classifyBundlerVirtualPackage, resolveRolldownPackageJsonFromVite } from "../src/notices";
 import { targetLeafDiscoveryKey, withOutputLocks } from "../src/output";
 import {
+  assertPendingAfterTurn,
+  startOutputLockContender,
+  waitForProcessOutputLockAttempt,
+} from "./observable-barriers";
+import {
   aggregateAndPack,
   buildDevPackage,
   buildWebTarget,
@@ -399,10 +404,14 @@ test("web target snapshot waits for a concurrent web-work replacement", async ()
     });
     await gapReady;
 
-    let settled = false;
-    snapshotTask = writeWebTargetLeaf(project, rid, webRoot, targetDiscoveryRoot(project)).finally(() => { settled = true; });
-    await delay(150);
-    assert.equal(settled, false, "The web snapshot must wait for the source generation lock.");
+    const snapshotContender = startOutputLockContender(
+      webRoot,
+      () => writeWebTargetLeaf(project, rid, webRoot, targetDiscoveryRoot(project)),
+      () => "The web snapshot did not attempt the source generation lock.",
+    );
+    snapshotTask = snapshotContender.completion;
+    await snapshotContender.attempting;
+    await assertPendingAfterTurn(snapshotTask, () => "The web snapshot did not wait for the source generation lock.");
     if (releaseGap === undefined) throw new Error("Web replacement release was not initialized.");
     releaseGap();
     releaseGap = undefined;
@@ -792,6 +801,11 @@ test("schema V2 rejects schema V1 and closed-shape V1 aliases with migration dia
       () => prepareProject(root),
       /schemaVersion 1 is no longer supported; migrate RPC package authoring to schemaVersion 2/u,
     );
+    await writeFile(configPath, `${JSON.stringify({ ...baseline, schemaVersion: 3 }, null, 2)}\n`, "utf8");
+    await assert.rejects(
+      () => prepareProject(root),
+      /schemaVersion must be exactly 2/u,
+    );
 
     const invalid: ReadonlyArray<{ readonly value: Partial<Record<string, unknown>>; readonly expected: RegExp }> = [
       {
@@ -1162,10 +1176,14 @@ test("recursive target discovery holds its configured root across a nested atomi
     });
     await gapReady;
 
-    let settled = false;
-    packageTask = aggregateAndPack(root, [{ path: targetsRoot, discoveryRoot }]).finally(() => { settled = true; });
-    await delay(150);
-    assert.equal(settled, false, "Aggregation must wait rather than enumerate a target-leaf swap gap.");
+    const packageContender = startOutputLockContender(
+      targetLeafDiscoveryKey(discoveryRoot),
+      () => aggregateAndPack(root, [{ path: targetsRoot, discoveryRoot }]),
+      () => "Aggregation did not attempt the target-leaf discovery lock.",
+    );
+    packageTask = packageContender.completion;
+    await packageContender.attempting;
+    await assertPendingAfterTurn(packageTask, () => "Aggregation did not wait for the target-leaf swap gap.");
     if (releaseGap === undefined) throw new Error("Discovery-gap release was not initialized.");
     releaseGap();
     releaseGap = undefined;
@@ -1296,7 +1314,7 @@ test("separate CLI processes contend safely and recover a killed owner during an
     let firstOutput = "";
     firstCli.stdout.on("data", (chunk: Buffer) => { firstOutput += chunk.toString("utf8"); });
     firstCli.stderr.on("data", (chunk: Buffer) => { firstOutput += chunk.toString("utf8"); });
-    await delay(150);
+    await waitForProcessOutputLockAttempt(firstCli.pid, () => firstOutput);
     assert.equal(firstCli.exitCode, null);
     assert.equal(await exists(devRoot), false);
     await writeFile(release, "release\n", "utf8");
@@ -1403,6 +1421,54 @@ test("Node recovery rolls back an interrupted C# aggregate transaction", async (
     assert.equal(await readFile(markerPath, "utf8"), "old marker\n");
     assert.equal(await exists(journalPath), false);
     assert.equal(await exists(stagedMarkerPath), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("generated output documents match the cross-language property corpus", async () => {
+  const corpusPath = resolve(__dirname, "../../../../../../../specs/generated-output/v1/conformance/documents.json");
+  const corpus = JSON.parse(await readFile(corpusPath, "utf8")) as OutputDocumentCorpus;
+  assert.equal(corpus.formatVersion, 1);
+  const root = resolve(tmpdir(), "sunder-node-tool-tests", randomUUID());
+  const outputPath = resolve(root, "shared-output");
+  try {
+    await mkdir(root, { recursive: true });
+    await withOutputLocks([outputPath], async () => {
+      const owner = JSON.parse(await readFile(`${outputPath}.sunder-output.lock/owner.json`, "utf8")) as Record<string, unknown>;
+      assertDocumentProperties(owner, corpus.documents.owner);
+      const marker = JSON.parse(await readFile(String(owner.processMarkerPath), "utf8")) as Record<string, unknown>;
+      assertDocumentProperties(marker, corpus.documents.processMarker);
+    });
+
+    const token = randomUUID();
+    const stagedPath = `${outputPath}.stage-${randomUUID().replaceAll("-", "")}`;
+    const backupPath = `${outputPath}.backup-${token}`;
+    const journalPath = `${outputPath}.sunder-output-transaction.json`;
+    await mkdir(outputPath);
+    await writeFile(resolve(outputPath, "generation.txt"), "old", "utf8");
+    await mkdir(stagedPath);
+    await writeFile(resolve(stagedPath, "generation.txt"), "new", "utf8");
+    const transaction = {
+      schemaVersion: 1,
+      token,
+      coordinatorPath: outputPath,
+      outputs: [{ finalPath: outputPath, stagedPath, backupPath, existed: true }],
+    };
+    assertDocumentProperties(transaction, corpus.documents.transaction);
+    assertDocumentProperties(transaction.outputs[0]!, corpus.documents.transactionOutput);
+    await writeFile(journalPath, `${JSON.stringify(transaction)}\n`, "utf8");
+    await rename(outputPath, backupPath);
+    await rename(stagedPath, outputPath);
+
+    await withOutputLocks([outputPath], async () => undefined);
+
+    assert.equal(await readFile(resolve(outputPath, "generation.txt"), "utf8"), "old");
+    assert.equal(await exists(journalPath), false);
+    assert.throws(
+      () => assertDocumentProperties({ ...transaction, seeded: true }, corpus.documents.transaction),
+      /property set/u,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1525,9 +1591,10 @@ test("live suspended lock owners are retained and two dead-owner reclaimers seri
 
     const waiterReady = resolve(root, "waiter.ready");
     const waiterRelease = resolve(root, "waiter.release");
-    const waiter = spawn(process.execPath, [helper, "hold", outputPath, waiterReady, waiterRelease], { stdio: ["pipe", "pipe", "pipe"] });
+    const waiterAttempting = resolve(root, "waiter.attempting");
+    const waiter = spawn(process.execPath, [helper, "hold", outputPath, waiterReady, waiterRelease, waiterAttempting], { stdio: ["pipe", "pipe", "pipe"] });
     children.push(waiter);
-    await delay(300);
+    await waitUntil(() => exists(waiterAttempting), "waiter output-lock attempt", () => "waiter did not announce lock acquisition");
     assert.equal(await exists(waiterReady), false, "A stale heartbeat must not override a live same-host PID.");
     if (process.platform !== "win32") assert.equal(owner.kill("SIGCONT"), true);
     await writeFile(ownerRelease, "release\n", "utf8");
@@ -1556,27 +1623,34 @@ test("live suspended lock owners are retained and two dead-owner reclaimers seri
     const reclaimerRuns = ["first", "second"].map((name) => {
       const ready = resolve(root, `${name}.ready`);
       const release = resolve(root, `${name}.release`);
-      const child = spawn(process.execPath, [helper, "hold", outputPath, ready, release], { stdio: ["pipe", "pipe", "pipe"] });
+      const attempting = resolve(root, `${name}.attempting`);
+      const child = spawn(process.execPath, [helper, "hold", outputPath, ready, release, attempting], { stdio: ["pipe", "pipe", "pipe"] });
       children.push(child);
-      return { child, ready, release };
+      return { child, ready, release, attempting };
     });
+    await Promise.all(reclaimerRuns.map((run) => waitUntil(
+      () => exists(run.attempting),
+      "stale-lock reclaimer attempt",
+      () => `pid=${run.child.pid ?? "missing"}`,
+    )));
     await waitUntil(
       async () => await exists(reclaimerRuns[0]!.ready) || await exists(reclaimerRuns[1]!.ready),
       "first stale-lock reclaimer",
       () => "neither reclaimer acquired the stale lock",
     );
-    await delay(250);
     const acquired = await Promise.all(reclaimerRuns.map((run) => exists(run.ready)));
-    assert.equal(acquired.filter(Boolean).length, 1, "Exactly one stale-lock reclaimer may own the main lock.");
     const firstIndex = acquired[0] ? 0 : 1;
     const secondIndex = firstIndex === 0 ? 1 : 0;
-    await writeFile(reclaimerRuns[firstIndex]!.release, "release\n", "utf8");
-    assert.equal(await waitForExit(reclaimerRuns[firstIndex]!.child), 0);
-    await waitUntil(
+    const secondReady = waitUntil(
       () => exists(reclaimerRuns[secondIndex]!.ready),
       "second reclaimer after serialized release",
       () => "second reclaimer did not acquire after the first released",
     );
+    await assertPendingAfterTurn(secondReady, () => "Both stale-lock reclaimers acquired before the first release.");
+    assert.equal(acquired.filter(Boolean).length, 1, "Exactly one stale-lock reclaimer may own the main lock.");
+    await writeFile(reclaimerRuns[firstIndex]!.release, "release\n", "utf8");
+    assert.equal(await waitForExit(reclaimerRuns[firstIndex]!.child), 0);
+    await secondReady;
     await writeFile(reclaimerRuns[secondIndex]!.release, "release\n", "utf8");
     assert.equal(await waitForExit(reclaimerRuns[secondIndex]!.child), 0);
     assert.equal(await exists(lockPath), false);
@@ -2002,6 +2076,15 @@ function assertSingle<T>(values: readonly T[]): T {
   return values[0]!;
 }
 
+function assertDocumentProperties(document: Record<string, unknown>, specification: OutputDocumentSpecification): void {
+  if (specification.schemaVersion !== undefined) assert.equal(document.schemaVersion, specification.schemaVersion);
+  assert.deepEqual(
+    Object.keys(document).sort(),
+    [...specification.properties].sort(),
+    "generated output document property set changed",
+  );
+}
+
 function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -2124,6 +2207,21 @@ interface PackageManifest {
     readonly abiSha256: string;
     readonly audience: string;
   }[];
+}
+
+interface OutputDocumentSpecification {
+  readonly schemaVersion?: number;
+  readonly properties: readonly string[];
+}
+
+interface OutputDocumentCorpus {
+  readonly formatVersion: number;
+  readonly documents: {
+    readonly owner: OutputDocumentSpecification;
+    readonly processMarker: OutputDocumentSpecification;
+    readonly transaction: OutputDocumentSpecification;
+    readonly transactionOutput: OutputDocumentSpecification;
+  };
 }
 
 interface DistributionMetadata {

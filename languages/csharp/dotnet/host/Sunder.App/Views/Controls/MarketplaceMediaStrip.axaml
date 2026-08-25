@@ -23,7 +23,8 @@
                     Command="{Binding SelectCommand}"
                     ToolTip.Tip="{Binding Caption}">
               <Grid>
-                <Border Classes="marketplace-image-frame">
+                <Border Classes="marketplace-image-frame"
+                        EffectiveViewportChanged="MediaFrame_OnEffectiveViewportChanged">
                   <Image Source="{Binding Image}" Stretch="UniformToFill" />
                 </Border>
                 <TextBlock Classes="caption marketplace-image-loading"

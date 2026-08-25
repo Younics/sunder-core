@@ -77,10 +77,9 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
       activationId: packageIdentity.activationId,
       sessionGeneration: corpus.lifecycle.sessionGeneration,
     });
-    assert.deepEqual(
-      await worker.messages.next(),
-      generationCommitted(corpus.lifecycle.sessionGeneration),
-    );
+    const committed = await worker.messages.next();
+    assertEnvelopePropertySet(committed);
+    assert.deepEqual(committed, generationCommitted(corpus.lifecycle.sessionGeneration));
     await prepareStorageMigrations(worker, corpus.lifecycle.sessionGeneration);
     send(worker, {
       type: "host.activate",
@@ -88,6 +87,7 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
     });
 
     const migrationKeys = await worker.messages.next();
+    assertEnvelopePropertySet(migrationKeys);
     assert.deepEqual({ type: migrationKeys.type, store: migrationKeys.store }, {
       type: "worker.migration-keys",
       store: "state",
@@ -98,6 +98,7 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
       value: { keys: corpus.storageMigrations.dynamicKeys },
     });
     const stateMigration = await worker.messages.next();
+    assertEnvelopePropertySet(stateMigration);
     const statePlan = corpus.storageMigrations.plans.find((plan) => plan.store === "state");
     assert.deepEqual({
       type: stateMigration.type,
@@ -112,6 +113,7 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
     });
     send(worker, { type: "host.result", id: stateMigration.id!, value: null });
     const secretMigration = await worker.messages.next();
+    assertEnvelopePropertySet(secretMigration);
     const secretPlan = corpus.storageMigrations.plans.find((plan) => plan.store === "secrets");
     assert.deepEqual({
       type: secretMigration.type,
@@ -125,6 +127,7 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
     send(worker, { type: "host.result", id: secretMigration.id!, value: null });
 
     const stateSet = await worker.messages.next();
+    assertEnvelopePropertySet(stateSet);
     assert.deepEqual({ type: stateSet.type, key: stateSet.key, value: stateSet.value }, {
       type: "worker.state-set",
       key: corpus.packageData.key,
@@ -132,6 +135,7 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
     });
     send(worker, { type: "host.result", id: stateSet.id!, value: null });
     const stateGet = await worker.messages.next();
+    assertEnvelopePropertySet(stateGet);
     assert.deepEqual({ type: stateGet.type, key: stateGet.key, mode: stateGet.mode }, {
       type: "worker.state-get",
       key: corpus.packageData.key,
@@ -143,28 +147,35 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
       value: { kind: "inline", value: corpus.packageData.value },
     });
     const stateDelete = await worker.messages.next();
+    assertEnvelopePropertySet(stateDelete);
     assert.deepEqual({ type: stateDelete.type, key: stateDelete.key }, {
       type: "worker.state-delete",
       key: corpus.packageData.key,
     });
     send(worker, { type: "host.result", id: stateDelete.id!, value: null });
-    assert.deepEqual(await worker.messages.next(), {
+    const activated = await worker.messages.next();
+    assertEnvelopePropertySet(activated);
+    assert.deepEqual(activated, {
       type: "worker.activated",
       sessionGeneration: corpus.lifecycle.sessionGeneration,
     });
 
     send(worker, corpusInvocation(corpus.rpc.unary.id, "unary", corpus.rpc.unary.methodId, corpus.rpc.unary.request));
     const unary = await worker.messages.next();
+    assertEnvelopePropertySet(unary);
     assert.equal(unary.type, "worker.result");
     assert.deepEqual(unary.value, corpus.rpc.unary.result);
 
     send(worker, corpusInvocation(corpus.rpc.stream.id, "server-stream", corpus.rpc.stream.methodId, corpus.rpc.stream.request));
     for (const expected of corpus.rpc.stream.events) {
       const event = await worker.messages.next();
+      assertEnvelopePropertySet(event);
       assert.equal(event.type, "worker.event");
       assert.deepEqual(event.value, expected);
     }
-    assert.deepEqual(await worker.messages.next(), {
+    const complete = await worker.messages.next();
+    assertEnvelopePropertySet(complete);
+    assert.deepEqual(complete, {
       type: "worker.complete",
       id: corpus.rpc.stream.id,
     });
@@ -176,6 +187,7 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
       corpus.rpc.domainFault.request,
     ));
     const domainFault = await worker.messages.next();
+    assertEnvelopePropertySet(domainFault);
     assert.equal(domainFault.type, "worker.error");
     assert.deepEqual(domainFault.error, corpus.rpc.domainFault.error);
 
@@ -186,6 +198,7 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
       corpus.rpc.undeclaredDomainFault.request,
     ));
     const diagnostic = await worker.messages.next();
+    assertEnvelopePropertySet(diagnostic);
     assert.equal(corpus.rpc.undeclaredDomainFault.diagnosticRequired, true);
     assert.equal(diagnostic.type, "worker.provider-fault-diagnostic");
     assert.equal(diagnostic.invocationId, corpus.rpc.undeclaredDomainFault.id);
@@ -196,6 +209,7 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
     );
     send(worker, { type: "host.result", id: diagnostic.id!, value: null });
     const undeclaredDomainFault = await worker.messages.next();
+    assertEnvelopePropertySet(undeclaredDomainFault);
     assert.equal(undeclaredDomainFault.type, "worker.error");
     assert.deepEqual(undeclaredDomainFault.error, corpus.rpc.undeclaredDomainFault.error);
 
@@ -204,7 +218,9 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
       shutdownId: corpus.lifecycle.shutdownId,
       reason: corpus.lifecycle.shutdownReason,
     });
-    assert.deepEqual(await worker.messages.next(), {
+    const shutdown = await worker.messages.next();
+    assertEnvelopePropertySet(shutdown);
+    assert.deepEqual(shutdown, {
       type: "worker.shutdown-ack",
       shutdownId: corpus.lifecycle.shutdownId,
     });
@@ -212,6 +228,13 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
   } finally {
     worker.child.kill("SIGKILL");
   }
+});
+
+test("shared Worker envelope property oracle rejects a seeded extra property", () => {
+  assert.throws(
+    () => assertEnvelopePropertySet({ type: "worker.result", id: "one", value: null, seeded: true }),
+    /worker\.result/u,
+  );
 });
 
 test("worker performs handshake, unary, stream, cancellation, and graceful shutdown", async () => {
@@ -1692,6 +1715,14 @@ async function waitForStderr(worker: WorkerProcess, value: string): Promise<void
 function object(value: JsonValue | undefined): Readonly<Record<string, JsonValue>> {
   assert.ok(value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value));
   return value as Readonly<Record<string, JsonValue>>;
+}
+
+function assertEnvelopePropertySet(envelope: Readonly<Record<string, JsonValue>>): void {
+  const type = envelope.type;
+  if (typeof type !== "string") assert.fail("Worker envelope type must be a string.");
+  const expected = workerV3ConformanceCorpus.envelopePropertySets[type];
+  assert.ok(expected !== undefined, `Shared corpus has no property set for '${type}'.`);
+  assert.deepEqual(Object.keys(envelope).sort(), [...expected].sort(), `${type} property set changed`);
 }
 
 interface WorkerProcess {

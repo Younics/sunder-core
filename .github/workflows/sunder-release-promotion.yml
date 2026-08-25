@@ -1,0 +1,460 @@
+name: Sunder Core Release Promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Exact component draft to promote
+        required: true
+        type: choice
+        options:
+          - app
+          - cli
+          - host
+          - sdk
+      release_id:
+        description: Numeric GitHub release database ID of the verified draft
+        required: true
+        type: string
+      tag:
+        description: Exact component SemVer tag, including the component prefix
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character source commit used for immutable publication
+        required: true
+        type: string
+      publication_run_id:
+        description: Successful tag workflow run ID that published the immutable bytes
+        required: true
+        type: string
+      publication_run_attempt:
+        description: Run attempt bound by the immutable publication evidence
+        required: true
+        type: string
+      production_acceptance_run_id:
+        description: Successful trusted production-acceptance workflow run ID
+        required: true
+        type: string
+      production_acceptance_run_attempt:
+        description: Trusted production-acceptance run attempt that archived the evidence
+        required: true
+        type: string
+      production_acceptance_workflow_sha:
+        description: Exact 40-character commit of the trusted production-acceptance workflow on protected main
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: sunder-release-draft-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: "10.0.100"
+  NODE_VERSION: "24.18.1"
+  NPM_VERSION: "11.19.0"
+  NUGET_FLAT_CONTAINER: https://api.nuget.org/v3-flatcontainer
+  NPM_REGISTRY: https://registry.npmjs.org
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+
+jobs:
+  verify:
+    name: Verify publication and separate production acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      component: ${{ steps.metadata.outputs.component }}
+      is_prerelease: ${{ steps.metadata.outputs.is_prerelease }}
+      npm_channel: ${{ steps.metadata.outputs.npm_channel }}
+      npm_version_range: ${{ steps.metadata.outputs.npm_version_range }}
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - name: Validate explicit promotion coordinates
+        id: metadata
+        shell: bash
+        env:
+          COMPONENT: ${{ inputs.component }}
+          PRODUCTION_RUN_ATTEMPT: ${{ inputs.production_acceptance_run_attempt }}
+          PRODUCTION_RUN_ID: ${{ inputs.production_acceptance_run_id }}
+          PRODUCTION_WORKFLOW_SHA: ${{ inputs.production_acceptance_workflow_sha }}
+          PUBLICATION_RUN_ATTEMPT: ${{ inputs.publication_run_attempt }}
+          PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          [[ "$COMPONENT" == "app" || "$COMPONENT" == "cli" || "$COMPONENT" == "host" || "$COMPONENT" == "sdk" ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PUBLICATION_RUN_ID" =~ ^[1-9][0-9]*$ && "$PUBLICATION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PRODUCTION_RUN_ID" =~ ^[1-9][0-9]*$ && "$PRODUCTION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PRODUCTION_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ ! "$TAG" =~ ^$COMPONENT/v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+)(\.[0-9A-Za-z-]+)*)?)$ ]]; then
+            echo "Tag '$TAG' does not match component '$COMPONENT' with strict SemVer." >&2
+            exit 2
+          fi
+          version="${BASH_REMATCH[1]}"
+          major="${BASH_REMATCH[2]}"
+          minor="${BASH_REMATCH[3]}"
+          is_prerelease=false
+          npm_channel=latest
+          if [[ "$version" == *-* ]]; then
+            is_prerelease=true
+            npm_channel=next
+            IFS='.' read -ra identifiers <<< "${version#*-}"
+            for identifier in "${identifiers[@]}"; do
+              if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" == 0* && "$identifier" != "0" ]]; then
+                echo "Numeric SemVer prerelease identifiers must not contain leading zeroes." >&2
+                exit 2
+              fi
+            done
+          fi
+          {
+            echo "component=$COMPONENT"
+            echo "is_prerelease=$is_prerelease"
+            echo "npm_channel=$npm_channel"
+            echo "npm_version_range=>=$major.$minor.0 <$major.$((minor + 1)).0"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact published source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Setup .NET for SDK repository-signature verification
+        if: inputs.component == 'sdk'
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Node for SDK provenance verification
+        if: inputs.component == 'sdk'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Use exact npm verifier version
+        if: inputs.component == 'sdk'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
+          [[ "$(npm --version)" == "$NPM_VERSION" ]]
+
+      - name: Download exact immutable publication evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sunder-${{ inputs.component }}-publication-evidence-${{ inputs.release_id }}-${{ inputs.publication_run_attempt }}
+          path: publication-evidence
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.publication_run_id }}
+
+      - name: Download separately archived production acceptance
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sunder-${{ inputs.component }}-production-acceptance-${{ inputs.release_id }}-${{ inputs.production_acceptance_run_attempt }}
+          path: production-acceptance
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.production_acceptance_run_id }}
+
+      - name: Verify exact immutable publication evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          bash scripts/release/verify-release-promotion.sh \
+            "${{ inputs.component }}" \
+            "${{ inputs.release_id }}" \
+            "${{ inputs.tag }}" \
+            "${{ inputs.source_sha }}" \
+            "${{ inputs.publication_run_id }}" \
+            "${{ inputs.publication_run_attempt }}" \
+            publication-evidence
+
+      - name: Verify separate production acceptance decision and archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          bash scripts/release/verify-production-acceptance.sh \
+            "${{ inputs.component }}" \
+            "${{ inputs.release_id }}" \
+            "${{ inputs.tag }}" \
+            "${{ inputs.source_sha }}" \
+            "${{ inputs.publication_run_id }}" \
+            "${{ inputs.publication_run_attempt }}" \
+            "${{ inputs.production_acceptance_run_id }}" \
+            "${{ inputs.production_acceptance_run_attempt }}" \
+            "${{ inputs.production_acceptance_workflow_sha }}" \
+            production-acceptance
+
+      - name: Verify exact immutable npm publication versions
+        if: inputs.component == 'sdk'
+        shell: bash
+        env:
+          NPM_VERSION_RANGE: ${{ steps.metadata.outputs.npm_version_range }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          node scripts/release/verify-npm-release.mjs \
+            "$VERSION" "$NPM_VERSION_RANGE" "accept-v$VERSION" \
+            publication-evidence "$GITHUB_REPOSITORY" \
+            .github/workflows/sunder-sdk-release.yml "${{ inputs.source_sha }}" publication
+
+      - name: Verify exact immutable NuGet publication versions
+        if: inputs.component == 'sdk'
+        shell: bash
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/verify-nuget-source.sh
+          package_ids=(Sunder.Sdk Sunder.Sdk.Avalonia Sunder.Sdk.Stacks Sunder.Sdk.Worker Sunder.Package.Build Sunder.Package.Templates)
+          for package_id in "${package_ids[@]}"; do
+            package_id_lower="${package_id,,}"
+            version_lower="${VERSION,,}"
+            published_package="$RUNNER_TEMP/$package_id.$VERSION.nupkg"
+            curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-redirs 0 \
+              "$NUGET_FLAT_CONTAINER/$package_id_lower/$version_lower/$package_id_lower.$version_lower.nupkg" \
+              -o "$published_package"
+            bash scripts/release/verify-nuget-package.sh \
+              "publication-evidence/$package_id.$VERSION.nupkg" "$published_package"
+          done
+
+  promote-npm:
+    name: Move SDK npm consumer channel
+    if: needs.verify.outputs.component == 'sdk'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: sunder-sdk-npm-promotion
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact published source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Setup Node for npm dist-tag promotion
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: ${{ env.NPM_REGISTRY }}
+
+      - name: Use exact npm verifier version
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
+          [[ "$(npm --version)" == "$NPM_VERSION" ]]
+
+      - name: Download exact immutable publication evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sunder-sdk-publication-evidence-${{ inputs.release_id }}-${{ inputs.publication_run_attempt }}
+          path: publication-evidence
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.publication_run_id }}
+
+      - name: Move and verify each exact npm consumer channel
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
+          NPM_CHANNEL: ${{ needs.verify.outputs.npm_channel }}
+          NPM_VERSION_RANGE: ${{ needs.verify.outputs.npm_version_range }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ -n "${NODE_AUTH_TOKEN:-}" ]] \
+            || { echo "Protected environment secret NPM_DIST_TAG_TOKEN is not configured." >&2; exit 1; }
+          package_ids=("@sunder/sdk" "@sunder/package-tool" "create-sunder-package")
+          for package_id in "${package_ids[@]}"; do
+            npm dist-tag add "$package_id@$VERSION" "$NPM_CHANNEL" --registry="$NPM_REGISTRY"
+            node scripts/release/verify-npm-release.mjs \
+              "$VERSION" "$NPM_VERSION_RANGE" "$NPM_CHANNEL" \
+              publication-evidence "$GITHUB_REPOSITORY" \
+              .github/workflows/sunder-sdk-release.yml "${{ inputs.source_sha }}" promotion "$package_id"
+          done
+          node scripts/release/verify-npm-release.mjs \
+            "$VERSION" "$NPM_VERSION_RANGE" "$NPM_CHANNEL" \
+            publication-evidence "$GITHUB_REPOSITORY" \
+            .github/workflows/sunder-sdk-release.yml "${{ inputs.source_sha }}" promotion
+
+  finalize-github:
+    name: Finalize exact numeric GitHub draft
+    if: >-
+      always() &&
+      needs.verify.result == 'success' &&
+      (needs.verify.outputs.component != 'sdk' || needs.promote-npm.result == 'success')
+    needs:
+      - verify
+      - promote-npm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: sunder-github-release-promotion
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout exact published source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Setup Node for final SDK channel verification
+        if: inputs.component == 'sdk'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Use exact npm verifier version
+        if: inputs.component == 'sdk'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
+          [[ "$(npm --version)" == "$NPM_VERSION" ]]
+
+      - name: Download exact immutable publication evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sunder-${{ inputs.component }}-publication-evidence-${{ inputs.release_id }}-${{ inputs.publication_run_attempt }}
+          path: publication-evidence
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.publication_run_id }}
+
+      - name: Download separately archived production acceptance
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sunder-${{ inputs.component }}-production-acceptance-${{ inputs.release_id }}-${{ inputs.production_acceptance_run_attempt }}
+          path: production-acceptance
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.production_acceptance_run_id }}
+
+      - name: Reverify production acceptance and finalize numeric draft
+        shell: bash
+        env:
+          COMPONENT: ${{ needs.verify.outputs.component }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          IS_PRERELEASE: ${{ needs.verify.outputs.is_prerelease }}
+          NPM_CHANNEL: ${{ needs.verify.outputs.npm_channel }}
+          NPM_VERSION_RANGE: ${{ needs.verify.outputs.npm_version_range }}
+          PROMOTION_ENVIRONMENT_GUARD: ${{ secrets.SUNDER_GITHUB_PROMOTION_GUARD }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ -n "${PROMOTION_ENVIRONMENT_GUARD:-}" ]] \
+            || { echo "Protected environment secret SUNDER_GITHUB_PROMOTION_GUARD is not configured." >&2; exit 1; }
+
+          bash scripts/release/verify-production-acceptance.sh \
+            "$COMPONENT" "$RELEASE_ID" "$TAG" "${{ inputs.source_sha }}" \
+            "${{ inputs.publication_run_id }}" "${{ inputs.publication_run_attempt }}" \
+            "${{ inputs.production_acceptance_run_id }}" "${{ inputs.production_acceptance_run_attempt }}" \
+            "${{ inputs.production_acceptance_workflow_sha }}" \
+            production-acceptance
+
+          if [[ "$COMPONENT" == "sdk" ]]; then
+            node scripts/release/verify-npm-release.mjs \
+              "$VERSION" "$NPM_VERSION_RANGE" "$NPM_CHANNEL" \
+              publication-evidence "$GITHUB_REPOSITORY" \
+              .github/workflows/sunder-sdk-release.yml "${{ inputs.source_sha }}" promotion
+          fi
+
+          release_state="$(gh api -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GH_REPO/releases/$RELEASE_ID")"
+          current_draft="$(jq -r '.draft' <<< "$release_state")"
+          EXPECTED_RELEASE_DRAFT="$current_draft" \
+            bash scripts/release/verify-release-promotion.sh \
+              "$COMPONENT" "$RELEASE_ID" "$TAG" "${{ inputs.source_sha }}" \
+              "${{ inputs.publication_run_id }}" "${{ inputs.publication_run_attempt }}" \
+              publication-evidence
+
+          expected_asset_count="$(( $(jq '.artifacts | length' publication-evidence/release-provenance.json) + 4 ))"
+          verified_asset_fingerprint="$(jq -c '
+            [.assets[] | {id,name,state,size,digest}] | sort_by(.name)
+          ' <<< "$release_state")"
+          expected_assets='[]'
+          while IFS= read -r asset_path; do
+            expected_assets="$(jq -cn \
+              --argjson assets "$expected_assets" \
+              --arg name "$(basename "$asset_path")" \
+              --arg digest "sha256:$(sha256sum "$asset_path" | cut -d ' ' -f 1)" \
+              --argjson size "$(wc -c < "$asset_path" | tr -d '[:space:]')" \
+              '$assets + [{name:$name,size:$size,digest:$digest}]')"
+          done < <(find publication-evidence -mindepth 1 -maxdepth 1 -type f -print | sort)
+          expected_assets="$(jq -c 'sort_by(.name)' <<< "$expected_assets")"
+          release_before="$(gh api -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GH_REPO/releases/$RELEASE_ID")"
+          jq -e \
+            --argjson release_id "$RELEASE_ID" \
+            --arg tag "$TAG" \
+            --argjson expected_count "$expected_asset_count" \
+            --argjson expected_draft "$current_draft" \
+            --argjson expected_assets "$expected_assets" \
+            --argjson verified_fingerprint "$verified_asset_fingerprint" '
+              .id == $release_id
+              and .tag_name == $tag
+              and .draft == $expected_draft
+              and (.assets | length) == $expected_count
+              and all(.assets[]; .state == "uploaded" and (.digest | test("^sha256:[0-9a-f]{64}$")))
+              and ([.assets[] | {name,size,digest}] | sort_by(.name)) == $expected_assets
+              and ([.assets[] | {id,name,state,size,digest}] | sort_by(.name)) == $verified_fingerprint
+            ' <<< "$release_before" >/dev/null \
+            || { echo "Numeric release changed after final byte verification." >&2; exit 1; }
+
+          make_latest=false
+          if [[ "$COMPONENT" == "app" && "$IS_PRERELEASE" == "false" ]]; then
+            make_latest=true
+          fi
+          jq -n \
+            --argjson prerelease "$IS_PRERELEASE" \
+            --arg make_latest "$make_latest" \
+            '{draft:false,prerelease:$prerelease,make_latest:$make_latest}' \
+            > "$RUNNER_TEMP/release-patch.json"
+          patched="$(gh api --method PATCH \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GH_REPO/releases/$RELEASE_ID" \
+            --input "$RUNNER_TEMP/release-patch.json")"
+          jq -e --argjson release_id "$RELEASE_ID" --arg tag "$TAG" --argjson prerelease "$IS_PRERELEASE" '
+            .id == $release_id and .tag_name == $tag and .draft == false and .prerelease == $prerelease
+          ' <<< "$patched" >/dev/null
+
+          published="$(gh api -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GH_REPO/releases/$RELEASE_ID")"
+          jq -e --argjson release_id "$RELEASE_ID" --arg tag "$TAG" --argjson prerelease "$IS_PRERELEASE" '
+            .id == $release_id and .tag_name == $tag and .draft == false and .prerelease == $prerelease
+          ' <<< "$published" >/dev/null
+          latest_tag="$(gh api -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          if [[ "$make_latest" == true ]]; then
+            [[ "$latest_tag" == "$TAG" ]] || { echo "Stable App promotion did not move GitHub latest." >&2; exit 1; }
+          else
+            [[ "$latest_tag" != "$TAG" ]] || { echo "Non-App or prerelease promotion unexpectedly moved GitHub latest." >&2; exit 1; }
+          fi

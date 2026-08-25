@@ -267,7 +267,8 @@ public sealed partial class PackagesWindowViewModel
 
     private void ApplyMarketplaceProfile(RegistryPackageProfile? profile)
     {
-        var shortDescription = _marketplace.ApplyProfile(profile);
+        _registryClientProvider.TryResolve(out var registryOrigin, out _);
+        var shortDescription = _marketplace.ApplyProfile(profile, registryOrigin);
         if (!string.IsNullOrWhiteSpace(shortDescription))
         {
             SelectedPackageSummary = shortDescription;

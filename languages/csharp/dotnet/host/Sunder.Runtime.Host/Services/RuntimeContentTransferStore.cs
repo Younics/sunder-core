@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Rpc;
 
@@ -48,15 +49,18 @@ internal sealed record RuntimeRpcContentLease(
 
 internal sealed class RuntimeContentTransferStore : IDisposable
 {
-    internal const long MaxPackageUploadBytes = 512L * 1024 * 1024;
-    internal const long MaxStackUploadBytes = 256L * 1024 * 1024;
-    internal const long MaxMediaUploadBytes = 64L * 1024 * 1024;
+    internal const long MaxPackageUploadBytes = RuntimeRequestSizeLimits.PackageUploadMaxRequestBodyBytes;
+    internal const long MaxStackUploadBytes = RuntimeRequestSizeLimits.StackUploadMaxRequestBodyBytes;
+    internal const long MaxMediaUploadBytes = RuntimeRequestSizeLimits.StackMediaUploadMaxRequestBodyBytes;
 
     private readonly RuntimePackagePaths _paths;
     private readonly RuntimeTransportPolicyOptions _policy;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, UploadEntry> _uploads = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DownloadEntry> _downloads = new(StringComparer.Ordinal);
+    private readonly object _pendingTransfersGate = new();
+    private long _pendingTransferBytes;
+    private int _pendingTransferCount;
     private readonly object _rpcContentGate = new();
     private readonly Dictionary<string, RpcContentEntry> _rpcContent = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RpcContentUsage> _rpcContentByPackage = new(StringComparer.Ordinal);
@@ -72,6 +76,18 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         _paths = paths;
         _policy = policy ?? new RuntimeTransportPolicyOptions();
         _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    internal static void CleanupCrashLeftTransfers(RuntimePackagePaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        if (!Directory.Exists(paths.TransferRootPath)) return;
+
+        foreach (var path in Directory.EnumerateFileSystemEntries(paths.TransferRootPath))
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+            else File.Delete(path);
+        }
     }
 
     public async Task<ContentUploadDescriptor> CreateUploadAsync(
@@ -110,8 +126,10 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         var normalizedContentType = NormalizeContentType(contentType);
         long length = 0;
         var buffer = ArrayPool<byte>.Shared.Rent(128 * 1024);
+        PendingTransferReservation? reservation = null;
         try
         {
+            reservation = ReservePendingTransfer(contentLength ?? 0);
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             await using (var destination = new FileStream(
                              partialPath,
@@ -129,11 +147,12 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                         break;
                     }
 
-                    length += read;
-                    if (length > limit)
+                    if (read > limit - length)
                     {
                         throw new RuntimeUploadLimitException($"Upload exceeds the {limit} byte limit.");
                     }
+                    length += read;
+                    EnsurePendingTransferReservationBytes(reservation, length);
 
                     hash.AppendData(buffer, 0, read);
                     await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
@@ -149,13 +168,24 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                 throw new RuntimeValidationException("Uploaded content hash does not match X-Content-SHA256.");
             }
 
+            ResizePendingTransferReservation(reservation, length);
             File.Move(partialPath, finalPath);
-            var entry = new UploadEntry(kind, finalPath, contentHash, length, normalizedFileName, normalizedContentType, generation, _timeProvider.GetUtcNow());
+            var entry = new UploadEntry(
+                kind,
+                finalPath,
+                contentHash,
+                length,
+                normalizedFileName,
+                normalizedContentType,
+                generation,
+                _timeProvider.GetUtcNow(),
+                reservation);
             if (!_uploads.TryAdd(uploadId, entry))
             {
                 throw new IOException("Failed to allocate an upload handle.");
             }
 
+            reservation = null;
             return new ContentUploadDescriptor(uploadId, contentHash, length, normalizedFileName, normalizedContentType);
         }
         catch
@@ -166,6 +196,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         }
         finally
         {
+            if (reservation is not null) RollbackPendingTransferReservation(reservation);
             ArrayPool<byte>.Shared.Return(buffer);
         }
     }
@@ -181,22 +212,31 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         {
             return null;
         }
+        if (consume) ReleasePendingTransferReservation(entry.Reservation);
         if (entry.Kind != kind
             || entry.Generation != generation
             || !File.Exists(entry.FilePath))
         {
-            if (!consume)
+            if (consume)
             {
-                _uploads.TryRemove(new KeyValuePair<string, UploadEntry>(uploadId, entry));
+                TryDeleteFile(entry.FilePath);
             }
-            TryDeleteFile(entry.FilePath);
+            else if (_uploads.TryRemove(new KeyValuePair<string, UploadEntry>(uploadId, entry)))
+            {
+                ReleasePendingTransferReservation(entry.Reservation);
+                TryDeleteFile(entry.FilePath);
+            }
             return null;
         }
 
         return new RuntimeUploadLease(uploadId, entry.FilePath, entry.ContentHash, entry.Length, entry.FileName, entry.ContentType);
     }
 
-    public void ReleaseUpload(RuntimeUploadLease lease) => TryDeleteFile(lease.FilePath);
+    public void ReleaseUpload(RuntimeUploadLease lease)
+    {
+        RemoveUpload(lease.UploadId);
+        TryDeleteFile(lease.FilePath);
+    }
 
     public void DiscardUpload(string uploadId) => RemoveUpload(uploadId);
 
@@ -208,23 +248,48 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         string contentType,
         long generation)
     {
+        if (length < 0)
+        {
+            throw new RuntimeValidationException("Download length cannot be negative.");
+        }
         var id = Guid.NewGuid().ToString("N");
-        var entry = new DownloadEntry(filePath, contentHash, length, NormalizeFileName(fileName, "download.bin"), NormalizeContentType(contentType), generation, _timeProvider.GetUtcNow());
-        _downloads[id] = entry;
-        return new ContentDownloadDescriptor(id, contentHash, length, entry.FileName, entry.ContentType, $"downloads/{id}");
+        PendingTransferReservation? reservation = ReservePendingTransfer(length);
+        try
+        {
+            var entry = new DownloadEntry(
+                filePath,
+                contentHash,
+                length,
+                NormalizeFileName(fileName, "download.bin"),
+                NormalizeContentType(contentType),
+                generation,
+                _timeProvider.GetUtcNow(),
+                reservation);
+            if (!_downloads.TryAdd(id, entry))
+            {
+                throw new IOException("Failed to allocate a download handle.");
+            }
+            reservation = null;
+            return new ContentDownloadDescriptor(id, contentHash, length, entry.FileName, entry.ContentType, $"downloads/{id}");
+        }
+        finally
+        {
+            if (reservation is not null) RollbackPendingTransferReservation(reservation);
+        }
     }
 
     public RuntimeUploadLease? AcquireDownload(string downloadId, long generation)
     {
         SweepExpired(_timeProvider.GetUtcNow());
-        if (!_downloads.TryRemove(downloadId, out var entry)
-            || entry.Generation != generation
+        if (!_downloads.TryRemove(downloadId, out var entry))
+        {
+            return null;
+        }
+        ReleasePendingTransferReservation(entry.Reservation);
+        if (entry.Generation != generation
             || !File.Exists(entry.FilePath))
         {
-            if (entry is not null)
-            {
-                TryDeleteFile(entry.FilePath);
-            }
+            TryDeleteFile(entry.FilePath);
             return null;
         }
 
@@ -638,11 +703,10 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         {
             RemoveUpload(id);
         }
-        foreach (var (_, entry) in _downloads)
+        foreach (var id in _downloads.Keys)
         {
-            TryDeleteFile(entry.FilePath);
+            RemoveDownload(id);
         }
-        _downloads.Clear();
         RpcContentEntry[] rpcContent;
         lock (_rpcContentGate)
         {
@@ -668,9 +732,11 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         }
         foreach (var (id, entry) in _downloads)
         {
-            if (entry.CreatedAtUtc < cutoff && _downloads.TryRemove(id, out var removed))
+            if (entry.CreatedAtUtc < cutoff
+                && _downloads.TryRemove(new KeyValuePair<string, DownloadEntry>(id, entry)))
             {
-                TryDeleteFile(removed.FilePath);
+                ReleasePendingTransferReservation(entry.Reservation);
+                TryDeleteFile(entry.FilePath);
             }
         }
         lock (_rpcContentGate)
@@ -898,6 +964,83 @@ internal sealed class RuntimeContentTransferStore : IDisposable
     private static bool WouldExceed(long current, long additional, long limit)
         => additional > limit || current > limit - additional;
 
+    private PendingTransferReservation ReservePendingTransfer(long bytes)
+    {
+        lock (_pendingTransfersGate)
+        {
+            if (_pendingTransferCount >= _policy.MaxPendingContentTransfers)
+            {
+                throw new RuntimeUploadLimitException(
+                    $"The Runtime already has {_policy.MaxPendingContentTransfers} pending content transfers.");
+            }
+            if (bytes < 0
+                || WouldExceed(_pendingTransferBytes, bytes, _policy.MaxPendingContentTransferBytes))
+            {
+                throw new RuntimeUploadLimitException(
+                    $"Pending content transfers exceed the {_policy.MaxPendingContentTransferBytes} byte aggregate limit.");
+            }
+
+            _pendingTransferCount++;
+            _pendingTransferBytes += bytes;
+            return new PendingTransferReservation(bytes);
+        }
+    }
+
+    private void EnsurePendingTransferReservationBytes(
+        PendingTransferReservation reservation,
+        long bytes)
+    {
+        lock (_pendingTransfersGate)
+        {
+            if (!reservation.IsActive || bytes <= reservation.Bytes) return;
+            ResizePendingTransferReservationCore(reservation, bytes);
+        }
+    }
+
+    private void ResizePendingTransferReservation(
+        PendingTransferReservation reservation,
+        long bytes)
+    {
+        lock (_pendingTransfersGate)
+        {
+            if (!reservation.IsActive)
+            {
+                throw new InvalidOperationException("The pending content transfer reservation is no longer active.");
+            }
+            ResizePendingTransferReservationCore(reservation, bytes);
+        }
+    }
+
+    private void ResizePendingTransferReservationCore(
+        PendingTransferReservation reservation,
+        long bytes)
+    {
+        var delta = bytes - reservation.Bytes;
+        if (delta > 0
+            && WouldExceed(_pendingTransferBytes, delta, _policy.MaxPendingContentTransferBytes))
+        {
+            throw new RuntimeUploadLimitException(
+                $"Pending content transfers exceed the {_policy.MaxPendingContentTransferBytes} byte aggregate limit.");
+        }
+
+        _pendingTransferBytes += delta;
+        reservation.Bytes = bytes;
+    }
+
+    private void RollbackPendingTransferReservation(PendingTransferReservation reservation)
+        => ReleasePendingTransferReservation(reservation);
+
+    private void ReleasePendingTransferReservation(PendingTransferReservation reservation)
+    {
+        lock (_pendingTransfersGate)
+        {
+            if (!reservation.IsActive) return;
+            reservation.IsActive = false;
+            _pendingTransferCount--;
+            _pendingTransferBytes -= reservation.Bytes;
+        }
+    }
+
     private static void ReleaseUsage<TKey>(
         Dictionary<TKey, RpcContentUsage> usage,
         TKey key,
@@ -942,6 +1085,16 @@ internal sealed class RuntimeContentTransferStore : IDisposable
     {
         if (_uploads.TryRemove(id, out var entry))
         {
+            ReleasePendingTransferReservation(entry.Reservation);
+            TryDeleteFile(entry.FilePath);
+        }
+    }
+
+    private void RemoveDownload(string id)
+    {
+        if (_downloads.TryRemove(id, out var entry))
+        {
+            ReleasePendingTransferReservation(entry.Reservation);
             TryDeleteFile(entry.FilePath);
         }
     }
@@ -971,8 +1124,32 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         }
     }
 
-    private sealed record UploadEntry(RuntimeUploadKind Kind, string FilePath, string ContentHash, long Length, string FileName, string ContentType, long Generation, DateTimeOffset CreatedAtUtc);
-    private sealed record DownloadEntry(string FilePath, string ContentHash, long Length, string FileName, string ContentType, long Generation, DateTimeOffset CreatedAtUtc);
+    private sealed record UploadEntry(
+        RuntimeUploadKind Kind,
+        string FilePath,
+        string ContentHash,
+        long Length,
+        string FileName,
+        string ContentType,
+        long Generation,
+        DateTimeOffset CreatedAtUtc,
+        PendingTransferReservation Reservation);
+
+    private sealed record DownloadEntry(
+        string FilePath,
+        string ContentHash,
+        long Length,
+        string FileName,
+        string ContentType,
+        long Generation,
+        DateTimeOffset CreatedAtUtc,
+        PendingTransferReservation Reservation);
+
+    private sealed class PendingTransferReservation(long bytes)
+    {
+        public long Bytes { get; set; } = bytes;
+        public bool IsActive { get; set; } = true;
+    }
 
     private sealed class RpcContentEntry(
         SunderRpcContentReference reference,

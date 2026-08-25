@@ -1,5 +1,4 @@
 using Sunder.Sdk.Compatibility;
-using Sunder.Sdk.Storage;
 
 namespace Sunder.Sdk.Worker;
 
@@ -26,7 +25,7 @@ public sealed class SunderWorkerMigrationPreparationContext
         string key,
         CancellationToken cancellationToken = default)
     {
-        Internal.WorkerPackageSettings.ValidateKey(key, nameof(key));
+        Internal.WorkerPackageDataValidation.ValidateKey(key, nameof(key));
         return _client.GetStateForMigrationPreparationAsync(key, cancellationToken);
     }
 
@@ -35,7 +34,7 @@ public sealed class SunderWorkerMigrationPreparationContext
         string key,
         CancellationToken cancellationToken = default)
     {
-        Internal.WorkerPackageSettings.ValidateKey(key, nameof(key));
+        Internal.WorkerPackageDataValidation.ValidateKey(key, nameof(key));
         return _client.ContainsStateKeyForMigrationPreparationAsync(key, cancellationToken);
     }
 
@@ -44,12 +43,7 @@ public sealed class SunderWorkerMigrationPreparationContext
         string? prefix = null,
         CancellationToken cancellationToken = default)
     {
-        if (prefix is not null && prefix.Length > 0 && !PackageStorageValidation.IsValidKey(prefix))
-        {
-            throw new ArgumentException(
-                $"Package storage key prefixes must be empty or portable ASCII tokens of at most {PackageStorageValidation.MaximumKeyLength} characters.",
-                nameof(prefix));
-        }
+        Internal.WorkerPackageDataValidation.ValidatePrefix(prefix, nameof(prefix));
         return _client.ListStateKeysForMigrationPreparationAsync(prefix, cancellationToken);
     }
 }

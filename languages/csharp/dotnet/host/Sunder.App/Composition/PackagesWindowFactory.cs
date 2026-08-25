@@ -10,7 +10,8 @@ public sealed class PackagesWindowFactory(
     IRuntimeApiClientFactory runtimeApiClientFactory,
     BackgroundProcessQueueService backgroundProcessQueue,
     ShellStateService shellStateService,
-    ShellState shellState)
+    ShellState shellState,
+    RemoteImageService remoteImageService)
 {
     internal PackagesWindow Create(
         PackageOperationService packageOperationService,
@@ -24,7 +25,8 @@ public sealed class PackagesWindowFactory(
             backgroundProcessQueue,
             backgroundProcessPopoverWidth: shellState.BackgroundProcessPopoverWidth,
             backgroundProcessPopoverHeight: shellState.BackgroundProcessPopoverHeight,
-            persistBackgroundProcessPopoverSize: persistBackgroundProcessPopoverSize);
+            persistBackgroundProcessPopoverSize: persistBackgroundProcessPopoverSize,
+            remoteImageService: remoteImageService);
         return window;
     }
 }

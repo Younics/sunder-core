@@ -1,32 +1,23 @@
+using Sunder.Runtime.Host.Services;
+
 namespace Sunder.Runtime.Host.Endpoints;
 
 internal static class RuntimeEndpointErrors
 {
-    public static void ThrowFailure(string? message, bool packageValidation = false)
+    public static void ThrowFailure(RuntimeStackFailure failure)
     {
-        var detail = string.IsNullOrWhiteSpace(message) ? "The Runtime rejected the operation." : message;
-        if (detail.Contains("stale", StringComparison.OrdinalIgnoreCase))
+        var detail = string.IsNullOrWhiteSpace(failure.Detail)
+            ? "The Runtime rejected the operation."
+            : failure.Detail;
+        throw failure.Category switch
         {
-            throw new RuntimeStaleGenerationException(detail);
-        }
-
-        if (detail.Contains("not found", StringComparison.OrdinalIgnoreCase)
-            || detail.Contains("not installed", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new RuntimeNotFoundException(detail);
-        }
-
-        if (detail.Contains("unavailable", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new RuntimeUnavailableException(detail);
-        }
-
-        if (packageValidation)
-        {
-            throw new RuntimePackageValidationException(detail);
-        }
-
-        throw new RuntimeValidationException(detail);
+            RuntimeStackFailureCategory.Validation => new RuntimeValidationException(detail),
+            RuntimeStackFailureCategory.PackageValidation => new RuntimePackageValidationException(detail),
+            RuntimeStackFailureCategory.StaleGeneration => new RuntimeStaleGenerationException(detail),
+            RuntimeStackFailureCategory.NotFound => new RuntimeNotFoundException(detail),
+            RuntimeStackFailureCategory.Unavailable => new RuntimeUnavailableException(detail),
+            _ => throw new ArgumentOutOfRangeException(nameof(failure), failure.Category, "Unknown Runtime Stack failure category."),
+        };
     }
 
     public static T Required<T>(T? value, string resource) where T : class

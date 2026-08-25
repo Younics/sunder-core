@@ -155,6 +155,7 @@ public sealed class AppPackageFaultNotifierTests
             "agent",
             candidateReplacement: true,
             new InvalidOperationException("first"));
+        await notifications.FirstPublicationStarted.WaitAsync(TimeSpan.FromSeconds(2));
         second.QueueActivationFailure(
             "agent",
             candidateReplacement: true,
@@ -162,9 +163,9 @@ public sealed class AppPackageFaultNotifierTests
         Assert.Equal(1, notifications.PublishAttempts);
 
         notifications.FailFirstPublication();
-        await TestSupport.AsyncAssert.WaitForConditionAsync(
-            () => notifications.PublishAttempts == 2);
+        await notifications.SuccessfulPublication.WaitAsync(TimeSpan.FromSeconds(2));
 
+        Assert.Equal(2, notifications.PublishAttempts);
         Assert.Equal(1, notifications.SuccessfulPublications);
     }
 
@@ -257,22 +258,32 @@ public sealed class AppPackageFaultNotifierTests
     {
         private readonly TaskCompletionSource _firstPublication = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _firstPublicationStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _successfulPublication = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _publishAttempts;
+        private int _successfulPublications;
 
-        public int PublishAttempts { get; private set; }
-        public int SuccessfulPublications { get; private set; }
+        public int PublishAttempts => Volatile.Read(ref _publishAttempts);
+        public int SuccessfulPublications => Volatile.Read(ref _successfulPublications);
+        public Task FirstPublicationStarted => _firstPublicationStarted.Task;
+        public Task SuccessfulPublication => _successfulPublication.Task;
 
         public ValueTask PublishAsync(
             PackageNotificationRequest request,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            PublishAttempts++;
-            if (PublishAttempts == 1)
+            var attempt = Interlocked.Increment(ref _publishAttempts);
+            if (attempt == 1)
             {
+                _firstPublicationStarted.TrySetResult();
                 return new ValueTask(_firstPublication.Task);
             }
 
-            SuccessfulPublications++;
+            Interlocked.Increment(ref _successfulPublications);
+            _successfulPublication.TrySetResult();
             return ValueTask.CompletedTask;
         }
 

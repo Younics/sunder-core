@@ -12,12 +12,13 @@ public sealed partial class RuntimeManagementClient
     {
         try
         {
-            using var response = await _httpClient.PostAsync(
+            using var response = await _transport.PostAsync(
                 CreateUri($"packages/store/stage/{Uri.EscapeDataString(stageId)}/commit"), null, token).ConfigureAwait(false);
             return await _responses.ReadRequiredJsonAsync<PackageOperationResult>(
                 response, token).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException)
+        catch (Exception exception)
+            when (exception is HttpRequestException or OperationCanceledException or TimeoutException)
         {
             try
             {

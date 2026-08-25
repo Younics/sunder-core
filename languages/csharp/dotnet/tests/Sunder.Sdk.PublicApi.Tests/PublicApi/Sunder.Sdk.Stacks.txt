@@ -452,4 +452,3 @@ type sealed class Sunder.Sdk.Stacks.SunderStackContributorRpc
   property static Sunder.Sdk.Rpc.SunderRpcContractDescriptor Descriptor { get; }
   method static Sunder.Sdk.Rpc.ISunderRpcServiceHandler CreateHandler(Sunder.Sdk.Stacks.IPackageStackContributor contributor)
   method static Sunder.Sdk.Stacks.StackContributorRpcClient CreateClient(Sunder.Sdk.Rpc.ISunderRpcCallScope scope, Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint)
-  method static Sunder.Sdk.Worker.SunderWorkerProviderRegistration CreateWorkerProviderRegistration(System.String providerId, Sunder.Sdk.Stacks.IPackageStackContributor contributor)

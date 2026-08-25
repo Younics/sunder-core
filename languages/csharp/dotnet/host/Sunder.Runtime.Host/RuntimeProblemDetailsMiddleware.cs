@@ -50,7 +50,9 @@ internal sealed class RuntimeProblemDetailsMiddleware(
             {
                 await RuntimeProblemDetailsWriter.WriteAsync(
                     context,
-                    new RuntimeValidationException(exception.Message),
+                    exception.StatusCode == StatusCodes.Status413PayloadTooLarge
+                        ? new RuntimeUploadLimitException(exception.Message)
+                        : new RuntimeValidationException(exception.Message),
                     correlationId);
             }
         }

@@ -140,16 +140,16 @@ internal sealed class RuntimeSessionOwner
         IReadOnlyList<string> errors,
         Action<long>? publishing = null)
     {
-        var result = await State.CommitPublicationAsync(publication, generation =>
+        var result = await State.CommitPublicationAsync(publication, publicationSnapshot =>
         {
             void Publish()
             {
                 lock (_snapshotPublicationGate)
                 {
                     if (!CommitGeneration(
-                        generation,
-                        publication.Session.GetActivePackages(),
-                        publication.Session.GetSessionPackages(),
+                        publicationSnapshot.Generation,
+                        publicationSnapshot.ActivePackages,
+                        publicationSnapshot.SessionPackages,
                         sources,
                         warnings,
                         errors))
@@ -157,7 +157,7 @@ internal sealed class RuntimeSessionOwner
                         throw new RuntimeStaleGenerationException(
                             "The candidate Runtime generation could not be published.");
                     }
-                    publishing?.Invoke(generation);
+                    publishing?.Invoke(publicationSnapshot.Generation);
                 }
             }
 
@@ -224,16 +224,16 @@ internal sealed class RuntimeSessionOwner
         IReadOnlyList<string> errors,
         Action<long>? publishing = null)
     {
-        var generation = State.CommitRecoveryPublication(publication, committedGeneration =>
+        var generation = State.CommitRecoveryPublication(publication, publicationSnapshot =>
         {
             void Publish()
             {
                 lock (_snapshotPublicationGate)
                 {
                     if (!CommitGeneration(
-                            committedGeneration,
-                            publication.PreviousEntry.Session.GetActivePackages(),
-                            publication.PreviousEntry.Session.GetSessionPackages(),
+                            publicationSnapshot.Generation,
+                            publicationSnapshot.ActivePackages,
+                            publicationSnapshot.SessionPackages,
                             sources,
                             warnings,
                             errors))
@@ -241,7 +241,7 @@ internal sealed class RuntimeSessionOwner
                         throw new RuntimeStaleGenerationException(
                             "The recovered Runtime generation could not be published.");
                     }
-                    publishing?.Invoke(committedGeneration);
+                    publishing?.Invoke(publicationSnapshot.Generation);
                 }
             }
 
@@ -263,16 +263,16 @@ internal sealed class RuntimeSessionOwner
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors)
     {
-        var generation = State.AbandonRecoveryPublication(publication, committedGeneration =>
+        var generation = State.AbandonRecoveryPublication(publication, publicationSnapshot =>
         {
             void Publish()
             {
                 lock (_snapshotPublicationGate)
                 {
                     if (!CommitGeneration(
-                            committedGeneration,
-                            [],
-                            [],
+                            publicationSnapshot.Generation,
+                            publicationSnapshot.ActivePackages,
+                            publicationSnapshot.SessionPackages,
                             sources,
                             warnings,
                             errors))
@@ -280,8 +280,8 @@ internal sealed class RuntimeSessionOwner
                         throw new RuntimeStaleGenerationException(
                             "The unavailable Runtime recovery generation could not be published.");
                     }
-                    _rpcCatalog?.DeactivateAll(committedGeneration);
-                    _rpcCatalog?.VerifySessionGeneration(committedGeneration);
+                    _rpcCatalog?.DeactivateAll(publicationSnapshot.Generation);
+                    _rpcCatalog?.VerifySessionGeneration(publicationSnapshot.Generation);
                 }
             }
 
@@ -598,28 +598,32 @@ internal sealed class RuntimeSessionOwner
             var origin = exception is ProcessRuntimeWorkerException
                 ? PackageFailureOrigin.RuntimeProcess
                 : PackageFailureOrigin.RuntimeActivation;
-            if (!State.RecordPackageRecoveryFailure(request, origin, exception, failedAtUtc))
+            var publicationSnapshot = State.RecordPackageRecoveryFailure(
+                request,
+                origin,
+                exception,
+                failedAtUtc);
+            if (publicationSnapshot is null)
             {
                 return false;
             }
 
-            var current = GetSnapshot();
             _events.PublishSnapshotMetadata(
-                current.SessionGeneration,
+                publicationSnapshot.Generation,
                 [request.PackageId],
                 runtimeEvent =>
                 {
                     lock (_snapshotGate)
                     {
-                        if (_snapshot.SessionGeneration == current.SessionGeneration)
+                        if (_snapshot.SessionGeneration == publicationSnapshot.Generation)
                         {
                             _snapshot = new RuntimePackageSnapshot(
                                 _snapshot.RuntimeInstanceId,
                                 _snapshot.SessionGeneration,
                                 runtimeEvent.SequenceId,
                                 _snapshot.BootstrapState,
-                                State.GetActivePackages(),
-                                State.GetSessionPackages(),
+                                publicationSnapshot.ActivePackages,
+                                publicationSnapshot.SessionPackages,
                                 _snapshot.Warnings,
                                 _snapshot.Errors);
                         }
@@ -648,19 +652,18 @@ internal sealed class RuntimeSessionOwner
                     replacement,
                     generation =>
                     {
-                        if (_rpcReadiness is not null)
-                        {
-                            State.RefreshRpcReadiness(_rpcReadiness, generation);
-                        }
+                        var publicationSnapshot = State.CapturePublicationSnapshot(
+                            generation,
+                            _rpcReadiness);
 
                         void Publish()
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             _packageRecoveryPublication?.Invoke();
                             if (!CommitGeneration(
-                                    generation,
-                                    State.GetActivePackages(),
-                                    State.GetSessionPackages(),
+                                    publicationSnapshot.Generation,
+                                    publicationSnapshot.ActivePackages,
+                                    publicationSnapshot.SessionPackages,
                                     sources,
                                     warnings,
                                     errors))
@@ -678,10 +681,10 @@ internal sealed class RuntimeSessionOwner
                         {
                             _rpcCatalog.ReconcileActiveSession(
                                 request.Session,
-                                generation,
+                                publicationSnapshot.Generation,
                                 request.PackageId,
                                 Publish);
-                            _rpcCatalog.VerifySessionGeneration(generation);
+                            _rpcCatalog.VerifySessionGeneration(publicationSnapshot.Generation);
                         }
                     },
                     cancellationToken,
@@ -734,15 +737,14 @@ internal sealed class RuntimeSessionOwner
             var committedGeneration = -1L;
             var applied = apply(current.SessionGeneration, generation =>
             {
-                committedGeneration = generation;
-                if (_rpcReadiness is not null)
-                {
-                    State.RefreshRpcReadiness(_rpcReadiness, generation);
-                }
-                CommitGeneration(
+                var publicationSnapshot = State.CapturePublicationSnapshot(
                     generation,
-                    State.GetActivePackages(),
-                    State.GetSessionPackages(),
+                    _rpcReadiness);
+                committedGeneration = publicationSnapshot.Generation;
+                CommitGeneration(
+                    publicationSnapshot.Generation,
+                    publicationSnapshot.ActivePackages,
+                    publicationSnapshot.SessionPackages,
                     sources,
                     warnings,
                     errors);

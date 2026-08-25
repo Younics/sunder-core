@@ -8,6 +8,134 @@ namespace Sunder.Host.Supervisor.Tests;
 public sealed partial class HostSupervisorFoundationTests
 {
     [Fact]
+    public void RuntimeWorkerLaunch_CreatesCompleteManagedDllStartInfo()
+    {
+        var root = CreateTempDirectory();
+        var runtimeHostPath = Path.Combine(root, "Sunder.Runtime.Host.DLL");
+        var connectionInfoPath = Path.Combine(root, "worker-connection.json");
+        var runtimeStateRoot = Path.Combine(root, "runtime-state");
+        File.WriteAllBytes(runtimeHostPath, []);
+        try
+        {
+            var resolver = new RuntimeResourcePolicyLaunchResolver(policyFilePath: null);
+            var endpoint = CreateTestEndpoint(root, "managed");
+
+            var startInfo = RuntimeWorkerLaunchProbe.CreateWorkerStartInfo(
+                runtimeHostPath,
+                connectionInfoPath,
+                runtimeStateRoot,
+                resolver,
+                "managed-token",
+                endpoint,
+                "managed-lifetime",
+                "managed-diagnostic");
+
+            Assert.Equal("dotnet", startInfo.FileName);
+            Assert.Equal([runtimeHostPath], startInfo.ArgumentList);
+            Assert.Equal(root, startInfo.WorkingDirectory);
+            Assert.False(startInfo.UseShellExecute);
+            Assert.True(startInfo.CreateNoWindow);
+            AssertPrivateLaunchEnvironment(
+                startInfo,
+                connectionInfoPath,
+                "managed-token",
+                "managed-lifetime",
+                "managed-diagnostic",
+                runtimeStateRoot,
+                endpoint);
+            Assert.DoesNotContain(
+                startInfo.ArgumentList,
+                argument => argument.Contains("managed-token", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                startInfo.ArgumentList,
+                argument => argument.Contains("managed-lifetime", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                startInfo.ArgumentList,
+                argument => argument.Contains("managed-diagnostic", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RuntimeWorkerLaunch_CreatesNativeExecutableWithoutDotnetArgument()
+    {
+        var root = CreateTempDirectory();
+        var runtimeHostPath = Path.Combine(root, "Sunder.Runtime.Host");
+        var connectionInfoPath = Path.Combine(root, "worker-connection.json");
+        var runtimeStateRoot = Path.Combine(root, "runtime-state");
+        File.WriteAllBytes(runtimeHostPath, []);
+        try
+        {
+            var resolver = new RuntimeResourcePolicyLaunchResolver(policyFilePath: null);
+            var endpoint = CreateTestEndpoint(root, "native");
+
+            var startInfo = RuntimeWorkerLaunchProbe.CreateWorkerStartInfo(
+                runtimeHostPath,
+                connectionInfoPath,
+                runtimeStateRoot,
+                resolver,
+                "native-token",
+                endpoint,
+                "native-lifetime",
+                "native-diagnostic");
+
+            Assert.Equal(runtimeHostPath, startInfo.FileName);
+            Assert.Empty(startInfo.ArgumentList);
+            Assert.Equal(root, startInfo.WorkingDirectory);
+            Assert.False(startInfo.UseShellExecute);
+            Assert.True(startInfo.CreateNoWindow);
+            AssertPrivateLaunchEnvironment(
+                startInfo,
+                connectionInfoPath,
+                "native-token",
+                "native-lifetime",
+                "native-diagnostic",
+                runtimeStateRoot,
+                endpoint);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RuntimeWorkerLaunch_MissingRuntimePathFailsBeforePolicyResolution()
+    {
+        var root = CreateTempDirectory();
+        var diagnostics = new List<string>();
+        var policyPath = Path.Combine(root, "invalid-policy.json");
+        File.WriteAllText(policyPath, "not-json");
+        try
+        {
+            var resolver = new RuntimeResourcePolicyLaunchResolver(policyPath, diagnostics.Add);
+
+            var exception = Assert.Throws<FileNotFoundException>(() =>
+                RuntimeWorkerLaunchProbe.CreateWorkerStartInfo(
+                    runtimeHostPath: null,
+                    Path.Combine(root, "worker-connection.json"),
+                    Path.Combine(root, "runtime-state"),
+                    resolver,
+                    "missing-token",
+                    CreateTestEndpoint(root, "missing"),
+                    "missing-lifetime",
+                    "missing-diagnostic"));
+
+            Assert.Equal(
+                "Sunder.Runtime.Host is not installed in this Host distribution.",
+                exception.Message);
+            Assert.Empty(diagnostics);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void PolicyEnvironmentRemovalClearsInheritedPathAndPayloadCaseInsensitively()
     {
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
@@ -71,7 +199,7 @@ public sealed partial class HostSupervisorFoundationTests
     }
 
     [Fact]
-    public async Task RuntimeWorkerCoordinatorReloadsPolicyForEachWorkerStartInfoAndPassesOnlyLaunchPayload()
+    public void RuntimeWorkerLaunchProbeReloadsPolicyForEachWorkerStartInfoAndPassesOnlyLaunchPayload()
     {
         var root = CreateTempDirectory();
         var runtimeHostPath = Path.Combine(root, "Sunder.Runtime.Host.dll");
@@ -85,21 +213,24 @@ public sealed partial class HostSupervisorFoundationTests
                 RuntimeResourcePolicies.Standard)));
         try
         {
-            using var store = new HostLifecycleStore(Path.Combine(root, "host-state"));
-            await using var coordinator = new RuntimeWorkerCoordinator(
-                runtimeHostPath,
-                Path.Combine(root, "worker-connection.json"),
-                TimeSpan.FromSeconds(1),
-                store,
-                isRuntimeLeaseAvailable: static () => true,
-                runtimeStateRoot: Path.Combine(root, "runtime-state"),
-                runtimeResourcePolicyFilePath: policyPath,
-                reportResourcePolicyDiagnostic: _ => Assert.Fail("Valid policies must not emit diagnostics."));
+            var connectionInfoPath = Path.Combine(root, "worker-connection.json");
+            var runtimeStateRoot = Path.Combine(root, "runtime-state");
+            var resolver = new RuntimeResourcePolicyLaunchResolver(
+                policyPath,
+                _ => Assert.Fail("Valid policies must not emit diagnostics."));
             var endpoint = OperatingSystem.IsWindows()
                 ? new RuntimeIpcEndpoint(RuntimeIpcTransportKind.NamedPipe, "sunder-runtime-policy-test")
                 : new RuntimeIpcEndpoint(RuntimeIpcTransportKind.UnixSocket, Path.Combine(root, "runtime.sock"));
 
-            var first = coordinator.CreateWorkerStartInfo("first-token", endpoint, "lifetime-1", "diagnostic-1");
+            var first = RuntimeWorkerLaunchProbe.CreateWorkerStartInfo(
+                runtimeHostPath,
+                connectionInfoPath,
+                runtimeStateRoot,
+                resolver,
+                "first-token",
+                endpoint,
+                "lifetime-1",
+                "diagnostic-1");
             var firstPayload = ParsePayload(first.Environment[
                 RuntimeResourcePolicyEnvironment.LaunchPayloadVariable]!);
 
@@ -115,17 +246,30 @@ public sealed partial class HostSupervisorFoundationTests
                 RuntimeResourcePolicyContract.SerializeSettings(new RuntimeResourcePolicySelection(
                     RuntimeResourcePolicyPreset.Custom,
                     custom)));
-            var second = coordinator.CreateWorkerStartInfo("second-token", endpoint, "lifetime-2", "diagnostic-2");
+            var second = RuntimeWorkerLaunchProbe.CreateWorkerStartInfo(
+                runtimeHostPath,
+                connectionInfoPath,
+                runtimeStateRoot,
+                resolver,
+                "second-token",
+                endpoint,
+                "lifetime-2",
+                "diagnostic-2");
             var secondPayload = ParsePayload(second.Environment[
                 RuntimeResourcePolicyEnvironment.LaunchPayloadVariable]!);
 
             Assert.Equal(RuntimeResourcePolicies.Standard, firstPayload.EffectivePolicy);
             Assert.Equal(custom, secondPayload.EffectivePolicy);
             Assert.NotEqual(firstPayload.EffectiveProfileHash, secondPayload.EffectiveProfileHash);
+            Assert.NotSame(first, second);
             Assert.False(first.Environment.ContainsKey(RuntimeResourcePolicyEnvironment.PolicyFilePathVariable));
             Assert.False(second.Environment.ContainsKey(RuntimeResourcePolicyEnvironment.PolicyFilePathVariable));
+            Assert.Equal(connectionInfoPath, second.Environment["SUNDER_RUNTIME_CONNECTION_FILE"]);
             Assert.Equal("second-token", second.Environment["SUNDER_RUNTIME_BEARER_TOKEN"]);
             Assert.Equal("lifetime-2", second.Environment["SUNDER_RUNTIME_SUPERVISOR_PIPE"]);
+            Assert.Equal("diagnostic-2", second.Environment["SUNDER_RUNTIME_STARTUP_DIAGNOSTIC_PIPE"]);
+            Assert.Equal(runtimeStateRoot, second.Environment[RuntimeLocalState.StateRootEnvironmentVariable]);
+            Assert.Equal(endpoint.ToEnvironmentValue(), second.Environment[RuntimeIpcEndpoint.EnvironmentVariable]);
         }
         finally
         {
@@ -135,4 +279,28 @@ public sealed partial class HostSupervisorFoundationTests
 
     private static RuntimeResourcePolicyLaunchPayload ParsePayload(string json)
         => RuntimeResourcePolicyContract.ParseLaunchPayload(Encoding.UTF8.GetBytes(json));
+
+    private static RuntimeIpcEndpoint CreateTestEndpoint(string root, string suffix)
+        => OperatingSystem.IsWindows()
+            ? new RuntimeIpcEndpoint(RuntimeIpcTransportKind.NamedPipe, $"sunder-runtime-launch-{suffix}")
+            : new RuntimeIpcEndpoint(RuntimeIpcTransportKind.UnixSocket, Path.Combine(root, $"runtime-{suffix}.sock"));
+
+    private static void AssertPrivateLaunchEnvironment(
+        System.Diagnostics.ProcessStartInfo startInfo,
+        string connectionInfoPath,
+        string workerToken,
+        string supervisorLifetimePipeHandle,
+        string startupDiagnosticPipeHandle,
+        string runtimeStateRoot,
+        RuntimeIpcEndpoint endpoint)
+    {
+        Assert.Equal(connectionInfoPath, startInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"]);
+        Assert.Equal(workerToken, startInfo.Environment["SUNDER_RUNTIME_BEARER_TOKEN"]);
+        Assert.Equal(supervisorLifetimePipeHandle, startInfo.Environment["SUNDER_RUNTIME_SUPERVISOR_PIPE"]);
+        Assert.Equal(startupDiagnosticPipeHandle, startInfo.Environment["SUNDER_RUNTIME_STARTUP_DIAGNOSTIC_PIPE"]);
+        Assert.Equal(runtimeStateRoot, startInfo.Environment[RuntimeLocalState.StateRootEnvironmentVariable]);
+        Assert.Equal(endpoint.ToEnvironmentValue(), startInfo.Environment[RuntimeIpcEndpoint.EnvironmentVariable]);
+        Assert.NotNull(startInfo.Environment[RuntimeResourcePolicyEnvironment.LaunchPayloadVariable]);
+        Assert.False(startInfo.Environment.ContainsKey(RuntimeResourcePolicyEnvironment.PolicyFilePathVariable));
+    }
 }

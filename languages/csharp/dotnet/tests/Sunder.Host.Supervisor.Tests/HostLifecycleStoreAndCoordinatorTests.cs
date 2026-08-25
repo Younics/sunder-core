@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using Sunder.Core.TestSupport;
 using Sunder.Host.Contracts;
 using Sunder.Host.Supervisor;
 using Sunder.Runtime.Host;
+using Sunder.Runtime.LocalState;
 using Xunit;
 
 namespace Sunder.Host.Supervisor.Tests;
@@ -298,10 +300,11 @@ public sealed partial class HostSupervisorFoundationTests
                 isRuntimeLeaseAvailable: () => Volatile.Read(ref leaseAvailable) == 1);
 
             var stop = coordinator.EnsureStoppedDurablyAsync();
-            for (var attempt = 0; attempt < 100 && coordinator.GetStatus().ActiveOperationId is null; attempt++)
-            {
-                await Task.Delay(10);
-            }
+            await Eventually.ObserveAsync(
+                _ => ValueTask.FromResult(coordinator.GetStatus()),
+                static status => status.ActiveOperationId is not null,
+                TimeSpan.FromSeconds(2),
+                describe: (status, error) => $"status={status}; error={error?.Message}");
 
             var persisted = store.LoadOrCreate();
             Assert.Equal(HostRuntimeDesiredState.Stopped, persisted.DesiredState);
@@ -406,10 +409,11 @@ public sealed partial class HostSupervisorFoundationTests
 
             await Assert.ThrowsAsync<FileNotFoundException>(() =>
                 coordinator.ReconcileStartupAsync(CancellationToken.None));
-            for (var attempt = 0; attempt < 200 && coordinator.GetStatus().State != HostRuntimeState.CrashLoop; attempt++)
-            {
-                await Task.Delay(10);
-            }
+            await Eventually.ObserveAsync(
+                _ => ValueTask.FromResult(coordinator.GetStatus()),
+                static status => status.State == HostRuntimeState.CrashLoop,
+                TimeSpan.FromSeconds(3),
+                describe: (status, error) => $"status={status}; error={error?.Message}");
 
             Assert.Equal(HostRuntimeState.CrashLoop, coordinator.GetStatus().State);
             Assert.Equal(HostRuntimeDesiredState.Running, coordinator.GetStatus().DesiredState);
@@ -460,6 +464,7 @@ public sealed partial class HostSupervisorFoundationTests
     {
         var root = CreateTempDirectory();
         var leaseAvailable = 0;
+        var leaseChecked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             using var store = new HostLifecycleStore(root);
@@ -472,12 +477,18 @@ public sealed partial class HostSupervisorFoundationTests
                 Path.Combine(root, "connection", "worker.json"),
                 TimeSpan.FromSeconds(5),
                 store,
-                isRuntimeLeaseAvailable: () => Volatile.Read(ref leaseAvailable) == 1);
+                isRuntimeLeaseAvailable: () =>
+                {
+                    leaseChecked.TrySetResult();
+                    return Volatile.Read(ref leaseAvailable) == 1;
+                });
             var reconciliation = coordinator.ReconcileStartupAsync(CancellationToken.None);
-            await Task.Delay(50);
+            await leaseChecked.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             var submission = coordinator.SubmitStopAsync(new HostLifecycleRequest(Guid.NewGuid(), 0));
-            await Task.Delay(50);
+            await Eventually.AssertPendingAsync(
+                submission,
+                () => $"reconciliation={reconciliation.Status}; status={coordinator.GetStatus()}");
             Assert.False(submission.IsCompleted);
 
             Volatile.Write(ref leaseAvailable, 1);
@@ -495,20 +506,259 @@ public sealed partial class HostSupervisorFoundationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "Component")]
+    [Trait("Capability", "Filesystem")]
+    [Trait("Size", "Medium")]
+    public async Task RuntimeWorkerCoordinator_PayloadReplacementPersistenceFaultRetainsPreviousStateAndAbandonsCandidate()
+    {
+        await using var scope = TemporaryDirectoryScope.Create("sunder-runtime-payload-persistence-fault");
+        var root = scope.RootPath;
+        var hostRoot = Path.Combine(root, "host");
+        var runtimeRoot = Path.Combine(root, "runtime");
+        var connectionPath = Path.Combine(hostRoot, "connection", "runtime-worker.json");
+        var candidateDirectory = Path.Combine(root, "payloads", "candidate");
+        var candidatePath = Path.Combine(candidateDirectory, "Sunder.Runtime.Host.dll");
+        Directory.CreateDirectory(candidateDirectory);
+        await File.WriteAllTextAsync(candidatePath, "candidate-runtime-payload");
+        var leaseChecks = 0;
+
+        using var store = new HostLifecycleStore(hostRoot);
+        store.Save(HostLifecyclePersistentState.Initial with
+        {
+            DesiredState = HostRuntimeDesiredState.Stopped,
+        });
+        await using var coordinator = new RuntimeWorkerCoordinator(
+            candidatePath,
+            connectionPath,
+            TimeSpan.FromSeconds(2),
+            store,
+            isRuntimeLeaseAvailable: () =>
+            {
+                Interlocked.Increment(ref leaseChecks);
+                return true;
+            },
+            getRecoveryDelay: static _ => TimeSpan.FromDays(1),
+            runtimeStateRoot: runtimeRoot);
+
+        var lifecyclePath = Path.Combine(hostRoot, "runtime", "v1", "lifecycle.json");
+        var previousDocument = await File.ReadAllBytesAsync(lifecyclePath);
+        File.Delete(lifecyclePath);
+        Directory.CreateDirectory(lifecyclePath);
+        Exception? persistenceFailure;
+        try
+        {
+            persistenceFailure = await Record.ExceptionAsync(() => coordinator.SubmitStartAsync(
+                new HostLifecycleRequest(Guid.NewGuid(), 0)));
+        }
+        finally
+        {
+            Directory.Delete(lifecyclePath);
+            await File.WriteAllBytesAsync(lifecyclePath, previousDocument);
+        }
+
+        Assert.True(
+            persistenceFailure is IOException or UnauthorizedAccessException,
+            $"Expected an atomic lifecycle persistence failure, but observed {persistenceFailure?.GetType().Name ?? "no failure"}: {persistenceFailure?.Message}");
+        Assert.Equal(0, Volatile.Read(ref leaseChecks));
+        Assert.Equal(HostRuntimeDesiredState.Stopped, coordinator.GetStatus().DesiredState);
+        Assert.Equal(HostRuntimeState.Stopped, coordinator.GetStatus().State);
+        Assert.Equal(0, coordinator.GetStatus().DeploymentGeneration);
+        Assert.Null(coordinator.GetStatus().ActiveOperationId);
+        var durable = store.LoadOrCreate();
+        Assert.Equal(HostRuntimeDesiredState.Stopped, durable.DesiredState);
+        Assert.Empty(durable.Operations);
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(lifecyclePath)!, ".lifecycle.*.tmp"));
+        Assert.False(File.Exists(connectionPath));
+        Assert.True(RuntimeLocalState.IsLeaseAvailable(runtimeRoot));
+
+        Directory.Delete(candidateDirectory, recursive: true);
+        Assert.False(Directory.Exists(candidateDirectory));
+    }
+
+    [Fact]
+    [Trait("Category", "Component")]
+    [Trait("Capability", "Process")]
+    [Trait("Size", "Large")]
+    public async Task RuntimeWorkerCoordinator_PayloadReplacementLaunchFaultAdvancesCandidateWithoutDuplicateOwner()
+    {
+        await RunPayloadReplacementCompensationOracleAsync(mutateDurableState: null);
+    }
+
+    [Fact]
+    [Trait("Category", "Component")]
+    [Trait("Capability", "Process")]
+    [Trait("Size", "Large")]
+    public async Task RuntimeWorkerCoordinator_PayloadReplacementOracleRejectsLostDesiredIntentMutation()
+    {
+        var exception = await Assert.ThrowsAsync<PayloadReplacementOracleException>(() =>
+            RunPayloadReplacementCompensationOracleAsync(static state => state with
+            {
+                DesiredState = HostRuntimeDesiredState.Stopped,
+            }));
+
+        Assert.Contains("lost durable Running intent", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static async Task RunPayloadReplacementCompensationOracleAsync(
+        Func<HostLifecyclePersistentState, HostLifecyclePersistentState>? mutateDurableState)
+    {
+        await using var scope = TemporaryDirectoryScope.Create("sunder-runtime-payload-compensation");
+        var root = scope.RootPath;
+        var hostRoot = Path.Combine(root, "host");
+        var runtimeRoot = Path.Combine(root, "runtime");
+        var connectionPath = Path.Combine(hostRoot, "connection", "runtime-worker.json");
+        var candidateDirectory = Path.Combine(root, "payloads", "candidate");
+        var sourceRuntimeAssembly = typeof(RuntimeHostStartupOptions).Assembly.Location;
+        CopyDirectory(Path.GetDirectoryName(sourceRuntimeAssembly)!, candidateDirectory);
+        var candidatePath = Path.Combine(candidateDirectory, Path.GetFileName(sourceRuntimeAssembly));
+        var validCandidateBytes = await File.ReadAllBytesAsync(candidatePath);
+        await File.WriteAllTextAsync(candidatePath, "seeded invalid managed Runtime payload");
+        var leaseBoundary = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLease = 0;
+
+        using (var store = new HostLifecycleStore(hostRoot))
+        {
+            store.Save(HostLifecyclePersistentState.Initial with
+            {
+                DesiredState = HostRuntimeDesiredState.Stopped,
+            });
+            await using var coordinator = new RuntimeWorkerCoordinator(
+                candidatePath,
+                connectionPath,
+                TimeSpan.FromSeconds(5),
+                store,
+                isRuntimeLeaseAvailable: () =>
+                {
+                    leaseBoundary.TrySetResult();
+                    return Volatile.Read(ref releaseLease) == 1;
+                },
+                getRecoveryDelay: static _ => TimeSpan.FromDays(1),
+                runtimeStateRoot: runtimeRoot);
+
+            var submission = await coordinator.SubmitStartAsync(new HostLifecycleRequest(Guid.NewGuid(), 0));
+            await leaseBoundary.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var persistedBeforeLaunch = store.LoadOrCreate();
+            Assert.Equal(HostRuntimeDesiredState.Running, persistedBeforeLaunch.DesiredState);
+            Assert.Equal(1, persistedBeforeLaunch.DeploymentGeneration);
+            Assert.Equal(submission.Operation.OperationId, persistedBeforeLaunch.ActiveOperationId);
+            Assert.False(File.Exists(connectionPath));
+            Assert.Null(coordinator.GetWorkerConnection());
+
+            Volatile.Write(ref releaseLease, 1);
+            var failed = await coordinator.WaitForOperationAsync(submission.Operation.OperationId)
+                .WaitAsync(TimeSpan.FromSeconds(10));
+
+            Assert.Equal(HostOperationState.Failed, failed.State);
+            Assert.Equal(HostRuntimeDesiredState.Running, coordinator.GetStatus().DesiredState);
+            Assert.Equal(HostRuntimeState.Failed, coordinator.GetStatus().State);
+            Assert.Null(coordinator.GetStatus().ActiveOperationId);
+            Assert.Null(coordinator.GetWorkerConnection());
+            Assert.False(File.Exists(connectionPath));
+            Assert.True(RuntimeLocalState.IsLeaseAvailable(runtimeRoot));
+            var persistedAfterFailure = store.LoadOrCreate();
+            Assert.Equal(HostRuntimeDesiredState.Running, persistedAfterFailure.DesiredState);
+            Assert.Null(persistedAfterFailure.ActiveOperationId);
+        }
+
+        await File.WriteAllBytesAsync(candidatePath, validCandidateBytes);
+        if (mutateDurableState is not null)
+        {
+            using var mutationStore = new HostLifecycleStore(hostRoot);
+            mutationStore.Save(mutateDurableState(mutationStore.LoadOrCreate()));
+        }
+
+        using (var store = new HostLifecycleStore(hostRoot))
+        await using (var coordinator = new RuntimeWorkerCoordinator(
+                         candidatePath,
+                         connectionPath,
+                         TimeSpan.FromSeconds(30),
+                         store,
+                         getRecoveryDelay: static _ => TimeSpan.FromDays(1),
+                         runtimeStateRoot: runtimeRoot))
+        {
+            await coordinator.ReconcileStartupAsync(CancellationToken.None);
+            var status = coordinator.GetStatus();
+            var durable = store.LoadOrCreate();
+            AssertCoherentAdvancedPayload(status, durable, coordinator.GetWorkerConnection());
+            Assert.False(RuntimeLocalState.IsLeaseAvailable(runtimeRoot));
+
+            var competitorRoot = Path.Combine(root, "competitor-host");
+            using var competitorStore = new HostLifecycleStore(competitorRoot);
+            await using var competitor = new RuntimeWorkerCoordinator(
+                candidatePath,
+                Path.Combine(competitorRoot, "connection", "runtime-worker.json"),
+                TimeSpan.FromMilliseconds(350),
+                competitorStore,
+                getRecoveryDelay: static _ => TimeSpan.FromDays(1),
+                runtimeStateRoot: runtimeRoot);
+            await Assert.ThrowsAsync<TimeoutException>(() =>
+                competitor.ReconcileStartupAsync(CancellationToken.None));
+            Assert.Null(competitor.GetWorkerConnection());
+            Assert.Equal("host.runtime-lease-timeout", competitor.GetStatus().FailureCode);
+            Assert.NotNull(coordinator.GetWorkerConnection());
+
+            await coordinator.StopForSupervisorShutdownAsync();
+            Assert.True(RuntimeLocalState.IsLeaseAvailable(runtimeRoot));
+            Assert.False(File.Exists(connectionPath));
+            await competitor.StopForSupervisorShutdownAsync();
+        }
+
+        Directory.Delete(candidateDirectory, recursive: true);
+        Assert.False(Directory.Exists(candidateDirectory));
+        Assert.True(RuntimeLocalState.IsLeaseAvailable(runtimeRoot));
+    }
+
+    private static void AssertCoherentAdvancedPayload(
+        HostRuntimeStatus status,
+        HostLifecyclePersistentState durable,
+        RuntimeWorkerConnection? connection)
+    {
+        if (durable.DesiredState != HostRuntimeDesiredState.Running
+            || status.DesiredState != HostRuntimeDesiredState.Running)
+        {
+            throw new PayloadReplacementOracleException(
+                $"Payload replacement lost durable Running intent. status={status}; durable={durable}");
+        }
+        if (status.State != HostRuntimeState.Ready
+            || status.ActiveOperationId is not null
+            || durable.ActiveOperationId is not null
+            || connection is null)
+        {
+            throw new PayloadReplacementOracleException(
+                $"Payload replacement did not advance to one coherent live owner. status={status}; durable={durable}; connection={connection}");
+        }
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source))
+        {
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
+        }
+        foreach (var directory in Directory.EnumerateDirectories(source))
+        {
+            CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
+        }
+    }
+
+    private sealed class PayloadReplacementOracleException(string message) : Exception(message);
+
     private static async Task WaitForOperationStateAsync(
         RuntimeWorkerCoordinator coordinator,
         string operationId,
         HostOperationState expectedState)
     {
-        for (var attempt = 0; attempt < 100; attempt++)
-        {
-            if (coordinator.TryGetOperation(operationId, out var operation)
-                && operation!.State == expectedState)
-            {
-                return;
-            }
-            await Task.Delay(10);
-        }
-        Assert.Fail($"Operation '{operationId}' did not reach state '{expectedState}'.");
+        await Eventually.ObserveAsync(
+            _ => ValueTask.FromResult(
+                coordinator.TryGetOperation(operationId, out var operation)
+                    ? operation
+                    : null),
+            operation => operation?.State == expectedState,
+            TimeSpan.FromSeconds(2),
+            describe: (operation, error) =>
+                $"operationId={operationId}; expected={expectedState}; actual={operation?.State.ToString() ?? "<missing>"}; status={coordinator.GetStatus()}; error={error?.Message}");
     }
 }

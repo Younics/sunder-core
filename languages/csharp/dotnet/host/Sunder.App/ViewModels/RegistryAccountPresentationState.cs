@@ -11,7 +11,8 @@ internal sealed record RegistryAccountPresentationState(
     string StatusText,
     string AvatarText,
     IBrush AvatarBrush,
-    string? AvatarUrl)
+    string? AvatarUrl,
+    Uri? RegistryOrigin)
 {
     private static readonly Color[] AvatarColors =
     [
@@ -41,7 +42,8 @@ internal sealed record RegistryAccountPresentationState(
             "Signed in to Sunder.",
             BuildAvatarText(avatarLabel),
             new SolidColorBrush(PickAvatarColor(avatarLabel)),
-            NormalizeAvatarUrl(state.User.AvatarUrl));
+            NormalizeAvatarUrl(state.User.AvatarUrl),
+            state.RegistryUrl);
     }
 
     public static RegistryAccountPresentationState SignedOut(string? message = null)
@@ -52,6 +54,7 @@ internal sealed record RegistryAccountPresentationState(
             string.IsNullOrWhiteSpace(message) ? "Sign in to publish packages and Stacks." : message,
             "R",
             new SolidColorBrush(AvatarColors[0]),
+            null,
             null);
 
     private static string GetDisplayName(RegistryCurrentUserResponse user)

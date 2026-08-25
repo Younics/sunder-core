@@ -89,7 +89,17 @@ public sealed partial class LocalStackLibraryItemViewModel(LocalStackLibraryItem
     private bool _isSelected;
 }
 
-public sealed partial class LocalStackDetailPackageViewModel(LocalStackDetailPackage package, Uri? iconUri) : PackageIconItemViewModel(iconUri)
+public sealed partial class LocalStackDetailPackageViewModel(
+    LocalStackDetailPackage package,
+    Uri? iconUri,
+    PackageIconTransport iconTransport = PackageIconTransport.RuntimeAsset,
+    Uri? registryOrigin = null,
+    RemoteImageService? remoteImageService = null)
+    : PackageIconItemViewModel(
+        iconUri,
+        iconTransport: iconTransport,
+        registryOrigin: registryOrigin,
+        remoteImageService: remoteImageService)
 {
     public string PackageId { get; } = package.PackageId;
 

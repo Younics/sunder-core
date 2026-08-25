@@ -9,6 +9,7 @@ output_root="artifacts"
 github_repository_url=""
 github_token=""
 include_prerelease_updates="false"
+strict_release="false"
 mac_bundle_id="com.younics.sunder"
 mac_sign_app_identity=""
 mac_notary_profile=""
@@ -147,7 +148,8 @@ usage() {
 Usage: package-sunder.sh --version <semver> [--runtime <linux-x64|linux-arm64|osx-x64|osx-arm64>]
                          [--channel stable|beta|nightly] [--configuration <configuration>]
                          [--output-root <directory>] [--github-repository-url <url>]
-                         [--github-token <token>] [--include-prerelease-updates]
+                          [--github-token <token>] [--include-prerelease-updates]
+                          [--strict-release]
                          [--mac-bundle-id <id>]
                          [--mac-sign-app-identity <identity>] [--mac-notary-profile <profile>]
                          [--mac-keychain <path>] [--mac-team-id <team-id>]
@@ -193,6 +195,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --include-prerelease-updates)
       include_prerelease_updates="true"
+      shift
+      ;;
+    --strict-release)
+      strict_release="true"
       shift
       ;;
     --mac-bundle-id)
@@ -440,12 +446,16 @@ release_dir="$artifact_root/velopack/$channel/$runtime"
 velopack_channel="app-$runtime-$channel"
 main_exe="Sunder.App"
 
-dotnet restore "$project_path" -r "$runtime" -p:Configuration="$configuration"
+dotnet restore "$project_path" \
+  -r "$runtime" \
+  -p:Configuration="$configuration" \
+  -p:RestoreLockedMode=false \
+  -p:NuGetLockFilePath="obj/packages.$runtime.lock.json"
 
 rm -rf "$publish_dir" "$release_dir"
 mkdir -p "$publish_dir" "$release_dir"
 
-if [[ -n "$github_repository_url" ]]; then
+if [[ "$strict_release" != "true" && -n "$github_repository_url" ]]; then
   effective_github_token="${github_token:-${GITHUB_TOKEN:-}}"
   if ! download_velopack_history \
     "$github_repository_url" \
@@ -466,6 +476,8 @@ dotnet publish "$project_path" \
   -p:InformationalVersion="$version" \
   -p:IncludeSourceRevisionInInformationalVersion=false \
   -p:ContinuousIntegrationBuild=true \
+  -p:RestoreLockedMode=false \
+  -p:NuGetLockFilePath="obj/packages.$runtime.lock.json" \
   -p:PublishSingleFile=false \
   -o "$publish_dir"
 
@@ -520,6 +532,15 @@ case "$runtime" in
 esac
 
 vpk "${pack_args[@]}"
+
+if [[ "$strict_release" == "true" ]]; then
+  shopt -s nullglob
+  strict_delta_packages=("$release_dir"/*-delta.nupkg)
+  if [[ ${#strict_delta_packages[@]} -ne 0 ]]; then
+    printf 'Strict release packaging produced a history-dependent delta: %s\n' "${strict_delta_packages[@]}" >&2
+    exit 1
+  fi
+fi
 
 rm -f "$release_dir/releases.$velopack_channel.json" "$release_dir"/RELEASES-*
 shopt -s nullglob

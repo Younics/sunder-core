@@ -12,5 +12,7 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <ProjectReference Include="$(MSBuildThisFileDirectory)Sunder.Core.TestSupport\Sunder.Core.TestSupport.csproj"
+                      Condition="'$(MSBuildProjectName)' != 'Sunder.Core.TestSupport'" />
   </ItemGroup>
 </Project>

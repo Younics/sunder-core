@@ -15,6 +15,7 @@ SKIPPED_DIRECTORIES = {".git", "bin", "node_modules", "obj"}
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 HTML_LINK = re.compile(r"<(?:a|img)\b[^>]*\b(?:href|src)=[\"']([^\"']+)[\"']", re.IGNORECASE)
 HTML_ANCHOR = re.compile(r"<a\b[^>]*\b(?:id|name)=[\"']([^\"']+)[\"']", re.IGNORECASE)
+INLINE_CODE = re.compile(r"(`+)(.*?)\1")
 HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
 HTML_TAG = re.compile(r"<[^>]+>")
 MARKDOWN_FORMATTING = re.compile(r"[`*_~]")
@@ -89,14 +90,15 @@ def targets(path: Path) -> list[tuple[int, str]]:
             continue
         if in_fence:
             continue
-        for raw in MARKDOWN_LINK.findall(line):
+        searchable = INLINE_CODE.sub("", line)
+        for raw in MARKDOWN_LINK.findall(searchable):
             value = raw.strip()
             if value.startswith("<") and ">" in value:
                 value = value[1:value.index(">")]
             elif " " in value:
                 value = value.split(" ", 1)[0]
             result.append((line_number, html.unescape(value)))
-        for raw in HTML_LINK.findall(line):
+        for raw in HTML_LINK.findall(searchable):
             result.append((line_number, html.unescape(raw.strip())))
     return result
 

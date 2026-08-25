@@ -24,8 +24,6 @@ public sealed partial class RuntimeManagementClient
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _ownsTransport = ownsTransport;
-        _getConnectionInfo = transport.GetConnectionInfo;
-        _httpClient = transport.HttpClient;
         _responses = transport.Responses;
     }
 

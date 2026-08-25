@@ -16,6 +16,71 @@ type sealed class Sunder.Registry.Contracts.RegistryAddStackMaintainerRequest : 
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Registry.Contracts.RegistryApiRoutes
+  field static System.String CliAuth = "/api/v1/cli-auth"
+  field static System.String CliAuthAuthorize = "/api/v1/cli-auth/authorize"
+  field static System.String CliAuthToken = "/api/v1/cli-auth/token"
+  field static System.String Contracts = "/api/v1/contracts"
+  field static System.String CurrentUser = "/api/v1/me"
+  field static System.String CurrentUserCliTokens = "/api/v1/me/tokens"
+  field static System.String CurrentUserPackages = "/api/v1/me/packages"
+  field static System.String CurrentUserProfile = "/api/v1/me/profile"
+  field static System.String CurrentUserPublishTokens = "/api/v1/me/publish-tokens"
+  field static System.String CurrentUserStacks = "/api/v1/me/stacks"
+  field static System.String CurrentUserUsers = "/api/v1/me/users"
+  field static System.String DevelopmentPackagePublishLocal = "/api/v1/dev/packages/publish/local"
+  field static System.String DevelopmentPackages = "/api/v1/dev/packages"
+  field static System.String DevelopmentStackPublishLocal = "/api/v1/dev/stacks/publish/local"
+  field static System.String DevelopmentStacks = "/api/v1/dev/stacks"
+  field static System.String PackagePublish = "/api/v1/packages/publish"
+  field static System.String PackageResolveInstallPlan = "/api/v1/packages/resolve-install-plan"
+  field static System.String PackageResolvePackageChanges = "/api/v1/packages/resolve-package-changes"
+  field static System.String PackageResolveUpdates = "/api/v1/packages/resolve-updates"
+  field static System.String Packages = "/api/v1/packages"
+  field static System.String Root = "/api/v1"
+  field static System.String StackPublish = "/api/v1/stacks/publish"
+  field static System.String Stacks = "/api/v1/stacks"
+  method static System.String ContractResolve(System.String contractId)
+  method static System.String ContractVersion(System.String contractId, System.String version)
+  method static System.String ContractVersionDescriptor(System.String contractId, System.String version)
+  method static System.String ContractVersions(System.String contractId)
+  method static System.String CurrentUserCliToken(System.Guid tokenId)
+  method static System.String CurrentUserPackage(System.String packageId)
+  method static System.String CurrentUserPackageMedia(System.String packageId)
+  method static System.String CurrentUserPackageMedia(System.String packageId, System.Guid mediaId)
+  method static System.String CurrentUserPackageProfile(System.String packageId)
+  method static System.String CurrentUserPublishToken(System.Guid tokenId)
+  method static System.String CurrentUserStack(System.String stackId)
+  method static System.String CurrentUserStackMedia(System.String stackId)
+  method static System.String CurrentUserStackMedia(System.String stackId, System.Guid mediaId)
+  method static System.String CurrentUserStackProfile(System.String stackId)
+  method static System.String Package(System.String packageId)
+  method static System.String PackageDistTag(System.String packageId, System.String tag)
+  method static System.String PackageDistTags(System.String packageId)
+  method static System.String PackageMaintainer(System.String packageId, System.String userId)
+  method static System.String PackageMaintainers(System.String packageId)
+  method static System.String PackageMedia(System.String packageId, System.Guid mediaId)
+  method static System.String PackageProfile(System.String packageId)
+  method static System.String PackageResolve(System.String packageId)
+  method static System.String PackageStar(System.String packageId)
+  method static System.String PackageVersion(System.String packageId, System.String version)
+  method static System.String PackageVersionCanonical(System.String packageId, System.String version)
+  method static System.String PackageVersionDeprecation(System.String packageId, System.String version)
+  method static System.String PackageVersionIcon(System.String packageId, System.String version)
+  method static System.String PackageVersionSharedProjectionDownload(System.String packageId, System.String version)
+  method static System.String PackageVersionTargetProjectionDownload(System.String packageId, System.String version, System.String role, System.String rid)
+  method static System.String PackageVersionYank(System.String packageId, System.String version)
+  method static System.String PackageVersions(System.String packageId)
+  method static System.String PackageView(System.String packageId)
+  method static System.String Stack(System.String stackId)
+  method static System.String StackDownload(System.String stackId)
+  method static System.String StackMaintainer(System.String stackId, System.String userId)
+  method static System.String StackMaintainers(System.String stackId)
+  method static System.String StackMedia(System.String stackId, System.Guid mediaId)
+  method static System.String StackProfile(System.String stackId)
+  method static System.String StackStar(System.String stackId)
+  method static System.String StackView(System.String stackId)
+  method static System.String ToHttpClientRelativePath(System.String serverRootedPath)
 type sealed class Sunder.Registry.Contracts.RegistryCliAuthorizeRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryCliAuthorizeRequest>
   method .ctor(System.String RedirectUri, System.String State, System.String CodeChallenge, System.String? DisplayName = null)
   property System.String CodeChallenge { get; init; }

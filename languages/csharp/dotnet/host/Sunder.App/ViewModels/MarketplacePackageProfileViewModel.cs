@@ -1,11 +1,19 @@
 using System.Collections.ObjectModel;
 using LiveMarkdown.Avalonia;
+using Sunder.App.Services;
 using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 
 internal sealed class MarketplacePackageProfileViewModel : IDisposable
 {
+    private readonly RemoteImageService? _remoteImageService;
+
+    public MarketplacePackageProfileViewModel(RemoteImageService? remoteImageService = null)
+    {
+        _remoteImageService = remoteImageService;
+    }
+
     public event Func<IReadOnlyList<RegistryPackageMediaItemViewModel>, int, Task>? ImageGalleryRequested;
 
     public ObservableStringBuilder ReadmeMarkdownBuilder { get; } = new();
@@ -30,7 +38,7 @@ internal sealed class MarketplacePackageProfileViewModel : IDisposable
 
     public bool HasMedia => Media.Count > 0;
 
-    public string? Apply(RegistryPackageProfile? profile)
+    public string? Apply(RegistryPackageProfile? profile, Uri? registryOrigin = null)
     {
         ReadmeMarkdownBuilder.Clear();
         if (!string.IsNullOrWhiteSpace(profile?.ReadmeMarkdown))
@@ -42,17 +50,14 @@ internal sealed class MarketplacePackageProfileViewModel : IDisposable
         Metadata.ReplaceWith(BuildProfileMetadata(profile));
         Tags.ReplaceWith(BuildProfileTags(profile));
         DisposeMedia();
-        Media.ReplaceWith(profile?.Media
-            .OrderBy(media => media.SortOrder)
-            .Select(media => new RegistryPackageMediaItemViewModel(media, OpenImageGalleryAsync))
-            .ToArray() ?? []);
+        Media.ReplaceWith(BuildMedia(profile?.Media, registryOrigin));
 
         return string.IsNullOrWhiteSpace(profile?.ShortDescription)
             ? null
             : profile.ShortDescription;
     }
 
-    public string? Apply(RegistryStackProfile? profile)
+    public string? Apply(RegistryStackProfile? profile, Uri? registryOrigin = null)
     {
         ReadmeMarkdownBuilder.Clear();
         if (!string.IsNullOrWhiteSpace(profile?.ReadmeMarkdown))
@@ -68,8 +73,10 @@ internal sealed class MarketplacePackageProfileViewModel : IDisposable
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray() ?? []);
         DisposeMedia();
-        Media.ReplaceWith(profile?.Media
+        Media.ReplaceWith((profile?.Media ?? [])
             .OrderBy(media => media.SortOrder)
+            .Where(media => IsAcceptedMediaUrl(media.Url, registryOrigin))
+            .Take(RemoteImageService.MaxAcceptedMediaEntries)
             .Select(media => new RegistryPackageMediaItemViewModel(
                 new RegistryPackageMedia(
                     media.MediaId,
@@ -79,8 +86,10 @@ internal sealed class MarketplacePackageProfileViewModel : IDisposable
                     media.AltText,
                     media.SortOrder,
                     media.Url),
-                OpenImageGalleryAsync))
-            .ToArray() ?? []);
+                OpenImageGalleryAsync,
+                remoteImageService: _remoteImageService,
+                registryOrigin: registryOrigin))
+            .ToArray());
 
         return string.IsNullOrWhiteSpace(profile?.ShortDescription)
             ? null
@@ -109,6 +118,24 @@ internal sealed class MarketplacePackageProfileViewModel : IDisposable
             media.Dispose();
         }
     }
+
+    private IReadOnlyList<RegistryPackageMediaItemViewModel> BuildMedia(
+        IReadOnlyList<RegistryPackageMedia>? media,
+        Uri? registryOrigin)
+        => (media ?? [])
+            .OrderBy(item => item.SortOrder)
+            .Where(item => IsAcceptedMediaUrl(item.Url, registryOrigin))
+            .Take(RemoteImageService.MaxAcceptedMediaEntries)
+            .Select(item => new RegistryPackageMediaItemViewModel(
+                item,
+                OpenImageGalleryAsync,
+                remoteImageService: _remoteImageService,
+                registryOrigin: registryOrigin))
+            .ToArray();
+
+    private static bool IsAcceptedMediaUrl(string url, Uri? registryOrigin)
+        => registryOrigin is null
+           || RemoteImageService.TryResolveRegistryImageUri(registryOrigin, url, out _);
 
     private static IReadOnlyList<RegistryPackageProfileLinkViewModel> BuildProfileLinks(RegistryPackageProfile? profile)
     {

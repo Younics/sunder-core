@@ -16,3 +16,5 @@ The baseline is:
 - generated manifests, content indexes, and package outputs rather than author-maintained copies.
 
 Public API snapshots and architecture ratchets define the current source baseline. Until V1 release, intentional changes update those snapshots directly and remove superseded names instead of preserving compatibility shims.
+
+The [Core compatibility ledger](SUNDER-CORE-COMPATIBILITY-CANDIDATE.md) records the intentional surface captured at Phase 2 and declared immutable at Phase 7 exit after every approved delta was implemented and verified.

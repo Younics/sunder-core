@@ -131,7 +131,7 @@ public sealed class RuntimeStatusViewModelTests
         => new(
             new RuntimeConnectionState(AppStartupOptions.DefaultRuntimeUrl),
             runtimeApiClientFactory,
-            new RuntimeHostProcessManager(new AppStartupOptions()),
+            new RuntimeAvailabilityManager(new AppStartupOptions()),
             "System Ready",
             initialSystemStatus,
             startupErrors: [],

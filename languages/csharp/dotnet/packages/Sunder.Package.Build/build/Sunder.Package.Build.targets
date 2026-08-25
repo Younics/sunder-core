@@ -142,11 +142,16 @@
     <RemoveDir Directories="$(_SunderPackageWorkerSigningDirectory)"
                Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
     <MakeDir Directories="$(_SunderPackageWorkerSigningDirectory)"
-             Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
+               Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
     <ItemGroup>
+      <_SunderPublishedAssembly Include="@(ResolvedFileToPublish)"
+                                Condition="'%(ResolvedFileToPublish.Extension)' == '.dll'" />
+      <_SunderXmlDocumentationFile Include="@(_SunderPublishedAssembly->'%(RootDir)%(Directory)%(Filename).xml')" />
       <_SunderWorkerSourceFile Include="@(ResolvedFileToPublish)"
+                               Exclude="@(_SunderXmlDocumentationFile)"
                                Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
       <_SunderWorkerFile Include="@(ResolvedFileToPublish)"
+                         Exclude="@(_SunderXmlDocumentationFile)"
                          Condition="'$(SunderPackageWorkerSigningTargets)' == ''" />
     </ItemGroup>
     <Copy SourceFiles="@(_SunderWorkerSourceFile)"

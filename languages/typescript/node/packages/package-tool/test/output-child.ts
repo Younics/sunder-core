@@ -10,11 +10,12 @@ import {
 } from "../src/output";
 
 async function main(): Promise<void> {
-  const [mode, rawOutputPath, readyPath, releasePath] = process.argv.slice(2);
+  const [mode, rawOutputPath, readyPath, releasePath, attemptingPath] = process.argv.slice(2);
   if (mode === undefined || rawOutputPath === undefined) throw new Error("output-child requires a mode and output path.");
   const outputPath = resolve(rawOutputPath);
   if (mode === "hold") {
     if (readyPath === undefined || releasePath === undefined) throw new Error("hold requires ready and release paths.");
+    if (attemptingPath !== undefined) await writeSignal(attemptingPath);
     await withOutputLocks([outputPath], async () => {
       await writeSignal(readyPath);
       while (!await isPresent(releasePath)) await delay(20);

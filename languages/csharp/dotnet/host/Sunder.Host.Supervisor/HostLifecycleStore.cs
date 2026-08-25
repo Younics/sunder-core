@@ -169,7 +169,7 @@ internal sealed class HostLifecycleStore : IDisposable
                 || !operationIds.Add(operation.OperationId)
                 || operation.MutationId == Guid.Empty
                 || !mutationIds.Add(operation.MutationId)
-                || !IsKnownOperationKind(operation.Kind)
+                || !HostLifecycleTransitions.TryGetDesiredState(operation.Kind, out _)
                 || operation.ExpectedDeploymentGeneration < 0
                 || !Enum.IsDefined(operation.State)
                 || operation.CreatedAtUtc > operation.UpdatedAtUtc)
@@ -204,21 +204,16 @@ internal sealed class HostLifecycleStore : IDisposable
         }
         else
         {
-            var expectedDesiredState = activeOperation.Kind == HostOperationKinds.RuntimeStop
-                ? HostRuntimeDesiredState.Stopped
-                : HostRuntimeDesiredState.Running;
-            if (state.DesiredState != expectedDesiredState
+            if (!HostLifecycleTransitions.TryGetDesiredState(
+                    activeOperation.Kind,
+                    out var expectedDesiredState)
+                || state.DesiredState != expectedDesiredState
                 || state.DeploymentGeneration != activeOperation.ExpectedDeploymentGeneration + 1)
             {
                 throw new InvalidDataException("Sunder Host lifecycle state has inconsistent active operation intent.");
             }
         }
     }
-
-    private static bool IsKnownOperationKind(string kind)
-        => kind is HostOperationKinds.RuntimeStart
-            or HostOperationKinds.RuntimeStop
-            or HostOperationKinds.RuntimeRestart;
 
     private static void ValidateText(string? value, string name)
     {

@@ -147,6 +147,18 @@ public sealed class SunderRpcV2ConformanceTests
     }
 
     [Fact]
+    [Trait("Category", "Conformance")]
+    [Trait("Size", "Small")]
+    public void V2RuntimeInstanceCorpus_IsExecutedByDotNet()
+        => VerifyRuntimeInstanceCorpus(mutateFirstExpectation: false);
+
+    [Fact]
+    [Trait("Category", "Conformance")]
+    [Trait("Size", "Small")]
+    public void V2RuntimeInstanceCorpus_OracleRejectsSeededExpectationMutation()
+        => Assert.ThrowsAny<Exception>(() => VerifyRuntimeInstanceCorpus(mutateFirstExpectation: true));
+
+    [Fact]
     public void V2DescriptorCaseCollisionFold_IsAsciiOnly()
     {
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
@@ -367,6 +379,32 @@ public sealed class SunderRpcV2ConformanceTests
 
     private static int? OptionalInt32(JsonElement element, string propertyName)
         => element.TryGetProperty(propertyName, out var property) ? property.GetInt32() : null;
+
+    private static void VerifyRuntimeInstanceCorpus(bool mutateFirstExpectation)
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "RpcV2Conformance");
+        using var corpus = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(root, "instances.json")));
+        Assert.Equal(1, corpus.RootElement.GetProperty("formatVersion").GetInt32());
+        var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(Path.Combine(
+            root,
+            corpus.RootElement.GetProperty("descriptor").GetString()!
+                .Replace('/', Path.DirectorySeparatorChar))));
+        var index = 0;
+        foreach (var item in corpus.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            var expected = item.GetProperty("valid").GetBoolean();
+            if (mutateFirstExpectation && index == 0) expected = !expected;
+            var actual = descriptor.IsValid(
+                "#/$defs/" + item.GetProperty("schema").GetString(),
+                item.GetProperty("value"),
+                out var error);
+            Assert.True(
+                actual == expected,
+                $"{item.GetProperty("name").GetString()}: expected {expected}, got {actual}: {error}");
+            index++;
+        }
+        Assert.True(index >= 20, "The shared runtime instance corpus lost its boundary coverage.");
+    }
 
     private static bool IsJsonSchemaValid(JsonElement schema, JsonElement instance, JsonElement rootSchema)
     {

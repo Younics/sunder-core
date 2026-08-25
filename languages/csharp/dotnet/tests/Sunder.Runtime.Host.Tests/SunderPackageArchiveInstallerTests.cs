@@ -10,6 +10,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
+[Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class SunderPackageArchiveInstallerTests
 {
     [Fact]
@@ -253,26 +254,35 @@ public sealed class SunderPackageArchiveInstallerTests
         var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var transfers = new RuntimeContentTransferStore(paths);
+        using var transfers = new RuntimeContentTransferStore(paths);
         var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer, transferStore: transfers);
-        var archivePath = CreatePackageArchive(root, "test.package", "1.0.0");
-        await using var archive = File.OpenRead(archivePath);
-        var upload = await transfers.CreateUploadAsync(RuntimeUploadKind.Package, archive, archive.Length, null, Path.GetFileName(archivePath), "application/vnd.sunder.package", 0, CancellationToken.None);
 
-        var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
-            new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId),
-        ]));
+        try
+        {
+            var archivePath = CreatePackageArchive(root, "test.package", "1.0.0");
+            await using var archive = File.OpenRead(archivePath);
+            var upload = await transfers.CreateUploadAsync(RuntimeUploadKind.Package, archive, archive.Length, null, Path.GetFileName(archivePath), "application/vnd.sunder.package", 0, CancellationToken.None);
 
-        Assert.True(stage.Success, string.Join(Environment.NewLine, stage.Errors));
-        Assert.NotNull(stage.StageId);
-        Assert.Empty(await store.ListAsync());
-        Assert.False(Directory.Exists(paths.GetInstalledPackagePath("test.package", "1.0.0")));
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId),
+            ]));
 
-        var discarded = await service.DiscardPackageStoreStageAsync(stage.StageId!);
+            Assert.True(stage.Success, string.Join(Environment.NewLine, stage.Errors));
+            Assert.NotNull(stage.StageId);
+            Assert.Empty(await store.ListAsync());
+            Assert.False(Directory.Exists(paths.GetInstalledPackagePath("test.package", "1.0.0")));
 
-        Assert.True(discarded);
-        Assert.Empty(await store.ListAsync());
-        Assert.False(Directory.Exists(paths.GetInstalledPackagePath("test.package", "1.0.0")));
+            var discarded = await service.DiscardPackageStoreStageAsync(stage.StageId!);
+
+            Assert.True(discarded);
+            Assert.Empty(await store.ListAsync());
+            Assert.False(Directory.Exists(paths.GetInstalledPackagePath("test.package", "1.0.0")));
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
     }
 
     [Fact]

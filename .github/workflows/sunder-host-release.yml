@@ -8,7 +8,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: sunder-host-release-${{ github.ref }}
+  group: sunder-release-draft-${{ github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -23,7 +23,8 @@ jobs:
 
   prepare:
     name: Prepare release metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     outputs:
       version: ${{ steps.release.outputs.version }}
       is_prerelease: ${{ steps.release.outputs.is_prerelease }}
@@ -63,6 +64,7 @@ jobs:
       - prepare
       - host-validation
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     permissions:
       contents: read
     strategy:
@@ -70,9 +72,9 @@ jobs:
       matrix:
         include:
           - runtime: win-x64
-            os: windows-latest
+            os: windows-2022
           - runtime: win-arm64
-            os: windows-latest
+            os: windows-2022
           - runtime: linux-x64
             os: ubuntu-24.04
           - runtime: linux-arm64
@@ -85,6 +87,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Setup .NET
@@ -148,27 +151,34 @@ jobs:
             if (Test-Path -LiteralPath $assetPath) { Remove-Item -LiteralPath $assetPath -Force }
             tar -czf $assetPath -C $publishDir .
           }
+          $producedAssets = @(Get-ChildItem -LiteralPath $assetDir -File)
+          if ($producedAssets.Count -ne 1 -or $producedAssets[0].FullName -cne (Resolve-Path -LiteralPath $assetPath).Path) {
+            throw "Runtime Host packaging did not produce exactly the expected archive '$assetPath'."
+          }
 
       - name: Upload Runtime Host artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sunder-runtime-host-${{ matrix.runtime }}
-          path: artifacts/release/host/${{ matrix.runtime }}/*
+          path: artifacts/release/host/${{ matrix.runtime }}/sunder-runtime-host-${{ needs.prepare.outputs.version }}-${{ matrix.runtime }}.${{ startsWith(matrix.runtime, 'win-') && 'zip' || 'tar.gz' }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
 
-  publish:
-    name: Publish GitHub Release
+  create-draft:
+    name: Create and byte-verify private GitHub draft
     needs:
       - prepare
       - package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     permissions:
+      actions: read
       contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Setup .NET
@@ -180,8 +190,10 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-assets
+          pattern: sunder-runtime-host-*
 
-      - name: Upload release assets
+      - name: Create and verify draft release assets
+        id: publication
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -193,6 +205,7 @@ jobs:
           shopt -s nullglob
 
           tag="host/v$VERSION"
+          bash scripts/release/verify-release-tag.sh "$tag"
           expected_archive_names=(
             "sunder-runtime-host-$VERSION-win-x64.zip"
             "sunder-runtime-host-$VERSION-win-arm64.zip"
@@ -218,8 +231,6 @@ jobs:
             test -f "$asset" || { echo "Missing exact Runtime Host release archive: $asset" >&2; exit 1; }
           done
 
-          bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
-          mapfile -t assets < <(find release-assets -type f | sort)
           expected_remote_names=(
             "${expected_archive_names[@]}"
             SHA256SUMS
@@ -227,60 +238,119 @@ jobs:
             release-sbom.spdx.json
             toolchain.txt
           )
-          if [[ ${#assets[@]} -ne ${#expected_remote_names[@]} ]]; then
-            echo "Expected exactly ${#expected_remote_names[@]} Runtime Host release assets after evidence generation, found ${#assets[@]}." >&2
-            exit 1
+          created_release=false
+          verified_release=false
+          set +e
+          release_json="$(bash scripts/release/resolve-github-release.sh "$tag")"
+          resolve_status=$?
+          set -e
+          if [[ $resolve_status -eq 4 ]]; then
+            create_args=(
+              release create "$tag"
+              --title "Sunder Runtime Host $VERSION"
+              --notes "Automated Sunder Runtime Host release for $VERSION."
+              --latest=false
+              --verify-tag
+            )
+            [[ "$IS_PRERELEASE" != "true" ]] || create_args+=(--prerelease)
+            gh "${create_args[@]}" --draft
+            created_release=true
+            for _ in {1..30}; do
+              if release_json="$(bash scripts/release/resolve-github-release.sh "$tag")"; then
+                break
+              fi
+              release_json=''
+              sleep 2
+            done
+            [[ -n "$release_json" ]] || { echo "Created Runtime Host draft was not discoverable through authenticated release listing." >&2; exit 1; }
+          elif [[ $resolve_status -ne 0 ]]; then
+            exit "$resolve_status"
           fi
-          if gh release view "$tag" >/dev/null 2>&1; then
-            if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" != "true" ]]; then
-              echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
-              exit 1
-            fi
-            gh release delete "$tag" --yes
-          fi
+          release_id="$(jq -r '.id' <<< "$release_json")"
+          jq -e --argjson release_id "$release_id" --arg tag "$tag" --argjson prerelease "$IS_PRERELEASE" '
+            .id == $release_id and .tag_name == $tag and .draft == true and .prerelease == $prerelease
+          ' <<< "$release_json" >/dev/null \
+            || { echo "Runtime Host release identity, draft state, or prerelease state is unexpected." >&2; exit 1; }
 
-          create_args=(
-            release create "$tag"
-            --title "Sunder Runtime Host $VERSION"
-            --notes "Automated Sunder Runtime Host release for $VERSION."
-            --latest=false
-          )
-
-          if [[ "$IS_PRERELEASE" == "true" ]]; then
-            create_args+=(--prerelease)
-          fi
-
-          gh "${create_args[@]}" --draft
           cleanup_failed_draft() {
             exit_code=$?
-            if [[ $exit_code -ne 0 ]] && gh release view "$tag" >/dev/null 2>&1; then
-              if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
-                gh release delete "$tag" --yes || true
-              fi
+            if [[ $exit_code -ne 0 && "$created_release" == true && "$verified_release" != true ]]; then
+              gh api --method DELETE "repos/$GH_REPO/releases/$release_id" >/dev/null 2>&1 || true
             fi
             exit "$exit_code"
           }
           trap cleanup_failed_draft EXIT
-          gh release upload "$tag" "${assets[@]}"
-
-          release_json="$(gh release view "$tag" --json isDraft,assets)"
-          [[ "$(jq -r '.isDraft' <<< "$release_json")" == "true" ]] \
-            || { echo "Runtime Host release '$tag' must remain a draft until its assets are verified." >&2; exit 1; }
           remote_asset_count="$(jq '.assets | length' <<< "$release_json")"
-          if [[ "$remote_asset_count" != "${#expected_remote_names[@]}" ]]; then
-            echo "Draft Runtime Host release must contain exactly ${#expected_remote_names[@]} assets, found $remote_asset_count." >&2
-            exit 1
+          if [[ "$remote_asset_count" == 0 ]]; then
+            GITHUB_RELEASE_ID="$release_id" \
+              bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
+            mapfile -t assets < <(find release-assets -type f | sort)
+            [[ ${#assets[@]} -eq ${#expected_remote_names[@]} ]] \
+              || { echo "Runtime Host publication evidence inventory is incomplete." >&2; exit 1; }
+            bash scripts/release/upload-github-release-assets.sh "$release_id" "$tag" "${assets[@]}"
+            evidence_run_attempt="$GITHUB_RUN_ATTEMPT"
+          else
+            bash scripts/release/download-github-release-assets.sh "$release_id" "$tag" release-assets \
+              SHA256SUMS release-provenance.json release-sbom.spdx.json toolchain.txt
+            jq -e \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg workflow_ref "$GITHUB_REPOSITORY/.github/workflows/sunder-host-release.yml@refs/tags/$tag" \
+              --arg run_id "$GITHUB_RUN_ID" \
+              --argjson release_id "$release_id" \
+              --arg ref "refs/tags/$tag" \
+              --arg source_sha "$GITHUB_SHA" '
+                .invocation.repository == $repository
+                and .invocation.workflowRef == $workflow_ref
+                and .invocation.runId == $run_id
+                and .invocation.releaseId == $release_id
+                and .invocation.ref == $ref
+                and .invocation.sha == $source_sha
+                and .sources == [{name:"sunder-core",sha:$source_sha}]
+              ' release-assets/release-provenance.json >/dev/null \
+              || { echo "Existing Runtime Host draft was verified by another publication run or source." >&2; exit 1; }
+            evidence_run_attempt="$(jq -r '.invocation.runAttempt' release-assets/release-provenance.json)"
+            [[ "$evidence_run_attempt" =~ ^[1-9][0-9]*$ ]] \
+              || { echo "Existing Runtime Host publication attempt is invalid." >&2; exit 1; }
           fi
-          remote_asset_names="$(jq -r '.assets[].name' <<< "$release_json")"
-          for expected_name in "${expected_remote_names[@]}"; do
-            asset_count="$(printf '%s\n' "$remote_asset_names" | grep -Fxc "$expected_name" || true)"
-            if [[ "$asset_count" != "1" ]]; then
-              echo "Draft Runtime Host release must contain exactly one '$expected_name'; found $asset_count." >&2
-              exit 1
-            fi
-          done
 
-          bash scripts/release/verify-github-release-assets.sh "$tag" release-assets "${expected_remote_names[@]}"
-
-          gh release edit "$tag" --draft=false
+          bash scripts/release/verify-github-release-assets.sh \
+            "$release_id" "$tag" release-assets "${expected_remote_names[@]}"
+          verified_release=true
+          {
+            echo "release_id=$release_id"
+            echo "evidence_run_attempt=$evidence_run_attempt"
+          } >> "$GITHUB_OUTPUT"
           trap - EXIT
+
+      - name: Capture exact verified publication bytes
+        id: handoff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVIDENCE_RUN_ATTEMPT: ${{ steps.publication.outputs.evidence_run_attempt }}
+          RELEASE_ID: ${{ steps.publication.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          artifact_name="sunder-host-publication-evidence-$RELEASE_ID-$EVIDENCE_RUN_ATTEMPT"
+          mkdir publication-evidence
+          bash scripts/release/download-github-release-assets.sh \
+            "$RELEASE_ID" "host/v${{ needs.prepare.outputs.version }}" publication-evidence
+          encoded_name="$(jq -rn --arg value "$artifact_name" '$value | @uri')"
+          artifacts="$(gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts?name=$encoded_name")"
+          artifact_count="$(jq --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | length' <<< "$artifacts")"
+          [[ "$artifact_count" -le 1 ]] || { echo "Publication handoff artifact is ambiguous." >&2; exit 1; }
+          {
+            echo "artifact_name=$artifact_name"
+            echo "upload=$([[ "$artifact_count" == 0 ]] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable publication evidence
+        if: steps.handoff.outputs.upload == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.handoff.outputs.artifact_name }}
+          path: publication-evidence/*
+          if-no-files-found: error
+          retention-days: 90

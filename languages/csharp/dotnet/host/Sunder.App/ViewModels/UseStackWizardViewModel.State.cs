@@ -16,9 +16,10 @@ public sealed partial class UseStackWizardViewModel(
     RegistryPackageInstallService registryInstallService,
     Func<RuntimePackageStamp, CancellationToken, Task> waitUntilPresentationAppliedAsync,
     Func<Uri, IRegistryApiClient> registryClientFactory,
-    string registryUrlText) : ViewModelBase, IDisposable
+    string registryUrlText) : ViewModelBase, IDisposable, IAsyncDisposable
 {
     private readonly MarketplacePackageProfileViewModel _stackProfile = BuildStackProfile(stack);
+    private readonly object _lifecycleGate = new();
     private IReadOnlyList<SunderStackPackageRequirement> _packageRequirements = [];
     private bool _manifestLoaded;
     private bool _installPlanReady;
@@ -26,7 +27,10 @@ public sealed partial class UseStackWizardViewModel(
     private readonly LatestAsyncRequest _previewRequest = new();
     private readonly OwnedTaskObserver _tasks = new(nameof(UseStackWizardViewModel));
     private string? _importPlanId;
-    private bool _disposed;
+    private TaskCompletionSource? _planOperationsDrained;
+    private Task? _cleanupTask;
+    private int _activePlanOperations;
+    private volatile bool _disposed;
 
     public event Action<bool?>? CloseRequested;
 
@@ -165,7 +169,8 @@ public sealed partial class UseStackWizardViewModel(
     [RelayCommand(CanExecute = nameof(CanApply))]
     private async Task ApplyAsync()
     {
-        if (_disposed)
+        using var planOperation = TryBeginPlanOperation();
+        if (planOperation is null)
         {
             return;
         }
@@ -240,6 +245,10 @@ public sealed partial class UseStackWizardViewModel(
         }
 
         await RefreshImportPreviewCoreAsync(cancellationToken);
+        if (_disposed || cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
 
         missingRequiredInput = RequiredInputs.FirstOrDefault(input => input.IsMissingRequiredValue);
         if (missingRequiredInput is not null)
@@ -263,11 +272,13 @@ public sealed partial class UseStackWizardViewModel(
 
         if (selectedActionIds.Length == 0)
         {
+            await TryDiscardImportPlanAsync(DetachCurrentImportPlan());
             StatusText = "No Stack setup actions were needed.";
             CloseRequested?.Invoke(true);
             return;
         }
-        if (string.IsNullOrWhiteSpace(_importPlanId))
+        var importPlanId = DetachCurrentImportPlan();
+        if (string.IsNullOrWhiteSpace(importPlanId))
         {
             StatusText = "Stack setup preview did not return an import plan.";
             NotifyWizardStateChanged();
@@ -278,14 +289,18 @@ public sealed partial class UseStackWizardViewModel(
         ImportWarnings.Clear();
         ImportErrors.Clear();
         ImportedItems.Clear();
+        var closeAfterImport = false;
         try
         {
             StatusText = "Importing Stack setup...";
             var result = await runtimeApiClient.ImportStackAsync(new RuntimeStackImportRequest(
-                _importPlanId,
+                importPlanId,
                 GetSelectedFragmentIds(),
                 selectedActionIds), cancellationToken);
-            _importPlanId = null;
+            if (_disposed || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
 
             foreach (var warning in result.Warnings)
             {
@@ -310,7 +325,7 @@ public sealed partial class UseStackWizardViewModel(
             };
             if (result.Outcome == RuntimeStackImportOutcome.Completed)
             {
-                CloseRequested?.Invoke(true);
+                closeAfterImport = true;
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -323,16 +338,35 @@ public sealed partial class UseStackWizardViewModel(
         }
         finally
         {
+            await TryDiscardImportPlanAsync(importPlanId);
             if (!_disposed)
             {
                 IsBusy = false;
                 NotifyWizardStateChanged();
             }
         }
+
+        if (closeAfterImport && !_disposed)
+        {
+            CloseRequested?.Invoke(true);
+        }
     }
 
     [RelayCommand]
-    private void Cancel()
-        => CloseRequested?.Invoke(false);
+    private async Task CancelAsync()
+    {
+        using var planOperation = TryBeginPlanOperation();
+        if (planOperation is null)
+        {
+            return;
+        }
+
+        _previewRequest.Invalidate();
+        await TryDiscardImportPlanAsync(DetachCurrentImportPlan());
+        if (!_disposed)
+        {
+            CloseRequested?.Invoke(false);
+        }
+    }
 
 }

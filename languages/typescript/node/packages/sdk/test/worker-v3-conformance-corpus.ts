@@ -8,6 +8,7 @@ export interface WorkerV3ConformanceCorpus {
     readonly identity: string;
     readonly version: number;
   };
+  readonly envelopePropertySets: Readonly<Record<string, readonly string[]>>;
   readonly categories: Readonly<Record<string, {
     readonly requirements: readonly string[];
   }>>;

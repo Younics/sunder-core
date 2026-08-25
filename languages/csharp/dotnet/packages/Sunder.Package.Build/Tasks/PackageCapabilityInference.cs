@@ -15,11 +15,13 @@ internal sealed class PackageCapabilityInference(
     IReadOnlyList<string> dynamicAccessAcknowledgements,
     string projectDirectory)
 {
-    private const string WorkerProtocolV3Capability = "worker-protocol.v3";
     private static readonly OpCode[] SingleByteOpCodes = new OpCode[0x100];
     private static readonly OpCode[] MultiByteOpCodes = new OpCode[0x100];
     private readonly List<string> _diagnostics = [];
     private readonly SortedSet<string> _dynamicSdkCallSites = new(StringComparer.Ordinal);
+    private readonly SortedSet<string> _unresolvedSdkAssemblies = new(StringComparer.Ordinal);
+    private readonly SortedSet<string> _unresolvedSdkTypes = new(StringComparer.Ordinal);
+    private readonly SortedSet<string> _unresolvedSdkMembers = new(StringComparer.Ordinal);
     private SdkCapabilityCatalog? _capabilityCatalog;
 
     public bool IsComplete { get; private set; }
@@ -51,6 +53,9 @@ internal sealed class PackageCapabilityInference(
     {
         _diagnostics.Clear();
         _dynamicSdkCallSites.Clear();
+        _unresolvedSdkAssemblies.Clear();
+        _unresolvedSdkTypes.Clear();
+        _unresolvedSdkMembers.Clear();
         IsComplete = false;
         var capabilities = new SortedSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -92,6 +97,7 @@ internal sealed class PackageCapabilityInference(
         {
             InspectAvaloniaXamlSources(capabilities);
         }
+        AddUnresolvedSdkContractDiagnostics();
 
         var explicitCapabilities = configuredCapabilities
             .Where(static value => !string.IsNullOrWhiteSpace(value))
@@ -172,10 +178,30 @@ internal sealed class PackageCapabilityInference(
             var name = metadata.GetString(metadata.GetAssemblyReference(handle).Name);
             if (IsSdkContractAssemblyName(name) && !availableFiles.Contains(name))
             {
-                _diagnostics.Add(
-                    $"Referenced Sunder SDK assembly '{name}' could not be resolved from the MSBuild reference or runtime copy-local paths; "
-                    + "capability inference cannot safely determine its SDK usage.");
+                _unresolvedSdkAssemblies.Add(name);
             }
+        }
+    }
+
+    private void AddUnresolvedSdkContractDiagnostics()
+    {
+        foreach (var assemblyName in _unresolvedSdkAssemblies)
+        {
+            _diagnostics.Add(
+                $"Referenced Sunder SDK assembly '{assemblyName}' could not be resolved from the MSBuild reference or runtime copy-local paths; "
+                + "capability inference cannot safely determine its SDK usage.");
+        }
+        foreach (var identity in _unresolvedSdkTypes)
+        {
+            _diagnostics.Add(
+                $"Referenced Sunder SDK type contract '{identity}' could not be resolved from SDK capability annotations; "
+                + "capability inference cannot safely determine its SDK usage.");
+        }
+        foreach (var identity in _unresolvedSdkMembers)
+        {
+            _diagnostics.Add(
+                $"Referenced Sunder SDK member contract '{identity}' could not be resolved from SDK capability annotations; "
+                + "capability inference cannot safely determine its SDK usage.");
         }
     }
 
@@ -196,7 +222,7 @@ internal sealed class PackageCapabilityInference(
             var identity = GetParentTypeIdentity(metadata, member.Parent);
             if (identity is { IsSdk: true } sdkType)
             {
-                AddKnownSdkMemberCapability(sdkType, metadata.GetString(member.Name), capabilities);
+                AddSdkMemberCapability(sdkType, metadata.GetString(member.Name), capabilities);
             }
         }
     }
@@ -402,7 +428,7 @@ internal sealed class PackageCapabilityInference(
         if (declaringType.IsSdk)
         {
             AddSdkTypeReferenceCapability(declaringType, capabilities);
-            AddKnownSdkMemberCapability(declaringType, memberName, capabilities);
+            AddSdkMemberCapability(declaringType, memberName, capabilities);
         }
         else if (IsDynamicAccessMember(declaringType, memberName))
         {
@@ -534,16 +560,18 @@ internal sealed class PackageCapabilityInference(
         }
 
         var identity = new MetadataTypeIdentity(parts[1], parts[0][..separator], parts[0][(separator + 1)..]);
-        if (_capabilityCatalog?.AddTypeCapabilities(
-                identity.AssemblyName,
-                identity.Namespace,
-                identity.Name,
-                capabilities) == true)
+        var resolution = _capabilityCatalog?.ResolveType(
+            identity.AssemblyName,
+            identity.Namespace,
+            identity.Name) ?? SdkCapabilityResolution.Unresolved;
+        if (resolution.IsResolved)
         {
+            capabilities.UnionWith(resolution.DeclaredCapabilities);
             return true;
         }
 
-        return false;
+        _unresolvedSdkTypes.Add(GetSdkTypeContractIdentity(identity));
+        return true;
     }
 
     private static bool IsGeneratedAvaloniaXamlMethod(MetadataReader metadata, MethodDefinitionHandle methodHandle)
@@ -703,180 +731,43 @@ internal sealed class PackageCapabilityInference(
 
     private void AddSdkTypeReferenceCapability(MetadataTypeIdentity identity, ISet<string> capabilities)
     {
-        if (_capabilityCatalog?.AddTypeCapabilities(
-                identity.AssemblyName,
-                identity.Namespace,
-                identity.Name,
-                capabilities) == true)
+        var resolution = _capabilityCatalog?.ResolveType(
+            identity.AssemblyName,
+            identity.Namespace,
+            identity.Name) ?? SdkCapabilityResolution.Unresolved;
+        if (!resolution.IsResolved)
         {
+            _unresolvedSdkTypes.Add(GetSdkTypeContractIdentity(identity));
             return;
         }
 
-        AddFallbackSdkTypeReferenceCapability(identity.Namespace, identity.Name, capabilities);
+        capabilities.UnionWith(resolution.DeclaredCapabilities);
     }
 
-    private static void AddFallbackSdkTypeReferenceCapability(string @namespace, string name, ISet<string> capabilities)
-    {
-        switch (@namespace, name)
-        {
-            case ("Sunder.Sdk.Abstractions", "ISunderAppPackageModule"):
-            case ("Sunder.Sdk.Abstractions", "IPackageContext"):
-                capabilities.Add(SunderSdkCapabilities.CoreV1);
-                break;
-            case ("Sunder.Sdk.Packaging", _):
-                capabilities.Add(SunderSdkCapabilities.PackagingV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "ISunderAppContributionRegistry"):
-            case ("Sunder.Sdk.Avalonia", "IAvaloniaPackageContributionRegistry"):
-                capabilities.Add(SunderSdkCapabilities.ContributionsV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "PackageViewRegistration"):
-            case ("Sunder.Sdk.Abstractions", "PackageViewPlacement"):
-                capabilities.Add(SunderSdkCapabilities.ViewsV1);
-                break;
-            case ("Sunder.Sdk.Worker", "ISunderWorkerLifecycleService"):
-            case ("Sunder.Sdk.Worker", "SunderWorkerComposition"):
-                capabilities.UnionWith([
-                    SunderSdkCapabilities.BackgroundServicesV1,
-                    SunderSdkCapabilities.RuntimeGenerationsV1,
-                    WorkerProtocolV3Capability,
-                ]);
-                break;
-            case ("Sunder.Sdk.Worker", "SunderWorkerGenerationContext"):
-                capabilities.UnionWith([
-                    SunderSdkCapabilities.RuntimeGenerationsV1,
-                    WorkerProtocolV3Capability,
-                ]);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IBackgroundProcessQueue"):
-            case ("Sunder.Sdk.Abstractions", "BackgroundProcessRequest"):
-            case ("Sunder.Sdk.Abstractions", "BackgroundProcessSnapshot"):
-            case ("Sunder.Sdk.Abstractions", "BackgroundProcessContext"):
-            case ("Sunder.Sdk.Abstractions", "BackgroundProcessChangedEventArgs"):
-            case ("Sunder.Sdk.Abstractions", "BackgroundProcessConcurrencyMode"):
-            case ("Sunder.Sdk.Abstractions", "BackgroundProcessState"):
-            case ("Sunder.Sdk.Abstractions", "BackgroundProcessIndicator"):
-                capabilities.Add(SunderSdkCapabilities.BackgroundProcessesV1);
-                break;
-            case ("Sunder.Sdk.Settings", _):
-                capabilities.Add(SunderSdkCapabilities.SettingsSchemaV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageSettings"):
-                capabilities.Add(SunderSdkCapabilities.SettingsV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageStorageContext"):
-            case ("Sunder.Sdk.Abstractions", "IPackageFileStore"):
-            case ("Sunder.Sdk.Abstractions", "IPackageKeyValueStore"):
-                capabilities.Add(SunderSdkCapabilities.StorageV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageStorageKeyMigrator"):
-            case ("Sunder.Sdk.Storage", "PackageStorageKeyFactory"):
-            case ("Sunder.Sdk.Storage", "PackageStorageKeyMigration"):
-                capabilities.UnionWith([SunderSdkCapabilities.StorageV1, SunderSdkCapabilities.StorageKeyMigrationV1]);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageRoleLocalWorkspace"):
-                capabilities.Add(SunderSdkCapabilities.RoleLocalWorkspaceV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageSecrets"):
-                capabilities.Add(SunderSdkCapabilities.SecretsV1);
-                break;
-            case ("Sunder.Sdk.Logging", _):
-                capabilities.Add(SunderSdkCapabilities.LoggingV1);
-                break;
-            case ("Sunder.Sdk.Notifications", _):
-                capabilities.Add(SunderSdkCapabilities.NotificationsV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageShellViewService"):
-            case ("Sunder.Sdk.Abstractions", "IPackageViewNavigationTarget"):
-            case ("Sunder.Sdk.Abstractions", "PackageViewNavigationContext"):
-            case ("Sunder.Sdk.Abstractions", "PackageHotbarView"):
-                capabilities.Add(SunderSdkCapabilities.ShellViewV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageViewNavigationPreparationTarget"): capabilities.UnionWith([SunderSdkCapabilities.ShellViewV1, SunderSdkCapabilities.ViewNavigationPreparationV1]); break;
-            case ("Sunder.Sdk.Abstractions", "IPackageSettingsNavigationService"):
-            case ("Sunder.Sdk.Abstractions", "NullPackageSettingsNavigationService"):
-                capabilities.Add(SunderSdkCapabilities.SettingsNavigationV1);
-                break;
-            case ("Sunder.Sdk.Stacks", "IPackageStackContributor"):
-            case ("Sunder.Sdk.Stacks", "IPackageStackExporter"):
-            case ("Sunder.Sdk.Stacks", "IPackageStackImporter"):
-            case ("Sunder.Sdk.Stacks", "IPackageStackImportAppliedHandler"):
-            case ("Sunder.Sdk.Stacks", "SunderStackContributorRpc"):
-            case ("Sunder.Sdk.Stacks", "StackContributorRpcClient"):
-                capabilities.UnionWith([SunderSdkCapabilities.StacksV1, SunderSdkCapabilities.StacksRpcV1]);
-                break;
-            case ("Sunder.Sdk.Stacks", _):
-                capabilities.Add(SunderSdkCapabilities.StacksV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageCallbackHandler"):
-            case ("Sunder.Sdk.Abstractions", "IPackageCallbackClient"):
-            case ("Sunder.Sdk.Abstractions", "NullPackageCallbackClient"):
-            case ("Sunder.Sdk.Callbacks", _):
-                capabilities.Add(SunderSdkCapabilities.CallbacksV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageAuthHandler"):
-            case ("Sunder.Sdk.Authentication", _):
-                capabilities.Add(SunderSdkCapabilities.AuthV1);
-                break;
-            case ("Sunder.Sdk.Avalonia.Theming", "SunderThemeKeys"):
-                capabilities.Add(SunderSdkCapabilities.ThemingV1);
-                break;
-        }
-    }
-
-    private void AddKnownSdkMemberCapability(
+    private void AddSdkMemberCapability(
         MetadataTypeIdentity identity,
         string memberName,
         ISet<string> capabilities)
     {
-        if (_capabilityCatalog?.AddMemberCapabilities(
-                identity.AssemblyName,
-                identity.Namespace,
-                identity.Name,
-                memberName,
-                capabilities) == true)
+        var resolution = _capabilityCatalog?.ResolveMember(
+            identity.AssemblyName,
+            identity.Namespace,
+            identity.Name,
+            memberName) ?? SdkCapabilityResolution.Unresolved;
+        if (!resolution.IsResolved)
         {
+            _unresolvedSdkMembers.Add(GetSdkMemberContractIdentity(identity, memberName));
             return;
         }
 
-        AddFallbackSdkMemberCapability(identity.Namespace, identity.Name, memberName, capabilities);
+        capabilities.UnionWith(resolution.DeclaredCapabilities);
     }
 
-    private static void AddFallbackSdkMemberCapability(
-        string @namespace,
-        string typeName,
-        string memberName,
-        ISet<string> capabilities)
-    {
-        if (@namespace == "Sunder.Sdk.Abstractions"
-            && typeName == "IPackageContext"
-            && memberName is "get_Settings" or "get_Callbacks")
-        {
-            capabilities.Add(memberName == "get_Settings"
-                ? SunderSdkCapabilities.SettingsV1
-                : SunderSdkCapabilities.CallbacksV1);
-            return;
-        }
+    private static string GetSdkTypeContractIdentity(MetadataTypeIdentity identity)
+        => $"{identity.FullName}, {identity.AssemblyName}";
 
-        if ((@namespace == "Sunder.Sdk.Abstractions"
-                && typeName == "ISunderAppContributionRegistry")
-            || (@namespace == "Sunder.Sdk.Avalonia"
-                && typeName is "IAvaloniaPackageContributionRegistry" or "AvaloniaPackageContributionRegistryExtensions"))
-        {
-            switch (memberName)
-            {
-                case "RegisterPackageView":
-                    capabilities.Add(SunderSdkCapabilities.ViewsV1);
-                    break;
-                case "RegisterSettingsView":
-                    capabilities.Add(SunderSdkCapabilities.SettingsViewsV1);
-                    break;
-                case "RegisterSettingsSchema":
-                    capabilities.Add(SunderSdkCapabilities.SettingsSchemaV1);
-                    break;
-            }
-        }
-    }
+    private static string GetSdkMemberContractIdentity(MetadataTypeIdentity identity, string memberName)
+        => $"{identity.FullName}::{memberName}, {identity.AssemblyName}";
 
     private static OpCode ReadOpCode(byte[] il, ref int index)
     {

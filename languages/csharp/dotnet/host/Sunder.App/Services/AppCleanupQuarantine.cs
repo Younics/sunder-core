@@ -9,6 +9,8 @@ internal static class AppCleanupQuarantine
 
     internal static int Count => PendingTasks.Count;
 
+    internal static bool IsRetained(Task task) => PendingTasks.ContainsKey(task);
+
     public static void Retain(object resource, string reason)
     {
         ArgumentNullException.ThrowIfNull(resource);

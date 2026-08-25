@@ -14,11 +14,15 @@ public sealed partial class RegistryPackageSearchItemViewModel : PackageIconItem
         string? installedVersion,
         RegistryPackageUpdate? update,
         Func<RegistryPackageSearchItemViewModel, Task> onSelectAsync,
-        bool loadIcon = true)
+        bool loadIcon = true,
+        Uri? registryOrigin = null,
+        RemoteImageService? remoteImageService = null)
         : base(
-            TryCreateIconUri(package.IconUrl),
+            TryCreateIconUri(package.IconUrl, registryOrigin),
             loadIcon: loadIcon,
-            iconTransport: PackageIconTransport.AnonymousMedia)
+            iconTransport: PackageIconTransport.Registry,
+            registryOrigin: registryOrigin,
+            remoteImageService: remoteImageService)
     {
         PackageId = package.PackageId;
         Name = package.Name;
@@ -106,8 +110,18 @@ public sealed partial class RegistryPackageSearchItemViewModel : PackageIconItem
     [RelayCommand]
     private async Task SelectAsync() => await _onSelectAsync(this);
 
-    private static Uri? TryCreateIconUri(string? iconUrl)
+    private static Uri? TryCreateIconUri(string? iconUrl, Uri? registryOrigin)
     {
+        if (registryOrigin is not null)
+        {
+            return RemoteImageService.TryResolveRegistryImageUri(
+                registryOrigin,
+                iconUrl,
+                out var registryIconUri)
+                ? registryIconUri
+                : null;
+        }
+
         if (!Uri.TryCreate(iconUrl?.Trim(), UriKind.Absolute, out var uri))
         {
             return null;

@@ -60,11 +60,31 @@ const packagePaths = [
   "languages/typescript/node/packages/package-tool/package.json",
   "languages/typescript/node/packages/create-sunder-package/package.json",
 ];
+const expectedPackageIdentity = new Map([
+  ["languages/typescript/node/package.json", { name: "sunder-js", private: true }],
+  ["languages/typescript/node/packages/sdk/package.json", { name: "@sunder/sdk", directory: "languages/typescript/node/packages/sdk" }],
+  ["languages/typescript/node/packages/package-tool/package.json", { name: "@sunder/package-tool", directory: "languages/typescript/node/packages/package-tool" }],
+  ["languages/typescript/node/packages/create-sunder-package/package.json", { name: "create-sunder-package", directory: "languages/typescript/node/packages/create-sunder-package" }],
+]);
 const packages = new Map();
 for (const path of packagePaths) {
   const manifest = await readJson(path);
+  const identity = expectedPackageIdentity.get(path);
+  if (manifest.name !== identity.name) {
+    throw new Error(`${path} package name '${manifest.name}' does not match '${identity.name}'.`);
+  }
   if (manifest.version !== version) {
     throw new Error(`${path} version '${manifest.version}' does not match '${version}'.`);
+  }
+  if (identity.private === true) {
+    if (manifest.private !== true) throw new Error(`${path} must remain private.`);
+  } else if (manifest.license !== "MIT"
+      || manifest.repository?.type !== "git"
+      || manifest.repository?.url !== "git+https://github.com/Younics/sunder-core.git"
+      || manifest.repository?.directory !== identity.directory
+      || manifest.publishConfig?.access !== "public"
+      || manifest.publishConfig?.provenance !== true) {
+    throw new Error(`${path} has unexpected release identity, repository, license, or publish configuration.`);
   }
   packages.set(path, manifest);
 }

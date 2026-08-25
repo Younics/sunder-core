@@ -7,8 +7,6 @@ public sealed class RuntimePackageCallbackClient : IDisposable
 {
     private readonly RuntimeClientTransport _transport;
     private readonly bool _ownsTransport;
-    private readonly Func<RuntimeConnectionInfo?> _getConnectionInfo;
-    private readonly HttpClient _httpClient;
     private readonly RuntimeHttpResponseReader _responses;
 
     public RuntimePackageCallbackClient(
@@ -28,8 +26,6 @@ public sealed class RuntimePackageCallbackClient : IDisposable
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _ownsTransport = ownsTransport;
-        _getConnectionInfo = transport.GetConnectionInfo;
-        _httpClient = transport.HttpClient;
         _responses = transport.Responses;
     }
 
@@ -39,7 +35,7 @@ public sealed class RuntimePackageCallbackClient : IDisposable
         IReadOnlyDictionary<string, string>? parameters,
         CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.PostAsJsonAsync(
+        using var response = await _transport.PostAsJsonAsync(
             CreateUri(packageId, $"callbacks/{Uri.EscapeDataString(callbackHandlerId)}/start"),
             new PackageCallbackSessionStartRequest(parameters),
             cancellationToken).ConfigureAwait(false);
@@ -51,9 +47,9 @@ public sealed class RuntimePackageCallbackClient : IDisposable
         string callbackSessionId,
         CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.GetAsync(
+        using var response = await _transport.GetAsync(
             CreateUri(packageId, $"callbacks/sessions/{Uri.EscapeDataString(callbackSessionId)}"),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<PackageCallbackSessionResponse>(response, cancellationToken).ConfigureAwait(false);
     }
 
@@ -62,20 +58,14 @@ public sealed class RuntimePackageCallbackClient : IDisposable
         string callbackSessionId,
         CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.DeleteAsync(
+        using var response = await _transport.DeleteAsync(
             CreateUri(packageId, $"callbacks/sessions/{Uri.EscapeDataString(callbackSessionId)}"),
             cancellationToken).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<bool>(response, cancellationToken).ConfigureAwait(false);
     }
 
     private Uri CreateUri(string packageId, string route)
-    {
-        var connection = _getConnectionInfo()
-            ?? throw new InvalidOperationException("Authenticated Runtime connection information is not available.");
-        return new Uri(
-            RuntimeConnectionInfo.Normalize(connection.RuntimeUrl),
-            $"api/v1/packages/{Uri.EscapeDataString(packageId)}/{route}");
-    }
+        => _transport.CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/{route}");
 
     public void Dispose()
     {

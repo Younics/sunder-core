@@ -36,7 +36,7 @@ internal static class SunderAppComposition
 
         services.AddSingleton<RuntimeApiClientFactory>();
         services.AddSingleton<IRuntimeApiClientFactory>(provider => provider.GetRequiredService<RuntimeApiClientFactory>());
-        services.AddSingleton<RuntimeHostProcessManager>();
+        services.AddSingleton<RuntimeAvailabilityManager>();
         services.AddSingleton<DevPackageOwnerSession>();
         services.AddSingleton<NotificationCenterService>();
         services.AddSingleton<IPackageNotificationService>(provider => new AppPackageNotificationService(
@@ -44,6 +44,7 @@ internal static class SunderAppComposition
             "sunder.app",
             "Sunder"));
         services.AddSingleton<DeveloperLogService>();
+        services.AddSingleton<RemoteImageService>();
         services.AddSingleton<RuntimePackageRecoveryNotificationService>();
         services.AddSingleton<RuntimeEventSubscriptionServiceFactory>();
         services.AddSingleton<CliInstallationService>();

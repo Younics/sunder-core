@@ -993,6 +993,319 @@ public sealed class StacksWindowViewModelTests
         Assert.Equal(["action-key"], runtimeApiClient.LastImportRequest.SelectedActionIds);
         Assert.Equal("plan-1", runtimeApiClient.LastImportRequest.PlanId);
         Assert.Equal("secret-local-value", runtimeApiClient.LastPreviewRequest?.InputValues["input-key"]);
+        Assert.Contains("plan-1", runtimeApiClient.DiscardedImportPlanIds);
+    }
+
+    [Fact]
+    public async Task UseStackWizard_RepeatedPreviewsReleaseSupersededPlansAndCleanupIsIdempotent()
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(
+            root,
+            "team-stack",
+            "Team Stack",
+            includeFragment: true,
+            includePackage: false,
+            fragmentDefaultSelected: true);
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var stack = await library.ImportAsync(stackPath);
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            GenerateUniqueImportPlanIds = true,
+            MaximumActiveImportPlans = 16,
+            ImportPreviewResponse = new RuntimeStackImportPreviewResponse(
+                true,
+                "unused",
+                DateTimeOffset.UtcNow.AddMinutes(15),
+                [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
+                [],
+                [],
+                [],
+                []),
+        };
+        var viewModel = new UseStackWizardViewModel(
+            library,
+            stack,
+            runtimeApiClient,
+            new RegistryPackageInstallService(),
+            (_, _) => Task.CompletedTask,
+            _ => new FakeRegistryApiClient(),
+            "https://registry.example/");
+
+        await viewModel.InitializeAsync();
+        var setupItem = Assert.Single(Assert.Single(viewModel.SetupPackageGroups).Items);
+        Assert.Equal(1, runtimeApiClient.ImportPreviewCount);
+        Assert.Single(runtimeApiClient.ActiveImportPlanIds);
+
+        for (var index = 0; index < 20; index++)
+        {
+            setupItem.IsSelected = false;
+            await WaitForConditionAsync(() => !viewModel.IsBusy && runtimeApiClient.ActiveImportPlanIds.Count == 0);
+            setupItem.IsSelected = true;
+            var expectedPreviewCount = index + 2;
+            await WaitForConditionAsync(() =>
+                !viewModel.IsBusy
+                && runtimeApiClient.ImportPreviewCount == expectedPreviewCount
+                && runtimeApiClient.ActiveImportPlanIds.Count == 1);
+        }
+
+        Assert.Empty(viewModel.ImportErrors);
+        Assert.Equal(21, runtimeApiClient.ImportPreviewCount);
+        await viewModel.CancelCommand.ExecuteAsync(null);
+        Assert.Empty(runtimeApiClient.ActiveImportPlanIds);
+        Assert.Equal(
+            runtimeApiClient.ImportPreviewCount,
+            runtimeApiClient.DiscardedImportPlanIds.Distinct(StringComparer.Ordinal).Count());
+
+        var discardCount = runtimeApiClient.DiscardedImportPlanIds.Count;
+        viewModel.Dispose();
+        viewModel.Dispose();
+        Assert.Equal(discardCount, runtimeApiClient.DiscardedImportPlanIds.Count);
+    }
+
+    [Fact]
+    public async Task UseStackWizard_DisposeDoesNotWaitForAsynchronousPlanDiscard()
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(
+            root,
+            "team-stack",
+            "Team Stack",
+            includeFragment: true,
+            includePackage: false,
+            fragmentDefaultSelected: true);
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var stack = await library.ImportAsync(stackPath);
+        var discardStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDiscard = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            ImportPreviewResponse = new RuntimeStackImportPreviewResponse(
+                true,
+                "plan-1",
+                DateTimeOffset.UtcNow.AddMinutes(15),
+                [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
+                [],
+                [],
+                [],
+                []),
+            DiscardStackImportPlanFactory = async (_, _) =>
+            {
+                discardStarted.TrySetResult();
+                await releaseDiscard.Task.ConfigureAwait(false);
+            },
+        };
+        var viewModel = new UseStackWizardViewModel(
+            library,
+            stack,
+            runtimeApiClient,
+            new RegistryPackageInstallService(),
+            (_, _) => Task.CompletedTask,
+            _ => new FakeRegistryApiClient(),
+            "https://registry.example/");
+        await viewModel.InitializeAsync();
+
+        var dispose = Task.Run(viewModel.Dispose);
+        try
+        {
+            await discardStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await dispose.WaitAsync(TimeSpan.FromSeconds(2));
+            var cleanup = viewModel.DisposeAsync().AsTask();
+            Assert.False(cleanup.IsCompleted);
+
+            releaseDiscard.TrySetResult();
+            await cleanup.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            releaseDiscard.TrySetResult();
+            await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+            await viewModel.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Equal(1, runtimeApiClient.DiscardImportPlanCallCount);
+        Assert.Equal(["plan-1"], runtimeApiClient.DiscardedImportPlanIds);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UseStackWizard_DisposeAsyncContainsDiscardFailure(bool cancellation)
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(
+            root,
+            "team-stack",
+            "Team Stack",
+            includeFragment: true,
+            includePackage: false,
+            fragmentDefaultSelected: true);
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var stack = await library.ImportAsync(stackPath);
+        var failure = new InvalidOperationException("Discard transport failed.");
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            ImportPreviewResponse = new RuntimeStackImportPreviewResponse(
+                true,
+                "plan-1",
+                DateTimeOffset.UtcNow.AddMinutes(15),
+                [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
+                [],
+                [],
+                [],
+                []),
+            DiscardStackImportPlanFactory = (_, _) => cancellation
+                ? Task.FromCanceled(canceled.Token)
+                : Task.FromException(failure),
+        };
+        var viewModel = new UseStackWizardViewModel(
+            library,
+            stack,
+            runtimeApiClient,
+            new RegistryPackageInstallService(),
+            (_, _) => Task.CompletedTask,
+            _ => new FakeRegistryApiClient(),
+            "https://registry.example/");
+        await viewModel.InitializeAsync();
+        var logStart = AppSessionLog.Snapshot().Count;
+
+        await viewModel.DisposeAsync();
+        await viewModel.DisposeAsync();
+
+        Assert.Equal(1, runtimeApiClient.DiscardImportPlanCallCount);
+        Assert.Contains(
+            AppSessionLog.Snapshot().Skip(logStart),
+            entry => entry.Message == "Failed to discard a Stack import preview plan."
+                     && (cancellation
+                         ? entry.Exception is OperationCanceledException
+                         : ReferenceEquals(entry.Exception, failure)));
+    }
+
+    [Fact]
+    public async Task UseStackWizard_DisposeCancelsActivePreviewAndDiscardsItsLatePlan()
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(
+            root,
+            "team-stack",
+            "Team Stack",
+            includeFragment: true,
+            includePackage: false,
+            fragmentDefaultSelected: true);
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var stack = await library.ImportAsync(stackPath);
+        var previewStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePreview = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var previewResponse = new RuntimeStackImportPreviewResponse(
+            true,
+            "late-plan",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
+            [],
+            [],
+            [],
+            []);
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            ImportPreviewResponse = previewResponse,
+            PreviewStackImportFactory = async (_, cancellationToken) =>
+            {
+                using var registration = cancellationToken.Register(() => cancellationObserved.TrySetResult());
+                previewStarted.TrySetResult();
+                await releasePreview.Task.ConfigureAwait(false);
+                return previewResponse;
+            },
+        };
+        var viewModel = new UseStackWizardViewModel(
+            library,
+            stack,
+            runtimeApiClient,
+            new RegistryPackageInstallService(),
+            (_, _) => Task.CompletedTask,
+            _ => new FakeRegistryApiClient(),
+            "https://registry.example/");
+
+        var initialization = viewModel.InitializeAsync();
+        await previewStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        viewModel.Dispose();
+        var cleanup = viewModel.DisposeAsync().AsTask();
+        try
+        {
+            await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(cleanup.IsCompleted);
+            releasePreview.TrySetResult();
+            await Task.WhenAll(initialization, cleanup).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            releasePreview.TrySetResult();
+            await Task.WhenAll(initialization, cleanup).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Equal(1, runtimeApiClient.DiscardImportPlanCallCount);
+        Assert.Equal(["late-plan"], runtimeApiClient.DiscardedImportPlanIds);
+        Assert.Empty(runtimeApiClient.ActiveImportPlanIds);
+    }
+
+    [Fact]
+    public async Task UseStackWizard_DisposalDoesNotDiscardApplyingPlanUntilFailedImportSettles()
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(
+            root,
+            "team-stack",
+            "Team Stack",
+            includeFragment: true,
+            includePackage: false,
+            fragmentDefaultSelected: true);
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var stack = await library.ImportAsync(stackPath);
+        var importStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseImport = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            GenerateUniqueImportPlanIds = true,
+            ImportPreviewResponse = new RuntimeStackImportPreviewResponse(
+                true,
+                "unused",
+                DateTimeOffset.UtcNow.AddMinutes(15),
+                [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
+                [],
+                [],
+                [],
+                []),
+            ImportStackFactory = async (_, _) =>
+            {
+                importStarted.TrySetResult();
+                await releaseImport.Task;
+                throw new InvalidOperationException("Import transport failed.");
+            },
+        };
+        var viewModel = new UseStackWizardViewModel(
+            library,
+            stack,
+            runtimeApiClient,
+            new RegistryPackageInstallService(),
+            (_, _) => Task.CompletedTask,
+            _ => new FakeRegistryApiClient(),
+            "https://registry.example/");
+        await viewModel.InitializeAsync();
+
+        var apply = viewModel.ApplyCommand.ExecuteAsync(null);
+        await importStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var applyingPlanId = Assert.IsType<string>(runtimeApiClient.LastImportRequest?.PlanId);
+        Assert.DoesNotContain(applyingPlanId, runtimeApiClient.DiscardedImportPlanIds);
+
+        viewModel.Dispose();
+        Assert.DoesNotContain(applyingPlanId, runtimeApiClient.DiscardedImportPlanIds);
+
+        releaseImport.TrySetResult();
+        await apply;
+        Assert.Contains(applyingPlanId, runtimeApiClient.DiscardedImportPlanIds);
+        Assert.Contains("Import transport failed.", viewModel.ImportErrors);
     }
 
     [Fact]
@@ -1540,11 +1853,21 @@ public sealed class StacksWindowViewModelTests
     {
         private string? _exportPath;
         private IReadOnlyList<PackageUiSnapshotDescriptor> _stagedPackageSources = [];
+        private readonly object _importPlanGate = new();
+        private readonly HashSet<string> _activeImportPlanIds = new(StringComparer.Ordinal);
+        private int _importPreviewCount;
+        private int _discardImportPlanCallCount;
         public RuntimeStackExportDiscoveryResponse ExportDiscoveryResponse { get; init; } = new([], [], []);
 
         public RuntimeStackImportPreviewResponse ImportPreviewResponse { get; init; } = new(true, "plan-1", DateTimeOffset.UtcNow.AddMinutes(15), [], [], [], [], []);
 
         public RuntimeStackImportResponse ImportResponse { get; init; } = new(RuntimeStackImportOutcome.Completed, [], new Dictionary<string, string>(), [], [], []);
+
+        public Func<RuntimeStackImportRequest, CancellationToken, Task<RuntimeStackImportResponse>>? ImportStackFactory { get; init; }
+
+        public Func<RuntimeStackImportPreviewRequest, CancellationToken, Task<RuntimeStackImportPreviewResponse>>? PreviewStackImportFactory { get; init; }
+
+        public Func<string, CancellationToken, Task>? DiscardStackImportPlanFactory { get; init; }
 
         public RuntimeRegistryResolveInstallPlanResponse RegistryPlan { get; init; } = new(true, [], [], [], [], []);
 
@@ -1571,6 +1894,36 @@ public sealed class StacksWindowViewModelTests
         public RuntimeRegistryPublishRequest? LastPublishRequest { get; private set; }
 
         public List<string> Events { get; } = [];
+
+        public List<string> DiscardedImportPlanIds { get; } = [];
+
+        public bool GenerateUniqueImportPlanIds { get; init; }
+
+        public int MaximumActiveImportPlans { get; init; } = int.MaxValue;
+
+        public int ImportPreviewCount
+        {
+            get
+            {
+                lock (_importPlanGate) return _importPreviewCount;
+            }
+        }
+
+        public int DiscardImportPlanCallCount
+        {
+            get
+            {
+                lock (_importPlanGate) return _discardImportPlanCallCount;
+            }
+        }
+
+        public IReadOnlyList<string> ActiveImportPlanIds
+        {
+            get
+            {
+                lock (_importPlanGate) return _activeImportPlanIds.ToArray();
+            }
+        }
 
         public bool WriteArchiveOnExport { get; init; }
 
@@ -1786,18 +2139,67 @@ public sealed class StacksWindowViewModelTests
             return Task.CompletedTask;
         }
 
-        public Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(RuntimeStackImportPreviewRequest request, CancellationToken cancellationToken = default)
+        public async Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(RuntimeStackImportPreviewRequest request, CancellationToken cancellationToken = default)
         {
             LastPreviewRequest = request;
             Events.Add("preview");
-            return Task.FromResult(ImportPreviewResponse);
+            RuntimeStackImportPreviewResponse response;
+            lock (_importPlanGate)
+            {
+                if (_activeImportPlanIds.Count >= MaximumActiveImportPlans)
+                {
+                    throw new InvalidOperationException("The Runtime Stack import plan capacity was reached.");
+                }
+
+                _importPreviewCount++;
+                response = GenerateUniqueImportPlanIds
+                    ? ImportPreviewResponse with { PlanId = $"plan-{_importPreviewCount}" }
+                    : ImportPreviewResponse;
+            }
+
+            if (PreviewStackImportFactory is not null)
+            {
+                response = await PreviewStackImportFactory(request, cancellationToken);
+            }
+
+            lock (_importPlanGate)
+            {
+                if (response.Success && !string.IsNullOrWhiteSpace(response.PlanId))
+                {
+                    _activeImportPlanIds.Add(response.PlanId);
+                }
+            }
+
+            return response;
         }
 
-        public Task<RuntimeStackImportResponse> ImportStackAsync(RuntimeStackImportRequest request, CancellationToken cancellationToken = default)
+        public async Task<RuntimeStackImportResponse> ImportStackAsync(RuntimeStackImportRequest request, CancellationToken cancellationToken = default)
         {
             LastImportRequest = request;
             Events.Add("import");
-            return Task.FromResult(ImportResponse);
+            lock (_importPlanGate) _activeImportPlanIds.Remove(request.PlanId);
+            return ImportStackFactory is null
+                ? ImportResponse
+                : await ImportStackFactory(request, cancellationToken);
+        }
+
+        public async Task DiscardStackImportPlanAsync(string planId, CancellationToken cancellationToken = default)
+        {
+            lock (_importPlanGate)
+            {
+                _discardImportPlanCallCount++;
+            }
+
+            if (DiscardStackImportPlanFactory is not null)
+            {
+                await DiscardStackImportPlanFactory(planId, cancellationToken);
+            }
+
+            lock (_importPlanGate)
+            {
+                DiscardedImportPlanIds.Add(planId);
+                _activeImportPlanIds.Remove(planId);
+            }
         }
 
         public void Dispose()

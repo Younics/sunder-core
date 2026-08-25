@@ -13,6 +13,8 @@ Environment.SetEnvironmentVariable(RuntimeResourcePolicyEnvironment.PolicyFilePa
 Environment.SetEnvironmentVariable(RuntimeResourcePolicyEnvironment.LaunchPayloadVariable, null);
 HostDeploymentIdentityVerifier.Validate(AppContext.BaseDirectory, options.DeploymentIdentity);
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(kestrel =>
+    kestrel.Limits.MaxRequestBodySize = RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes);
 if (builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any())
 {
     throw new InvalidOperationException(
@@ -192,8 +194,14 @@ app.MapPost("/api/v1/system/reset/drain", async (
 
 var forwardedMethods = new[] { "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS" };
 app.MapMethods("/api/handshake", ["GET"], (HttpContext context, RuntimeGateway gateway) => gateway.ForwardAsync(context));
+app.MapPost("/api/v1/uploads/packages", (HttpContext context, RuntimeGateway gateway) => gateway.ForwardAsync(context))
+    .WithMetadata(new RequestSizeLimitAttribute(RuntimeRequestSizeLimits.PackageUploadMaxRequestBodyBytes));
+app.MapPost("/api/v1/uploads/stacks", (HttpContext context, RuntimeGateway gateway) => gateway.ForwardAsync(context))
+    .WithMetadata(new RequestSizeLimitAttribute(RuntimeRequestSizeLimits.StackUploadMaxRequestBodyBytes));
+app.MapPost("/api/v1/uploads/stack-media", (HttpContext context, RuntimeGateway gateway) => gateway.ForwardAsync(context))
+    .WithMetadata(new RequestSizeLimitAttribute(RuntimeRequestSizeLimits.StackMediaUploadMaxRequestBodyBytes));
 app.MapMethods("/api/v1/{**path}", forwardedMethods, (HttpContext context, RuntimeGateway gateway) => gateway.ForwardAsync(context))
-    .WithMetadata(new DisableRequestSizeLimitAttribute());
+    .WithMetadata(new RequestSizeLimitAttribute(RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes));
 
 RuntimeConnectionInfo? externalConnection = null;
 var workerCoordinator = app.Services.GetRequiredService<RuntimeWorkerCoordinator>();

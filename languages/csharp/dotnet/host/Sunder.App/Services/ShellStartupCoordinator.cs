@@ -103,7 +103,7 @@ public sealed class ShellStartupCoordinator
     private readonly ShellState _shellState;
     private readonly RuntimeConnectionState _runtimeConnectionState;
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory;
-    private readonly RuntimeHostProcessManager _runtimeHostProcessManager;
+    private readonly RuntimeAvailabilityManager _runtimeAvailabilityManager;
     private readonly DevPackageOwnerSession _devPackageOwnerSession;
     private readonly NotificationCenterService _notificationCenter;
     private readonly DeveloperLogService _developerLog;
@@ -124,7 +124,7 @@ public sealed class ShellStartupCoordinator
         ShellState shellState,
         RuntimeConnectionState runtimeConnectionState,
         IRuntimeApiClientFactory runtimeApiClientFactory,
-        RuntimeHostProcessManager runtimeHostProcessManager,
+        RuntimeAvailabilityManager runtimeAvailabilityManager,
         DevPackageOwnerSession devPackageOwnerSession,
         NotificationCenterService notificationCenter,
         DeveloperLogService developerLog,
@@ -145,7 +145,7 @@ public sealed class ShellStartupCoordinator
         _shellState = shellState;
         _runtimeConnectionState = runtimeConnectionState;
         _runtimeApiClientFactory = runtimeApiClientFactory;
-        _runtimeHostProcessManager = runtimeHostProcessManager;
+        _runtimeAvailabilityManager = runtimeAvailabilityManager;
         _devPackageOwnerSession = devPackageOwnerSession;
         _notificationCenter = notificationCenter;
         _developerLog = developerLog;
@@ -222,7 +222,7 @@ public sealed class ShellStartupCoordinator
         var runtimeConnectionState = _runtimeConnectionState;
         runtimeConnectionState.RuntimeUrl = runtimeUrl;
         var runtimeApiClientFactory = _runtimeApiClientFactory;
-        var runtimeHostProcessManager = _runtimeHostProcessManager;
+        var runtimeAvailabilityManager = _runtimeAvailabilityManager;
         var notificationCenter = _notificationCenter;
         var developerLog = _developerLog;
         var cliInstallationService = _cliInstallationService;
@@ -272,7 +272,7 @@ public sealed class ShellStartupCoordinator
                         )
                         .ConfigureAwait(false);
 
-                    await runtimeHostProcessManager
+                    await runtimeAvailabilityManager
                         .EnsureStartedAsync(runtimeConnectionState.RuntimeUrl, cancellationToken)
                         .ConfigureAwait(false);
                     LogStartupPhase(StartupPhase.RuntimeHost, phaseStopwatch);

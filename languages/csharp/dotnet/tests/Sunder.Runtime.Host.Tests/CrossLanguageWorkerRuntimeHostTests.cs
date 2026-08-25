@@ -8,13 +8,18 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
+[Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class CrossLanguageWorkerRuntimeHostTests
 {
-    [Fact]
+    [ExternalArtifactFact(
+        "SUNDER_REQUIRE_NODE_SEA_INTEROP",
+        "SUNDER_NODE_SEA_PACKAGE_PATH",
+        "SUNDER_NODE_SEA_LEAF_PATH")]
+    [Trait("Category", "ExternalArtifact")]
     public async Task DotNetToNode_RealRuntimeHostRunsNativeSeaUnaryStreamDataFaultAndShutdown()
     {
         var configured = GetNodeSeaInputs();
-        if (configured is null) return;
+        Assert.NotNull(configured);
         var (archivePath, leafPath) = configured.Value;
         using var corpus = ReadCorpus();
         var interop = corpus.RootElement.GetProperty("interop");
@@ -80,11 +85,15 @@ public sealed class CrossLanguageWorkerRuntimeHostTests
         }
     }
 
-    [Fact]
+    [ExternalArtifactFact(
+        "SUNDER_REQUIRE_NODE_SEA_INTEROP",
+        "SUNDER_NODE_SEA_PACKAGE_PATH",
+        "SUNDER_NODE_SEA_LEAF_PATH")]
+    [Trait("Category", "ExternalArtifact")]
     public async Task NodeToDotNet_RealRuntimeHostRoutesRpcToNativeDotNetWorker()
     {
         var configured = GetNodeSeaInputs();
-        if (configured is null) return;
+        Assert.NotNull(configured);
         var (_, leafPath) = configured.Value;
         using var corpus = ReadCorpus();
         var interop = corpus.RootElement.GetProperty("interop");

@@ -107,8 +107,25 @@ export interface SunderBrowserNavigation {
   navigate(route: string, options?: BrowserCallOptions): Promise<{ readonly accepted: boolean }>;
 }
 
+export interface SunderBrowserResourcePolicy {
+  readonly rpcValueBytes: number;
+  readonly valueDepth: number;
+  readonly valueNodes: number;
+  readonly objectMembers: number;
+  readonly inlineDecodedBytes: number;
+  readonly contentReferenceBytes: number;
+}
+
+export interface SunderBrowserResourceProfile {
+  readonly reportedByRuntime: boolean;
+  readonly runtimeInstanceId: string | null;
+  readonly effectiveProfileHash: string | null;
+  readonly effectivePolicy: SunderBrowserResourcePolicy;
+}
+
 export interface SunderBrowserApi {
   readonly version: 2;
+  readonly resourceProfile: SunderBrowserResourceProfile;
   readonly rpc: SunderBrowserRpc;
   openExternal(url: string, options?: BrowserCallOptions): Promise<{ readonly opened: boolean }>;
   getNavigationState(options?: BrowserCallOptions): Promise<{ readonly route: string }>;
@@ -149,6 +166,7 @@ export function getSunder(): SunderBrowserApi {
   adaptedSource = candidate;
   adaptedApi = Object.freeze({
     version: 2,
+    resourceProfile: candidate.resourceProfile,
     rpc,
     openExternal: (url: string, options?: BrowserCallOptions) => candidate.openExternal(url, outboundOptions(options)),
     getNavigationState: (options?: BrowserCallOptions) => candidate.getNavigationState(outboundOptions(options)),

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -94,6 +95,75 @@ public sealed class RuntimeApiClientTransferTests
             Assert.True(result.RuntimeSessionReconciliationPending);
             Assert.False(result.RuntimeSessionApplied);
             Assert.Contains("/api/v1/packages/stages/stage-1", requests);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Local_package_commit_timeout_reconciles_public_result_from_stage_status(bool committed)
+    {
+        var requests = new List<string>();
+        var commitTimeout = new TimeoutException("commit response deadline expired");
+        var handler = new DelegateHandler(request =>
+        {
+            requests.Add(request.RequestUri!.AbsolutePath);
+            return Task.FromResult(request.RequestUri.AbsolutePath switch
+            {
+                "/api/handshake" => Json(CreateHandshake()),
+                "/api/v1/packages/installed" => Json(Array.Empty<InstalledPackageDescriptor>()),
+                "/api/v1/uploads/packages" => Json(new ContentUploadDescriptor(
+                    "upload-1",
+                    "hash",
+                    7,
+                    "demo.sunderpkg",
+                    "application/vnd.sunder.package")),
+                "/api/v1/packages/store/stage" => Json(new PackageStoreStageResult(
+                    "stage-1",
+                    new PackageOperationResult(true, "staged", false, false, [], []),
+                    [])),
+                "/api/v1/packages/store/stage/stage-1/commit" => throw commitTimeout,
+                "/api/v1/packages/stages/stage-1" => Json(new RuntimePackageStageStatus(
+                    "stage-1",
+                    RuntimePackageStageKind.PackageStore,
+                    committed ? RuntimePackageStageState.Committed : RuntimePackageStageState.Failed,
+                    DateTimeOffset.UtcNow,
+                    committed ? new RuntimePackageStamp(Guid.NewGuid(), 4) : null,
+                    RuntimeSessionApplied: committed,
+                    ReconciliationPending: false,
+                    committed ? "Store committed." : "Store commit failed.")),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            });
+        });
+        var path = Path.Combine(Path.GetTempPath(), $"sunder-cli-{Guid.NewGuid():N}.pkg");
+        await File.WriteAllTextAsync(path, "archive");
+
+        try
+        {
+            using var client = new RuntimeManagementClient(
+                () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "runtime-secret"),
+                handler);
+
+            if (committed)
+            {
+                var result = await client.ApplyLocalPackageAsync(path, "demo", false, false);
+                Assert.True(result.Success);
+                Assert.True(result.StoreCommitted);
+                Assert.True(result.RuntimeSessionApplied);
+                Assert.Equal("Store committed.", result.Message);
+            }
+            else
+            {
+                var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+                    client.ApplyLocalPackageAsync(path, "demo", false, false));
+                Assert.Same(commitTimeout, exception);
+            }
+
+            Assert.Equal(1, requests.Count(path => path == "/api/v1/packages/stages/stage-1"));
         }
         finally
         {
@@ -433,13 +503,67 @@ public sealed class RuntimeApiClientTransferTests
     [Fact]
     public async Task Registry_content_reader_rejects_chunked_content_past_limit()
     {
-        using var content = new StreamContent(new MemoryStream("123456789"u8.ToArray()));
+        var stream = new TrackingReadStream("123456789-more"u8.ToArray());
+        using var content = new StreamContent(stream);
 
         await Assert.ThrowsAsync<InvalidDataException>(() => CliHttpContentReader.ReadJsonAsync<object>(
             content,
             maxBytes: 8,
             new JsonSerializerOptions(JsonSerializerDefaults.Web),
             CancellationToken.None));
+
+        Assert.Equal(9, stream.BytesRead);
+        Assert.True(stream.IsDisposed);
+    }
+
+    [Fact]
+    public async Task Registry_content_reader_accepts_exact_limit()
+    {
+        var stream = new TrackingReadStream("\"123456\""u8.ToArray());
+        using var content = new StreamContent(stream);
+
+        var value = await CliHttpContentReader.ReadJsonAsync<string>(
+            content,
+            maxBytes: 8,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web),
+            CancellationToken.None);
+
+        Assert.Equal("123456", value);
+        Assert.Equal(8, stream.BytesRead);
+    }
+
+    [Fact]
+    public async Task Registry_error_reader_UsesHeadersAndStopsAtDiagnosticLimit()
+    {
+        var stream = new TrackingReadStream(new byte[70 * 1024]);
+        var handler = new DelegateHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+        {
+            Content = new StreamContent(stream),
+        }));
+        using var client = new RegistryClient(new Uri("https://registry.test/"), handler);
+
+        var exception = await Assert.ThrowsAsync<CliHttpException>(() =>
+            client.SearchAsync(null, 0, 20, CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, exception.StatusCode);
+        Assert.Equal(64 * 1024 + 1, stream.BytesRead);
+        Assert.True(stream.IsDisposed);
+    }
+
+    [Fact]
+    public async Task Registry_client_rejects_response_from_changed_origin()
+    {
+        var handler = new DelegateHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://other.test/api/v1/packages"),
+            Content = JsonContent.Create(Array.Empty<RegistryPackageSummary>()),
+        }));
+        using var client = new RegistryClient(new Uri("https://registry.test/"), handler);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.SearchAsync(null, 0, 20, CancellationToken.None));
+
+        Assert.Contains("trusted Registry origin", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private static HttpResponseMessage Json<T>(T value)
@@ -472,6 +596,44 @@ public sealed class RuntimeApiClientTransferTests
             var response = await send(request);
             response.RequestMessage ??= request;
             return response;
+        }
+    }
+
+    private sealed class TrackingReadStream(byte[] content) : Stream
+    {
+        private int _offset;
+        private int _disposed;
+        public int BytesRead => Volatile.Read(ref _offset);
+        public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _offset; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count)
+            => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            var count = Math.Min(buffer.Length, content.Length - _offset);
+            content.AsSpan(_offset, count).CopyTo(buffer);
+            _offset += count;
+            return count;
+        }
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(Read(buffer.Span));
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Volatile.Write(ref _disposed, 1);
+            base.Dispose(disposing);
         }
     }
 }

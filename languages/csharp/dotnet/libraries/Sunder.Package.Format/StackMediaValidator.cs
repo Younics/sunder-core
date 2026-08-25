@@ -15,7 +15,8 @@ internal static class StackMediaValidator
     public static void Validate(
         IReadOnlyList<SunderStackMediaManifest>? mediaItems,
         string stagingPath,
-        ICollection<string> errors)
+        ICollection<string> errors,
+        ICollection<int> missingEntryErrorIndexes)
     {
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var media in mediaItems ?? [])
@@ -50,6 +51,7 @@ internal static class StackMediaValidator
             var filePath = SunderArchive.ResolveFile(stagingPath, path);
             if (!File.Exists(filePath))
             {
+                missingEntryErrorIndexes.Add(errors.Count);
                 errors.Add($"Stack media '{label}' path '{media.Path}' was not found in the Stack archive.");
                 continue;
             }

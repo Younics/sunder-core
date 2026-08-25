@@ -285,7 +285,6 @@
       "sunder.app": {
         "type": "Project",
         "dependencies": {
-          "AsyncImageLoader.Avalonia": "[3.8.0, )",
           "Avalonia": "[12.0.3, )",
           "Avalonia.AvaloniaEdit": "[12.0.0, )",
           "Avalonia.Controls.WebView": "[12.0.1, )",
@@ -308,6 +307,9 @@
           "Sunder.Sdk.Stacks": "[1.1.0, )",
           "Velopack": "[0.0.1298, )"
         }
+      },
+      "sunder.core.testsupport": {
+        "type": "Project"
       },
       "sunder.host.client": {
         "type": "Project",
@@ -369,23 +371,7 @@
       "sunder.sdk.stacks": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )",
-          "Sunder.Sdk.Worker": "[1.1.0, )"
-        }
-      },
-      "sunder.sdk.worker": {
-        "type": "Project",
-        "dependencies": {
           "Sunder.Sdk": "[1.1.0, )"
-        }
-      },
-      "AsyncImageLoader.Avalonia": {
-        "type": "CentralTransitive",
-        "requested": "[3.8.0, )",
-        "resolved": "3.8.0",
-        "contentHash": "5cFMhM7MUD7w3rH+n5pWyVR82loEFuFqANQ/EDDRg0lRKc91PoSq/4vro/ixW/ZQ1TYnXAD6jXRoTjcce2fbUg==",
-        "dependencies": {
-          "Avalonia": "12.0.0"
         }
       },
       "Avalonia": {

@@ -18,6 +18,8 @@ param(
 
     [switch]$IncludePrereleaseUpdates,
 
+    [switch]$StrictRelease,
+
     [string]$WindowsSignParams = "",
 
     [string]$WindowsPublisherSubject = $env:SUNDER_WINDOWS_PUBLISHER_SUBJECT
@@ -175,7 +177,7 @@ function Import-VelopackHistory {
     }
 }
 
-& dotnet restore $projectPath -r $Runtime -p:Configuration=$Configuration
+& dotnet restore $projectPath -r $Runtime -p:Configuration=$Configuration -p:RestoreLockedMode=false "-p:NuGetLockFilePath=obj/packages.$Runtime.lock.json"
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet restore failed for '$projectPath' and runtime $Runtime."
 }
@@ -191,7 +193,7 @@ if (Test-Path -LiteralPath $releaseDir) {
 New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
 
-if (-not [string]::IsNullOrWhiteSpace($GitHubRepositoryUrl)) {
+if (-not $StrictRelease -and -not [string]::IsNullOrWhiteSpace($GitHubRepositoryUrl)) {
     $effectiveGitHubToken = if (-not [string]::IsNullOrWhiteSpace($GitHubToken)) { $GitHubToken } else { $env:GITHUB_TOKEN }
     try {
         Import-VelopackHistory `
@@ -217,6 +219,8 @@ $publishArgs = @(
     "-p:InformationalVersion=$Version",
     "-p:IncludeSourceRevisionInInformationalVersion=false",
     "-p:ContinuousIntegrationBuild=true",
+    "-p:RestoreLockedMode=false",
+    "-p:NuGetLockFilePath=obj/packages.$Runtime.lock.json",
     "-p:PublishSingleFile=false",
     "-o", $publishDir
 )
@@ -270,6 +274,12 @@ $packArgs += "--noPortable"
 & $vpk.Source @packArgs
 if ($LASTEXITCODE -ne 0) {
     throw "vpk pack failed for runtime $Runtime."
+}
+if ($StrictRelease) {
+    $strictDeltaPackages = @(Get-ChildItem -LiteralPath $releaseDir -File -Filter "*-delta.nupkg")
+    if ($strictDeltaPackages.Count -ne 0) {
+        throw "Strict release packaging produced a history-dependent delta: $($strictDeltaPackages.Name -join ', ')."
+    }
 }
 
 $currentPackagePrefix = "Sunder-$Version-$velopackChannel-"

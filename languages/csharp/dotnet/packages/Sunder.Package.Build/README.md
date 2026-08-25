@@ -37,6 +37,7 @@ The NuGet package exposes no compile or runtime assembly asset; its task assembl
 - Validate descriptorVersion 2 RPC contracts, generate C# bindings and immutable canonical snapshots, derive descriptor and ABI hashes, and copy descriptors into `payload/shared/contracts`.
 - Project only matching `runtimes/<rid>` content into each declared exact role/RID layer.
 - Exclude host boundary assemblies such as `Sunder.Sdk` and core Avalonia assemblies from private package output.
+- Exclude generated DLL-matched XML documentation companions while retaining explicitly authored XML content and authored managed PDBs.
 
 Package authors do not maintain `sunder-package.json` by hand.
 
@@ -236,7 +237,7 @@ Explicit target items replace the inferred App role/RID matrix. Runtime authorin
 
 An isolated .NET worker declares exactly one `runtime/<RID>` target with `Kind="worker"` per self-contained executable build. It requires `OutputType=Exe`, `SelfContained=true`, `UseAppHost=true`, `PublishSingleFile=false`, and use of the Worker V3 API so capability inference finds `worker-protocol.v3`. The entry point is the official project apphost under `lib/`: `$(TargetName).exe` for Windows and extensionless `$(TargetName)` for Linux/macOS. It cannot be renamed or factored into a shared aggregate layer. Every Runtime target also receives `rpc.v2` and must carry the SDK-version-matched baseline. The emitted leaf includes the complete self-contained publish closure and does not require an `ISunderRuntimePackageModule`. Aggregate the six native leaves for a universal package.
 
-For platform signing, append a project target to `SunderPackageWorkerSigningTargets`. That target receives a private copied instance of the complete closure as `@(SunderPackageWorkerSigningFile)` and the official apphost relative path as `$(SunderPackageWorkerEntryPointRelativePath)`. It runs after `ComputeFilesToPublish` without exposing NuGet or runtime-pack cache files to mutation, and before Sunder copies, indexes, and validates the leaf. Sign the supplied files in place and fail closed; later byte changes fail pack validation because packing never regenerates the established content index. Platform binary signatures do not constitute a Sunder package signature or publisher attestation.
+For platform signing, append a project target to `SunderPackageWorkerSigningTargets`. That target receives a private copied instance of the executable publish closure, after generated XML documentation companions are removed, as `@(SunderPackageWorkerSigningFile)` and the official apphost relative path as `$(SunderPackageWorkerEntryPointRelativePath)`. It runs after `ComputeFilesToPublish` without exposing NuGet or runtime-pack cache files to mutation, and before Sunder copies, indexes, and validates the leaf. Sign the supplied files in place and fail closed; later byte changes fail pack validation because packing never regenerates the established content index. Platform binary signatures do not constitute a Sunder package signature or publisher attestation.
 
 Schema-first RPC metadata is authored with strict MSBuild items. Every imported or provided contract must have a local bundle, so validation never depends on another installed package:
 
@@ -261,6 +262,8 @@ Schema-first RPC metadata is authored with strict MSBuild items. Every imported 
                      Audience="owner" />
 </ItemGroup>
 ```
+
+`SunderRpcBinding` requires `Namespace`; optional `OutputFile` selects a relative generated `.cs` path. Set `Accessibility="Internal"` when the generated binding should stay assembly-local. Optional `Accessibility` accepts only the exact values `Public` and `Internal`, defaults to `Public` when omitted or blank, and fails the build before generated output is replaced when invalid. `Internal` uniformly applies to all top-level generated C# declarations, including DTOs, provider interfaces, clients, and handlers. It is intended for same-assembly bindings hidden behind handwritten public authoring contracts; use `Public` when generated types cross an assembly boundary. Per-type or mixed accessibility is not supported.
 
 `SunderContractBundle` accepts only a descriptorVersion 2 descriptor whose `contractId` and complete SemVer `version`, including build metadata, exactly match `ContractId` and `Version`. `Exposure` is required and is either `package` or `public`; `DescriptorPath` defaults to `contracts/&lt;file name&gt;` and must stay under `contracts/`. The build canonicalizes the immutable descriptor snapshot and derives `descriptorSha256` and `abiSha256`; hash metadata must never be authored.
 

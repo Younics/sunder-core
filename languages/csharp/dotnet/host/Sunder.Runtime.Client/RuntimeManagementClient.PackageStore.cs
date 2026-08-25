@@ -38,7 +38,7 @@ public sealed partial class RuntimeManagementClient
         bool enabled,
         CancellationToken token = default)
     {
-        using var response = await _httpClient.PostAsync(
+        using var response = await _transport.PostAsync(
             CreateUri($"packages/{Uri.EscapeDataString(packageId)}/{(enabled ? "enable" : "disable")}"),
             content: null,
             token).ConfigureAwait(false);
@@ -50,7 +50,7 @@ public sealed partial class RuntimeManagementClient
         PackageStoreStageRequest request,
         CancellationToken token = default)
     {
-        using var response = await _httpClient.PostAsJsonAsync(CreateUri("packages/store/stage"), request, token).ConfigureAwait(false);
+        using var response = await _transport.PostAsJsonAsync(CreateUri("packages/store/stage"), request, token).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<PackageStoreStageResult>(response, token).ConfigureAwait(false);
     }
 
@@ -68,7 +68,7 @@ public sealed partial class RuntimeManagementClient
 
     public async Task DiscardPackageStoreStageAsync(string stageId, CancellationToken token = default)
     {
-        using var response = await _httpClient.DeleteAsync(
+        using var response = await _transport.DeleteAsync(
             CreateUri($"packages/store/stage/{Uri.EscapeDataString(stageId)}"),
             token).ConfigureAwait(false);
         if (response.StatusCode != System.Net.HttpStatusCode.NotFound)

@@ -232,6 +232,61 @@ public sealed class RuntimeArchitectureRatchetTests
     }
 
     [Fact]
+    public void RuntimeSessionPublication_ExposesReadOnlyStatusAndImmutableDescriptorSnapshot()
+    {
+        var sessionEntry = typeof(PackageSessionState).GetNestedType(
+            "SessionEntry",
+            BindingFlags.NonPublic);
+        var mutablePublication = typeof(PackageSessionState).GetNestedType(
+            "MutableSessionPublication",
+            BindingFlags.NonPublic);
+        var publication = typeof(PackageSessionState).GetNestedType(
+            "SessionPublication",
+            BindingFlags.NonPublic);
+        var publicationSnapshot = typeof(PackageSessionState).GetNestedType(
+            "SessionPublicationSnapshot",
+            BindingFlags.NonPublic);
+
+        Assert.NotNull(sessionEntry);
+        Assert.True(sessionEntry.IsNestedPrivate);
+        Assert.NotNull(mutablePublication);
+        Assert.True(mutablePublication.IsNestedPrivate);
+        Assert.NotNull(publication);
+        Assert.True(publication.IsNestedAssembly);
+        Assert.True(publication.IsInterface);
+        var properties = publication.GetProperties(BindingFlags.Instance | BindingFlags.Public);
+        Assert.Equal(
+            new[]
+            {
+                "Abandoned",
+                "CandidateGeneration",
+                "Committed",
+                "Completed",
+                "ExpectedGeneration",
+                "PreviousSession",
+                "PreviousWorkersQuiesced",
+                "RecoveryCommitted",
+                "Session",
+            },
+            properties.Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.All(properties, property => Assert.Null(property.SetMethod));
+        Assert.NotNull(publicationSnapshot);
+        Assert.True(publicationSnapshot.IsNestedAssembly);
+        Assert.True(publicationSnapshot.IsSealed);
+        var snapshotProperties = publicationSnapshot.GetProperties(BindingFlags.Instance | BindingFlags.Public);
+        Assert.Equal(
+            new[] { "ActivePackages", "Generation", "SessionPackages" },
+            snapshotProperties.Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.All(snapshotProperties, property => Assert.Null(property.SetMethod));
+        Assert.DoesNotContain(
+            snapshotProperties,
+            property => property.PropertyType == typeof(ActivePackageSession));
+        var snapshotConstructor = Assert.Single(publicationSnapshot.GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
+        Assert.True(snapshotConstructor.IsPrivate);
+    }
+
+    [Fact]
     public void RuntimeContracts_RemainHostAndSdkNeutral()
     {
         var references = typeof(SystemStatusResponse).Assembly.GetReferencedAssemblies().Select(reference => reference.Name).ToArray();
@@ -294,7 +349,7 @@ public sealed class RuntimeArchitectureRatchetTests
         Assert.False(File.Exists(Path.Combine(appServices, "RuntimeHostVersionComparer.cs")));
         Assert.Contains(
             "RuntimeProtocolCompatibility.IsCompatible",
-            File.ReadAllText(Path.Combine(appServices, "RuntimeHostProcessManager.cs")),
+            File.ReadAllText(Path.Combine(appServices, "RuntimeAvailabilityManager.cs")),
             StringComparison.Ordinal);
     }
 

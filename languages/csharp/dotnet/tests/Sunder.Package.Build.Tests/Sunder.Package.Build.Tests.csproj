@@ -1,10 +1,4 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <IsPackable>false</IsPackable>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj" />
     <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
@@ -24,5 +18,14 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Build.Framework" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\..\..\..\specs\generated-output\v1\conformance\documents.json"
+          Link="GeneratedOutputConformance\documents.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\eng\test-oracles\core-public-packages.json"
+          Link="TestOracles\core-public-packages.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

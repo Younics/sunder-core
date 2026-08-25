@@ -13,7 +13,8 @@ internal static class StackManifestSchemaValidator
         SunderStackManifest? manifest,
         string stagingPath,
         ICollection<string> warnings,
-        ICollection<string> errors)
+        ICollection<string> errors,
+        ICollection<int> missingEntryErrorIndexes)
     {
         if (manifest is null)
         {
@@ -51,7 +52,7 @@ internal static class StackManifestSchemaValidator
         }
 
         ValidatePackages(packages, errors);
-        ValidateFragments(fragments, stagingPath, errors);
+        ValidateFragments(fragments, stagingPath, errors, missingEntryErrorIndexes);
     }
 
     private static void ValidateFeatures(
@@ -156,7 +157,8 @@ internal static class StackManifestSchemaValidator
     private static void ValidateFragments(
         IReadOnlyList<SunderStackFragmentManifest> fragments,
         string stagingPath,
-        ICollection<string> errors)
+        ICollection<string> errors,
+        ICollection<int> missingEntryErrorIndexes)
     {
         var seenFragments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var fragment in fragments)
@@ -201,7 +203,7 @@ internal static class StackManifestSchemaValidator
                 errors.Add($"Stack fragment '{fragmentId}' is missing displayName.");
             }
 
-            ValidatePayload(fragment, fragmentId, stagingPath, errors);
+            ValidatePayload(fragment, fragmentId, stagingPath, errors, missingEntryErrorIndexes);
             ValidateRequiredInputs(fragment.RequiredInputs ?? [], $"Stack fragment '{fragmentId}'", errors);
             ValidatePreview(fragment.Preview, $"Stack fragment '{fragmentId}'", errors);
         }
@@ -211,7 +213,8 @@ internal static class StackManifestSchemaValidator
         SunderStackFragmentManifest fragment,
         string fragmentId,
         string stagingPath,
-        ICollection<string> errors)
+        ICollection<string> errors,
+        ICollection<int> missingEntryErrorIndexes)
     {
         if (string.IsNullOrWhiteSpace(fragment.PayloadPath))
         {
@@ -230,6 +233,7 @@ internal static class StackManifestSchemaValidator
         }
         else if (!File.Exists(SunderArchive.ResolveFile(stagingPath, path)))
         {
+            missingEntryErrorIndexes.Add(errors.Count);
             errors.Add($"Stack fragment '{fragmentId}' payloadPath '{fragment.PayloadPath}' was not found in the Stack archive.");
         }
         else

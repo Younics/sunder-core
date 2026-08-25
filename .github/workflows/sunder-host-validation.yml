@@ -5,49 +5,66 @@ on:
   pull_request:
     paths:
       - ".github/workflows/sunder-host-validation.yml"
+      - ".github/workflows/sunder-host-release.yml"
+      - ".github/workflows/sunder-release-promotion.yml"
+      - "docs/**"
+      - "scripts/release/**"
       - "languages/csharp/dotnet/Directory.Build.props"
       - "languages/csharp/dotnet/Directory.Packages.props"
       - "languages/csharp/dotnet/host/**"
       - "languages/csharp/dotnet/libraries/**"
-      - "languages/csharp/dotnet/packages/Sunder.Sdk/**"
-      - "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/**"
-      - "languages/csharp/dotnet/tests/Sunder.Host.Supervisor.Tests/**"
-      - "languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/**"
+      - "languages/csharp/dotnet/packages/**"
+      - "languages/csharp/dotnet/tests/Directory.Build.props"
+      - "languages/csharp/dotnet/tests/**"
+      - "languages/typescript/node/fixtures/sea-smoke/contracts/example.rpc.json"
+      - "eng/test-oracles/**"
+      - "scripts/test-oracles/**"
+      - "specs/worker/v3/conformance/corpus.json"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/sunder-host-validation.yml"
+      - ".github/workflows/sunder-host-release.yml"
+      - ".github/workflows/sunder-release-promotion.yml"
+      - "docs/**"
+      - "scripts/release/**"
       - "languages/csharp/dotnet/Directory.Build.props"
       - "languages/csharp/dotnet/Directory.Packages.props"
       - "languages/csharp/dotnet/host/**"
       - "languages/csharp/dotnet/libraries/**"
-      - "languages/csharp/dotnet/packages/Sunder.Sdk/**"
-      - "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/**"
-      - "languages/csharp/dotnet/tests/Sunder.Host.Supervisor.Tests/**"
-      - "languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/**"
+      - "languages/csharp/dotnet/packages/**"
+      - "languages/csharp/dotnet/tests/Directory.Build.props"
+      - "languages/csharp/dotnet/tests/**"
+      - "languages/typescript/node/fixtures/sea-smoke/contracts/example.rpc.json"
+      - "eng/test-oracles/**"
+      - "scripts/test-oracles/**"
+      - "specs/worker/v3/conformance/corpus.json"
 
 permissions:
   contents: read
 
 env:
   DOTNET_VERSION: "10.0.100"
+  NODE_VERSION: "24.18.1"
 
 jobs:
   supervisor-and-runtime:
-    name: Supervisor and Runtime (${{ matrix.os }})
+    name: Platform/process .NET (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+          - ubuntu-24.04
+          - windows-2022
+          - macos-14
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Setup .NET
@@ -55,14 +72,41 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Restore Host tests
-        run: |
-          dotnet restore languages/csharp/dotnet/tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj --locked-mode
-          dotnet restore languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --locked-mode
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
-      - name: Test Supervisor and Runtime
+      - name: Restore Core
+        run: dotnet restore Sunder.Core.slnx --locked-mode
+
+      - name: Require platform/process lane
+        run: node scripts/test-oracles/run-core-test-lane.mjs --primary-lane host-platform
+
+      - name: Test platform/process behavior
         env:
           SUNDER_RUN_EXTERNAL_KEYSTORE_TESTS: ${{ runner.os == 'macOS' && '1' || '0' }}
-        run: |
-          dotnet test languages/csharp/dotnet/tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj -c Release --no-restore
-          dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj -c Release --no-restore
+        run: >-
+          node scripts/test-oracles/run-dotnet-tests-with-results.mjs
+          --primary-lane host-platform
+          --results-directory artifacts/test-results/host-platform-${{ runner.os }}
+          --build
+          --configuration Release
+          --disable-build-servers
+
+      - name: Summarize platform/process results
+        if: always()
+        run: >-
+          node scripts/test-oracles/summarize-core-test-results.mjs
+          artifacts/test-results/host-platform-${{ runner.os }}
+          --allow-partial
+          --require-primary-lane host-platform
+
+      - name: Upload platform/process results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-host-platform-results-${{ runner.os }}
+          path: artifacts/test-results/host-platform-${{ runner.os }}
+          if-no-files-found: warn
+          retention-days: 14

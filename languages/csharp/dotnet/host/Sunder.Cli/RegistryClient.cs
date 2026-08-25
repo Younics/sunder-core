@@ -41,10 +41,12 @@ internal interface IRegistryClient : IRegistryBrowseClient, IRegistryManageClien
 
 internal sealed partial class RegistryClient : IRegistryClient
 {
-    private const string ApiRoot = "api/v1";
     private const long MaxJsonResponseBytes = 4L * 1024 * 1024;
     private const long MaxErrorResponseBytes = 64L * 1024;
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        MaxDepth = 32,
+    };
     private readonly HttpClient _httpClient;
 
     public RegistryClient(Uri registryApiUrl, HttpMessageHandler? handler = null)
@@ -59,21 +61,50 @@ internal sealed partial class RegistryClient : IRegistryClient
 
     private async Task<T> GetRequiredAsync<T>(string path, CancellationToken token)
     {
-        using var response = await _httpClient.GetAsync(CreateUri(path), token).ConfigureAwait(false);
+        using var request = new HttpRequestMessage(HttpMethod.Get, CreateUri(path));
+        using var response = await SendAsync(request, token).ConfigureAwait(false);
         return await ReadRequiredAsync<T>(response, token).ConfigureAwait(false);
     }
 
     private async Task<T?> GetOrNullAsync<T>(string path, CancellationToken token)
     {
-        using var response = await _httpClient.GetAsync(CreateUri(path), token).ConfigureAwait(false);
+        using var request = new HttpRequestMessage(HttpMethod.Get, CreateUri(path));
+        using var response = await SendAsync(request, token).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound) return default;
         return await ReadRequiredAsync<T>(response, token).ConfigureAwait(false);
     }
 
     private async Task<TResponse> PostAsync<TRequest, TResponse>(string path, TRequest request, CancellationToken token, bool acceptErrorPayload)
     {
-        using var response = await _httpClient.PostAsJsonAsync(CreateUri(path), request, token).ConfigureAwait(false);
+        using var message = new HttpRequestMessage(HttpMethod.Post, CreateUri(path))
+        {
+            Content = JsonContent.Create(request),
+        };
+        using var response = await SendAsync(message, token).ConfigureAwait(false);
         return await ReadRequiredAsync<TResponse>(response, token, acceptErrorPayload).ConfigureAwait(false);
+    }
+
+    private async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken token)
+    {
+        RegistryTransportSecurity.RequireSameOrigin(RegistryApiUrl, request.RequestUri);
+        var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            token).ConfigureAwait(false);
+        try
+        {
+            RegistryTransportSecurity.RequireSameOrigin(
+                RegistryApiUrl,
+                response.RequestMessage?.RequestUri ?? request.RequestUri);
+            return response;
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
     }
 
     private static async Task<T> ReadRequiredAsync<T>(HttpResponseMessage response, CancellationToken token, bool acceptErrorPayload = false)

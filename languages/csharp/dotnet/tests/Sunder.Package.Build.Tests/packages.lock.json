@@ -146,6 +146,9 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "sunder.core.testsupport": {
+        "type": "Project"
+      },
       "sunder.package.build": {
         "type": "Project"
       },
@@ -170,13 +173,6 @@
         }
       },
       "sunder.sdk.stacks": {
-        "type": "Project",
-        "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )",
-          "Sunder.Sdk.Worker": "[1.1.0, )"
-        }
-      },
-      "sunder.sdk.worker": {
         "type": "Project",
         "dependencies": {
           "Sunder.Sdk": "[1.1.0, )"

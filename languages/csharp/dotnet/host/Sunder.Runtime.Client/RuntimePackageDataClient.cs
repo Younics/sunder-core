@@ -8,8 +8,6 @@ public sealed class RuntimePackageDataClient : IDisposable
 {
     private readonly RuntimeClientTransport _transport;
     private readonly bool _ownsTransport;
-    private readonly HttpClient _httpClient;
-    private readonly Func<RuntimeConnectionInfo?> _getConnectionInfo;
     private readonly RuntimeHttpResponseReader _responses;
 
     public RuntimePackageDataClient(
@@ -29,8 +27,6 @@ public sealed class RuntimePackageDataClient : IDisposable
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _ownsTransport = ownsTransport;
-        _getConnectionInfo = transport.GetConnectionInfo;
-        _httpClient = transport.HttpClient;
         _responses = transport.Responses;
     }
 
@@ -64,9 +60,9 @@ public sealed class RuntimePackageDataClient : IDisposable
         string key,
         CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.GetAsync(
+        using var response = await _transport.GetAsync(
             CreatePackageUri(packageId, $"settings/{Uri.EscapeDataString(key)}"),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
@@ -82,7 +78,7 @@ public sealed class RuntimePackageDataClient : IDisposable
         string value,
         CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.PutAsJsonAsync(
+        using var response = await _transport.PutAsJsonAsync(
             CreatePackageUri(packageId, $"settings/{Uri.EscapeDataString(key)}"),
             new SetPackageSettingValueRequest(value),
             cancellationToken).ConfigureAwait(false);
@@ -94,7 +90,7 @@ public sealed class RuntimePackageDataClient : IDisposable
         string key,
         CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.DeleteAsync(
+        using var response = await _transport.DeleteAsync(
             CreatePackageUri(packageId, $"settings/{Uri.EscapeDataString(key)}"),
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.NotFound)
@@ -127,9 +123,9 @@ public sealed class RuntimePackageDataClient : IDisposable
         string relativePath,
         CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.GetAsync(
+        using var response = await _transport.GetAsync(
             CreateUri(packageId, $"files/{EscapeRelativePath(relativePath)}"),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
@@ -146,7 +142,7 @@ public sealed class RuntimePackageDataClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         using var requestContent = new ReadOnlyMemoryContent(contents);
-        using var response = await _httpClient.PutAsync(
+        using var response = await _transport.PutAsync(
             CreateUri(packageId, $"files/{EscapeRelativePath(relativePath)}"),
             requestContent,
             cancellationToken).ConfigureAwait(false);
@@ -158,7 +154,7 @@ public sealed class RuntimePackageDataClient : IDisposable
         string relativePath,
         CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.DeleteAsync(
+        using var response = await _transport.DeleteAsync(
             CreateUri(packageId, $"files/{EscapeRelativePath(relativePath)}"),
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.NotFound)
@@ -173,9 +169,9 @@ public sealed class RuntimePackageDataClient : IDisposable
         string key,
         CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(
+        using var response = await _transport.GetAsync(
             CreateUri(packageId, $"{area}/{Uri.EscapeDataString(key)}"),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
@@ -192,7 +188,7 @@ public sealed class RuntimePackageDataClient : IDisposable
         string value,
         CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.PutAsJsonAsync(
+        using var response = await _transport.PutAsJsonAsync(
             CreateUri(packageId, $"{area}/{Uri.EscapeDataString(key)}"),
             new SetPackageDataValueRequest(value),
             cancellationToken).ConfigureAwait(false);
@@ -205,7 +201,7 @@ public sealed class RuntimePackageDataClient : IDisposable
         string key,
         CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.DeleteAsync(
+        using var response = await _transport.DeleteAsync(
             CreateUri(packageId, $"{area}/{Uri.EscapeDataString(key)}"),
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.NotFound)
@@ -221,7 +217,9 @@ public sealed class RuntimePackageDataClient : IDisposable
         CancellationToken cancellationToken)
     {
         var suffix = string.IsNullOrEmpty(prefix) ? string.Empty : $"?prefix={Uri.EscapeDataString(prefix)}";
-        using var response = await _httpClient.GetAsync(CreateUri(packageId, $"{area}{suffix}"), cancellationToken)
+        using var response = await _transport.GetAsync(
+                CreateUri(packageId, $"{area}{suffix}"),
+                cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
@@ -240,13 +238,7 @@ public sealed class RuntimePackageDataClient : IDisposable
         => CreatePackageUri(packageId, $"data/{relativePath}");
 
     private Uri CreatePackageUri(string packageId, string relativePath)
-    {
-        var connection = _getConnectionInfo()
-            ?? throw new InvalidOperationException("Authenticated Runtime connection information is not available.");
-        return new Uri(
-            RuntimeConnectionInfo.Normalize(connection.RuntimeUrl),
-            $"api/v1/packages/{Uri.EscapeDataString(packageId)}/{relativePath}");
-    }
+        => _transport.CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/{relativePath}");
 
     public void Dispose()
     {

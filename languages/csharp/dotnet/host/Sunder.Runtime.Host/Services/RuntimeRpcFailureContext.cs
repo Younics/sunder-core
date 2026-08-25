@@ -160,66 +160,37 @@ internal sealed class RuntimeRpcSemanticValidationException : Exception
         => new("undefined", "$", null);
 
     public static RuntimeRpcSemanticValidationException Schema(
-        string? error,
+        SunderRpcValidationFailure? failure,
         RuntimeRpcValueMeasurement measurement)
-        => new(Classify(error), NormalizePath(error), measurement);
+        => new(
+            failure?.Code ?? "schema-invalid",
+            NormalizePath(failure?.Path),
+            measurement);
 
-    private static string Classify(string? error)
+    private static string NormalizePath(string? path)
     {
-        if (string.IsNullOrWhiteSpace(error)) return "schema-invalid";
-        if (error.Contains("must be of type", StringComparison.Ordinal)) return "type-mismatch";
-        if (error.Contains("must contain Unicode scalar values", StringComparison.Ordinal)) return "invalid-unicode";
-        if (error.Contains("const value", StringComparison.Ordinal)) return "const-mismatch";
-        if (error.Contains("enum value", StringComparison.Ordinal)) return "enum-mismatch";
-        if (error.Contains("missing required property", StringComparison.Ordinal)) return "required-property";
-        if (error.Contains("undeclared property", StringComparison.Ordinal)) return "undeclared-property";
-        if (error.Contains("invalid, duplicate, or case-colliding property", StringComparison.Ordinal)) return "property-name-invalid";
-        if (error.Contains(" characters; expected ", StringComparison.Ordinal)) return "string-length";
-        if (error.Contains("outside its declared length bounds", StringComparison.Ordinal)) return "string-length";
-        if (error.Contains(" properties; expected ", StringComparison.Ordinal)
-            || error.Contains(" properties; expected at most ", StringComparison.Ordinal)) return "object-size";
-        if (error.Contains("outside its declared property-count bounds", StringComparison.Ordinal)) return "object-size";
-        if (error.Contains(" items; expected ", StringComparison.Ordinal)) return "array-size";
-        if (error.Contains("outside its declared item-count bounds", StringComparison.Ordinal)) return "array-size";
-        if (error.Contains("base64", StringComparison.Ordinal)) return "base64-invalid";
-        if (error.Contains("content-reference", StringComparison.Ordinal)) return "content-reference-invalid";
-        if (error.Contains("format", StringComparison.Ordinal)
-            || error.Contains("canonical UTC date-time", StringComparison.Ordinal)) return "format-invalid";
-        if (error.Contains("integer", StringComparison.Ordinal)) return "integer-invalid";
-        if (error.Contains("numeric", StringComparison.Ordinal)
-            || error.Contains("number", StringComparison.Ordinal)
-            || error.Contains("floating-point", StringComparison.Ordinal)) return "number-invalid";
-        if (error.Contains("union variant", StringComparison.Ordinal)) return "union-mismatch";
-        return "schema-invalid";
-    }
-
-    private static string NormalizePath(string? error)
-    {
-        if (string.IsNullOrEmpty(error) || error[0] != '$') return "$";
+        if (string.IsNullOrEmpty(path) || path[0] != '$') return "$";
 
         var normalized = new StringBuilder("$");
         var index = 1;
-        while (index < error.Length && normalized.Length < 128)
+        while (index < path.Length && normalized.Length < 128)
         {
-            if (char.IsWhiteSpace(error[index])) break;
-            if (error[index] == '.')
+            if (path[index] == '.')
             {
                 normalized.Append(".*");
                 index++;
-                while (index < error.Length
-                       && !char.IsWhiteSpace(error[index])
-                       && error[index] is not ('.' or '['))
+                while (index < path.Length && path[index] is not ('.' or '['))
                 {
                     index++;
                 }
                 continue;
             }
-            if (error[index] == '[')
+            if (path[index] == '[')
             {
                 normalized.Append("[]");
                 index++;
-                while (index < error.Length && error[index] != ']') index++;
-                if (index < error.Length) index++;
+                while (index < path.Length && path[index] != ']') index++;
+                if (index < path.Length) index++;
                 continue;
             }
             index++;

@@ -98,7 +98,7 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                 }
 
                 stagedPackagePath = packageOutputPath + ".stage-" + Guid.NewGuid().ToString("N");
-                DeterministicPackageArchiveWriter.Write(devPackagePath, stagedPackagePath);
+                SunderArchive.WriteDeterministic(devPackagePath, stagedPackagePath);
                 var archiveValidation = SunderPackageArchiveInspector
                     .ExtractAndValidateAsync(stagedPackagePath, archiveValidationPath)
                     .GetAwaiter()

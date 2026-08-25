@@ -8,7 +8,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: sunder-app-release-${{ github.ref }}
+  group: sunder-release-draft-${{ github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -26,7 +26,8 @@ jobs:
 
   prepare:
     name: Prepare release metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     outputs:
       version: ${{ steps.release.outputs.version }}
       is_prerelease: ${{ steps.release.outputs.is_prerelease }}
@@ -60,39 +61,13 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
 
-  clear-stale-draft:
-    name: Clear stale App draft
-    needs: prepare
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Delete stale draft for this tag
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          tag="app/v$VERSION"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            exit 0
-          fi
-          if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" != "true" ]]; then
-            echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
-            exit 1
-          fi
-          gh release delete "$tag" --yes
-
   package:
     name: Package ${{ matrix.runtime }}
     needs:
       - prepare
-      - clear-stale-draft
       - host-validation
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     environment: sunder-app-signing
     permissions:
       contents: read
@@ -102,9 +77,9 @@ jobs:
       matrix:
         include:
           - runtime: win-x64
-            os: windows-latest
+            os: windows-2022
           - runtime: win-arm64
-            os: windows-latest
+            os: windows-2022
           - runtime: linux-x64
             os: ubuntu-24.04
           - runtime: linux-arm64
@@ -117,6 +92,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Setup .NET
@@ -124,8 +100,8 @@ jobs:
         with:
           dotnet-version: |
             ${{ env.DOTNET_VERSION }}
-            9.0.x
-            8.0.x
+            9.0.100
+            8.0.100
 
       - name: Add .NET tools to PATH
         shell: pwsh
@@ -165,7 +141,8 @@ jobs:
           $requiredVariables = @(
             "AZURE_TRUSTED_SIGNING_ENDPOINT",
             "AZURE_TRUSTED_SIGNING_ACCOUNT_NAME",
-            "AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME"
+            "AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME",
+            "WINDOWS_PUBLISHER_SUBJECT"
           )
 
           foreach ($variableName in $requiredVariables) {
@@ -184,12 +161,12 @@ jobs:
           }
           Expand-Archive -LiteralPath $clientPackage -DestinationPath $clientRoot
 
-          $dlib = Get-ChildItem -Path $clientRoot -Filter "Azure.CodeSigning.Dlib.dll" -Recurse |
-            Where-Object { $_.FullName -match "[\\/]x64[\\/]" } |
-            Select-Object -First 1
-          if ($null -eq $dlib) {
-            throw "Azure.CodeSigning.Dlib.dll was not found in the Artifact Signing client package."
+          $dlibs = @(Get-ChildItem -Path $clientRoot -Filter "Azure.CodeSigning.Dlib.dll" -Recurse |
+            Where-Object { $_.FullName -match "[\\/]x64[\\/]" })
+          if ($dlibs.Count -ne 1) {
+            throw "Expected exactly one x64 Azure.CodeSigning.Dlib.dll in the Artifact Signing client package, found $($dlibs.Count)."
           }
+          $dlib = $dlibs[0]
 
           $metadataPath = Join-Path $env:RUNNER_TEMP "trusted-signing-metadata.json"
           $metadata = [ordered]@{
@@ -299,6 +276,7 @@ jobs:
             Runtime = "${{ matrix.runtime }}"
             Channel = "${{ env.RELEASE_CHANNEL }}"
             GitHubRepositoryUrl = "${{ env.RELEASE_REPO_URL }}"
+            StrictRelease = $true
             WindowsSignParams = $windowsSignParams
             WindowsPublisherSubject = $env:WINDOWS_PUBLISHER_SUBJECT
           }
@@ -327,6 +305,7 @@ jobs:
             --runtime "${{ matrix.runtime }}"
             --channel "${RELEASE_CHANNEL}"
             --github-repository-url "${RELEASE_REPO_URL}"
+            --strict-release
           )
 
           if [[ "${{ startsWith(matrix.runtime, 'osx-') }}" == "true" ]]; then
@@ -425,10 +404,10 @@ jobs:
       - name: Upload package artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sunder-${{ matrix.runtime }}
+          name: sunder-app-release-${{ matrix.runtime }}
           path: artifacts/velopack/${{ env.RELEASE_CHANNEL }}/${{ matrix.runtime }}/*
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
 
       - name: Clean up Apple signing keychain
         if: ${{ always() && startsWith(matrix.runtime, 'osx-') }}
@@ -442,18 +421,21 @@ jobs:
             security delete-keychain "$APPLE_KEYCHAIN_PATH"
           fi
 
-  publish:
-    name: Publish GitHub Release
+  create-draft:
+    name: Create and byte-verify private GitHub draft
     needs:
       - prepare
       - package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     permissions:
+      actions: read
       contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Setup .NET
@@ -461,7 +443,7 @@ jobs:
         with:
           dotnet-version: |
             ${{ env.DOTNET_VERSION }}
-            9.0.x
+            9.0.100
 
       - name: Add .NET tools to PATH
         shell: bash
@@ -475,12 +457,14 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-assets
+          pattern: sunder-app-release-*
 
-      - name: Upload release assets
+      - name: Create and verify draft release assets
+        id: publication
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.prepare.outputs.version }}
           IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
         run: |
@@ -488,37 +472,18 @@ jobs:
           shopt -s nullglob
 
           tag="app/v$VERSION"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
-              gh release delete "$tag" --yes
-            else
-              echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
-              exit 1
-            fi
-          fi
-
-          cleanup_failed_release() {
-            exit_code=$?
-            if [[ $exit_code -ne 0 ]] && gh release view "$tag" >/dev/null 2>&1; then
-              if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
-                gh release delete "$tag" --yes || true
-              fi
-            fi
-            exit "$exit_code"
-          }
-          trap cleanup_failed_release EXIT
-
+          bash scripts/release/verify-release-tag.sh "$tag"
           expected_setup_assets=(
-            "release-assets/sunder-win-x64/Sunder-app-win-x64-$RELEASE_CHANNEL-Setup.exe"
-            "release-assets/sunder-win-arm64/Sunder-app-win-arm64-$RELEASE_CHANNEL-Setup.exe"
+            "release-assets/sunder-app-release-win-x64/Sunder-app-win-x64-$RELEASE_CHANNEL-Setup.exe"
+            "release-assets/sunder-app-release-win-arm64/Sunder-app-win-arm64-$RELEASE_CHANNEL-Setup.exe"
           )
           expected_appimage_assets=(
-            "release-assets/sunder-linux-x64/Sunder-app-linux-x64-$RELEASE_CHANNEL.AppImage"
-            "release-assets/sunder-linux-arm64/Sunder-app-linux-arm64-$RELEASE_CHANNEL.AppImage"
+            "release-assets/sunder-app-release-linux-x64/Sunder-app-linux-x64-$RELEASE_CHANNEL.AppImage"
+            "release-assets/sunder-app-release-linux-arm64/Sunder-app-linux-arm64-$RELEASE_CHANNEL.AppImage"
           )
           expected_dmg_assets=(
-            "release-assets/sunder-osx-x64/Sunder-app-osx-x64-$RELEASE_CHANNEL.dmg"
-            "release-assets/sunder-osx-arm64/Sunder-app-osx-arm64-$RELEASE_CHANNEL.dmg"
+            "release-assets/sunder-app-release-osx-x64/Sunder-app-osx-x64-$RELEASE_CHANNEL.dmg"
+            "release-assets/sunder-app-release-osx-arm64/Sunder-app-osx-arm64-$RELEASE_CHANNEL.dmg"
           )
           expected_distribution_assets=(
             "${expected_setup_assets[@]}"
@@ -529,24 +494,176 @@ jobs:
             test -f "$asset" || { echo "Missing exact Sunder distribution asset: $asset" >&2; exit 1; }
           done
 
-          setup_assets=(release-assets/sunder-*/*-Setup.exe)
-          appimage_assets=(release-assets/sunder-*/*.AppImage)
-          dmg_assets=(release-assets/sunder-*/*.dmg)
+          setup_assets=(release-assets/sunder-app-release-*/*-Setup.exe)
+          appimage_assets=(release-assets/sunder-app-release-*/*.AppImage)
+          dmg_assets=(release-assets/sunder-app-release-*/*.dmg)
           if [[ ${#setup_assets[@]} -ne 2 || ${#appimage_assets[@]} -ne 2 || ${#dmg_assets[@]} -ne 2 ]]; then
             echo "Expected exactly two Setup.exe, two AppImage, and two DMG distribution assets." >&2
             exit 1
           fi
 
           alternate_distribution_assets=(
-            release-assets/sunder-*/*-Setup.pkg
-            release-assets/sunder-*/*-Portable.zip
+            release-assets/sunder-app-release-*/*-Setup.pkg
+            release-assets/sunder-app-release-*/*-Portable.zip
           )
           if [[ ${#alternate_distribution_assets[@]} -ne 0 ]]; then
             printf 'Unexpected alternate distribution artifact: %s\n' "${alternate_distribution_assets[@]}" >&2
             exit 1
           fi
 
-          bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
+          runtimes=(win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64)
+          expected_remote_names=()
+          expected_manifest_names=()
+          for runtime in "${runtimes[@]}"; do
+            output_dir="release-assets/sunder-app-release-$runtime"
+            full_name="Sunder-$VERSION-app-$runtime-$RELEASE_CHANNEL-full.nupkg"
+            manifest_name="releases.app-$runtime-$RELEASE_CHANNEL.json"
+            test -f "$output_dir/$full_name" \
+              || { echo "Missing exact App Full package: $output_dir/$full_name" >&2; exit 1; }
+            expected_remote_names+=("$full_name" "$manifest_name")
+            expected_manifest_names+=("$manifest_name")
+            case "$runtime" in
+              win-*) expected_remote_names+=("Sunder-app-$runtime-$RELEASE_CHANNEL-Setup.exe") ;;
+              linux-*) expected_remote_names+=("Sunder-app-$runtime-$RELEASE_CHANNEL.AppImage") ;;
+              osx-*) expected_remote_names+=("Sunder-app-$runtime-$RELEASE_CHANNEL.dmg") ;;
+            esac
+          done
+          expected_remote_names+=(SHA256SUMS release-provenance.json release-sbom.spdx.json toolchain.txt)
+
+          created_release=false
+          verified_release=false
+          set +e
+          release_json="$(bash scripts/release/resolve-github-release.sh "$tag")"
+          resolve_status=$?
+          set -e
+          if [[ $resolve_status -eq 4 ]]; then
+            create_args=(
+              release create "$tag"
+              --title "Sunder App $VERSION"
+              --notes "Automated Sunder App draft publication for $VERSION."
+              --latest=false
+              --verify-tag
+            )
+            [[ "$IS_PRERELEASE" != "true" ]] || create_args+=(--prerelease)
+            gh "${create_args[@]}" --draft
+            created_release=true
+            for _ in {1..30}; do
+              if release_json="$(bash scripts/release/resolve-github-release.sh "$tag")"; then break; fi
+              release_json=''
+              sleep 2
+            done
+            [[ -n "$release_json" ]] || { echo "Created App draft was not discoverable through authenticated release listing." >&2; exit 1; }
+          elif [[ $resolve_status -ne 0 ]]; then
+            exit "$resolve_status"
+          fi
+          release_id="$(jq -r '.id' <<< "$release_json")"
+          jq -e --argjson release_id "$release_id" --arg tag "$tag" --argjson prerelease "$IS_PRERELEASE" '
+            .id == $release_id and .tag_name == $tag and .draft == true and .prerelease == $prerelease
+          ' <<< "$release_json" >/dev/null \
+            || { echo "App release identity, draft state, or prerelease state is unexpected." >&2; exit 1; }
+          cleanup_failed_release() {
+            exit_code=$?
+            if [[ $exit_code -ne 0 && "$created_release" == true && "$verified_release" != true ]]; then
+              gh api --method DELETE "repos/$GH_REPO/releases/$release_id" >/dev/null 2>&1 || true
+            fi
+            exit "$exit_code"
+          }
+          trap cleanup_failed_release EXIT
+
+          remote_asset_count="$(jq '.assets | length' <<< "$release_json")"
+          if [[ "$remote_asset_count" == 0 ]]; then
+            for runtime in "${runtimes[@]}"; do
+              output_dir="release-assets/sunder-app-release-$runtime"
+              channel="app-$runtime-$RELEASE_CHANNEL"
+              manifest_name="releases.app-$runtime-$RELEASE_CHANNEL.json"
+              manifest_target="$RUNNER_TEMP/sunder-app-manifest-$runtime"
+              mkdir "$manifest_target"
+              vpk upload local \
+                --path "$manifest_target" \
+                --regenerate \
+                --channel "$channel" \
+                --outputDir "$output_dir"
+              [[ -f "$manifest_target/$manifest_name" ]] \
+                || { echo "Velopack did not generate '$manifest_name' locally." >&2; exit 1; }
+              cp "$manifest_target/$manifest_name" "$output_dir/$manifest_name"
+            done
+            GITHUB_RELEASE_ID="$release_id" \
+              bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
+            upload_assets=("${expected_distribution_assets[@]}")
+            for runtime in "${runtimes[@]}"; do
+              output_dir="release-assets/sunder-app-release-$runtime"
+              upload_assets+=(
+                "$output_dir/Sunder-$VERSION-app-$runtime-$RELEASE_CHANNEL-full.nupkg"
+                "$output_dir/releases.app-$runtime-$RELEASE_CHANNEL.json"
+              )
+            done
+            bash scripts/release/upload-github-release-assets.sh "$release_id" "$tag" \
+              "${upload_assets[@]}" \
+              release-assets/SHA256SUMS \
+              release-assets/release-provenance.json \
+              release-assets/release-sbom.spdx.json \
+              release-assets/toolchain.txt
+            evidence_run_attempt="$GITHUB_RUN_ATTEMPT"
+          else
+            bash scripts/release/download-github-release-assets.sh "$release_id" "$tag" release-assets \
+              "${expected_manifest_names[@]}" \
+              SHA256SUMS release-provenance.json release-sbom.spdx.json toolchain.txt
+            jq -e \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg workflow_ref "$GITHUB_REPOSITORY/.github/workflows/sunder-app-release.yml@refs/tags/$tag" \
+              --arg run_id "$GITHUB_RUN_ID" \
+              --argjson release_id "$release_id" \
+              --arg ref "refs/tags/$tag" \
+              --arg source_sha "$GITHUB_SHA" '
+                .invocation.repository == $repository
+                and .invocation.workflowRef == $workflow_ref
+                and .invocation.runId == $run_id
+                and .invocation.releaseId == $release_id
+                and .invocation.ref == $ref
+                and .invocation.sha == $source_sha
+                and .sources == [{name:"sunder-core",sha:$source_sha}]
+              ' release-assets/release-provenance.json >/dev/null \
+              || { echo "Existing App draft was verified by another publication run or source." >&2; exit 1; }
+            evidence_run_attempt="$(jq -r '.invocation.runAttempt' release-assets/release-provenance.json)"
+            [[ "$evidence_run_attempt" =~ ^[1-9][0-9]*$ ]] \
+              || { echo "Existing App publication attempt is invalid." >&2; exit 1; }
+          fi
+
+          for runtime in "${runtimes[@]}"; do
+            output_dir="release-assets/sunder-app-release-$runtime"
+            manifest_name="releases.app-$runtime-$RELEASE_CHANNEL.json"
+            manifest_path="$output_dir/$manifest_name"
+            [[ -f "$manifest_path" ]] || manifest_path="release-assets/$manifest_name"
+            full_name="Sunder-$VERSION-app-$runtime-$RELEASE_CHANNEL-full.nupkg"
+            delta_name="Sunder-$VERSION-app-$runtime-$RELEASE_CHANNEL-delta.nupkg"
+            jq -e --arg full "$full_name" --arg delta "$delta_name" '
+              .Assets as $assets
+              | ($assets | type == "array" and length == 1)
+              and ([$assets[].FileName] | length == (unique | length))
+              and ([$assets[] | select(.FileName == $full)] | length == 1)
+              and ([$assets[] | select(.FileName == $delta)] | length == 0)
+            ' "$manifest_path" >/dev/null \
+              || { echo "Velopack manifest '$manifest_name' has no release assets." >&2; exit 1; }
+            while IFS=$'\t' read -r package_name expected_sha256; do
+              case "$package_name" in
+                "Sunder-$VERSION-app-$runtime-$RELEASE_CHANNEL-full.nupkg") ;;
+                *) echo "Velopack manifest '$manifest_name' contains an unexpected package identity." >&2; exit 1 ;;
+              esac
+              [[ "$expected_sha256" =~ ^[0-9a-fA-F]{64}$ ]] \
+                || { echo "Velopack manifest '$manifest_name' contains an invalid package digest." >&2; exit 1; }
+              package_path="$output_dir/$package_name"
+              test -f "$package_path" \
+                || { echo "Velopack manifest '$manifest_name' references missing '$package_name'." >&2; exit 1; }
+              if command -v sha256sum >/dev/null 2>&1; then
+                actual_sha256="$(sha256sum "$package_path" | cut -d ' ' -f 1)"
+              else
+                actual_sha256="$(shasum -a 256 "$package_path" | cut -d ' ' -f 1)"
+              fi
+              [[ "${actual_sha256,,}" == "${expected_sha256,,}" ]] \
+                || { echo "Velopack manifest digest mismatch for '$package_name'." >&2; exit 1; }
+            done < <(jq -r '.Assets[] | [.FileName, .SHA256] | @tsv' "$manifest_path")
+          done
+
           for dmg_asset in "${expected_dmg_assets[@]}"; do
             dmg_name="$(basename "$dmg_asset")"
             checksum_count="$(grep -Ec "^[0-9a-fA-F]{64}  ${dmg_name//./\\.}$" release-assets/SHA256SUMS || true)"
@@ -556,68 +673,6 @@ jobs:
             fi
           done
 
-          upload_args=(
-            upload github
-            --repoUrl "$RELEASE_REPO_URL"
-            --token "$GITHUB_TOKEN"
-            --merge
-            --releaseName "Sunder App $VERSION"
-            --tag "app/v$VERSION"
-          )
-
-          if [[ "$IS_PRERELEASE" == "true" ]]; then
-            upload_args+=(--pre)
-          fi
-
-          runtimes=(win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64)
-          for runtime in "${runtimes[@]}"; do
-            output_dir="release-assets/sunder-$runtime"
-            channel="app-$runtime-$RELEASE_CHANNEL"
-
-            if [[ ! -d "$output_dir" ]]; then
-              echo "Missing packaged artifact directory: $output_dir" >&2
-              exit 1
-            fi
-
-            vpk "${upload_args[@]}" --channel "$channel" --outputDir "$output_dir"
-          done
-
-          gh release upload "$tag" \
-            "${expected_dmg_assets[@]}" \
-            release-assets/SHA256SUMS \
-            release-assets/release-provenance.json \
-            release-assets/release-sbom.spdx.json \
-            release-assets/toolchain.txt
-
-          expected_distribution_names=(
-            "Sunder-app-win-x64-$RELEASE_CHANNEL-Setup.exe"
-            "Sunder-app-win-arm64-$RELEASE_CHANNEL-Setup.exe"
-            "Sunder-app-linux-x64-$RELEASE_CHANNEL.AppImage"
-            "Sunder-app-linux-arm64-$RELEASE_CHANNEL.AppImage"
-            "Sunder-app-osx-x64-$RELEASE_CHANNEL.dmg"
-            "Sunder-app-osx-arm64-$RELEASE_CHANNEL.dmg"
-          )
-          remote_asset_names="$(gh release view "$tag" --json assets --jq '.assets[].name')"
-          for expected_name in "${expected_distribution_names[@]}"; do
-            asset_count="$(printf '%s\n' "$remote_asset_names" | grep -Fxc "$expected_name" || true)"
-            if [[ "$asset_count" != "1" ]]; then
-              echo "Draft release must contain exactly one '$expected_name'; found $asset_count." >&2
-              exit 1
-            fi
-          done
-          expected_mac_update_assets=(
-            "releases.app-osx-x64-$RELEASE_CHANNEL.json"
-            "releases.app-osx-arm64-$RELEASE_CHANNEL.json"
-            "Sunder-$VERSION-app-osx-x64-$RELEASE_CHANNEL-full.nupkg"
-            "Sunder-$VERSION-app-osx-arm64-$RELEASE_CHANNEL-full.nupkg"
-          )
-          for expected_name in "${expected_mac_update_assets[@]}"; do
-            asset_count="$(printf '%s\n' "$remote_asset_names" | grep -Fxc "$expected_name" || true)"
-            if [[ "$asset_count" != "1" ]]; then
-              echo "Draft release must retain exactly one macOS update asset '$expected_name'; found $asset_count." >&2
-              exit 1
-            fi
-          done
           while IFS= read -r remote_asset_name; do
             case "$remote_asset_name" in
               *-Setup.pkg|*-Portable.zip)
@@ -625,11 +680,50 @@ jobs:
                 exit 1
                 ;;
             esac
-          done <<< "$remote_asset_names"
+          done < <(gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$GH_REPO/releases/$release_id" --jq '.assets[].name')
 
-          edit_args=(release edit "$tag" --draft=false)
-          if [[ "$IS_PRERELEASE" != "true" ]]; then
-            edit_args+=(--latest)
-          fi
-          gh "${edit_args[@]}"
+          bash scripts/release/verify-github-release-assets.sh \
+            "$release_id" \
+            "$tag" \
+            release-assets \
+            "${expected_remote_names[@]}"
+          verified_release=true
+          {
+            echo "release_id=$release_id"
+            echo "evidence_run_attempt=$evidence_run_attempt"
+          } >> "$GITHUB_OUTPUT"
           trap - EXIT
+
+      - name: Capture exact verified publication bytes
+        id: handoff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVIDENCE_RUN_ATTEMPT: ${{ steps.publication.outputs.evidence_run_attempt }}
+          RELEASE_ID: ${{ steps.publication.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          artifact_name="sunder-app-publication-evidence-$RELEASE_ID-$EVIDENCE_RUN_ATTEMPT"
+          mkdir publication-evidence
+          bash scripts/release/download-github-release-assets.sh \
+            "$RELEASE_ID" "app/v${{ needs.prepare.outputs.version }}" publication-evidence
+          encoded_name="$(jq -rn --arg value "$artifact_name" '$value | @uri')"
+          artifacts="$(gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts?name=$encoded_name")"
+          artifact_count="$(jq --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | length' <<< "$artifacts")"
+          [[ "$artifact_count" -le 1 ]] || { echo "Publication handoff artifact is ambiguous." >&2; exit 1; }
+          {
+            echo "artifact_name=$artifact_name"
+            echo "upload=$([[ "$artifact_count" == 0 ]] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable publication evidence
+        if: steps.handoff.outputs.upload == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.handoff.outputs.artifact_name }}
+          path: publication-evidence/*
+          if-no-files-found: error
+          retention-days: 90

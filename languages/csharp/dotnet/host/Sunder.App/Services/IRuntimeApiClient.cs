@@ -105,6 +105,7 @@ public interface IRuntimeStackClient : IRuntimeClient
     Task<RuntimeStackExportResponse> ExportStackAsync(RuntimeStackExportRequest request, CancellationToken cancellationToken = default);
     Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(RuntimeStackImportPreviewRequest request, CancellationToken cancellationToken = default);
     Task<RuntimeStackImportResponse> ImportStackAsync(RuntimeStackImportRequest request, CancellationToken cancellationToken = default);
+    Task DiscardStackImportPlanAsync(string planId, CancellationToken cancellationToken = default);
 }
 
 public interface IRuntimeRegistryAuthClient : IRuntimeClient

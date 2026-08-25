@@ -51,6 +51,7 @@ public static class SunderStackArchiveInspector
     {
         var warnings = new List<string>();
         var errors = new List<string>();
+        var missingEntryErrorIndexes = new HashSet<int>();
         if (!File.Exists(SunderArchive.ResolveFile(stagingPath, ManifestPath)))
         {
             errors.Add($"Stack archive is missing {SunderStackFormat.ManifestPath}.");
@@ -70,10 +71,10 @@ public static class SunderStackArchiveInspector
         SunderStackContentIndex? contentIndex;
         try
         {
-            manifest = JsonSerializer.Deserialize(
+            manifest = StrictJsonSerializer.Deserialize(
                 await SunderArchive.ReadMetadataJsonAsync(stagingPath, ManifestPath, maxMetadataJsonBytes, cancellationToken),
                 JsonContext.SunderStackManifest);
-            contentIndex = JsonSerializer.Deserialize(
+            contentIndex = StrictJsonSerializer.Deserialize(
                 await SunderArchive.ReadMetadataJsonAsync(stagingPath, ContentIndexPath, maxMetadataJsonBytes, cancellationToken),
                 JsonContext.SunderStackContentIndex);
         }
@@ -87,10 +88,10 @@ public static class SunderStackArchiveInspector
             return new SunderStackArchiveValidationResult(null, warnings, errors);
         }
 
-        StackManifestSchemaValidator.Validate(manifest, stagingPath, warnings, errors);
+        StackManifestSchemaValidator.Validate(manifest, stagingPath, warnings, errors, missingEntryErrorIndexes);
         if (manifest is not null)
         {
-            StackMediaValidator.Validate(manifest.Media, stagingPath, errors);
+            StackMediaValidator.Validate(manifest.Media, stagingPath, errors, missingEntryErrorIndexes);
         }
 
         await StackContentIndexValidator.ValidateAsync(contentIndex, stagingPath, errors, cancellationToken);
@@ -99,6 +100,11 @@ public static class SunderStackArchiveInspector
         return new SunderStackArchiveValidationResult(
             errors.Count == 0 && manifest is not null ? SunderStackManifestProjection.Create(manifest) : null,
             warnings,
-            errors);
+            errors,
+            Enumerable.Range(0, errors.Count)
+                .Select(index => missingEntryErrorIndexes.Contains(index)
+                    ? SunderStackArchiveErrorCategory.MissingEntry
+                    : SunderStackArchiveErrorCategory.Validation)
+                .ToArray());
     }
 }

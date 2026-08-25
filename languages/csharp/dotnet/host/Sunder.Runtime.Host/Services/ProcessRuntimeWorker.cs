@@ -423,15 +423,16 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     type = "host.activate",
                     sessionGeneration = generation,
                 }, _transportLimits);
+                Volatile.Write(ref _activationFrameBody, body);
                 if (!TryQueueFrameBody(body))
                 {
+                    Volatile.Write(ref _activationFrameBody, null);
                     queueFailure = new WorkerTransportResourceException(
                         "Process worker protocol write queue exceeded its bound.");
                 }
                 else
                 {
                     // Calls can observe Active only after host.activate is ordered ahead of them.
-                    Volatile.Write(ref _activationFrameBody, body);
                     _state = WorkerState.Activating;
                     queueActivation = true;
                 }
@@ -1073,19 +1074,23 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 HandleWorkerCancellation(root);
                 break;
             case "worker.activated":
-                HandleActivated(root);
+                HandleActivated(ProcessRuntimeWorkerLifecycleEnvelopeCodec.ParseActivated(root));
                 break;
             case "worker.candidate-started":
-                HandleCandidateStarted(root);
+                HandleCandidateStarted(
+                    ProcessRuntimeWorkerLifecycleEnvelopeCodec.ParseCandidateStarted(root));
                 break;
             case "worker.generation-committed":
-                HandleGenerationCommitted(root);
+                HandleGenerationCommitted(
+                    ProcessRuntimeWorkerLifecycleEnvelopeCodec.ParseGenerationCommitted(root));
                 break;
             case "worker.storage-migrations-prepared":
-                HandleStorageMigrationsPrepared(root);
+                HandleStorageMigrationsPrepared(
+                    ProcessRuntimeWorkerLifecycleEnvelopeCodec.ParseStorageMigrationsPrepared(root));
                 break;
             case "worker.generation-fault":
-                HandleGenerationFault(root);
+                HandleGenerationFault(
+                    ProcessRuntimeWorkerLifecycleEnvelopeCodec.ParseGenerationFault(root));
                 break;
             case "worker.callback-started":
             case "worker.callback-completed":
@@ -1098,7 +1103,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 HandleContributionResponse(type, root);
                 break;
             case "worker.shutdown-ack":
-                HandleShutdownAcknowledgement(root);
+                HandleShutdownAcknowledgement(
+                    ProcessRuntimeWorkerLifecycleEnvelopeCodec.ParseShutdownAcknowledgement(root));
                 break;
             default:
                 throw new SunderWorkerProtocolException($"Unknown process worker envelope type '{type}'.");
@@ -1214,9 +1220,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         return sha256;
     }
 
-    private void HandleCandidateStarted(JsonElement root)
+    private void HandleCandidateStarted(WorkerCandidateStartedEnvelope _)
     {
-        SunderWorkerProtocol.RequireOnlyProperties(root, "type");
         lock (_stateGate)
         {
             if (_state is not (WorkerState.CandidateStarting or WorkerState.Stopping)
@@ -1233,16 +1238,13 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         _candidateStarted.TrySetResult();
     }
 
-    private void HandleGenerationCommitted(JsonElement root)
+    private void HandleGenerationCommitted(WorkerGenerationCommittedEnvelope envelope)
     {
-        SunderWorkerProtocol.RequireOnlyProperties(root, "type", "activationId", "sessionGeneration");
-        var activationId = SunderWorkerProtocol.RequiredString(root, "activationId", 64);
-        var generation = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "sessionGeneration");
         lock (_stateGate)
         {
             if (_state is not (WorkerState.Committing or WorkerState.Stopping)
-                || !string.Equals(activationId, _activationId.ToString("N"), StringComparison.Ordinal)
-                || generation != _sessionGeneration
+                || !string.Equals(envelope.ActivationId, _activationId.ToString("N"), StringComparison.Ordinal)
+                || envelope.SessionGeneration != _sessionGeneration
                 || _generationCommitted.Task.IsCompleted)
             {
                 throw new SunderWorkerProtocolException(
@@ -1256,20 +1258,13 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         _generationCommitted.TrySetResult();
     }
 
-    private void HandleStorageMigrationsPrepared(JsonElement root)
+    private void HandleStorageMigrationsPrepared(WorkerStorageMigrationsPreparedEnvelope envelope)
     {
-        SunderWorkerProtocol.RequireOnlyProperties(
-            root,
-            "type",
-            "activationId",
-            "sessionGeneration");
-        var activationId = SunderWorkerProtocol.RequiredString(root, "activationId", 64);
-        var generation = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "sessionGeneration");
         lock (_stateGate)
         {
             if (_state is not (WorkerState.PreparingStorageMigrations or WorkerState.Stopping)
-                || !string.Equals(activationId, _activationId.ToString("N"), StringComparison.Ordinal)
-                || generation != _sessionGeneration
+                || !string.Equals(envelope.ActivationId, _activationId.ToString("N"), StringComparison.Ordinal)
+                || envelope.SessionGeneration != _sessionGeneration
                 || _storageMigrationsPrepared.Task.IsCompleted)
             {
                 throw new SunderWorkerProtocolException(
@@ -1283,15 +1278,13 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         _storageMigrationsPrepared.TrySetResult();
     }
 
-    private void HandleActivated(JsonElement root)
+    private void HandleActivated(WorkerActivatedEnvelope envelope)
     {
-        SunderWorkerProtocol.RequireOnlyProperties(root, "type", "sessionGeneration");
-        var generation = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "sessionGeneration");
         lock (_stateGate)
         {
             var validState = _state is WorkerState.Activating or WorkerState.Stopping;
             if (!validState
-                || generation != _sessionGeneration
+                || envelope.SessionGeneration != _sessionGeneration
                 || _activationAcknowledged)
             {
                 throw new SunderWorkerProtocolException("Process worker acknowledged an invalid Runtime generation.");
@@ -1312,51 +1305,32 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             "Worker V3 activation acknowledged for package {PackageId}, activation {ActivationId}, generation {SessionGeneration}",
             _package.PackageId,
             _activationId,
-            generation);
+            envelope.SessionGeneration);
     }
 
-    private void HandleGenerationFault(JsonElement root)
+    private void HandleGenerationFault(WorkerGenerationFaultEnvelope envelope)
     {
-        SunderWorkerProtocol.RequireOnlyProperties(
-            root,
-            "type",
-            "activationId",
-            "sessionGeneration",
-            "code",
-            "message");
-        var activationId = SunderWorkerProtocol.RequiredString(root, "activationId", 64);
-        var generation = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "sessionGeneration");
-        var code = SunderWorkerProtocol.RequiredString(root, "code", 128);
-        var message = SunderWorkerProtocol.RequiredString(root, "message", 512);
-        if (!code.All(static character =>
-                char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_'))
-        {
-            throw new SunderWorkerProtocolException(
-                "Process worker generation-fault code contains unsupported characters.");
-        }
         lock (_stateGate)
         {
             if (_state != WorkerState.Active
-                || !string.Equals(activationId, _activationId.ToString("N"), StringComparison.Ordinal)
-                || generation != _sessionGeneration)
+                || !string.Equals(envelope.ActivationId, _activationId.ToString("N"), StringComparison.Ordinal)
+                || envelope.SessionGeneration != _sessionGeneration)
             {
                 throw new SunderWorkerProtocolException(
                     "Process worker generation fault does not identify its exact active generation.");
             }
         }
-        Fault(new ProcessRuntimeGenerationFaultException(code, message));
+        Fault(new ProcessRuntimeGenerationFaultException(envelope.Code, envelope.Message));
     }
 
-    private void HandleShutdownAcknowledgement(JsonElement root)
+    private void HandleShutdownAcknowledgement(WorkerShutdownAcknowledgementEnvelope envelope)
     {
-        SunderWorkerProtocol.RequireOnlyProperties(root, "type", "shutdownId");
-        var shutdownId = SunderWorkerProtocol.RequiredString(root, "shutdownId", 128);
         Task[] workerCallCompletions;
         lock (_stateGate)
         {
             if (_state != WorkerState.Stopping
                 || _shutdownId is null
-                || !string.Equals(_shutdownId, shutdownId, StringComparison.Ordinal)
+                || !string.Equals(_shutdownId, envelope.ShutdownId, StringComparison.Ordinal)
                 || _shutdownAcknowledgementReceived)
             {
                 throw new SunderWorkerProtocolException("Process worker sent an unsolicited or duplicate shutdown acknowledgement.");
@@ -3145,6 +3119,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
         _candidateStarted.TrySetResult();
         _generationCommitted.TrySetResult();
+        _storageMigrationsPrepared.TrySetResult();
         _activated.TrySetResult();
         if (_fault is null) _generationCompletion.TrySetResult();
         _stopped.TrySetResult();

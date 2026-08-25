@@ -35,10 +35,18 @@ public partial class UseStackWizardWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        var viewModel = ViewModel;
         _lifetime.Cancel();
         _tasks.Dispose();
         SubscribeToViewModel(null);
-        ViewModel?.Dispose();
+        if (viewModel is not null)
+        {
+            var cleanup = viewModel.DisposeAsync().AsTask();
+            if (!cleanup.IsCompletedSuccessfully)
+            {
+                AppCleanupQuarantine.Retain(cleanup, "disposing a closed Use Stack wizard");
+            }
+        }
         DataContext = null;
         _lifetime.Dispose();
     }

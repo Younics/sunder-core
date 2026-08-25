@@ -7,6 +7,7 @@
     <Description>dotnet new template for creating Sunder package projects with coordinated SDK and package-build references.</Description>
     <PackageTags>sunder;package;plugin;sdk;dotnet-new;template</PackageTags>
     <EnableDefaultItems>false</EnableDefaultItems>
+    <IsPackable>true</IsPackable>
     <NoDefaultExcludes>true</NoDefaultExcludes>
     <NoWarn>$(NoWarn);NU5110;NU5111</NoWarn>
 

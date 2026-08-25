@@ -102,6 +102,18 @@ public sealed class WorkerFramingTests
     }
 
     [Fact]
+    [Trait("Category", "Conformance")]
+    [Trait("Size", "Small")]
+    public async Task Reader_ExecutesSharedCrossLanguageTransportVectors()
+        => await VerifySharedTransportVectorsAsync(mutateFirstExpectation: false);
+
+    [Fact]
+    [Trait("Category", "Conformance")]
+    [Trait("Size", "Small")]
+    public async Task Reader_SharedTransportOracleRejectsSeededExpectationMutation()
+        => await Assert.ThrowsAnyAsync<Exception>(() => VerifySharedTransportVectorsAsync(mutateFirstExpectation: true));
+
+    [Fact]
     public void Writer_AccountsForExactEnvelopeMetadataEscapingAndValueDepth()
     {
         var limits = WorkerLimits.Default with
@@ -313,6 +325,58 @@ public sealed class WorkerFramingTests
         await stream.WriteAsync(body);
         await Assert.ThrowsAsync<WorkerProtocolException>(async () =>
             await reader.ReadAsync(CancellationToken.None));
+    }
+
+    private static async Task VerifySharedTransportVectorsAsync(bool mutateFirstExpectation)
+    {
+        using var corpus = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+            AppContext.BaseDirectory,
+            "WorkerV3Conformance",
+            "transport-vectors.json")));
+        Assert.Equal(1, corpus.RootElement.GetProperty("formatVersion").GetInt32());
+        var index = 0;
+        foreach (var vector in corpus.RootElement.GetProperty("vectors").EnumerateArray())
+        {
+            var name = vector.GetProperty("name").GetString()!;
+            var body = vector.TryGetProperty("bodyBase64", out var base64)
+                ? Convert.FromBase64String(base64.GetString()!)
+                : Encoding.UTF8.GetBytes(vector.GetProperty("bodyUtf8").GetString()!);
+            var header = vector.GetProperty("header").GetString()!
+                .Replace("{{length}}", body.Length.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+            var limits = WorkerLimits.Default with
+            {
+                MaximumFrameBytes = vector.TryGetProperty("maxFrameBytes", out var frameBytes)
+                    ? frameBytes.GetInt32()
+                    : WorkerLimits.Default.MaximumFrameBytes,
+                MaximumMessageDepth = vector.TryGetProperty("maxMessageDepth", out var messageDepth)
+                    ? messageDepth.GetInt32()
+                    : WorkerLimits.Default.MaximumMessageDepth,
+            };
+            using var stream = new AsyncByteStream();
+            var reader = new WorkerFrameReader(stream, limits);
+            foreach (var value in Encoding.ASCII.GetBytes(header).Concat(body))
+            {
+                await stream.WriteAsync(new byte[] { value });
+            }
+            var expected = vector.GetProperty("valid").GetBoolean();
+            if (mutateFirstExpectation && index == 0) expected = !expected;
+
+            if (expected)
+            {
+                using var document = await reader.ReadAsync(CancellationToken.None);
+                Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
+            }
+            else
+            {
+                var exception = await Record.ExceptionAsync(async () =>
+                    await reader.ReadAsync(CancellationToken.None));
+                Assert.True(
+                    exception is WorkerProtocolException,
+                    $"Transport vector '{name}' was accepted or failed with the wrong exception: {exception}");
+            }
+            index++;
+        }
+        Assert.True(index >= 10, "The shared Worker transport corpus lost boundary vectors.");
     }
 
     private sealed class BlockingWriteStream : Stream

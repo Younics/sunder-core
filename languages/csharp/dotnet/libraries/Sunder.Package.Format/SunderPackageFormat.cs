@@ -24,6 +24,7 @@ public static class SunderPackageFormat
     public const string OwnerProviderAudience = "owner";
     public const string PublicProviderAudience = "public";
     public const string Extension = ".sunderpkg";
+    internal const long MaxArchiveBytes = 512L * 1024 * 1024;
     public const string ManifestPath = "manifest/sunder-package.json";
     public const string ContentIndexPath = "manifest/content-index.json";
     public const string SharedPayloadRoot = "payload/shared/";

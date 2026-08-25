@@ -17,7 +17,7 @@ public sealed partial class RuntimeStatusViewModel : ViewModelBase
 
     private readonly RuntimeConnectionState _runtimeConnectionState;
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory;
-    private readonly RuntimeHostProcessManager _runtimeHostProcessManager;
+    private readonly RuntimeAvailabilityManager _runtimeAvailabilityManager;
     private readonly Action<Uri> _persistPreferredRuntimeUrl;
     private readonly Func<Uri, CancellationToken, Task> _startRuntimeAsync;
     private readonly SemaphoreSlim _operationSemaphore = new(1, 1);
@@ -25,7 +25,7 @@ public sealed partial class RuntimeStatusViewModel : ViewModelBase
     public RuntimeStatusViewModel(
         RuntimeConnectionState runtimeConnectionState,
         IRuntimeApiClientFactory runtimeApiClientFactory,
-        RuntimeHostProcessManager runtimeHostProcessManager,
+        RuntimeAvailabilityManager runtimeAvailabilityManager,
         string initialSystemStatusText,
         SystemStatusResponse? initialSystemStatus,
         IReadOnlyList<string> startupErrors,
@@ -34,9 +34,9 @@ public sealed partial class RuntimeStatusViewModel : ViewModelBase
     {
         _runtimeConnectionState = runtimeConnectionState;
         _runtimeApiClientFactory = runtimeApiClientFactory;
-        _runtimeHostProcessManager = runtimeHostProcessManager;
+        _runtimeAvailabilityManager = runtimeAvailabilityManager;
         _persistPreferredRuntimeUrl = persistPreferredRuntimeUrl;
-        _startRuntimeAsync = startRuntimeAsync ?? _runtimeHostProcessManager.EnsureStartedAsync;
+        _startRuntimeAsync = startRuntimeAsync ?? _runtimeAvailabilityManager.EnsureStartedAsync;
         SystemStatusText = initialSystemStatusText;
         RuntimeAddressText = _runtimeConnectionState.RuntimeUrl.AbsoluteUri;
         ApplyInitialRuntimeState(initialSystemStatus, startupErrors);
@@ -189,7 +189,7 @@ public sealed partial class RuntimeStatusViewModel : ViewModelBase
             Exception? stopFailure = null;
             try
             {
-                await _runtimeHostProcessManager.StopAsync(runtimeUrl, cancellationToken);
+                await _runtimeAvailabilityManager.StopAsync(runtimeUrl, cancellationToken);
                 await Task.Delay(250, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

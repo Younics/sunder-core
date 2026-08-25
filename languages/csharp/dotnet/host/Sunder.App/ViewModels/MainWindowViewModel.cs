@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Avalonia.Controls;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -22,13 +21,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     private readonly IWindowLauncher _windowLauncher;
     private readonly ShellLayoutStateCoordinator _layoutStateCoordinator;
-    private readonly ShellPackageLifecycleRefreshCoordinator _packageLifecycleRefreshCoordinator;
+    private readonly ShellPackageViewPresentationCoordinator _packageViewPresentationCoordinator;
     private readonly ShellPanelContentPresenter _shellPanelContentPresenter;
     private readonly ShellRailCollectionPresenter _railCollectionPresenter;
     private readonly ShellPackagePanelCoordinator _packagePanelCoordinator;
     private readonly ShellDeferredHostedViewActivator _deferredHostedViewActivator;
     private readonly ShellPackageViewPreloader _packageViewPreloader;
-    private readonly ShellPackageLifecyclePresenter _packageLifecyclePresenter;
     private readonly ShellHotbarCoordinator _hotbarCoordinator;
     private readonly ShellLayoutPresenter _shellLayout;
     private readonly RuntimeStatusViewModel _runtimeStatus;
@@ -36,6 +34,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private readonly AppUpdatePromptViewModel _appUpdatePrompt;
     private readonly RegistryAuthService? _registryAuthService;
     private readonly ExternalBrowserService? _externalBrowserService;
+    private readonly RemoteImageService? _remoteImageService;
     private readonly MainWindowSubscriptionScope _subscriptionScope;
     private readonly ShellSelectionPresenter _selectionPresenter = new();
     private readonly ShellItemViewModelFactory _shellItemFactory;
@@ -47,27 +46,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private readonly IReadOnlyList<string> _startupWarnings;
     private readonly IReadOnlyList<string> _startupErrors;
     private readonly object _viewPreloadSyncRoot = new();
-    private readonly object _viewPresentationSyncRoot = new();
-    private readonly Dictionary<RailPlacement, long> _viewPresentationRevisions = [];
-    private readonly Dictionary<RailPlacement, CancellationTokenSource> _viewPresentationCancellations = [];
-    private readonly Dictionary<RailPlacement, PackageNavigationStage> _packageNavigationStages = [];
-    private Action<Control>? _stageCandidateView;
-    private Action? _detachStagedCandidateViews;
-    private Func<IDisposable?>? _acquirePackageViewTransitionSnapshot;
     private CancellationTokenSource? _viewPreloadCancellation;
     private Func<Func<CancellationToken, Task>, CancellationToken, Task>? _runPreloadWorkAsync;
-    private Func<Func<CancellationToken, Task>, CancellationToken, Task> _runPostPresentationWorkAsync =
-        static (work, cancellationToken) =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return work(cancellationToken);
-        };
     private bool _shellRevealed;
     private bool _shellPersistencePending;
-    private bool _viewPresentationRequestsSuspended;
     private bool _disposed;
     private int _viewPreloadSuspensionCount;
-    private long _nextViewPresentationRevision;
 
     internal event Action? ShellViewStateChanged;
 
@@ -78,7 +62,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         PackageViewHostService packageViewHostService,
         RuntimeConnectionState runtimeConnectionState,
         IRuntimeApiClientFactory runtimeApiClientFactory,
-        RuntimeHostProcessManager runtimeHostProcessManager,
+        RuntimeAvailabilityManager runtimeAvailabilityManager,
         SystemStatusResponse? initialSystemStatus,
         NotificationCenterService notificationCenter,
         AppPackageShellViewService? shellViewService = null,
@@ -90,12 +74,14 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         DeveloperLogService? developerLog = null,
         RegistryAuthService? registryAuthService = null,
         ExternalBrowserService? externalBrowserService = null,
+        RemoteImageService? remoteImageService = null,
         IUiDispatcher? uiDispatcher = null
     )
     {
         _windowLauncher = windowLauncher;
         _registryAuthService = registryAuthService;
         _externalBrowserService = externalBrowserService;
+        _remoteImageService = remoteImageService;
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         _packageViewHostService = packageViewHostService;
         _shellRevealed = !deferInitialHostedViews;
@@ -138,7 +124,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         _runtimeStatus = new RuntimeStatusViewModel(
             runtimeConnectionState,
             runtimeApiClientFactory,
-            runtimeHostProcessManager,
+            runtimeAvailabilityManager,
             shellSnapshot.SystemStatusText,
             initialSystemStatus,
             _startupErrors,
@@ -208,7 +194,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             NotifyViewNavigatedIgnoringCancellationAsync,
             NotifyLayoutStateChanged
         );
-        _packageLifecyclePresenter = new ShellPackageLifecyclePresenter(
+        var packageLifecyclePresenter = new ShellPackageLifecyclePresenter(
             effectiveShellCompositionService,
             _viewsById,
             _shellState,
@@ -221,15 +207,20 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             RefreshPackageMetadata,
             packageViewHostService.IsPackageAppUiQuarantined
         );
-        _packageLifecycleRefreshCoordinator = new ShellPackageLifecycleRefreshCoordinator(
+        _packageViewPresentationCoordinator = new ShellPackageViewPresentationCoordinator(
             effectivePackageLifecycleCoordinator,
-            _packageLifecyclePresenter,
-            () => _disposed,
-            StageCandidateView,
-            DetachStagedCandidateViews,
+            packageLifecyclePresenter,
+            packageViewHostService,
+            _viewsById,
+            _shellState,
+            _selectionPresenter,
+            GetBar,
+            GetPanel,
+            ApplyPanelContent,
+            NotifyLayoutStateChanged,
+            PersistShellState,
             _uiDispatcher,
-            BeginPackageLifecyclePresentationCommit,
-            CompletePackageLifecyclePresentationCommit
+            IsDeveloperMode
         );
         _subscriptionScope = new MainWindowSubscriptionScope(
             this,
@@ -389,11 +380,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         _disposed = true;
         CancelPackageViewPreloading();
-        CancelAllViewPresentationRequests();
-        ClearAllPackageNavigationStages();
-        DetachStagedCandidateViews();
-        _packageViewHostService.CancelAllViewNavigations();
+        _packageViewPresentationCoordinator.Dispose();
         _registryAuthRequest.Dispose();
+        _registryAvatarRequest.Dispose();
+        PackageIconImageViewModelLoader.DisposeImage(RegistryAccountAvatarImage);
+        RegistryAccountAvatarImage = null;
         _appUpdatePrompt.Dispose();
         _tasks.Dispose();
         _hotbarCoordinator.Dispose();
@@ -424,7 +415,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds = null,
         CancellationToken cancellationToken = default,
-        Action? detachAuxiliaryPackageViews = null
+        Action? detachAuxiliaryPackageViews = null,
+        Func<CancellationToken, Task>? refreshAuxiliaryPackageViewsAsync = null
     )
     {
         if (_disposed)
@@ -432,19 +424,16 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
-        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            _tasks.Token
-        );
         SuspendPackageViewPreloading();
         try
         {
-            await _packageLifecycleRefreshCoordinator.ApplyPackageLifecycleChangesAsync(
+            await _packageViewPresentationCoordinator.ApplyPackageLifecycleChangesAsync(
                 snapshot,
                 packageSources,
                 retryDisabledPackageIds,
-                lifetimeCancellation.Token,
-                detachAuxiliaryPackageViews
+                cancellationToken,
+                detachAuxiliaryPackageViews,
+                refreshAuxiliaryPackageViewsAsync
             );
         }
         finally
@@ -455,10 +444,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     internal Task ApplyPackageMetadataSnapshotAsync(
         RuntimePackageSnapshot snapshot,
-        CancellationToken cancellationToken = default)
-        => _packageLifecycleRefreshCoordinator.ApplyPackageMetadataAsync(
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task>? refreshAuxiliaryPackageViewsAsync = null)
+        => _packageViewPresentationCoordinator.ApplyPackageMetadataAsync(
             snapshot.ActivePackages,
-            cancellationToken);
+            cancellationToken,
+            refreshAuxiliaryPackageViewsAsync);
 
     internal void ConfigurePackageViewStagingSurface(
         Action<Control> stageCandidateView,
@@ -466,18 +457,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         Func<IDisposable?>? acquirePackageViewTransitionSnapshot = null
     )
     {
-        ArgumentNullException.ThrowIfNull(stageCandidateView);
-        ArgumentNullException.ThrowIfNull(detachStagedCandidateViews);
-        if (_stageCandidateView is not null)
-        {
-            throw new InvalidOperationException(
-                "The package view staging surface is already configured."
-            );
-        }
-
-        _stageCandidateView = stageCandidateView;
-        _detachStagedCandidateViews = detachStagedCandidateViews;
-        _acquirePackageViewTransitionSnapshot = acquirePackageViewTransitionSnapshot;
+        _packageViewPresentationCoordinator.ConfigureStagingSurface(
+            stageCandidateView,
+            detachStagedCandidateViews,
+            acquirePackageViewTransitionSnapshot);
     }
 
     public async Task ActivateDeferredInitialHostedViewsAsync(
@@ -523,15 +506,14 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         ArgumentNullException.ThrowIfNull(runPreloadWorkAsync);
         ArgumentNullException.ThrowIfNull(runPostPresentationWorkAsync);
         _runPreloadWorkAsync = runPreloadWorkAsync;
-        _runPostPresentationWorkAsync = runPostPresentationWorkAsync;
+        _packageViewPresentationCoordinator.ConfigureWorkScheduler(runPostPresentationWorkAsync);
         RestartPackageViewPreloading();
     }
 
     internal void ConfigurePackageViewWorkScheduler(
         Func<Func<CancellationToken, Task>, CancellationToken, Task> runWorkAsync)
     {
-        ArgumentNullException.ThrowIfNull(runWorkAsync);
-        _runPostPresentationWorkAsync = runWorkAsync;
+        _packageViewPresentationCoordinator.ConfigureWorkScheduler(runWorkAsync);
     }
 
     private void RestartPackageViewPreloading()
@@ -554,7 +536,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             preloadCancellation = new CancellationTokenSource();
             _viewPreloadCancellation = preloadCancellation;
         }
-        RequestCancellation(previousCancellation, "replacing package view preloading");
+        RequestPreloadCancellation(previousCancellation, "replacing package view preloading");
         var preloadTask = RunPackageViewPreloadingAsync(
             preloadCancellation,
             _tasks.Token);
@@ -598,7 +580,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         {
             cancellation = _viewPreloadCancellation;
         }
-        RequestCancellation(cancellation, "cancelling package view preloading");
+        RequestPreloadCancellation(cancellation, "cancelling package view preloading");
     }
 
     private void SuspendPackageViewPreloading()
@@ -609,7 +591,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             _viewPreloadSuspensionCount++;
             cancellation = _viewPreloadCancellation;
         }
-        RequestCancellation(cancellation, "suspending package view preloading");
+        RequestPreloadCancellation(cancellation, "suspending package view preloading");
     }
 
     private void ResumePackageViewPreloading()
@@ -707,23 +689,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
 
         SuspendPackageViewPreloading();
-        var request = BeginViewPresentationRequest(viewId);
         try
         {
-            return await _packagePanelCoordinator.ReloadPackageViewAsync(
-                viewId,
-                _runPostPresentationWorkAsync,
-                () => IsCurrentViewPresentationRequest(request, viewId),
-                () => new ValueTask<bool>(PresentPackageViewCoreAsync(
-                    viewId,
-                    parameters: null,
-                    request)),
-                request.CancellationToken);
-        }
-        catch (OperationCanceledException) when (
-            request.CancellationToken.IsCancellationRequested && !_tasks.Token.IsCancellationRequested)
-        {
-            return false;
+            return await _packageViewPresentationCoordinator.ReloadPackageViewAsync(
+                _packagePanelCoordinator,
+                viewId);
         }
         finally
         {
@@ -736,7 +706,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         IReadOnlyDictionary<string, string?>? parameters = null
     )
     {
-        if (!CanStartPackageViewInteraction())
+        if (!_packageViewPresentationCoordinator.CanStartPackageViewInteraction)
         {
             return false;
         }
@@ -746,7 +716,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     public bool ClosePackageViewPanel(string viewId)
     {
-        if (!CanStartPackageViewInteraction())
+        if (!_packageViewPresentationCoordinator.CanStartPackageViewInteraction)
         {
             return false;
         }
@@ -817,433 +787,27 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     private void SelectItem(ShellItemViewModel item, bool allowToggle)
     {
-        if (CanStartPackageViewInteraction())
+        if (_packageViewPresentationCoordinator.CanStartPackageViewInteraction)
         {
             _packagePanelCoordinator.SelectItem(item, allowToggle);
         }
     }
 
     private void ObserveViewNavigation(string viewId)
-    {
-        if (!_viewsById.ContainsKey(viewId))
-        {
-            return;
-        }
-
-        var request = BeginViewPresentationRequest(viewId);
-        _tasks.Observe(
-            PresentPackageViewCoreAsync(
-                viewId,
-                parameters: null,
-                request),
-            $"presenting package view '{viewId}'"
-        );
-    }
+        => _packageViewPresentationCoordinator.ObserveViewNavigation(viewId);
 
     private async ValueTask<bool> PresentPackageViewAsync(
         string viewId,
         IReadOnlyDictionary<string, string?>? parameters)
-        => await PresentPackageViewCoreAsync(
+        => await _packageViewPresentationCoordinator.PresentPackageViewAsync(
             viewId,
-            parameters,
-            BeginViewPresentationRequest(viewId));
-
-    private async Task<bool> PresentPackageViewCoreAsync(
-        string viewId,
-        IReadOnlyDictionary<string, string?>? parameters,
-        ViewPresentationRequest request)
-    {
-        var cancellationToken = request.CancellationToken;
-        var requestedAt = Stopwatch.GetTimestamp();
-        try
-        {
-            var usesNavigationPreparation = await _uiDispatcher.InvokeAsync(
-                () => IsCurrentViewPresentationRequest(request, viewId)
-                    && _packageViewHostService.SupportsNavigationPreparation(
-                        viewId,
-                        request.GenerationId),
-                cancellationToken);
-            var acknowledged = await _uiDispatcher.InvokeAsync(
-                () =>
-                {
-                    return IsCurrentViewPresentationRequest(request, viewId);
-                },
-                cancellationToken);
-            if (!acknowledged)
-            {
-                return false;
-            }
-
-            LogPresentationStage(viewId, "selection acknowledgement", requestedAt);
-            LogPresentationStage(viewId, "state/geometry commit", requestedAt);
-
-            if (usesNavigationPreparation)
-            {
-                var navigationPrepared = false;
-                await _runPostPresentationWorkAsync(
-                    async operationCancellation =>
-                    {
-                        if (!IsCurrentViewPresentationRequest(request, viewId))
-                        {
-                            return;
-                        }
-
-                        navigationPrepared = await _packageViewHostService
-                            .PrepareNavigationForPresentationAsync(
-                                viewId,
-                                parameters,
-                                request.GenerationId,
-                                control => StagePackageNavigationView(
-                                    request,
-                                    viewId,
-                                    control),
-                                control => CommitPackageNavigationView(
-                                    request,
-                                    viewId,
-                                    control,
-                                    requestedAt),
-                                _ => UnstagePackageNavigationView(request),
-                                operationCancellation,
-                                () => IsCurrentViewPresentationRequest(request, viewId));
-                    },
-                    cancellationToken);
-                if (navigationPrepared)
-                {
-                    LogPresentationStage(viewId, "prepared navigation", requestedAt);
-                    AppSessionLog.WriteInfo(
-                        $"Package view '{viewId}' presented in {Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.0} ms.",
-                        visibleInDeveloperLog: false);
-                }
-                return navigationPrepared;
-            }
-
-            var constructionStartedAt = Stopwatch.GetTimestamp();
-            var prepared = false;
-            await _runPostPresentationWorkAsync(
-                async operationCancellation =>
-                {
-                    if (!IsCurrentViewPresentationRequest(request, viewId))
-                    {
-                        return;
-                    }
-
-                    prepared = await _packageViewHostService.PrepareViewForPresentationAsync(
-                        viewId,
-                        request.GenerationId,
-                        control =>
-                        {
-                            if (!IsCurrentViewPresentationRequest(request, viewId)
-                                || !_viewsById.TryGetValue(viewId, out var packageView))
-                            {
-                                return false;
-                            }
-
-                            var panel = GetPanel(request.Placement);
-                            var retainedBoundary = panel.GetRetainedView(viewId);
-                            if (control is not null && retainedBoundary is null)
-                            {
-                                var boundary = _packageViewHostService.CreateHostedViewBoundary(
-                                    packageView.PackageId,
-                                    viewId,
-                                    control);
-                                if (boundary is not null)
-                                {
-                                    retainedBoundary = panel.RetainHostedView(viewId, boundary);
-                                }
-                            }
-
-                            if (control is not null && retainedBoundary is null)
-                            {
-                                return false;
-                            }
-
-                            if (!CommitPackageViewState(
-                                    request,
-                                    viewId,
-                                    retainedBoundary,
-                                    control is null))
-                            {
-                                return false;
-                            }
-                            LogPresentationStage(viewId, "attachment", requestedAt);
-                            return control is null
-                                || ReferenceEquals(panel.HostedView, retainedBoundary);
-                        },
-                        operationCancellation);
-                },
-                cancellationToken);
-            LogPresentationStage(viewId, "construction/warmup", constructionStartedAt);
-            if (!prepared)
-            {
-                return false;
-            }
-
-            var navigated = false;
-            await _runPostPresentationWorkAsync(
-                async _ =>
-                {
-                    if (!IsCurrentViewPresentationRequest(request, viewId))
-                    {
-                        return;
-                    }
-
-                    navigated = await NavigatePresentedViewAsync(
-                        viewId,
-                        parameters,
-                        request,
-                        requestedAt);
-                },
-                cancellationToken);
-            return navigated;
-        }
-        catch (OperationCanceledException) when (
-            cancellationToken.IsCancellationRequested && !_tasks.Token.IsCancellationRequested)
-        {
-            return false;
-        }
-    }
-
-    private bool StagePackageNavigationView(
-        ViewPresentationRequest request,
-        string viewId,
-        Control control)
-    {
-        if (!IsCurrentViewPresentationRequest(request, viewId)
-            || !_viewsById.TryGetValue(viewId, out var packageView))
-        {
-            return false;
-        }
-
-        var panel = GetPanel(request.Placement);
-        if (panel.GetRetainedView(viewId) is null)
-        {
-            var boundary = _packageViewHostService.CreateHostedViewBoundary(
-                packageView.PackageId,
-                viewId,
-                control);
-            if (boundary is not null)
-            {
-                panel.RetainHostedView(viewId, boundary);
-            }
-        }
-
-        var snapshotLease = _acquirePackageViewTransitionSnapshot?.Invoke();
-        if (_packageNavigationStages.Remove(request.Placement, out var previousStage))
-        {
-            panel.UnstageHostedView(previousStage.ViewId);
-            previousStage.SnapshotLease?.Dispose();
-        }
-
-        panel.SetDockStaged(true);
-        var staged = panel.StageHostedView(viewId);
-        if (staged)
-        {
-            _packageNavigationStages[request.Placement] = new PackageNavigationStage(
-                request.Revision,
-                viewId,
-                snapshotLease);
-            NotifyLayoutStateChanged();
-        }
-        else
-        {
-            panel.SetDockStaged(false);
-            snapshotLease?.Dispose();
-        }
-        return staged;
-    }
-
-    private bool CommitPackageNavigationView(
-        ViewPresentationRequest request,
-        string viewId,
-        Control control,
-        long requestedAt)
-    {
-        if (!IsCurrentViewPresentationRequest(request, viewId))
-        {
-            return false;
-        }
-
-        var panel = GetPanel(request.Placement);
-        var retainedBoundary = panel.GetRetainedView(viewId);
-        if (retainedBoundary is null)
-        {
-            return false;
-        }
-
-        if (!CommitPackageViewState(
-                request,
-                viewId,
-                retainedBoundary,
-                allowMissingHostedView: false))
-        {
-            return false;
-        }
-        CompletePackageNavigationStage(request, unstageView: false);
-        LogPresentationStage(viewId, "prepared attachment", requestedAt);
-        return ReferenceEquals(panel.HostedView, retainedBoundary);
-    }
-
-    private void UnstagePackageNavigationView(ViewPresentationRequest request)
-    {
-        CompletePackageNavigationStage(request, unstageView: true);
-    }
-
-    private bool CommitPackageViewState(
-        ViewPresentationRequest request,
-        string viewId,
-        object? retainedBoundary,
-        bool allowMissingHostedView)
-    {
-        if (!IsCurrentViewPresentationRequest(request, viewId))
-        {
-            return false;
-        }
-
-        if (_packageNavigationStages.TryGetValue(request.Placement, out var staleStage)
-            && staleStage.Revision != request.Revision)
-        {
-            ClearPackageNavigationStage(request.Placement, staleStage, unstageView: true);
-        }
-
-        var bar = GetBar(request.Placement);
-        var selected = bar.Items.FirstOrDefault(item => string.Equals(
-            item.Id,
-            viewId,
-            StringComparison.OrdinalIgnoreCase));
-        if (selected is null)
-        {
-            return false;
-        }
-
-        var previousViewId = ShellSelectionState.GetSelectedViewId(
-            _shellState,
-            request.Placement);
-        _selectionPresenter.Select(bar, request.Placement, selected);
-        ShellSelectionState.SetSelectedViewId(_shellState, request.Placement, viewId);
-        var panel = GetPanel(request.Placement);
-        panel.SetDockVisible(true);
-        ApplyPanelContent(request.Placement, viewId, createHostedView: true);
-        NotifyLayoutStateChanged();
-        PersistShellState();
-        if (!string.IsNullOrWhiteSpace(previousViewId)
-            && !string.Equals(previousViewId, viewId, StringComparison.OrdinalIgnoreCase))
-        {
-            QueueViewNavigationCancellation(previousViewId);
-        }
-
-        return allowMissingHostedView
-            || retainedBoundary is not null
-            && ReferenceEquals(panel.HostedView, retainedBoundary);
-    }
-
-    private void CompletePackageNavigationStage(
-        ViewPresentationRequest request,
-        bool unstageView)
-    {
-        if (!_packageNavigationStages.TryGetValue(request.Placement, out var stage)
-            || stage.Revision != request.Revision)
-        {
-            return;
-        }
-        ClearPackageNavigationStage(request.Placement, stage, unstageView);
-    }
-
-    private void ClearPackageNavigationStage(
-        RailPlacement placement,
-        PackageNavigationStage stage,
-        bool unstageView)
-    {
-        _packageNavigationStages.Remove(placement);
-        var panel = GetPanel(placement);
-        if (unstageView)
-        {
-            panel.UnstageHostedView(stage.ViewId);
-        }
-        panel.SetDockStaged(false);
-        NotifyLayoutStateChanged();
-        stage.SnapshotLease?.Dispose();
-    }
-
-    private void ClearAllPackageNavigationStages()
-    {
-        foreach (var stage in _packageNavigationStages.ToArray())
-        {
-            ClearPackageNavigationStage(stage.Key, stage.Value, unstageView: true);
-        }
-    }
-
-    private async Task<bool> NavigatePresentedViewAsync(
-        string viewId,
-        IReadOnlyDictionary<string, string?>? parameters,
-        ViewPresentationRequest request,
-        long requestedAt)
-    {
-        if (!await NotifyViewNavigatedForPresentationAsync(
-                viewId,
-                parameters,
-                request,
-                request.CancellationToken))
-        {
-            return false;
-        }
-
-        LogPresentationStage(viewId, "navigation", requestedAt);
-        AppSessionLog.WriteInfo(
-            $"Package view '{viewId}' presented in {Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.0} ms.",
-            visibleInDeveloperLog: false);
-        return true;
-    }
+            parameters);
 
     private void ObservePanelClose(RailPlacement placement, string viewId)
-    {
-        var request = BeginViewPresentationRequest(placement);
-        var requestedAt = Stopwatch.GetTimestamp();
-        if (!IsCurrentViewPresentationRequest(request)
-            || ShellSelectionState.GetSelectedViewId(_shellState, placement) is not null)
-        {
-            return;
-        }
-
-        if (_packageNavigationStages.TryGetValue(placement, out var stage))
-        {
-            ClearPackageNavigationStage(placement, stage, unstageView: true);
-        }
-        ApplyPanelContent(placement, viewId: null, createHostedView: false);
-        NotifyLayoutStateChanged();
-        LogPresentationStage(viewId, "close detach/geometry", requestedAt);
-    }
+        => _packageViewPresentationCoordinator.ObservePanelClose(placement, viewId);
 
     private void QueueViewNavigationCancellation(string viewId)
-    {
-        if (!_viewsById.ContainsKey(viewId))
-        {
-            return;
-        }
-
-        var generationId = _packageViewHostService.CurrentGenerationId;
-        using (ExecutionContext.SuppressFlow())
-        {
-            _tasks.Run(
-                cancellationToken => _runPostPresentationWorkAsync(
-                    async operationCancellation =>
-                    {
-                        var shouldCancel = await _uiDispatcher.InvokeAsync(
-                            () => !IsViewSelected(viewId),
-                            operationCancellation);
-                        if (!shouldCancel)
-                        {
-                            return;
-                        }
-
-                        await _packageViewHostService.CancelViewNavigationAsync(
-                            viewId,
-                            generationId,
-                            () => !IsViewSelected(viewId));
-                    },
-                    cancellationToken),
-                $"cancelling package view '{viewId}' navigation");
-        }
-    }
+        => _packageViewPresentationCoordinator.QueueViewNavigationCancellation(viewId);
 
     private async Task NotifyViewNavigatedIgnoringCancellationAsync(
         string viewId,
@@ -1307,112 +871,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<bool> NotifyViewNavigatedForPresentationAsync(
-        string viewId,
-        IReadOnlyDictionary<string, string?>? parameters,
-        ViewPresentationRequest request,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await _packageViewHostService.NotifyViewNavigatedAsync(
-                viewId,
-                parameters,
-                request.GenerationId,
-                cancellationToken,
-                () => IsCurrentViewPresentationRequest(request, viewId));
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return false;
-        }
-    }
-
-    private ViewPresentationRequest BeginViewPresentationRequest(string viewId)
-        => BeginViewPresentationRequest(_viewsById[viewId].Placement);
-
-    private ViewPresentationRequest BeginViewPresentationRequest(RailPlacement placement)
-    {
-        CancellationTokenSource? previousCancellation;
-        ViewPresentationRequest request;
-        lock (_viewPresentationSyncRoot)
-        {
-            if (_disposed || _viewPresentationRequestsSuspended)
-            {
-                return new ViewPresentationRequest(
-                    placement,
-                    ++_nextViewPresentationRevision,
-                    _packageViewHostService.CurrentGenerationId,
-                    new CancellationToken(canceled: true));
-            }
-
-            _viewPresentationCancellations.Remove(placement, out previousCancellation);
-            var revision = ++_nextViewPresentationRevision;
-            var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_tasks.Token);
-            _viewPresentationRevisions[placement] = revision;
-            _viewPresentationCancellations[placement] = cancellation;
-            request = new ViewPresentationRequest(
-                placement,
-                revision,
-                _packageViewHostService.CurrentGenerationId,
-                cancellation.Token);
-        }
-        RequestCancellation(
-            previousCancellation,
-            "superseding package view presentation",
-            disposeWhenComplete: true);
-        return request;
-    }
-
-    private void CancelAllViewPresentationRequests()
-    {
-        CancellationTokenSource[] cancellations;
-        lock (_viewPresentationSyncRoot)
-        {
-            cancellations = _viewPresentationCancellations.Values.ToArray();
-            _viewPresentationCancellations.Clear();
-            _viewPresentationRevisions.Clear();
-        }
-
-        foreach (var cancellation in cancellations)
-        {
-            RequestCancellation(
-                cancellation,
-                "cancelling package view presentation",
-                disposeWhenComplete: true);
-        }
-    }
-
-    private bool CanStartPackageViewInteraction()
-    {
-        lock (_viewPresentationSyncRoot)
-        {
-            return !_disposed && !_viewPresentationRequestsSuspended;
-        }
-    }
-
-    private void BeginPackageLifecyclePresentationCommit()
-    {
-        lock (_viewPresentationSyncRoot)
-        {
-            _viewPresentationRequestsSuspended = true;
-        }
-        CancelAllViewPresentationRequests();
-        ClearAllPackageNavigationStages();
-    }
-
-    private void CompletePackageLifecyclePresentationCommit()
-    {
-        lock (_viewPresentationSyncRoot)
-        {
-            _viewPresentationRequestsSuspended = false;
-        }
-    }
-
-    private void RequestCancellation(
+    private void RequestPreloadCancellation(
         CancellationTokenSource? cancellation,
-        string operation,
-        bool disposeWhenComplete = false)
+        string operation)
     {
         if (cancellation is null)
         {
@@ -1427,27 +888,17 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         catch (Exception ex)
         {
             AppSessionLog.WriteError($"Package callback failed while {operation}.", ex);
-            if (disposeWhenComplete)
-            {
-                cancellation.Dispose();
-            }
             return;
         }
 
         _tasks.Observe(
-            ObserveCancellationAsync(
-                cancellationTask,
-                cancellation,
-                operation,
-                disposeWhenComplete),
+            ObservePreloadCancellationAsync(cancellationTask, operation),
             operation);
     }
 
-    private static async Task ObserveCancellationAsync(
+    private static async Task ObservePreloadCancellationAsync(
         Task cancellationTask,
-        CancellationTokenSource cancellation,
-        string operation,
-        bool disposeWhenComplete)
+        string operation)
     {
         try
         {
@@ -1457,50 +908,6 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         {
             AppSessionLog.WriteError($"Package callback failed while {operation}.", ex);
         }
-        finally
-        {
-            if (disposeWhenComplete)
-            {
-                cancellation.Dispose();
-            }
-        }
-    }
-
-    private bool IsCurrentViewPresentationRequest(ViewPresentationRequest request)
-    {
-        lock (_viewPresentationSyncRoot)
-        {
-            return !_disposed
-                && _viewPresentationRevisions.TryGetValue(
-                    request.Placement,
-                    out var currentRevision)
-                && currentRevision == request.Revision;
-        }
-    }
-
-    private bool IsCurrentViewPresentationRequest(
-        ViewPresentationRequest request,
-        string viewId)
-        => IsCurrentViewPresentationRequest(request)
-            && request.GenerationId == _packageViewHostService.CurrentGenerationId
-            && _viewsById.TryGetValue(viewId, out var packageView)
-            && packageView.Placement == request.Placement;
-
-    private bool IsViewSelected(string viewId)
-        => _shellLayout.GetSlots().Any(slot => string.Equals(
-            ShellSelectionState.GetSelectedViewId(_shellState, slot.Placement),
-            viewId,
-            StringComparison.OrdinalIgnoreCase));
-
-    private void LogPresentationStage(string viewId, string stage, long startedAt)
-    {
-        if (!IsDeveloperMode)
-        {
-            return;
-        }
-
-        AppSessionLog.WriteInfo(
-            $"Package view '{viewId}' {stage}: {Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.0} ms.");
     }
 
     private void ApplyPanelContent(
@@ -1535,17 +942,6 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         // retaining the projection avoids persisting the fault as an uninstall/layout change.
     }
 
-    private readonly record struct ViewPresentationRequest(
-        RailPlacement Placement,
-        long Revision,
-        Guid GenerationId,
-        CancellationToken CancellationToken);
-
-    private sealed record PackageNavigationStage(
-        long Revision,
-        string ViewId,
-        IDisposable? SnapshotLease);
-
     private void PersistShellState()
     {
         if (!_shellRevealed)
@@ -1561,16 +957,6 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             BottomSplitRatio
         );
     }
-
-    private void StageCandidateView(Control view) =>
-        (
-            _stageCandidateView
-            ?? throw new InvalidOperationException(
-                "The package view staging surface is not configured."
-            )
-        )(view);
-
-    private void DetachStagedCandidateViews() => _detachStagedCandidateViews?.Invoke();
 
     private PackageIconBarViewModel GetBar(RailPlacement placement) =>
         _shellLayout.GetBar(placement);

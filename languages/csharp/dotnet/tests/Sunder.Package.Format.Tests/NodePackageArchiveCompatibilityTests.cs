@@ -5,14 +5,12 @@ namespace Sunder.Package.Format.Tests;
 
 public sealed class NodePackageArchiveCompatibilityTests
 {
-    [Fact]
+    [ExternalArtifactFact("SUNDER_REQUIRE_NODE_SEA_PACKAGE", "SUNDER_NODE_SEA_PACKAGE_PATH")]
+    [Trait("Category", "ExternalArtifact")]
     public async Task NodePackageArchive_WhenConfigured_IsAcceptedByDotNetInspector()
     {
         var archivePath = Environment.GetEnvironmentVariable("SUNDER_NODE_SEA_PACKAGE_PATH");
-        if (string.IsNullOrWhiteSpace(archivePath))
-        {
-            return;
-        }
+        Assert.False(string.IsNullOrWhiteSpace(archivePath), "SUNDER_NODE_SEA_PACKAGE_PATH is required by the selected artifact lane.");
 
         Assert.True(File.Exists(archivePath), $"Node SEA package does not exist: {archivePath}");
         var stagingPath = Path.Combine(
@@ -21,7 +19,7 @@ public sealed class NodePackageArchiveCompatibilityTests
             Guid.NewGuid().ToString("N"));
         try
         {
-            var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(archivePath, stagingPath);
+            var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(archivePath!, stagingPath);
 
             Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
             var targets = result.Manifest!.Targets!

@@ -4,6 +4,8 @@ using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Avalonia;
 using Sunder.Sdk.Stacks;
 using Sunder.Sdk.Worker;
+using Sunder.Host.Contracts;
+using Sunder.Package.Build.Tasks;
 using Sunder.Runtime.Contracts;
 using Sunder.Registry.Contracts;
 using Sunder.Package.Format;
@@ -19,6 +21,8 @@ public sealed class PublicApiBaselineTests
         typeof(IAvaloniaPackageContributionRegistry).Assembly,
         typeof(IPackageStackExporter).Assembly,
         typeof(SunderWorker).Assembly,
+        typeof(HostHandshakeResponse).Assembly,
+        typeof(GenerateSunderPackageManifestTask).Assembly,
         typeof(RuntimeHandshakeResponse).Assembly,
         typeof(RegistryPackageCanonicalArtifact).Assembly,
         typeof(SunderPackageManifest).Assembly,

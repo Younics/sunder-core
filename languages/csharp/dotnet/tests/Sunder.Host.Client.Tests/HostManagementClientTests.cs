@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Sunder.Host.Client;
 using Sunder.Host.Contracts;
 using Sunder.Runtime.LocalState;
@@ -115,6 +116,64 @@ public sealed class HostManagementClientTests
     }
 
     [Fact]
+    public async Task Client_StopsChunkedJsonAtLimitPlusOneAndDisposesResponseStream()
+    {
+        const int maximumBytes = 1024 * 1024;
+        var body = new TrackingReadStream(new byte[maximumBytes + 128]);
+        using var client = new HostManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("https://host.example:5275/"), "client-token"),
+            new RecordingHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(body),
+            })));
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => client.GetStatusAsync());
+
+        Assert.Contains("byte limit", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(maximumBytes + 1, body.BytesRead);
+        Assert.True(body.IsDisposed);
+    }
+
+    [Fact]
+    public async Task Client_AcceptsJsonAtExactResponseLimit()
+    {
+        const int maximumBytes = 1024 * 1024;
+        var expected = CreateStatus();
+        var json = JsonSerializer.SerializeToUtf8Bytes(expected);
+        var payload = Enumerable.Repeat((byte)' ', maximumBytes).ToArray();
+        json.CopyTo(payload, 0);
+        var body = new TrackingReadStream(payload);
+        using var client = new HostManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("https://host.example:5275/"), "client-token"),
+            new RecordingHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(body),
+            })));
+
+        var actual = await client.GetStatusAsync();
+
+        Assert.Equal(expected, actual);
+        Assert.Equal(maximumBytes, body.BytesRead);
+        Assert.True(body.IsDisposed);
+    }
+
+    [Fact]
+    public async Task Client_RejectsResponseFromChangedOrigin()
+    {
+        using var client = new HostManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("https://host.example:5275/"), "client-token"),
+            new RecordingHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://other.example/api/host/v1/status"),
+                Content = JsonContent.Create(CreateStatus()),
+            })));
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => client.GetStatusAsync());
+
+        Assert.Contains("untrusted origin", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Compatibility_RequiresHostIdentityRangeAndRequestedFeatures()
     {
         var compatible = new HostHandshakeResponse(
@@ -169,5 +228,43 @@ public sealed class HostManagementClientTests
             HttpRequestMessage request,
             CancellationToken cancellationToken)
             => sendAsync(request);
+    }
+
+    private sealed class TrackingReadStream(byte[] content) : Stream
+    {
+        private int _offset;
+        private int _disposed;
+        public int BytesRead => Volatile.Read(ref _offset);
+        public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _offset; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count)
+            => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            var count = Math.Min(buffer.Length, content.Length - _offset);
+            content.AsSpan(_offset, count).CopyTo(buffer);
+            _offset += count;
+            return count;
+        }
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(Read(buffer.Span));
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Volatile.Write(ref _disposed, 1);
+            base.Dispose(disposing);
+        }
     }
 }

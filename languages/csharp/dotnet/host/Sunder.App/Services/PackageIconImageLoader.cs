@@ -9,13 +9,7 @@ public static class PackageIconImageLoader
 {
     private const long MaxIconBytes = SunderPackageFormat.MaxIconBytes;
     private static RuntimeClientTransport? _runtimeTransport;
-    private static readonly HttpClient AnonymousMediaHttpClient = new(
-        new HttpClientHandler { AllowAutoRedirect = false })
-    {
-        Timeout = TimeSpan.FromSeconds(15),
-    };
     private static readonly SemaphoreSlim RuntimeAssetLoadSemaphore = new(4, 4);
-    private static readonly SemaphoreSlim AnonymousMediaLoadSemaphore = new(4, 4);
 
     public static async Task<PackageIconImageLoadResult> LoadAsync(Uri uri, CancellationToken cancellationToken = default)
         => await LoadRuntimeAssetAsync(uri, cancellationToken).ConfigureAwait(false);
@@ -45,29 +39,6 @@ public static class PackageIconImageLoader
                 MaxIconBytes,
                 token),
             RuntimeAssetLoadSemaphore,
-            uri,
-            cancellationToken);
-    }
-
-    public static Task<PackageIconImageLoadResult> LoadAnonymousMediaAsync(
-        Uri uri,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!HttpMediaUriValidator.IsValid(uri))
-        {
-            return Task.FromResult(PackageIconImageLoadResult.Failed(
-                $"Anonymous media URL '{uri}' must use HTTP or HTTPS without user information."));
-        }
-
-        return LoadCoreAsync(
-            (loadSemaphore, requestUri, token) => BoundedImageContentLoader.LoadAsync(
-                AnonymousMediaHttpClient,
-                loadSemaphore,
-                requestUri,
-                MaxIconBytes,
-                token),
-            AnonymousMediaLoadSemaphore,
             uri,
             cancellationToken);
     }
@@ -187,7 +158,7 @@ public static class PackageIconImageLoader
 public enum PackageIconTransport
 {
     RuntimeAsset,
-    AnonymousMedia,
+    Registry,
 }
 
 public sealed record PackageIconImageLoadResult(IImage? Image, string? Error)

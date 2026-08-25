@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Sunder.Host.Contracts;
 using Sunder.Runtime.LocalState;
 
@@ -7,6 +8,12 @@ namespace Sunder.Host.Client;
 
 public sealed class HostManagementClient : IDisposable
 {
+    private const long MaxJsonResponseBytes = 1024 * 1024;
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        MaxDepth = 32,
+    };
     private readonly Func<RuntimeConnectionInfo?> _getConnection;
     private readonly HttpClient _client;
 
@@ -85,17 +92,27 @@ public sealed class HostManagementClient : IDisposable
     private async Task ShutdownHostAsync(string path, CancellationToken cancellationToken)
     {
         using var request = CreateRequest(HttpMethod.Post, path);
-        using var response = await _client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        _ = await SendAsync(
+            request,
+            static (response, _) =>
+            {
+                response.EnsureSuccessStatusCode();
+                return Task.FromResult(true);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<T> GetRequiredAsync<T>(string path, CancellationToken cancellationToken)
     {
         using var request = CreateRequest(HttpMethod.Get, path);
-        using var response = await _client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken).ConfigureAwait(false)
-               ?? throw new InvalidDataException("Sunder Host returned an empty response.");
+        return await SendAsync(
+            request,
+            static async (response, token) =>
+            {
+                response.EnsureSuccessStatusCode();
+                return await ReadRequiredJsonAsync<T>(response.Content, token).ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<HostLifecycleSubmission> SubmitAsync(
@@ -106,26 +123,108 @@ public sealed class HostManagementClient : IDisposable
     {
         using var request = CreateRequest(HttpMethod.Post, path);
         request.Content = JsonContent.Create(payload);
-        using var response = await _client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        var submission = await response.Content.ReadFromJsonAsync<HostLifecycleSubmission>(
-                             cancellationToken: cancellationToken).ConfigureAwait(false)
-                         ?? throw new InvalidDataException("Sunder Host returned an empty lifecycle submission.");
-        if (string.IsNullOrWhiteSpace(submission.Operation.OperationId)
-            || submission.Operation.MutationId != payload.MutationId
-            || !string.Equals(submission.Operation.Kind, expectedKind, StringComparison.Ordinal)
-            || submission.Operation.ExpectedDeploymentGeneration != payload.ExpectedDeploymentGeneration)
+        return await SendAsync(
+            request,
+            async (response, token) =>
+            {
+                response.EnsureSuccessStatusCode();
+                var submission = await ReadRequiredJsonAsync<HostLifecycleSubmission>(
+                    response.Content,
+                    token).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(submission.Operation.OperationId)
+                    || submission.Operation.MutationId != payload.MutationId
+                    || !string.Equals(submission.Operation.Kind, expectedKind, StringComparison.Ordinal)
+                    || submission.Operation.ExpectedDeploymentGeneration != payload.ExpectedDeploymentGeneration)
+                {
+                    throw new InvalidDataException("Sunder Host returned a lifecycle operation that does not match the request.");
+                }
+                var expectedLocation = $"/api/host/v1/operations/{Uri.EscapeDataString(submission.Operation.OperationId)}";
+                var location = response.Headers.Location;
+                var actualPath = location?.IsAbsoluteUri == true ? location.AbsolutePath : location?.OriginalString;
+                if (!string.Equals(actualPath, expectedLocation, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("Sunder Host returned an invalid lifecycle operation location.");
+                }
+                return submission;
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<T> SendAsync<T>(
+        HttpRequestMessage request,
+        Func<HttpResponseMessage, CancellationToken, Task<T>> readAsync,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = new CancellationTokenSource(RequestTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        try
         {
-            throw new InvalidDataException("Sunder Host returned a lifecycle operation that does not match the request.");
+            using var response = await _client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                linked.Token).ConfigureAwait(false);
+            EnsureResponseOrigin(request, response);
+            return await readAsync(response, linked.Token).ConfigureAwait(false);
         }
-        var expectedLocation = $"/api/host/v1/operations/{Uri.EscapeDataString(submission.Operation.OperationId)}";
-        var location = response.Headers.Location;
-        var actualPath = location?.IsAbsoluteUri == true ? location.AbsolutePath : location?.OriginalString;
-        if (!string.Equals(actualPath, expectedLocation, StringComparison.Ordinal))
+        catch (OperationCanceledException exception)
+            when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            throw new InvalidDataException("Sunder Host returned an invalid lifecycle operation location.");
+            throw new TimeoutException($"Sunder Host request exceeded the {RequestTimeout} timeout.", exception);
         }
-        return submission;
+    }
+
+    private static async Task<T> ReadRequiredJsonAsync<T>(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is { } contentLength
+            && contentLength > MaxJsonResponseBytes)
+        {
+            throw new InvalidDataException(
+                $"Sunder Host response exceeds the {MaxJsonResponseBytes} byte limit.");
+        }
+
+        await using var source = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var destination = new MemoryStream();
+        var buffer = new byte[16 * 1024];
+        while (true)
+        {
+            var remaining = MaxJsonResponseBytes - destination.Length;
+            var readLength = (int)Math.Min(buffer.Length, remaining + 1);
+            var read = await source.ReadAsync(
+                buffer.AsMemory(0, readLength),
+                cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                return destination.Length == 0
+                    ? throw new InvalidDataException("Sunder Host returned an empty response.")
+                    : JsonSerializer.Deserialize<T>(destination.ToArray(), JsonOptions)
+                      ?? throw new InvalidDataException("Sunder Host returned an empty response.");
+            }
+            if (read > remaining)
+            {
+                throw new InvalidDataException(
+                    $"Sunder Host response exceeds the {MaxJsonResponseBytes} byte limit.");
+            }
+            destination.Write(buffer, 0, read);
+        }
+    }
+
+    private static void EnsureResponseOrigin(HttpRequestMessage request, HttpResponseMessage response)
+    {
+        var expected = request.RequestUri;
+        var actual = response.RequestMessage?.RequestUri ?? expected;
+        if (expected is not null
+            && actual is not null
+            && string.Equals(expected.Scheme, actual.Scheme, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(expected.Host, actual.Host, StringComparison.OrdinalIgnoreCase)
+            && expected.Port == actual.Port
+            && string.IsNullOrEmpty(actual.UserInfo))
+        {
+            return;
+        }
+
+        throw new InvalidDataException("Sunder Host response changed to an untrusted origin.");
     }
 
     private HttpRequestMessage CreateRequest(HttpMethod method, string path)

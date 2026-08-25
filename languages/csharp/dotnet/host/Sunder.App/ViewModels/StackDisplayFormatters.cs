@@ -81,4 +81,5 @@ public sealed record StackPackageInfo(
     string DisplayName,
     PackageIconDescriptor? Icon,
     Uri? IconUri,
-    PackageIconTransport IconTransport = PackageIconTransport.RuntimeAsset);
+    PackageIconTransport IconTransport = PackageIconTransport.RuntimeAsset,
+    Uri? RegistryOrigin = null);

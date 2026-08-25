@@ -32,6 +32,8 @@
     <Project Path="languages/csharp/dotnet/tests/Sunder.Sdk.Worker.Tests/Sunder.Sdk.Worker.Tests.csproj" />
   </Folder>
   <Folder Name="/Sdk/Test Fixtures/">
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Core.TestSupport/Sunder.Core.TestSupport.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Core.TestSupport.Tests/Sunder.Core.TestSupport.Tests.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/AuthoredDynamicReflection/AuthoredDynamicReflection.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/AuthoredReflection/AuthoredReflection.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ExternalDependency/ExternalDependency.csproj" />

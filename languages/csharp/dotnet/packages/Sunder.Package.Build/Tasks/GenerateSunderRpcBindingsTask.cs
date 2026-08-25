@@ -236,6 +236,10 @@ public sealed class GenerateSunderRpcBindingsTask : Microsoft.Build.Utilities.Ta
                 Log.LogError($"SunderRpcBinding '{binding.ItemSpec}' requires 'Namespace' metadata.");
                 continue;
             }
+            if (!TryResolveAccessibility(binding, out var accessibility))
+            {
+                continue;
+            }
 
             string descriptorPath;
             try
@@ -270,7 +274,7 @@ public sealed class GenerateSunderRpcBindingsTask : Microsoft.Build.Utilities.Ta
             string source;
             try
             {
-                source = SunderRpcCSharpGenerator.Generate(input.Descriptor, namespaceName);
+                source = SunderRpcCSharpGenerator.Generate(input.Descriptor, namespaceName, accessibility);
             }
             catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
             {
@@ -296,6 +300,29 @@ public sealed class GenerateSunderRpcBindingsTask : Microsoft.Build.Utilities.Ta
                 Utf8NoBom.GetBytes(source)));
         }
         return Log.HasLoggedErrors ? null : plans;
+    }
+
+    private bool TryResolveAccessibility(
+        ITaskItem binding,
+        out SunderRpcCSharpAccessibility accessibility)
+    {
+        var value = binding.GetMetadata("Accessibility");
+        if (string.IsNullOrWhiteSpace(value) || string.Equals(value, "Public", StringComparison.Ordinal))
+        {
+            accessibility = SunderRpcCSharpAccessibility.Public;
+            return true;
+        }
+        if (string.Equals(value, "Internal", StringComparison.Ordinal))
+        {
+            accessibility = SunderRpcCSharpAccessibility.Internal;
+            return true;
+        }
+
+        accessibility = default;
+        Log.LogError(
+            $"SunderRpcBinding '{binding.ItemSpec}' Accessibility metadata '{value}' is invalid. "
+            + "Allowed values are 'Public' and 'Internal'.");
+        return false;
     }
 
     private bool TryResolveOutputPath(

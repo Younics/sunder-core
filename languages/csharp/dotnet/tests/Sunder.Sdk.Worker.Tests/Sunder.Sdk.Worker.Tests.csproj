@@ -1,10 +1,4 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <IsPackable>false</IsPackable>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Worker\Sunder.Sdk.Worker.csproj" />
   </ItemGroup>
@@ -12,6 +6,9 @@
   <ItemGroup>
     <None Include="..\..\..\..\..\specs\worker\v3\conformance\corpus.json"
           Link="WorkerV3Conformance\corpus.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\worker\v3\conformance\transport-vectors.json"
+          Link="WorkerV3Conformance\transport-vectors.json"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

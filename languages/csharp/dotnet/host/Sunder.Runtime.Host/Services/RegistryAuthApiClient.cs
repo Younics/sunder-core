@@ -10,9 +10,11 @@ internal sealed class RegistryAuthApiClient(RegistryHttpClient registryClient)
         string accessToken,
         CancellationToken cancellationToken)
     {
-        var request = new HttpRequestMessage(HttpMethod.Get, new Uri(origin, "api/v1/me"));
+        var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(origin, RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.CurrentUser)));
         request.Headers.Authorization = new("Bearer", accessToken);
-        return registryClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        return registryClient.SendAsync(request, cancellationToken);
     }
 
     public Task<HttpResponseMessage> RevokeCurrentTokenAsync(
@@ -20,9 +22,11 @@ internal sealed class RegistryAuthApiClient(RegistryHttpClient registryClient)
         string accessToken,
         CancellationToken cancellationToken)
     {
-        var request = new HttpRequestMessage(HttpMethod.Delete, new Uri(origin, "api/v1/cli-auth/token"));
+        var request = new HttpRequestMessage(
+            HttpMethod.Delete,
+            new Uri(origin, RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.CliAuthToken)));
         request.Headers.Authorization = new("Bearer", accessToken);
-        return registryClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        return registryClient.SendAsync(request, cancellationToken);
     }
 
     public Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -35,11 +39,12 @@ internal sealed class RegistryAuthApiClient(RegistryHttpClient registryClient)
         CancellationToken cancellationToken)
     {
         using var tokenResponse = await registryClient.SendAsync(
-            new HttpRequestMessage(HttpMethod.Post, new Uri(origin, "api/v1/cli-auth/token"))
+            new HttpRequestMessage(
+                HttpMethod.Post,
+                new Uri(origin, RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.CliAuthToken)))
             {
                 Content = JsonContent.Create(new RegistryCliTokenRequest(code, verifier)),
             },
-            HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
         var token = await registryClient.ReadJsonAsync<RegistryCliTokenResponse>(tokenResponse, cancellationToken);
         if (token is null || !token.Success || string.IsNullOrWhiteSpace(token.Token))

@@ -1,0 +1,42 @@
+{
+  "formatVersion": 1,
+  "documents": {
+    "owner": {
+      "schemaVersion": 2,
+      "properties": [
+        "schemaVersion",
+        "token",
+        "pid",
+        "hostname",
+        "processStartedAt",
+        "platform",
+        "processMarkerPath",
+        "processMarkerToken",
+        "linuxBootId",
+        "linuxPidNamespace",
+        "acquiredAt"
+      ]
+    },
+    "processMarker": {
+      "schemaVersion": 1,
+      "properties": [
+        "schemaVersion",
+        "token",
+        "pid",
+        "hostname",
+        "processStartedAt",
+        "platform",
+        "linuxBootId",
+        "linuxPidNamespace",
+        "createdAt"
+      ]
+    },
+    "transaction": {
+      "schemaVersion": 1,
+      "properties": ["schemaVersion", "token", "coordinatorPath", "outputs"]
+    },
+    "transactionOutput": {
+      "properties": ["finalPath", "stagedPath", "backupPath", "existed"]
+    }
+  }
+}

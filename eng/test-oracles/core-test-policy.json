@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "primaryLanes": [
+    "app-packaging",
+    "dotnet-linux",
+    "host-platform",
+    "node",
+    "release-artifact"
+  ],
+  "dotnetLaneRules": [
+    {
+      "lane": "app-packaging",
+      "source": "/Sunder.App.Tests/BundledBuildOutputTests\\.cs$"
+    },
+    {
+      "lane": "release-artifact",
+      "attributes": "ExternalArtifact(?:Fact|Theory)|Trait\\(\\s*\"Category\"\\s*,\\s*\"(?:ExternalArtifact|Release)\""
+    },
+    {
+      "lane": "host-platform",
+      "project": "Sunder.Package.Templates.Tests"
+    },
+    {
+      "lane": "host-platform",
+      "source": "/(?:HostSupervisorProcessIntegrationTests|ProcessRuntimeWorkerTests)\\.cs$"
+    },
+    {
+      "lane": "host-platform",
+      "attributes": "(?:MacOs|Windows|Linux|Unix)[A-Za-z0-9_]*(?:Fact|Theory)|Trait\\(\\s*\"Capability\"\\s*,\\s*\"Process\""
+    }
+  ],
+  "defaultDotnetLane": "dotnet-linux",
+  "projectLanes": {
+    "Sunder.App.Tests": ["app-packaging", "dotnet-linux", "host-platform", "release-artifact"],
+    "Sunder.Cli.Tests": ["dotnet-linux"],
+    "Sunder.Core.TestSupport.Tests": ["dotnet-linux", "host-platform"],
+    "Sunder.Host.Client.Tests": ["dotnet-linux"],
+    "Sunder.Host.Supervisor.Tests": ["dotnet-linux", "host-platform"],
+    "Sunder.Package.Build.Tests": ["dotnet-linux", "host-platform", "release-artifact"],
+    "Sunder.Package.Format.Tests": ["dotnet-linux", "release-artifact"],
+    "Sunder.Package.Templates.Tests": ["host-platform"],
+    "Sunder.Registry.Contracts.Tests": ["dotnet-linux"],
+    "Sunder.Runtime.Client.Tests": ["dotnet-linux"],
+    "Sunder.Runtime.Host.Tests": ["dotnet-linux", "host-platform", "release-artifact"],
+    "Sunder.Sdk.PublicApi.Tests": ["dotnet-linux"],
+    "Sunder.Sdk.Worker.Tests": ["dotnet-linux"],
+    "create-sunder-package": ["node"],
+    "package-tool": ["node"],
+    "scripts/release": ["node", "release-artifact"],
+    "scripts/test-oracles": ["node"],
+    "sdk": ["node"]
+  },
+  "reports": {
+    "node": [
+      "node-core-oracles.junit.xml",
+      "node-create-sunder-package.junit.xml",
+      "node-package-tool.junit.xml",
+      "node-sdk.junit.xml"
+    ],
+    "releaseFixtures": "release-fixtures.junit.xml"
+  },
+  "expectedSkips": [
+    {
+      "id": "macos-keychain-opt-in",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Runtime.Host.Tests.PackageStorageServicesTests.MacOsKeychain_OptInIntegration_AddUpdateLoadDelete",
+      "owner": "host-platform",
+      "reason": "External Keychain mutation is opt-in on macOS.",
+      "runnerReasonPattern": "^Set SUNDER_RUN_EXTERNAL_KEYSTORE_TESTS=1 on macOS to permit Keychain mutation\\.$"
+    },
+    {
+      "id": "linux-secret-service-opt-in",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Runtime.Host.Tests.PackageStorageServicesTests.LinuxSecretService_OptInIntegration_StoreLoadDelete",
+      "owner": "host-platform",
+      "reason": "External Secret Service mutation is opt-in on Linux.",
+      "runnerReasonPattern": "^Set SUNDER_RUN_EXTERNAL_KEYSTORE_TESTS=1 on Linux to permit Secret Service mutation\\.$"
+    },
+    {
+      "id": "node-linux-process-identity",
+      "framework": "node",
+      "source": "languages/typescript/node/packages/package-tool/test/package-tool.test.ts",
+      "name": "Linux boot and PID namespace mismatches time out without reclamation",
+      "skipOn": ["Windows", "MacOS"],
+      "owner": "node",
+      "reason": "Linux process-identity metadata is unavailable on this runner.",
+      "runnerReasonPattern": "^(?:true|Requires Linux\\.)$"
+    },
+    {
+      "id": "node-process-suspension",
+      "framework": "node",
+      "source": "languages/typescript/node/packages/package-tool/test/rpc-bindings.test.ts",
+      "name": "a stale generator cannot overwrite a newer plan after waiting for the publish lock",
+      "skipOn": ["Windows"],
+      "owner": "node",
+      "reason": "Windows has no SIGSTOP/SIGCONT process suspension.",
+      "runnerReasonPattern": "^Windows has no SIGSTOP/SIGCONT process suspension\\.$"
+    },
+    {
+      "id": "node-package-tool-symlink-capability",
+      "framework": "node",
+      "source": "languages/typescript/node/packages/package-tool/test/rpc-bindings.test.ts",
+      "name": "generation refuses descriptor paths that pass through symbolic links or reparse points",
+      "owner": "node",
+      "reason": "The runner cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^The test runner cannot create a symbolic link on this platform\\.$"
+    },
+    {
+      "id": "node-sdk-output-symlink-capability",
+      "framework": "node",
+      "source": "languages/typescript/node/packages/sdk/test/generator.test.ts",
+      "name": "generator CLI refuses a symbolic-link output without changing its target",
+      "owner": "node",
+      "reason": "The runner cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Symbolic links are not available on this platform\\.$"
+    },
+    {
+      "id": "node-sdk-input-symlink-capability",
+      "framework": "node",
+      "source": "languages/typescript/node/packages/sdk/test/generator.test.ts",
+      "name": "generator CLI refuses a symbolic-link descriptor source",
+      "owner": "node",
+      "reason": "The runner cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Symbolic links are not available on this platform\\.$"
+    },
+    {
+      "id": "node-sdk-parent-symlink-capability",
+      "framework": "node",
+      "source": "languages/typescript/node/packages/sdk/test/generator.test.ts",
+      "name": "generator CLI refuses symbolic-link output parents",
+      "owner": "node",
+      "reason": "The runner cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Symbolic links are not available on this platform\\.$"
+    },
+    {
+      "id": "declared-external-artifact-not-selected",
+      "framework": "dotnet",
+      "condition": "externalArtifactNotSelected",
+      "owner": "release-artifact",
+      "reason": "The test's declared external artifact lane was not selected.",
+      "runnerReasonPattern": "^External (?:artifact|interop) lane is not selected\\. Set SUNDER_REQUIRE_[A-Z0-9_]+=1 to require it\\.$"
+    },
+    {
+      "id": "unsupported-dotnet-platform",
+      "framework": "dotnet",
+      "condition": "unsupportedOperatingSystem",
+      "owner": "host-platform",
+      "reason": "The conditional platform test is owned by another supported runner.",
+      "runnerReasonPattern": "^Requires (?:macOS|Windows|Linux|a Unix platform|Linux process identity metadata)\\.$"
+    }
+  ]
+}

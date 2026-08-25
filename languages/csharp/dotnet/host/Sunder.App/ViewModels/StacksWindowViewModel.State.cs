@@ -31,7 +31,8 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     private readonly MarketplaceSearchScheduler _registrySearchScheduler;
     private readonly TimeSpan _registryDetailSpinnerDelay;
     private readonly MarketplacePackageProfileViewModel _selectedLocalProfile = new();
-    private readonly MarketplacePackageProfileViewModel _registryProfile = new();
+    private readonly MarketplacePackageProfileViewModel _registryProfile;
+    private readonly RemoteImageService? _remoteImageService;
     private StackSelectionRequest _localSelectionRequest;
     private CancellationTokenSource? _registryStackDetailsSpinnerCancellation;
     private readonly OwnedTaskObserver _tasks = new(nameof(StacksWindowViewModel));
@@ -58,11 +59,14 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         Func<RuntimePackageStamp, CancellationToken, Task>? waitUntilPresentationAppliedAsync = null,
         Func<Uri, IRegistryApiClient>? registryClientFactory = null,
         TimeSpan? registrySearchThrottleDelay = null,
-        TimeSpan? registryDetailSpinnerDelay = null)
+        TimeSpan? registryDetailSpinnerDelay = null,
+        RemoteImageService? remoteImageService = null)
     {
         _library = library;
         _archivePicker = archivePicker;
         _runtimeApiClient = runtimeApiClient;
+        _remoteImageService = remoteImageService;
+        _registryProfile = new MarketplacePackageProfileViewModel(remoteImageService);
         _selection = new StackSelectionCoordinator(_tasks.Token);
         _detailLoader = new StackDetailLoadCoordinator(library, runtimeApiClient);
         _registryInstallService = registryInstallService ?? new RegistryPackageInstallService();

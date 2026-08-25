@@ -1,12 +1,18 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http.Features;
 using Sunder.Runtime.Client;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.LocalState;
 
 namespace Sunder.Host.Supervisor;
 
 internal sealed class RuntimeGateway : IDisposable
 {
+    private const int RequestPreflightBufferBytes = 64 * 1024;
+    private const string CorrelationHeader = "X-Correlation-ID";
+
     private static readonly HashSet<string> HopByHopHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
         "Connection",
@@ -38,6 +44,11 @@ internal sealed class RuntimeGateway : IDisposable
 
     public async Task ForwardAsync(HttpContext context)
     {
+        if (!await IsWithinRequestBodyLimitAsync(context).ConfigureAwait(false))
+        {
+            return;
+        }
+
         var connection = _connections.GetWorkerConnection();
         if (connection is null)
         {
@@ -102,6 +113,94 @@ internal sealed class RuntimeGateway : IDisposable
            || HttpMethods.IsPost(request.Method)
            || HttpMethods.IsPut(request.Method)
            || HttpMethods.IsPatch(request.Method);
+
+    private static async Task<bool> IsWithinRequestBodyLimitAsync(HttpContext context)
+    {
+        var request = context.Request;
+        var maximumBytes = GetMaximumRequestBodyBytes(request);
+        if (!HasRequestBody(request))
+        {
+            return true;
+        }
+        if (request.ContentLength is { } contentLength && contentLength <= maximumBytes)
+        {
+            return true;
+        }
+        var declaredOverflow = request.ContentLength > maximumBytes;
+
+        // Read one sentinel byte locally so unknown-length overflow never reaches worker IPC.
+        var maxRequestBodySize = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (maxRequestBodySize is { IsReadOnly: false })
+        {
+            maxRequestBodySize.MaxRequestBodySize = maximumBytes + 1;
+        }
+        request.EnableBuffering(
+            RequestPreflightBufferBytes,
+            maximumBytes + 1);
+        var buffer = new byte[RequestPreflightBufferBytes];
+        long observedBytes = 0;
+        try
+        {
+            while (true)
+            {
+                var remainingThroughOverflow = maximumBytes + 1 - observedBytes;
+                var read = await request.Body.ReadAsync(
+                    buffer.AsMemory(0, (int)Math.Min(buffer.Length, remainingThroughOverflow)),
+                    context.RequestAborted).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    if (declaredOverflow)
+                    {
+                        await WriteUploadLimitAsync(context, maximumBytes).ConfigureAwait(false);
+                        return false;
+                    }
+                    request.Body.Position = 0;
+                    return true;
+                }
+
+                observedBytes += read;
+                if (observedBytes > maximumBytes)
+                {
+                    await WriteUploadLimitAsync(context, maximumBytes).ConfigureAwait(false);
+                    return false;
+                }
+            }
+        }
+        catch (BadHttpRequestException exception)
+            when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            await WriteUploadLimitAsync(context, maximumBytes).ConfigureAwait(false);
+            return false;
+        }
+    }
+
+    internal static long GetMaximumRequestBodyBytes(HttpRequest request)
+    {
+        if (!HttpMethods.IsPost(request.Method))
+        {
+            return RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes;
+        }
+
+        var path = request.Path.Value;
+        if (path is { Length: > 1 } && path[^1] == '/')
+        {
+            path = path[..^1];
+        }
+        if (string.Equals(path, "/api/v1/uploads/packages", StringComparison.OrdinalIgnoreCase))
+        {
+            return RuntimeRequestSizeLimits.PackageUploadMaxRequestBodyBytes;
+        }
+        if (string.Equals(path, "/api/v1/uploads/stacks", StringComparison.OrdinalIgnoreCase))
+        {
+            return RuntimeRequestSizeLimits.StackUploadMaxRequestBodyBytes;
+        }
+        if (string.Equals(path, "/api/v1/uploads/stack-media", StringComparison.OrdinalIgnoreCase))
+        {
+            return RuntimeRequestSizeLimits.StackMediaUploadMaxRequestBodyBytes;
+        }
+
+        return RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes;
+    }
 
     private static void CopyRequestHeaders(HttpRequest source, HttpRequestMessage destination)
     {
@@ -169,6 +268,43 @@ internal sealed class RuntimeGateway : IDisposable
             },
             new JsonSerializerOptions(JsonSerializerDefaults.Web),
             context.RequestAborted).ConfigureAwait(false);
+    }
+
+    private static async Task WriteUploadLimitAsync(HttpContext context, long maximumBytes)
+    {
+        var correlationId = ResolveCorrelationId(context);
+        context.TraceIdentifier = correlationId;
+        context.Response.Clear();
+        context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+        context.Response.ContentType = "application/problem+json";
+        context.Response.Headers[CorrelationHeader] = correlationId;
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body,
+            new
+            {
+                type = "https://sunder.dev/problems/runtime.v1.upload-limit",
+                title = "Upload limit exceeded",
+                status = StatusCodes.Status413PayloadTooLarge,
+                detail = $"Request body too large. The max request body size is {maximumBytes} bytes.",
+                code = "runtime.v1.upload-limit",
+                correlationId,
+            },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web),
+            CancellationToken.None).ConfigureAwait(false);
+        await context.Response.CompleteAsync().ConfigureAwait(false);
+    }
+
+    private static string ResolveCorrelationId(HttpContext context)
+    {
+        var supplied = context.Request.Headers[CorrelationHeader].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(supplied)
+            && supplied.Length <= 128
+            && supplied.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'))
+        {
+            return supplied;
+        }
+
+        return Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N");
     }
 
     private HttpClient GetClient(RuntimeWorkerConnection connection)

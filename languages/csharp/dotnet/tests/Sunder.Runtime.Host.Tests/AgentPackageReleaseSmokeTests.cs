@@ -11,6 +11,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
+[Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class AgentPackageReleaseSmokeTests
 {
     private const string AgentPackageId = "sunder.package.agent";
@@ -23,16 +24,14 @@ public sealed class AgentPackageReleaseSmokeTests
         "shell.tools",
     ];
 
-    [Fact]
+    [ExternalArtifactFact("SUNDER_REQUIRE_AGENT_PACKAGE_RELEASE", "SUNDER_AGENT_PACKAGE_ARCHIVE_DIR")]
+    [Trait("Category", "ExternalArtifact")]
     public async Task ReleaseArchives_InstallActivateUnloadReloadAndReinstallAsOneFamily()
     {
         var archiveDirectory = Environment.GetEnvironmentVariable("SUNDER_AGENT_PACKAGE_ARCHIVE_DIR");
-        if (string.IsNullOrWhiteSpace(archiveDirectory))
-        {
-            return;
-        }
+        Assert.False(string.IsNullOrWhiteSpace(archiveDirectory), "SUNDER_AGENT_PACKAGE_ARCHIVE_DIR is required by the selected artifact lane.");
 
-        var archives = Directory.GetFiles(Path.GetFullPath(archiveDirectory), "*.sunderpkg")
+        var archives = Directory.GetFiles(Path.GetFullPath(archiveDirectory!), "*.sunderpkg")
             .Order(StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(15, archives.Length);
@@ -59,7 +58,8 @@ public sealed class AgentPackageReleaseSmokeTests
             var install = await host.ApplyPackageStoreMutationsAsync(archives
                 .Select(path => new PackageStoreMutation(
                     PackageStoreMutationKind.Install,
-                    ArchiveFilePath: path))
+                    ArchiveFilePath: path,
+                    CapabilityConsent: ReadSensitiveCapabilityConsent(path)))
                 .ToArray());
             Assert.True(install.Success, logger.Describe("Install family", install.Errors));
 
@@ -139,6 +139,30 @@ public sealed class AgentPackageReleaseSmokeTests
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
             Assert.False(Directory.Exists(root));
         }
+    }
+
+    private static PackageCapabilityConsent? ReadSensitiveCapabilityConsent(string archivePath)
+    {
+        using var archive = ZipFile.OpenRead(archivePath);
+        var manifest = ReadArchiveJson<SunderPackageManifest>(archive, SunderPackageFormat.ManifestPath);
+        var capabilities = PackageSensitiveCapabilityPolicy.GetRequiredCapabilities(manifest);
+        if (capabilities.Count == 0) return null;
+
+        var contentIndex = ReadArchiveJson<SunderPackageContentIndex>(archive, SunderPackageFormat.ContentIndexPath);
+        return new PackageCapabilityConsent(
+            manifest.Id ?? throw new InvalidDataException("Package manifest id is missing."),
+            manifest.Version ?? throw new InvalidDataException("Package manifest version is missing."),
+            PackageSensitiveCapabilityPolicy.GetManifestSha256(contentIndex),
+            capabilities);
+    }
+
+    private static T ReadArchiveJson<T>(ZipArchive archive, string path) where T : class
+    {
+        var entry = archive.GetEntry(path)
+            ?? throw new InvalidDataException($"Package archive is missing {path}.");
+        using var stream = entry.Open();
+        return JsonSerializer.Deserialize<T>(stream)
+            ?? throw new InvalidDataException($"Package archive contains invalid {path}.");
     }
 
     private static void VerifyReleasedSqliteBytes(

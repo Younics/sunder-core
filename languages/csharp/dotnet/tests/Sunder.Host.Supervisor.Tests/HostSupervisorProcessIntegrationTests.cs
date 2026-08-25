@@ -2,6 +2,9 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
+using Microsoft.AspNetCore.Http;
+using Sunder.Core.TestSupport;
 using Sunder.Host.Contracts;
 using Sunder.Host.Supervisor;
 using Sunder.Runtime.Client;
@@ -14,10 +17,13 @@ namespace Sunder.Host.Supervisor.Tests;
 
 public sealed class HostSupervisorProcessIntegrationTests
 {
+    private const string CorrelationHeader = "X-Correlation-ID";
+
     [Fact]
     public async Task SupervisorProcess_GatewaysToNestedRuntimeAndOwnsResetDrain()
     {
-        var root = CreateTempDirectory();
+        await using var scope = TemporaryDirectoryScope.Create("sunder-host-process-tests");
+        var root = scope.RootPath;
         var hostStateRoot = Path.Combine(root, "host");
         var runtimeStateRoot = Path.Combine(root, "runtime");
         var externalConnectionPath = Path.Combine(root, "connection", "host.json");
@@ -25,15 +31,13 @@ public sealed class HostSupervisorProcessIntegrationTests
         var externalToken = $"integration-external-{Guid.NewGuid():N}";
         var deploymentIdentity = HostDeploymentIdentityVerifier.Compute(
             Path.GetDirectoryName(typeof(HostStartupOptions).Assembly.Location)!);
-        using var process = StartSupervisor(
+        await using var process = StartSupervisor(
             typeof(RuntimeHostStartupOptions).Assembly.Location,
             hostStateRoot,
             runtimeStateRoot,
             externalConnectionPath,
             externalToken,
             deploymentIdentity);
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
 
         try
@@ -153,8 +157,8 @@ public sealed class HostSupervisorProcessIntegrationTests
                 content: null,
                 timeout.Token);
             Assert.Equal(HttpStatusCode.NoContent, shutdown.StatusCode);
-            await process.WaitForExitAsync(timeout.Token);
-            Assert.Equal(0, process.ExitCode);
+            var result = await process.WaitForExitAsync(TimeSpan.FromSeconds(30), timeout.Token);
+            Assert.Equal(0, result.ExitCode);
             Assert.False(File.Exists(externalConnectionPath));
             Assert.False(File.Exists(workerConnectionPath));
             Assert.True(RuntimeLocalState.IsLeaseAvailable(runtimeStateRoot));
@@ -165,22 +169,146 @@ public sealed class HostSupervisorProcessIntegrationTests
         }
         catch (Exception exception)
         {
-            await TerminateProcessAsync(process);
-            var diagnostics = process.HasExited
-                ? $"stdout:\n{await standardOutput}\nstderr:\n{await standardError}"
-                : "Supervisor process did not exit; output streams remain open.";
             throw new InvalidOperationException(
-                $"Real Supervisor/Runtime integration failed.\n{diagnostics}",
+                $"Real Supervisor/Runtime integration failed.{Environment.NewLine}{process.Diagnostics}",
                 exception);
-        }
-        finally
-        {
-            await TerminateProcessAsync(process);
-            TryDeleteDirectory(root);
         }
     }
 
-    private static Process StartSupervisor(
+    [Fact]
+    public async Task SupervisorProcess_ForwardsTransferClassesAndRejectsOversizedOrdinaryBodiesBeforeRuntimeProxy()
+    {
+        await using var scope = TemporaryDirectoryScope.Create("sunder-host-upload-limit-tests");
+        var root = scope.RootPath;
+        var hostStateRoot = Path.Combine(root, "host");
+        var runtimeStateRoot = Path.Combine(root, "runtime");
+        var externalConnectionPath = Path.Combine(root, "connection", "host.json");
+        var externalToken = $"integration-external-{Guid.NewGuid():N}";
+        var deploymentIdentity = HostDeploymentIdentityVerifier.Compute(
+            Path.GetDirectoryName(typeof(HostStartupOptions).Assembly.Location)!);
+        await using var process = StartSupervisor(
+            typeof(RuntimeHostStartupOptions).Assembly.Location,
+            hostStateRoot,
+            runtimeStateRoot,
+            externalConnectionPath,
+            externalToken,
+            deploymentIdentity);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+
+        try
+        {
+            var connection = await WaitForConnectionAsync(externalConnectionPath, process, timeout.Token);
+            using var client = new HttpClient
+            {
+                BaseAddress = connection.RuntimeUrl,
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                "Bearer",
+                connection.BearerToken);
+            await WaitForHostStateAsync(client, HostRuntimeState.Ready, process, timeout.Token);
+
+            var transferLength = RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes + 1;
+            await AssertTransferAcceptedAsync(
+                client,
+                "api/v1/uploads/packages",
+                transferLength,
+                chunked: false,
+                timeout.Token);
+            await AssertTransferAcceptedAsync(
+                client,
+                "api/v1/uploads/stacks",
+                transferLength,
+                chunked: true,
+                timeout.Token);
+            await AssertTransferAcceptedAsync(
+                client,
+                "api/v1/uploads/stack-media",
+                transferLength,
+                chunked: false,
+                timeout.Token);
+
+            await AssertOversizedRequestAsync(client, chunked: false, timeout.Token);
+            await AssertOversizedRequestAsync(client, chunked: true, timeout.Token);
+
+            var status = await client.GetFromJsonAsync<HostRuntimeStatus>(
+                "api/host/v1/status",
+                timeout.Token);
+            Assert.Equal(HostRuntimeState.Ready, status?.State);
+
+            using var shutdown = await client.PostAsync("api/host/v1/shutdown", content: null, timeout.Token);
+            Assert.Equal(HttpStatusCode.NoContent, shutdown.StatusCode);
+            var result = await process.WaitForExitAsync(TimeSpan.FromSeconds(30), timeout.Token);
+            Assert.Equal(0, result.ExitCode);
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                $"Real Supervisor request-limit integration failed.{Environment.NewLine}{process.Diagnostics}",
+                exception);
+        }
+    }
+
+    private static async Task AssertTransferAcceptedAsync(
+        HttpClient client,
+        string path,
+        long length,
+        bool chunked,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new SizedHttpContent(length, reportLength: !chunked),
+            Version = HttpVersion.Version11,
+            VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+        };
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+
+        using var response = await client.SendAsync(request, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var upload = await response.Content.ReadFromJsonAsync<ContentUploadDescriptor>(cancellationToken);
+        Assert.NotNull(upload);
+        Assert.Equal(length, upload.Length);
+    }
+
+    private static async Task AssertOversizedRequestAsync(
+        HttpClient client,
+        bool chunked,
+        CancellationToken cancellationToken)
+    {
+        var correlationId = $"supervisor-upload-{(chunked ? "chunked" : "fixed")}";
+        using var request = new HttpRequestMessage(
+            HttpMethod.Put,
+            "api/v1/packages/missing/settings/values")
+        {
+            Content = new SizedHttpContent(
+                RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes + 1,
+                reportLength: !chunked),
+        };
+        request.Headers.TryAddWithoutValidation(CorrelationHeader, correlationId);
+
+        using var response = await client.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(correlationId, response.Headers.GetValues(CorrelationHeader).Single());
+        Assert.Equal(
+            "https://sunder.dev/problems/runtime.v1.upload-limit",
+            problem.GetProperty("type").GetString());
+        Assert.Equal("Upload limit exceeded", problem.GetProperty("title").GetString());
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, problem.GetProperty("status").GetInt32());
+        Assert.Equal(
+            $"Request body too large. The max request body size is {RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes} bytes.",
+            problem.GetProperty("detail").GetString());
+        Assert.Equal("runtime.v1.upload-limit", problem.GetProperty("code").GetString());
+        Assert.Equal(correlationId, problem.GetProperty("correlationId").GetString());
+    }
+
+    private static CapturedProcess StartSupervisor(
         string runtimeHostPath,
         string hostStateRoot,
         string runtimeStateRoot,
@@ -222,61 +350,63 @@ public sealed class HostSupervisorProcessIntegrationTests
         startInfo.Environment["SUNDER_RUNTIME_BEARER_TOKEN"] = externalToken;
         startInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"] = externalConnectionPath;
 
-        return Process.Start(startInfo)
-               ?? throw new InvalidOperationException("Failed to launch the real Sunder Host Supervisor process.");
+        return CapturedProcess.Start(startInfo);
     }
 
     private static async Task<RuntimeConnectionInfo> WaitForConnectionAsync(
         string path,
-        Process process,
+        CapturedProcess process,
         CancellationToken cancellationToken)
     {
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var connection = RuntimeConnectionInfoStore.Load(path);
-            if (connection is not null)
-            {
-                return connection;
-            }
-            ThrowIfExited(process, $"publish connection information to '{path}'");
-            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
-        }
+        await FileSignal.WaitForAsync(
+            path,
+            TimeSpan.FromSeconds(30),
+            () => process.Diagnostics,
+            cancellationToken);
+        return await Eventually.ObserveAsync(
+            _ => ValueTask.FromResult(RuntimeConnectionInfoStore.Load(path)),
+            static connection => connection is not null,
+            TimeSpan.FromSeconds(2),
+            describe: (connection, error) =>
+                $"connection={connection}; error={error?.Message}; {process.Diagnostics}",
+            cancellationToken: cancellationToken)
+            ?? throw new InvalidOperationException($"Connection signal '{path}' did not contain a connection document.");
     }
 
     private static async Task<HostRuntimeStatus> WaitForHostStateAsync(
         HttpClient client,
         HostRuntimeState expected,
-        Process process,
+        CapturedProcess process,
         CancellationToken cancellationToken)
     {
-        HostRuntimeStatus? latest = null;
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            latest = await client.GetFromJsonAsync<HostRuntimeStatus>(
-                "api/host/v1/status",
-                cancellationToken);
-            if (latest?.State == expected)
+        var status = await Eventually.ObserveAsync(
+            async token =>
             {
+                ThrowIfExited(process, $"reach Host Runtime state '{expected}'");
+                var latest = await client.GetFromJsonAsync<HostRuntimeStatus>(
+                    "api/host/v1/status",
+                    token);
+                if (latest?.State is HostRuntimeState.Failed or HostRuntimeState.CrashLoop)
+                {
+                    throw new InvalidOperationException(
+                        $"Runtime worker entered '{latest.State}': {latest.FailureCode} {latest.FailureMessage}");
+                }
                 return latest;
-            }
-            if (latest?.State is HostRuntimeState.Failed or HostRuntimeState.CrashLoop)
-            {
-                throw new InvalidOperationException(
-                    $"Runtime worker entered '{latest.State}': {latest.FailureCode} {latest.FailureMessage}");
-            }
-            ThrowIfExited(process, $"reach Host Runtime state '{expected}'");
-            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
-        }
+            },
+            latest => latest?.State == expected,
+            TimeSpan.FromSeconds(60),
+            TimeSpan.FromMilliseconds(100),
+            (latest, error) => $"expected={expected}; latest={latest}; error={error?.Message}; {process.Diagnostics}",
+            cancellationToken);
+        return status ?? throw new InvalidOperationException($"Host status did not reach '{expected}'.");
     }
 
-    private static void ThrowIfExited(Process process, string operation)
+    private static void ThrowIfExited(CapturedProcess process, string operation)
     {
         if (process.HasExited)
         {
             throw new InvalidOperationException(
-                $"Sunder Host Supervisor exited with code {process.ExitCode} before it could {operation}.");
+                $"Sunder Host Supervisor exited before it could {operation}.{Environment.NewLine}{process.Diagnostics}");
         }
     }
 
@@ -298,49 +428,25 @@ public sealed class HostSupervisorProcessIntegrationTests
             : "dotnet";
     }
 
-    private static async Task TerminateProcessAsync(Process process)
+    private sealed class SizedHttpContent(long length, bool reportLength) : HttpContent
     {
-        if (!process.HasExited)
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
         {
-            try
+            var buffer = new byte[64 * 1024];
+            var remaining = length;
+            while (remaining > 0)
             {
-                process.Kill(entireProcessTree: true);
+                var count = (int)Math.Min(buffer.Length, remaining);
+                await stream.WriteAsync(buffer.AsMemory(0, count));
+                remaining -= count;
             }
-            catch (InvalidOperationException)
-            {
-            }
         }
 
-        try
+        protected override bool TryComputeLength(out long computedLength)
         {
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-        }
-        catch (TimeoutException)
-        {
+            computedLength = reportLength ? length : 0;
+            return reportLength;
         }
     }
 
-    private static string CreateTempDirectory()
-    {
-        var path = Path.Combine(
-            Path.GetTempPath(),
-            "sunder-host-process-tests",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
-    }
-
-    private static void TryDeleteDirectory(string path)
-    {
-        try
-        {
-            Directory.Delete(path, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-    }
 }

@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.Core.TestSupport;
 using System.Collections.Specialized;
 using System.Net;
 using System.Reflection;
@@ -167,7 +168,9 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "Duplicate hosted view failure.",
             PackageFailureOrigin.AppHostedView);
-        await Task.Delay(50);
+        await Eventually.AssertPendingAsync(disable, () => "Primary disable completed before warmup cleanup was released.");
+        await Eventually.AssertPendingAsync(duplicateDisable, () => "Duplicate disable completed before warmup cleanup was released.");
+        await Eventually.AssertPendingAsync(probe.DisposalObserved.Task, () => "Package view was disposed before its warmup drained.");
         Assert.False(disable.IsCompleted);
         Assert.False(duplicateDisable.IsCompleted);
         Assert.False(probe.DisposalObserved.Task.IsCompleted);
@@ -441,7 +444,8 @@ public sealed class PackageViewHostServiceTests
             "agent.chat",
             parameters: null).AsTask();
 
-        await Task.Delay(50);
+        await Eventually.AssertPendingAsync(presentation, () => "Presentation crossed an active warmup barrier.");
+        await Eventually.AssertPendingAsync(navigation, () => "Navigation crossed an active warmup barrier.");
         Assert.False(presented);
         Assert.False(probe.NavigationStarted.Task.IsCompleted);
 
@@ -551,7 +555,8 @@ public sealed class PackageViewHostServiceTests
             parameters: null,
             hostService.CurrentGenerationId,
             CancellationToken.None);
-        await Task.Delay(50);
+        await Eventually.AssertPendingAsync(reload, () => "Reload crossed an active warmup barrier.");
+        await Eventually.AssertPendingAsync(navigation.AsTask(), () => "Navigation crossed an active warmup barrier.");
         Assert.False(reload.IsCompleted);
         Assert.False(navigation.IsCompleted);
 
@@ -650,13 +655,19 @@ public sealed class PackageViewHostServiceTests
             parameters: null).AsTask();
         await secondNavigationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         releaseEscapedOperation.TrySetResult();
-        await Task.Delay(50);
-        Assert.NotNull(escapedOperation);
-        Assert.False(escapedOperation!.IsCompleted);
+        var pendingEscapedOperation = await Eventually.ObserveAsync(
+            _ => ValueTask.FromResult(escapedOperation),
+            static operation => operation is not null,
+            TimeSpan.FromSeconds(2),
+            describe: (operation, error) => $"escapedOperation={operation?.Status.ToString() ?? "<not-created>"}; error={error?.Message}");
+        Assert.NotNull(pendingEscapedOperation);
+        await Eventually.AssertPendingAsync(
+            pendingEscapedOperation,
+            () => "Escaped presentation bypassed the active navigation gate.");
 
         releaseSecondNavigation.TrySetResult();
         await secondNavigation.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.True(await escapedOperation.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(await pendingEscapedOperation.WaitAsync(TimeSpan.FromSeconds(2)));
     }
 
     [Fact]
@@ -735,7 +746,8 @@ public sealed class PackageViewHostServiceTests
             CancellationToken.None);
 
         resetCancellation.Cancel();
-        await Task.Delay(50);
+        await Eventually.AssertPendingAsync(canceledReset, () => "Canceled queued reset completed before its predecessor retired.");
+        await Eventually.AssertPendingAsync(presentation, () => "Presentation crossed the predecessor reset barrier.");
         Assert.False(canceledReset.IsCompleted);
         Assert.False(presentation.IsCompleted);
 
@@ -938,11 +950,13 @@ public sealed class PackageViewHostServiceTests
             var replacement = hostService.ApplyPackageDeltaAsync([package], [replacementSource], ["agent"]);
             await WaitForFileAsync(gatePath + ".started");
 
+            Assert.Equal(1, hostService.PendingQuarantineCandidateCount);
             Assert.Same(currentView, hostService.GetOrCreateView("agent.chat"));
             Assert.False(GetIsDisposed(currentView));
 
             File.WriteAllText(gatePath + ".release", string.Empty);
             await replacement.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, hostService.PendingQuarantineCandidateCount);
             Assert.NotSame(currentView, hostService.GetOrCreateView("agent.chat"));
         }
         finally
@@ -1155,6 +1169,7 @@ public sealed class PackageViewHostServiceTests
                 InvokePendingCandidateManagedFaultAsync(rejectedCandidateView!));
 
             Assert.True(firstFaultHandled);
+            Assert.Equal(1, hostService.PendingQuarantineCandidateCount);
             Assert.True(hostService.TryHandleUnhandledException(lateFault));
             Assert.Equal(currentGenerationId, hostService.CurrentGenerationId);
             Assert.Same(currentView, hostService.GetOrCreateView("agent.chat"));
@@ -1164,6 +1179,7 @@ public sealed class PackageViewHostServiceTests
             releaseRejectedRetirement.TrySetResult();
             await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
+            Assert.Equal(0, hostService.PendingQuarantineCandidateCount);
             Assert.False(hostService.TryHandleUnhandledException(lateFault));
             Assert.Equal(currentGenerationId, hostService.CurrentGenerationId);
         }
@@ -1633,6 +1649,7 @@ public sealed class PackageViewHostServiceTests
             Assert.True(hostService.TryHandleUnhandledException(fault));
             Assert.True(hostService.TryHandleUnobservedTaskException(
                 new AggregateException(fault)));
+            Assert.Equal(1, hostService.AcceptedPackageFaultCount);
             Assert.NotNull(recoveryRequest);
             Assert.Empty(notificationCenter.ListNotifications());
             Assert.Equal(
@@ -1676,10 +1693,12 @@ public sealed class PackageViewHostServiceTests
             await TestSupport.AsyncAssert.WaitForConditionAsync(
                 () => hostService.IsPackageAppUiQuarantined("agent")
                     && GetIsDisposed(replacementView)
-                    && notificationCenter.ListNotifications().Count == 1);
+                    && notificationCenter.ListNotifications().Count == 1
+                    && rpcHandler.CloseCount == 2);
 
             Assert.Equal(1, Volatile.Read(ref recoveryCount));
             Assert.Equal(1, recoveryCoordinator.AttemptedRecoveryCount);
+            Assert.Equal(2, hostService.AcceptedPackageFaultCount);
             Assert.Empty(hostService.FilterEnabledPackages([package]));
             Assert.Equal(2, rpcHandler.CloseCount);
             Assert.Equal(
@@ -1764,6 +1783,7 @@ public sealed class PackageViewHostServiceTests
                 AppPackageUiCleanupOutcome.Unproven,
                 await recoveryRequest.CleanupCompletion.WaitAsync(
                     TimeSpan.FromSeconds(2)));
+            Assert.Equal(1, hostService.PackageQuarantineCount);
             await recoveryCoordinator.WaitForRecoveryAsync(
                     "agent",
                     source.ContentHash)
@@ -2068,6 +2088,7 @@ public sealed class PackageViewHostServiceTests
             var enabledPackages = await apply.WaitAsync(TimeSpan.FromSeconds(2));
 
             Assert.Empty(enabledPackages);
+            Assert.Equal(1, hostService.PackageQuarantineCount);
             Assert.True(hostService.IsPackageAppUiQuarantined("agent"));
             Assert.Null(hostService.GetOrCreateView("agent.chat"));
         }
@@ -2126,6 +2147,7 @@ public sealed class PackageViewHostServiceTests
             var enabledPackages = await apply.WaitAsync(TimeSpan.FromSeconds(2));
 
             Assert.Empty(enabledPackages);
+            Assert.Equal(1, hostService.PackageQuarantineCount);
             Assert.True(hostService.IsPackageAppUiQuarantined("agent"));
             Assert.Null(hostService.GetOrCreateView("agent.chat"));
             Assert.False(File.Exists(sideEffectPath));
@@ -2165,6 +2187,7 @@ public sealed class PackageViewHostServiceTests
                 "agent",
                 "Hosted view failed.",
                 PackageFailureOrigin.AppHostedView);
+            Assert.Equal(1, hostService.PackageQuarantineCount);
             File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
             var replacementSource = RuntimeContractTestData.Snapshot(
                 "agent",
@@ -2173,6 +2196,7 @@ public sealed class PackageViewHostServiceTests
 
             await hostService.ApplyPackageDeltaAsync([package], [replacementSource]);
 
+            Assert.Equal(0, hostService.PackageQuarantineCount);
             Assert.False(hostService.IsPackageAppUiQuarantined("agent"));
             Assert.NotNull(hostService.GetOrCreateView("agent.chat"));
             Assert.Single(hostService.FilterEnabledPackages([package]));
@@ -2433,7 +2457,16 @@ public sealed class PackageViewHostServiceTests
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 hostService.ApplyPackageDeltaAsync([package], [rejectedSource], ["agent"]));
 
-            await Task.Delay(100);
+            await Eventually.ObserveAsync(
+                _ => ValueTask.FromResult(new
+                {
+                    Notifications = notificationCenter.ListNotifications().Count,
+                    Processes = backgroundProcesses.ListProcesses().Count,
+                    SideEffectExists = File.Exists(sideEffectPath),
+                }),
+                state => state.Notifications == 1 && state.Processes == 0 && !state.SideEffectExists,
+                TimeSpan.FromSeconds(2),
+                describe: (state, error) => $"state={state}; error={error?.Message}");
             var hostNotification = Assert.Single(notificationCenter.ListNotifications());
             Assert.Equal("Agent App UI update failed", hostNotification.Title);
             Assert.Empty(backgroundProcesses.ListProcesses());

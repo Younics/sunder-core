@@ -64,14 +64,9 @@ public sealed class UserHostPayloadStoreTests
         }
     }
 
-    [Fact]
+    [UnixFact]
     public void Prepare_RejectsLinksInBundledPayload()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var root = CreateRoot();
         try
         {

@@ -75,7 +75,11 @@ internal sealed class RegistryPackagePlanResolver(
                 acquired));
         }
         using var response = await registryClient.SendAsync(
-            new HttpRequestMessage(HttpMethod.Post, new Uri(origin, "api/v1/packages/resolve-package-changes"))
+            new HttpRequestMessage(
+                HttpMethod.Post,
+                new Uri(
+                    origin,
+                    RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.PackageResolvePackageChanges)))
             {
                 Content = JsonContent.Create(new RegistryResolvePackageChangesRequest(
                     RuntimeRegistryContractMapper.ToRegistry(request.Packages),
@@ -85,7 +89,6 @@ internal sealed class RegistryPackagePlanResolver(
                     request.AllowDowngrade,
                     request.Reinstall)),
             },
-            HttpCompletionOption.ResponseContentRead,
             cancellationToken);
         if (!response.IsSuccessStatusCode)
         {

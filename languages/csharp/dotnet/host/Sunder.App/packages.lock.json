@@ -2,15 +2,6 @@
   "version": 2,
   "dependencies": {
     "net10.0": {
-      "AsyncImageLoader.Avalonia": {
-        "type": "Direct",
-        "requested": "[3.8.0, )",
-        "resolved": "3.8.0",
-        "contentHash": "5cFMhM7MUD7w3rH+n5pWyVR82loEFuFqANQ/EDDRg0lRKc91PoSq/4vro/ixW/ZQ1TYnXAD6jXRoTjcce2fbUg==",
-        "dependencies": {
-          "Avalonia": "12.0.0"
-        }
-      },
       "Avalonia": {
         "type": "Direct",
         "requested": "[12.0.3, )",
@@ -365,13 +356,6 @@
         }
       },
       "sunder.sdk.stacks": {
-        "type": "Project",
-        "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )",
-          "Sunder.Sdk.Worker": "[1.1.0, )"
-        }
-      },
-      "sunder.sdk.worker": {
         "type": "Project",
         "dependencies": {
           "Sunder.Sdk": "[1.1.0, )"

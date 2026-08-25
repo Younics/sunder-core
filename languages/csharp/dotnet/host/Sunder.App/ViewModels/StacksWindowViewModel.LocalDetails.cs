@@ -214,7 +214,12 @@ public sealed partial class StacksWindowViewModel
                     .OrderBy(item => StackContentKindLabels.FormatGroupName(item.Kind), StringComparer.OrdinalIgnoreCase)
                     .ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
                     .ToArray());
-            RegistrySelectedDetails.Add(new LocalStackDetailPackageViewModel(package, info?.IconUri));
+            RegistrySelectedDetails.Add(new LocalStackDetailPackageViewModel(
+                package,
+                info?.IconUri,
+                info?.IconTransport ?? PackageIconTransport.Registry,
+                info?.RegistryOrigin,
+                _remoteImageService));
         }
     }
 

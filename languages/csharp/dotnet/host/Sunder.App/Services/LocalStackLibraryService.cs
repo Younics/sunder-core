@@ -1,11 +1,18 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Sunder.Package.Format;
 
 namespace Sunder.App.Services;
 
 public sealed class LocalStackLibraryService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = false,
+        RespectRequiredConstructorParameters = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        WriteIndented = true,
+    };
     private readonly string _stacksRoot;
 
     public LocalStackLibraryService(string? stacksRoot = null)
@@ -37,7 +44,9 @@ public sealed class LocalStackLibraryService
 
         if (changed)
         {
-            await SaveIndexAsync(new LocalStackLibraryIndex(existing.Select(ToStoredPath).ToArray()), cancellationToken);
+            await SaveIndexAsync(new LocalStackLibraryIndex(
+                LocalStackLibraryIndex.CurrentSchemaVersion,
+                existing.Select(ToStoredPath).ToArray()), cancellationToken);
         }
 
         return existing
@@ -119,7 +128,7 @@ public sealed class LocalStackLibraryService
             .Where(item => !string.Equals(item.StackId, stackId, StringComparison.OrdinalIgnoreCase))
             .Append(ToStoredPath(item))
             .ToArray();
-        await SaveIndexAsync(new LocalStackLibraryIndex(items), CancellationToken.None);
+        await SaveIndexAsync(new LocalStackLibraryIndex(LocalStackLibraryIndex.CurrentSchemaVersion, items), CancellationToken.None);
         return item;
     }
 
@@ -134,7 +143,7 @@ public sealed class LocalStackLibraryService
                 ? item with { Details = details }
                 : item)
             .ToArray();
-        await SaveIndexAsync(new LocalStackLibraryIndex(items), cancellationToken);
+        await SaveIndexAsync(new LocalStackLibraryIndex(LocalStackLibraryIndex.CurrentSchemaVersion, items), cancellationToken);
     }
 
     public async Task UpdatePublishStateAsync(
@@ -157,7 +166,7 @@ public sealed class LocalStackLibraryService
                 }
                 : item)
             .ToArray();
-        await SaveIndexAsync(new LocalStackLibraryIndex(items), cancellationToken);
+        await SaveIndexAsync(new LocalStackLibraryIndex(LocalStackLibraryIndex.CurrentSchemaVersion, items), cancellationToken);
     }
 
     public async Task ClearPublishStateAsync(
@@ -176,7 +185,7 @@ public sealed class LocalStackLibraryService
                 }
                 : item)
             .ToArray();
-        await SaveIndexAsync(new LocalStackLibraryIndex(items), cancellationToken);
+        await SaveIndexAsync(new LocalStackLibraryIndex(LocalStackLibraryIndex.CurrentSchemaVersion, items), cancellationToken);
     }
 
     public async Task ExportAsync(LocalStackLibraryItem item, string destinationPath, CancellationToken cancellationToken = default)
@@ -204,7 +213,7 @@ public sealed class LocalStackLibraryService
         var items = index.Items
             .Where(existing => !string.Equals(existing.StackId, item.StackId, StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        await SaveIndexAsync(new LocalStackLibraryIndex(items), cancellationToken);
+        await SaveIndexAsync(new LocalStackLibraryIndex(LocalStackLibraryIndex.CurrentSchemaVersion, items), cancellationToken);
 
         var path = ResolveItemPath(item.LocalPath);
         if (File.Exists(path))
@@ -237,18 +246,28 @@ public sealed class LocalStackLibraryService
         var path = GetIndexPath();
         if (!File.Exists(path))
         {
-            return new LocalStackLibraryIndex([]);
+            return new LocalStackLibraryIndex(LocalStackLibraryIndex.CurrentSchemaVersion, []);
         }
 
+        LocalStackLibraryIndex? index;
         try
         {
-            return JsonSerializer.Deserialize<LocalStackLibraryIndex>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions)
-                   ?? new LocalStackLibraryIndex([]);
+            index = JsonSerializer.Deserialize<LocalStackLibraryIndex>(
+                await File.ReadAllTextAsync(path, cancellationToken),
+                JsonOptions);
         }
-        catch
+        catch (JsonException exception)
         {
-            return new LocalStackLibraryIndex([]);
+            throw new InvalidDataException($"Local Stack library index '{path}' is invalid.", exception);
         }
+
+        if (index is null
+            || index.SchemaVersion != LocalStackLibraryIndex.CurrentSchemaVersion
+            || index.Items is null)
+        {
+            throw new InvalidDataException($"Local Stack library index '{path}' has an unsupported schema.");
+        }
+        return index;
     }
 
     private async Task SaveIndexAsync(LocalStackLibraryIndex index, CancellationToken cancellationToken)
@@ -489,7 +508,10 @@ public sealed class LocalStackLibraryService
     }
 }
 
-public sealed record LocalStackLibraryIndex(IReadOnlyList<LocalStackLibraryItem> Items);
+public sealed record LocalStackLibraryIndex(int SchemaVersion, IReadOnlyList<LocalStackLibraryItem> Items)
+{
+    public const int CurrentSchemaVersion = 1;
+}
 
 public sealed record LocalStackLibraryItem(
     string StackId,

@@ -94,16 +94,36 @@ done
   printf 'image-os: %s\n' "${ImageOS:-unknown}"
 } > "$artifact_dir/toolchain.txt"
 
+release_id="${GITHUB_RELEASE_ID:-local}"
+[[ "$release_id" == local || "$release_id" =~ ^[1-9][0-9]*$ ]] \
+  || { printf 'GITHUB_RELEASE_ID must be a positive decimal integer when supplied.\n' >&2; exit 2; }
+
 jq -n \
+  --arg repository "${GITHUB_REPOSITORY:-local}" \
   --arg workflow "${GITHUB_WORKFLOW:-local}" \
+  --arg workflow_ref "${GITHUB_WORKFLOW_REF:-local}" \
   --arg run_id "${GITHUB_RUN_ID:-local}" \
   --arg run_attempt "${GITHUB_RUN_ATTEMPT:-1}" \
+  --arg release_id "$release_id" \
+  --arg ref "${GITHUB_REF:-local}" \
+  --arg ref_name "${GITHUB_REF_NAME:-local}" \
+  --arg sha "${GITHUB_SHA:-local}" \
   --argjson sources "$sources_json" \
   --argjson artifacts "$artifacts_json" \
   '{
     schemaVersion: 1,
     buildType: "https://sunderapp.io/provenance/github-actions/v1",
-    invocation: {workflow: $workflow, runId: $run_id, runAttempt: $run_attempt},
+    invocation: {
+      repository: $repository,
+      workflow: $workflow,
+      workflowRef: $workflow_ref,
+      runId: $run_id,
+      runAttempt: $run_attempt,
+      releaseId: (if $release_id == "local" then "local" else ($release_id | tonumber) end),
+      ref: $ref,
+      refName: $ref_name,
+      sha: $sha
+    },
     sources: $sources,
     artifacts: $artifacts
   }' > "$artifact_dir/release-provenance.json"

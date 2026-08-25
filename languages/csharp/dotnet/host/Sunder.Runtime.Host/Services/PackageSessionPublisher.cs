@@ -120,7 +120,7 @@ internal sealed class PackageSessionPublisher(
             pending.Publication.CandidateGeneration);
         try
         {
-            var previousSession = pending.Publication.PreviousEntry.Session;
+            var previousSession = pending.Publication.PreviousSession;
             if (previousSession.SharesPersistentWorkspaceWith(candidate.Session))
             {
                 sessions.MarkPreviousWorkersQuiesced(pending.Publication);
@@ -539,7 +539,7 @@ internal sealed class PackageSessionPublisher(
         }
         faults = sessions.GetDrainingFaults(publication);
 
-        var previousSession = publication.PreviousEntry.Session;
+        var previousSession = publication.PreviousSession;
         var snapshot = sessions.GetSnapshot();
         var sources = sessions.Sources.Snapshot();
         var diagnostics = DrainingFaultDiagnostics(publication);

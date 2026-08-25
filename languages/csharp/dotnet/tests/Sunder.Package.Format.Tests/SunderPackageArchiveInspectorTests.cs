@@ -12,6 +12,70 @@ namespace Sunder.Package.Format.Tests;
 public sealed class SunderPackageArchiveInspectorTests
 {
     [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task ExtractAndValidateAsync_RejectsOldAndFutureArchiveFormatVersions(int version)
+    {
+        var root = CreateTempDirectory();
+        var archivePath = CreatePackageArchive(
+            root,
+            CreateManifest([], archiveFormatVersion: version),
+            new Dictionary<string, byte[]>());
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "archive-version-staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            $"Package manifest must declare archiveFormatVersion {SunderPackageFormat.CurrentArchiveFormatVersion}.",
+            result.Errors);
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task ExtractAndValidateAsync_RejectsOldAndFutureManifestVersions(int version)
+    {
+        var root = CreateTempDirectory();
+        var archivePath = CreatePackageArchive(
+            root,
+            CreateManifest([], manifestVersion: version),
+            new Dictionary<string, byte[]>());
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "manifest-version-staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            $"Package manifest must declare manifestVersion {SunderPackageFormat.CurrentManifestVersion}.",
+            result.Errors);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task ExtractAndValidateAsync_RejectsOldAndFutureContentIndexVersions(int version)
+    {
+        var root = CreateTempDirectory();
+        var archivePath = CreatePackageArchive(
+            root,
+            CreateManifest([]),
+            new Dictionary<string, byte[]>(),
+            index => index with { SchemaVersion = version });
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "content-index-version-staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            $"Package content index must declare schemaVersion {SunderPackageFormat.CurrentContentIndexVersion}.",
+            result.Errors);
+    }
+
+    [Theory]
     [InlineData("win-x64")]
     [InlineData("win-arm64")]
     [InlineData("linux-x64")]
@@ -552,7 +616,7 @@ public sealed class SunderPackageArchiveInspectorTests
             manifest,
             new Dictionary<string, byte[]> { ["payload/shared/contracts/example.json"] = descriptor });
 
-        Assert.Equal(SunderRpcProtocol.DescriptorVersion, parsedDescriptor.DescriptorVersion);
+        Assert.Equal(SunderRpcProtocol.DescriptorVersionV1, parsedDescriptor.DescriptorVersion);
         var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
             archivePath,
             Path.Combine(root, "staging"));
@@ -1979,11 +2043,13 @@ public sealed class SunderPackageArchiveInspectorTests
         IReadOnlyList<SunderPackageContractBundleManifest?>? contractBundles = null,
         IReadOnlyList<SunderPackageContractUseManifest?>? usesContracts = null,
         IReadOnlyList<SunderPackageProviderManifest?>? provides = null,
-        string? icon = null)
+        string? icon = null,
+        int archiveFormatVersion = SunderPackageFormat.CurrentArchiveFormatVersion,
+        int manifestVersion = SunderPackageFormat.CurrentManifestVersion)
         => new()
         {
-            ArchiveFormatVersion = 1,
-            ManifestVersion = 3,
+            ArchiveFormatVersion = archiveFormatVersion,
+            ManifestVersion = manifestVersion,
             Id = "test.package",
             Name = "Test Package",
             Summary = "Canonical V3 test package.",

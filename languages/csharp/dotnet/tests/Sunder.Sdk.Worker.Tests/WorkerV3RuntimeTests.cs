@@ -111,7 +111,13 @@ public sealed class WorkerV3RuntimeTests
         Assert.Equal(
             Path.Combine(worker.WorkspacePath, "models", "index.bin"),
             context.RoleLocalWorkspace.GetLocalPath("models/index.bin"));
-        Assert.Throws<ArgumentException>(() => context.RoleLocalWorkspace.GetLocalPath("../escape"));
+        var exception = Assert.Throws<ArgumentException>(() =>
+            context.RoleLocalWorkspace.GetLocalPath("../escape"));
+        Assert.Equal("relativePath", exception.ParamName);
+        Assert.StartsWith(
+            "Package workspace paths must be portable, non-empty, relative, and free of traversal.",
+            exception.Message,
+            StringComparison.Ordinal);
 
         await worker.ShutdownAsync();
     }

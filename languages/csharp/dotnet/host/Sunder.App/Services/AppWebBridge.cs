@@ -12,7 +12,6 @@ internal sealed class AppWebBridge : IAsyncDisposable
 {
     internal const string Protocol = "sunder.bridge.v2";
     internal const int ProtocolVersion = 2;
-    private const int MaxRememberedRequestIds = 2048;
     private readonly IAppWebView _webView;
     private readonly AppWebContentServer _contentServer;
     private readonly IAppWebRpcClient _rpc;
@@ -22,9 +21,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
     private readonly RuntimeClientResourceLimits _limits;
     private readonly JsonSerializerOptions _boundedJsonOptions;
     private readonly object _gate = new();
-    private readonly Dictionary<string, PendingRequest> _pending = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _rememberedIds = new(StringComparer.Ordinal);
-    private readonly Queue<string> _rememberedOrder = new();
+    private readonly AppWebPendingRequestRegistry _pendingRequests;
     private readonly Dictionary<string, SunderRpcProviderSnapshot> _providerHandles = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _handlesByEndpoint = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetime = new();
@@ -51,6 +48,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
         _externalBrowser = externalBrowser;
         _navigate = navigate;
         _limits = resourceLimits ?? rpc.ResourceLimits;
+        _pendingRequests = new AppWebPendingRequestRegistry(_gate);
         _boundedJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
             MaxDepth = _limits.MaximumJsonEnvelopeDepth,
@@ -70,27 +68,24 @@ internal sealed class AppWebBridge : IAsyncDisposable
     {
         get
         {
-            lock (_gate) return _pending.Count;
+            lock (_gate) return _pendingRequests.Count;
         }
     }
 
     public void NavigationStarting()
     {
-        PendingRequest[] requests;
+        AppWebPendingRequest[] requests;
         lock (_gate)
         {
             _trustedNavigation = false;
             _currentUri = null;
             _documentGeneration = checked(_documentGeneration + 1);
             _nonce = CreateNonce();
-            requests = _pending.Values.ToArray();
-            _pending.Clear();
-            _rememberedIds.Clear();
-            _rememberedOrder.Clear();
+            requests = _pendingRequests.DetachAll();
             _providerHandles.Clear();
             _handlesByEndpoint.Clear();
         }
-        foreach (var request in requests) request.Cancel();
+        AppWebPendingRequestRegistry.Cancel(requests);
     }
 
     public async Task EstablishAsync(Uri uri, CancellationToken cancellationToken = default)
@@ -107,7 +102,12 @@ internal sealed class AppWebBridge : IAsyncDisposable
             _currentUri = uri;
             _trustedNavigation = true;
             documentGeneration = _documentGeneration;
-            script = CreateBootstrapScript(_nonce);
+            script = AppWebBootstrapScriptGenerator.Generate(
+                Protocol,
+                ProtocolVersion,
+                _origin,
+                _nonce,
+                _limits);
         }
         try
         {
@@ -197,7 +197,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 return;
             }
 
-            PendingRequest? pending = null;
+            AppWebPendingRequest? pending = null;
             SunderRpcError? immediateError = null;
             string? protocolRejection = null;
             lock (_gate)
@@ -213,37 +213,29 @@ internal sealed class AppWebBridge : IAsyncDisposable
                         "rpc.bridge.authentication",
                         "The browser bridge origin or nonce is invalid.");
                 }
-                else if (!_rememberedIds.Add(request.RequestId))
-                {
-                    protocolRejection = $"The browser bridge reused request id '{request.RequestId}'.";
-                    immediateError = new SunderRpcError(
-                        SunderRpcErrorKind.Protocol,
-                        "rpc.bridge.request-id-reused",
-                        "The browser bridge request id was already used.");
-                }
                 else
                 {
-                    _rememberedOrder.Enqueue(request.RequestId);
-                    while (_rememberedOrder.Count > MaxRememberedRequestIds)
+                    var reservation = _pendingRequests.TryReserve(
+                        request.RequestId,
+                        () => CreatePendingRequest(
+                            _documentGeneration,
+                            cancellationToken,
+                            request.DeadlineUtc),
+                        out pending);
+                    if (reservation == AppWebPendingRequestRegistry.ReservationOutcome.RequestIdReused)
                     {
-                        _rememberedIds.Remove(_rememberedOrder.Dequeue());
+                        protocolRejection = $"The browser bridge reused request id '{request.RequestId}'.";
+                        immediateError = new SunderRpcError(
+                            SunderRpcErrorKind.Protocol,
+                            "rpc.bridge.request-id-reused",
+                            "The browser bridge request id was already used.");
                     }
-                    if (_pending.Count >= RuntimeClientResourceLimits.MaximumPendingBrowserRequests)
+                    else if (reservation == AppWebPendingRequestRegistry.ReservationOutcome.CapacityReached)
                     {
                         immediateError = new SunderRpcError(
                             SunderRpcErrorKind.ResourceExhausted,
                             "rpc.bridge.pending-limit",
                             "The browser bridge request limit was reached.");
-                    }
-                    else
-                    {
-                        pending = PendingRequest.Create(
-                            _documentGeneration,
-                            cancellationToken,
-                            _lifetime.Token,
-                            RuntimeClientResourceLimits.BrowserRequestTimeout,
-                            request.DeadlineUtc);
-                        _pending.Add(request.RequestId, pending);
                     }
                 }
             }
@@ -265,26 +257,21 @@ internal sealed class AppWebBridge : IAsyncDisposable
             return;
         }
         _lifetime.Cancel();
-        PendingRequest[] requests;
+        AppWebPendingRequest[] requests;
         lock (_gate)
         {
             _trustedNavigation = false;
             _currentUri = null;
-            requests = _pending.Values.ToArray();
-            _pending.Clear();
+            requests = _pendingRequests.DetachAll();
             _providerHandles.Clear();
             _handlesByEndpoint.Clear();
         }
-        foreach (var request in requests)
-        {
-            request.Cancel();
-            request.Dispose();
-        }
+        AppWebPendingRequestRegistry.CancelAndDispose(requests);
         await _rpc.DisposeAsync().ConfigureAwait(false);
         _lifetime.Dispose();
     }
 
-    private async Task ExecuteAsync(BridgeRequest request, PendingRequest pending)
+    private async Task ExecuteAsync(BridgeRequest request, AppWebPendingRequest pending)
     {
         try
         {
@@ -478,14 +465,13 @@ internal sealed class AppWebBridge : IAsyncDisposable
                     "rpc.bridge.cancel-authentication",
                     "The browser bridge cancellation has an invalid origin or nonce."));
             }
-            if (!_pending.TryGetValue(target, out var pending))
+            if (!_pendingRequests.TryCancel(target))
             {
                 throw new SunderRpcException(new SunderRpcError(
                     SunderRpcErrorKind.Protocol,
                     "rpc.bridge.cancel-target",
                     "The browser bridge cancellation target is not pending."));
             }
-            pending.Cancel();
         }
     }
 
@@ -584,18 +570,18 @@ internal sealed class AppWebBridge : IAsyncDisposable
         };
     }
 
-    private Task FinishResultAsync(string requestId, PendingRequest pending, object? value)
+    private Task FinishResultAsync(string requestId, AppWebPendingRequest pending, object? value)
         => FinishAsync(requestId, pending, "result", value, error: null);
 
-    private Task FinishCompleteAsync(string requestId, PendingRequest pending)
+    private Task FinishCompleteAsync(string requestId, AppWebPendingRequest pending)
         => FinishAsync(requestId, pending, "complete", value: null, error: null);
 
-    private Task FinishErrorAsync(string requestId, PendingRequest pending, SunderRpcError error)
+    private Task FinishErrorAsync(string requestId, AppWebPendingRequest pending, SunderRpcError error)
         => FinishAsync(requestId, pending, "error", value: null, error);
 
     private async Task FinishAsync(
         string requestId,
-        PendingRequest pending,
+        AppWebPendingRequest pending,
         string type,
         object? value,
         SunderRpcError? error)
@@ -603,16 +589,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
         var send = false;
         lock (_gate)
         {
-            if (_pending.TryGetValue(requestId, out var current)
-                && ReferenceEquals(current, pending))
-            {
-                _pending.Remove(requestId);
-                send = pending.TryComplete();
-            }
-            else
-            {
-                pending.TryComplete();
-            }
+            send = _pendingRequests.TryComplete(requestId, pending);
         }
         try
         {
@@ -636,13 +613,11 @@ internal sealed class AppWebBridge : IAsyncDisposable
         }
     }
 
-    private async Task SendEventAsync(string requestId, PendingRequest pending, object? value)
+    private async Task SendEventAsync(string requestId, AppWebPendingRequest pending, object? value)
     {
         lock (_gate)
         {
-            if (!_pending.TryGetValue(requestId, out var current)
-                || !ReferenceEquals(current, pending)
-                || pending.IsCompleted
+            if (!_pendingRequests.IsCurrent(requestId, pending)
                 || !_trustedNavigation
                 || pending.DocumentGeneration != _documentGeneration)
             {
@@ -657,7 +632,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
 
     private async Task<bool> TrySendAsync(
         string requestId,
-        PendingRequest pending,
+        AppWebPendingRequest pending,
         string type,
         object? value,
         SunderRpcError? error)
@@ -716,280 +691,6 @@ internal sealed class AppWebBridge : IAsyncDisposable
         var script = $"window.__sunderReceive?.({JsonSerializer.Serialize(json)});";
         await _webView.InvokeScriptAsync(script).ConfigureAwait(false);
         return true;
-    }
-
-    private string CreateBootstrapScript(string sessionNonce)
-    {
-        var protocol = JsonSerializer.Serialize(Protocol);
-        var nonce = JsonSerializer.Serialize(sessionNonce);
-        var origin = JsonSerializer.Serialize(_origin);
-        var profileHash = JsonSerializer.Serialize(_limits.Profile?.EffectiveProfileHash);
-        var runtimeInstanceId = JsonSerializer.Serialize(_limits.Profile?.RuntimeInstanceId.ToString("D"));
-        var reportedByRuntime = _limits.IsRuntimeReported ? "true" : "false";
-        var policy = _limits.EffectivePolicy;
-        return FormattableString.Invariant($$$"""
-            (() => {
-              'use strict';
-              const protocol = {{{protocol}}};
-              const version = 2;
-              const nonce = {{{nonce}}};
-              const expectedOrigin = {{{origin}}};
-              const encoder = new TextEncoder();
-              const maxEnvelopeBytes = {{{_limits.MaximumJsonEnvelopeBytes}}};
-              const maxPendingRequests = {{{RuntimeClientResourceLimits.MaximumPendingBrowserRequests}}};
-              const maxRequestMilliseconds = {{{(long)RuntimeClientResourceLimits.BrowserRequestTimeout.TotalMilliseconds}}};
-              const maxQueuedEvents = {{{RuntimeClientResourceLimits.MaximumQueuedBrowserEvents}}};
-              const maxQueuedEventBytes = {{{_limits.MaximumQueuedBrowserEventBytes}}};
-              const resourceProfile = Object.freeze({
-                reportedByRuntime: {{{reportedByRuntime}}},
-                runtimeInstanceId: {{{runtimeInstanceId}}},
-                effectiveProfileHash: {{{profileHash}}},
-                effectivePolicy: Object.freeze({
-                  rpcValueBytes: {{{policy.MaximumRpcValueBytes}}},
-                  valueDepth: {{{policy.MaximumValueDepth}}},
-                  valueNodes: {{{policy.MaximumValueNodes}}},
-                  objectMembers: {{{policy.MaximumObjectMembers}}},
-                  inlineDecodedBytes: {{{policy.MaximumInlineDecodedBytes}}},
-                  contentReferenceBytes: {{{policy.MaximumContentReferenceBytes}}}
-                })
-              });
-              if (location.origin !== expectedOrigin || typeof window.invokeCSharpAction !== 'function') return false;
-              const marker = `__sunderBridge_${nonce}`;
-              if (window[marker] === true && window.sunder?.version === version && typeof window.__sunderReceive === 'function') return true;
-              if (Object.prototype.hasOwnProperty.call(window, 'sunder')) return false;
-              let sequence = 0;
-              const pending = new Map();
-              let queuedEventBytes = 0;
-              const freezeJson = (value) => {
-                if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
-                  for (const child of Object.values(value)) freezeJson(child);
-                  Object.freeze(value);
-                }
-                return value;
-              };
-              const failure = (kind, code, message, dispatchState = 'not-dispatched', retrySafety = 'safe', details) => {
-                const error = { kind, code, message, dispatchState, retrySafety };
-                if (details !== undefined) error.details = freezeJson(details);
-                return Object.assign(new Error(message), {
-                  name: 'SunderRpcError',
-                  error: Object.freeze(error)
-                });
-              };
-              const depth = (root) => {
-                let maximum = 1;
-                const stack = [{ value: root, depth: 1 }];
-                while (stack.length) {
-                  const current = stack.pop();
-                  maximum = Math.max(maximum, current.depth);
-                  if (current.value !== null && typeof current.value === 'object') {
-                    for (const value of Object.values(current.value)) stack.push({ value, depth: current.depth + 1 });
-                  }
-                }
-                return maximum;
-              };
-              const rejected = (error, stream) => {
-                if (!stream) return Promise.reject(error);
-                return Object.freeze({
-                  [Symbol.asyncIterator]() {
-                    let returned = false;
-                    return {
-                      next() {
-                        if (returned) return Promise.resolve({ done: true, value: undefined });
-                        returned = true;
-                        return Promise.reject(error);
-                      },
-                      return() { returned = true; return Promise.resolve({ done: true, value: undefined }); }
-                    };
-                  }
-                });
-              };
-              const finish = (state, error) => {
-                if (state.done) return;
-                state.done = true;
-                state.error = error;
-                if (state.timer !== null) clearTimeout(state.timer);
-                state.signal?.removeEventListener('abort', state.cancel);
-                pending.delete(state.requestId);
-                for (const item of state.queue.splice(0)) queuedEventBytes -= item.size;
-                for (const waiter of state.waiters.splice(0)) error ? waiter.fail(error) : waiter.ok({ done: true, value: undefined });
-                if (!state.stream && error) state.reject(error);
-              };
-              const send = (method, payload, options, stream) => {
-                const requestId = `b_${++sequence}`;
-                let body;
-                let normalized;
-                try {
-                  body = JSON.stringify({ protocol, version, nonce, origin: location.origin, requestId, method, deadlineUtc: options?.deadline?.toISOString?.() ?? null, payload });
-                  if (typeof body !== 'string') throw new TypeError('Request serialization returned no JSON.');
-                  normalized = JSON.parse(body);
-                } catch {
-                  return rejected(failure('validation', 'rpc.bridge.serialization', 'The browser bridge request is not valid JSON.'), stream);
-                }
-                const value = method === 'rpc.invoke' || method === 'rpc.subscribe'
-                  ? normalized.payload?.request
-                  : normalized.payload;
-                let valueJson;
-                try { valueJson = JSON.stringify(value); } catch { valueJson = undefined; }
-                if (typeof valueJson !== 'string'
-                    || encoder.encode(valueJson).byteLength > resourceProfile.effectivePolicy.rpcValueBytes
-                    || depth(value) > resourceProfile.effectivePolicy.valueDepth
-                    || encoder.encode(body).byteLength > maxEnvelopeBytes) {
-                  return rejected(failure('resource-exhausted', 'rpc.bridge.request-limit', 'The browser bridge request exceeds a negotiated resource limit.'), stream);
-                }
-                if (pending.size >= maxPendingRequests) {
-                  return rejected(failure('resource-exhausted', 'rpc.bridge.pending-limit', 'The browser bridge request limit was reached.'), stream);
-                }
-                let resolve = () => {};
-                let reject = () => {};
-                const promise = stream ? null : new Promise((ok, fail) => { resolve = ok; reject = fail; });
-                const state = { requestId, resolve, reject, stream, queue: [], waiters: [], done: false, error: null, signal: options?.signal, cancelSent: false, timer: null };
-                const notifyCancel = () => {
-                  if (state.done || state.cancelSent) return;
-                  state.cancelSent = true;
-                  try {
-                    window.invokeCSharpAction(JSON.stringify({ protocol, version, nonce, origin: location.origin, requestId, method: 'bridge.cancel', deadlineUtc: null, payload: { targetRequestId: requestId } }));
-                  } catch {
-                    finish(state, failure('unavailable', 'rpc.bridge.native-unavailable', 'The native browser bridge is unavailable.', 'possibly-dispatched', 'unsafe'));
-                  }
-                };
-                const cancel = () => {
-                  if (state.done) return;
-                  notifyCancel();
-                  finish(state, failure('cancelled', 'rpc.bridge.cancelled', 'The browser bridge request was cancelled.', 'possibly-dispatched', 'unsafe'));
-                };
-                state.cancel = cancel;
-                state.notifyCancel = notifyCancel;
-                pending.set(requestId, state);
-                const requestedDeadline = Date.parse(normalized.deadlineUtc ?? '');
-                const remaining = Number.isFinite(requestedDeadline)
-                  ? Math.max(0, requestedDeadline - Date.now())
-                  : maxRequestMilliseconds;
-                const timeout = Math.min(maxRequestMilliseconds, remaining);
-                state.timer = setTimeout(() => {
-                  if (state.done) return;
-                  notifyCancel();
-                  finish(state, failure('deadline-exceeded', 'rpc.call.deadline-exceeded', 'The browser bridge request deadline elapsed.', 'possibly-dispatched', 'unsafe'));
-                }, timeout);
-                if (!state.done) {
-                  try {
-                    window.invokeCSharpAction(body);
-                  } catch {
-                    finish(state, failure('unavailable', 'rpc.bridge.native-unavailable', 'The native browser bridge is unavailable.', 'possibly-dispatched', 'unsafe'));
-                  }
-                }
-                if (!state.done) {
-                  options?.signal?.addEventListener('abort', cancel, { once: true });
-                  if (options?.signal?.aborted) cancel();
-                }
-                if (!stream) return promise;
-                return Object.freeze({
-                  [Symbol.asyncIterator]() {
-                    return {
-                      next() {
-                        if (state.queue.length) {
-                          const item = state.queue.shift();
-                          queuedEventBytes -= item.size;
-                          return Promise.resolve({ done: false, value: item.value });
-                        }
-                        if (state.done) return state.error ? Promise.reject(state.error) : Promise.resolve({ done: true, value: undefined });
-                        return new Promise((ok, fail) => state.waiters.push({ ok, fail }));
-                      },
-                      return() { cancel(); return Promise.resolve({ done: true, value: undefined }); }
-                    };
-                  }
-                });
-              };
-              Object.defineProperty(window, '__sunderReceive', { configurable: true, value(raw) {
-                let message;
-                try { message = JSON.parse(raw); } catch { return; }
-                if (message?.protocol !== protocol || message?.version !== version || message?.nonce !== nonce) return;
-                const state = pending.get(message.requestId);
-                if (!state || state.done) return;
-                const emittedBytes = encoder.encode(raw).byteLength;
-                if (emittedBytes > maxEnvelopeBytes) {
-                  state.notifyCancel();
-                  finish(state, failure('resource-exhausted', 'rpc.bridge.response-envelope-limit', 'The browser bridge response exceeds its negotiated envelope limit.', 'possibly-dispatched', 'unsafe'));
-                  return;
-                }
-                if (message.type === 'event' || message.type === 'result') {
-                  let valueJson;
-                  try { valueJson = JSON.stringify(message.value); } catch { valueJson = undefined; }
-                  if (typeof valueJson !== 'string'
-                      || encoder.encode(valueJson).byteLength > resourceProfile.effectivePolicy.rpcValueBytes
-                      || depth(message.value) > resourceProfile.effectivePolicy.valueDepth) {
-                    state.notifyCancel();
-                    finish(state, failure('resource-exhausted', 'rpc.bridge.response-limit', 'The browser bridge response exceeds a negotiated resource limit.', 'possibly-dispatched', 'unsafe'));
-                    return;
-                  }
-                }
-                if (message.type === 'event') {
-                  if (!state.stream) {
-                    finish(state, failure('protocol', 'rpc.bridge.unexpected-event', 'The browser bridge returned an unexpected stream event.', 'possibly-dispatched', 'unsafe'));
-                    return;
-                  }
-                  const waiter = state.waiters.shift();
-                  if (waiter) {
-                    waiter.ok({ done: false, value: message.value });
-                  } else if (state.queue.length >= maxQueuedEvents || queuedEventBytes + emittedBytes > maxQueuedEventBytes) {
-                    state.notifyCancel();
-                    finish(state, failure('resource-exhausted', 'rpc.bridge.event-queue-limit', 'The browser bridge event queue limit was reached.', 'possibly-dispatched', 'unsafe'));
-                  } else {
-                    state.queue.push({ value: message.value, size: emittedBytes });
-                    queuedEventBytes += emittedBytes;
-                  }
-                  return;
-                }
-                if (message.type === 'result') {
-                  if (state.stream) finish(state, failure('protocol', 'rpc.bridge.unexpected-result', 'The browser bridge returned an unexpected unary result.', 'possibly-dispatched', 'unsafe'));
-                  else { state.resolve(message.value); finish(state); }
-                  return;
-                }
-                if (message.type === 'complete') {
-                  if (state.stream) finish(state);
-                  else finish(state, failure('protocol', 'rpc.bridge.unexpected-complete', 'The browser bridge completed without a unary result.', 'possibly-dispatched', 'unsafe'));
-                  return;
-                }
-                if (message.type === 'error') {
-                  const detail = message.error ?? {};
-                  const dispatchState = detail.dispatchState === 'not-dispatched' ? 'not-dispatched' : 'possibly-dispatched';
-                  const retrySafety = detail.retrySafety === 'safe' ? 'safe' : 'unsafe';
-                  let details;
-                  if (Object.prototype.hasOwnProperty.call(detail, 'details')) {
-                    let detailsJson;
-                    try { detailsJson = JSON.stringify(detail.details); } catch { detailsJson = undefined; }
-                    if (detail.kind !== 'domain'
-                        || typeof detailsJson !== 'string'
-                        || encoder.encode(detailsJson).byteLength > resourceProfile.effectivePolicy.rpcValueBytes
-                        || depth(detail.details) > resourceProfile.effectivePolicy.valueDepth) {
-                      finish(state, failure('protocol', 'rpc.bridge.invalid-error-details', 'The browser bridge returned invalid RPC error details.', dispatchState, retrySafety));
-                      return;
-                    }
-                    details = detail.details;
-                  }
-                  finish(state, failure(detail.kind ?? 'protocol', detail.code ?? 'rpc.bridge.error', detail.message ?? 'Sunder RPC failed.', dispatchState, retrySafety, details));
-                  return;
-                }
-                finish(state, failure('protocol', 'rpc.bridge.message-type', 'The browser bridge returned an unknown message type.', 'possibly-dispatched', 'unsafe'));
-              }});
-              const rpc = Object.freeze({
-                discover: (contractId, options) => send('rpc.discover', { contractId }, options, false),
-                watch: (afterRevision, afterSequence, options) => send('rpc.watch', { afterRevision, afterSequence }, options, true),
-                invoke: (providerHandle, serviceId, methodId, request, options) => send('rpc.invoke', { providerHandle, serviceId, methodId, request }, options, false),
-                subscribe: (providerHandle, serviceId, methodId, request, options) => send('rpc.subscribe', { providerHandle, serviceId, methodId, request }, options, true)
-              });
-              const api = Object.freeze({
-                version,
-                resourceProfile,
-                rpc,
-                openExternal: (url, options) => send('host.openExternal', { url }, options, false),
-                getNavigationState: (options) => send('navigation.getState', {}, options, false),
-                navigate: (route, options) => send('navigation.navigate', { route }, options, false)
-              });
-              Object.defineProperty(window, 'sunder', { configurable: false, enumerable: true, writable: false, value: api });
-              Object.defineProperty(window, marker, { configurable: false, enumerable: false, writable: false, value: true });
-              return true;
-            })();
-            """);
     }
 
     private bool TryReadRequest(JsonElement root, out BridgeRequest request, out string error)
@@ -1175,7 +876,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
 
     private static SunderRpcException WithDispatchMetadata(
         SunderRpcException exception,
-        PendingRequest pending)
+        AppWebPendingRequest pending)
         => new(new SunderRpcError(
             exception.Error.Kind,
             exception.Error.Code,
@@ -1196,7 +897,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
             : new { kind, error.Code, error.Message, dispatchState, retrySafety };
     }
 
-    private static SunderRpcError ResponseLimit(PendingRequest pending)
+    private static SunderRpcError ResponseLimit(AppWebPendingRequest pending)
         => new(
             SunderRpcErrorKind.ResourceExhausted,
             "rpc.bridge.response-limit",
@@ -1341,6 +1042,36 @@ internal sealed class AppWebBridge : IAsyncDisposable
     private static SunderRpcException Validation(string code, string message)
         => new(new SunderRpcError(SunderRpcErrorKind.Validation, code, message));
 
+    private AppWebPendingRequest CreatePendingRequest(
+        long documentGeneration,
+        CancellationToken request,
+        DateTimeOffset? requestedDeadline)
+    {
+        var effectiveTimeout = RuntimeClientResourceLimits.BrowserRequestTimeout;
+        if (requestedDeadline is { } deadlineUtc)
+        {
+            var remaining = deadlineUtc - DateTimeOffset.UtcNow;
+            if (remaining < effectiveTimeout)
+            {
+                effectiveTimeout = remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+            }
+        }
+        var deadline = new CancellationTokenSource(effectiveTimeout);
+        try
+        {
+            return new AppWebPendingRequest(
+                documentGeneration,
+                request,
+                _lifetime.Token,
+                deadline);
+        }
+        catch
+        {
+            deadline.Dispose();
+            throw;
+        }
+    }
+
     private static string Base64Url(byte[] bytes)
         => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
@@ -1362,116 +1093,4 @@ internal sealed class AppWebBridge : IAsyncDisposable
         string ServiceId,
         string MethodId,
         JsonElement Request);
-
-    private sealed class PendingRequest : IDisposable
-    {
-        private readonly CancellationTokenSource _deadline;
-        private readonly CancellationTokenSource _cancellation = new();
-        private CancellationTokenRegistration _requestRegistration;
-        private CancellationTokenRegistration _lifetimeRegistration;
-        private CancellationTokenRegistration _deadlineRegistration;
-        private int _cancellationReason;
-        private int _dispatchState;
-        private int _retrySafety;
-        private int _completed;
-        private int _disposed;
-
-        private PendingRequest(
-            long documentGeneration,
-            TimeSpan timeout)
-        {
-            DocumentGeneration = documentGeneration;
-            _deadline = new CancellationTokenSource(timeout);
-        }
-
-        public long DocumentGeneration { get; }
-
-        public CancellationToken Token => _cancellation.Token;
-
-        public bool TimedOut => Volatile.Read(ref _cancellationReason) == (int)CancellationReason.Deadline;
-
-        public bool IsCompleted => Volatile.Read(ref _completed) != 0;
-
-        public SunderRpcDispatchState DispatchState
-            => (SunderRpcDispatchState)Volatile.Read(ref _dispatchState);
-
-        public SunderRpcRetrySafety RetrySafety
-            => (SunderRpcRetrySafety)Volatile.Read(ref _retrySafety);
-
-        public static PendingRequest Create(
-            long documentGeneration,
-            CancellationToken request,
-            CancellationToken lifetime,
-            TimeSpan timeout,
-            DateTimeOffset? requestedDeadline)
-        {
-            var effectiveTimeout = timeout;
-            if (requestedDeadline is { } deadlineUtc)
-            {
-                var remaining = deadlineUtc - DateTimeOffset.UtcNow;
-                if (remaining < effectiveTimeout) effectiveTimeout = remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
-            }
-            var pending = new PendingRequest(documentGeneration, effectiveTimeout);
-            pending._requestRegistration = request.Register(
-                static state => ((PendingRequest)state!).TryCancel(CancellationReason.Cancelled),
-                pending);
-            pending._lifetimeRegistration = lifetime.Register(
-                static state => ((PendingRequest)state!).TryCancel(CancellationReason.Cancelled),
-                pending);
-            pending._deadlineRegistration = pending._deadline.Token.Register(
-                static state => ((PendingRequest)state!).TryCancel(CancellationReason.Deadline),
-                pending);
-            return pending;
-        }
-
-        public bool TryComplete() => Interlocked.Exchange(ref _completed, 1) == 0;
-
-        public void MarkPossiblyDispatched(SunderRpcRetrySafety retrySafety)
-        {
-            Volatile.Write(ref _retrySafety, (int)retrySafety);
-            Volatile.Write(ref _dispatchState, (int)SunderRpcDispatchState.PossiblyDispatched);
-        }
-
-        public void Cancel()
-        {
-            TryCancel(CancellationReason.Cancelled);
-        }
-
-        private void TryCancel(CancellationReason reason)
-        {
-            if (Interlocked.CompareExchange(ref _cancellationReason, (int)reason, (int)CancellationReason.None)
-                != (int)CancellationReason.None)
-            {
-                return;
-            }
-            try
-            {
-                _cancellation.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Completion won the race with navigation or bridge disposal.
-            }
-        }
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            {
-                return;
-            }
-            _requestRegistration.Dispose();
-            _lifetimeRegistration.Dispose();
-            _deadlineRegistration.Dispose();
-            _deadline.Dispose();
-            _cancellation.Dispose();
-        }
-
-        private enum CancellationReason
-        {
-            None,
-            Cancelled,
-            Deadline,
-        }
-    }
 }

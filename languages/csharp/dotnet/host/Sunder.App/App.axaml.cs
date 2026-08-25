@@ -35,7 +35,6 @@ public partial class App : Application
     public override void Initialize()
     {
         AppPackageAvaloniaAssetLoader.Install(_packageResourceAssemblyRegistry);
-        SunderAsyncImageLoader.Install();
         AvaloniaXamlLoader.Load(this);
 
 #if DEBUG

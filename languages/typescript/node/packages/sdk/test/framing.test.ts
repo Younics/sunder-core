@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import test from "node:test";
 import { FrameDecoder, ProtocolError, TransportResourceError, encodeFrame } from "../src/framing";
 
@@ -125,3 +127,53 @@ test("framing admits the exact value plus metadata envelope and rejects one byte
     ProtocolError,
   );
 });
+
+test("framing executes the shared cross-language Worker transport vectors", async () => {
+  await verifySharedTransportVectors(false);
+});
+
+test("shared Worker transport oracle rejects a seeded expectation mutation", async () => {
+  await assert.rejects(() => verifySharedTransportVectors(true), /fragmented-unicode-frame/u);
+});
+
+interface TransportVector {
+  readonly name: string;
+  readonly valid: boolean;
+  readonly header: string;
+  readonly bodyUtf8?: string;
+  readonly bodyBase64?: string;
+  readonly maxFrameBytes?: number;
+  readonly maxMessageDepth?: number;
+}
+
+async function verifySharedTransportVectors(mutateFirstExpectation: boolean): Promise<void> {
+  const path = resolve(__dirname, "../../../../../../../specs/worker/v3/conformance/transport-vectors.json");
+  const corpus = JSON.parse(await readFile(path, "utf8")) as {
+    readonly formatVersion: number;
+    readonly vectors: readonly TransportVector[];
+  };
+  assert.equal(corpus.formatVersion, 1);
+  assert.ok(corpus.vectors.length >= 10, "The shared Worker transport corpus lost boundary vectors.");
+  for (const [index, vector] of corpus.vectors.entries()) {
+    const body = vector.bodyBase64 === undefined
+      ? Buffer.from(vector.bodyUtf8 ?? "", "utf8")
+      : Buffer.from(vector.bodyBase64, "base64");
+    const header = Buffer.from(vector.header.replace("{{length}}", String(body.length)), "ascii");
+    const wire = Buffer.concat([header, body]);
+    const decoder = new FrameDecoder({
+      ...(vector.maxFrameBytes === undefined ? {} : { maxFrameBytes: vector.maxFrameBytes }),
+      ...(vector.maxMessageDepth === undefined ? {} : { maxMessageDepth: vector.maxMessageDepth }),
+    });
+    const expected = mutateFirstExpectation && index === 0 ? !vector.valid : vector.valid;
+    let valid = true;
+    try {
+      const values: unknown[] = [];
+      for (const byte of wire) values.push(...decoder.push(Buffer.of(byte)));
+      decoder.end();
+      valid = values.length === 1;
+    } catch {
+      valid = false;
+    }
+    assert.equal(valid, expected, vector.name);
+  }
+}

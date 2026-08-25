@@ -12,7 +12,8 @@ public sealed class StacksWindowFactory(
     RegistryPackageInstallService registryPackageInstallService,
     StackWizardWindowFactory stackWizardWindowFactory,
     ShellStateService shellStateService,
-    ShellState shellState)
+    ShellState shellState,
+    RemoteImageService remoteImageService)
 {
     internal StacksWindow Create(
         Func<RuntimePackageStamp, CancellationToken, Task> waitUntilPresentationAppliedAsync,
@@ -24,7 +25,8 @@ public sealed class StacksWindowFactory(
             new StackArchivePicker(window),
             runtimeApiClientFactory.CreateClient<IRuntimeStacksClient>(),
             packageInstallService ?? registryPackageInstallService,
-            waitUntilPresentationAppliedAsync);
+            waitUntilPresentationAppliedAsync,
+            remoteImageService: remoteImageService);
         return window;
     }
 }

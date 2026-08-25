@@ -798,17 +798,18 @@ public sealed class WorkerV3PackageDataTests
         var boundary = JsonSerializer.SerializeToElement(new { kind = "inline", keys });
         Assert.Equal(64 * 1024, Encoding.UTF8.GetByteCount(boundary.GetProperty("keys").GetRawText()));
 
-        var accepted = WorkerWire.ReadDataKeys(boundary, 1024 * 1024);
+        var accepted = WorkerPackagePayloadCodec.ReadDataKeys(boundary, 1024 * 1024);
 
         Assert.Equal(keys.Length, accepted.Keys?.Count);
         keys[^1] = "aaaaa";
         var oversized = JsonSerializer.SerializeToElement(new { kind = "inline", keys });
         Assert.Equal(64 * 1024 + 1, Encoding.UTF8.GetByteCount(oversized.GetProperty("keys").GetRawText()));
-        Assert.Throws<WorkerProtocolException>(() => WorkerWire.ReadDataKeys(oversized, 1024 * 1024));
+        Assert.Throws<WorkerProtocolException>(() =>
+            WorkerPackagePayloadCodec.ReadDataKeys(oversized, 1024 * 1024));
     }
 
     [Fact]
-    public async Task WorkerV3_InvalidPackageDataIsRejectedBeforeWritingAFrame()
+    public async Task WorkerV3_LocalPackageDataValidationIsSynchronousAndWritesNoFrame()
     {
         SunderWorkerContext? context = null;
         await using var worker = CreateWorker(value =>
@@ -816,14 +817,165 @@ public sealed class WorkerV3PackageDataTests
             context = value;
             return new SunderWorkerOptions([WorkerHarness.Registration(new TestRpcHandler())]);
         });
-        await worker.HandshakeAsync();
+        await worker.HandshakeAndActivateAsync();
 
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
-            await context!.State.GetValueAsync("invalid key"));
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
-            await context!.State.SetValueAsync(
+        AssertLocalArgumentException(
+            () => _ = context!.Settings.GetValueAsync(null!),
+            $"Package storage keys must be portable ASCII tokens of at most {PackageStorageValidation.MaximumKeyLength} characters.",
+            "key");
+        AssertLocalArgumentException(
+            () => _ = context!.State.GetValueAsync("invalid key"),
+            $"Package storage keys must be portable ASCII tokens of at most {PackageStorageValidation.MaximumKeyLength} characters.",
+            "key");
+        AssertLocalArgumentException(
+            () => _ = context!.State.ListKeysAsync("invalid prefix"),
+            $"Package storage key prefixes must be empty or portable ASCII tokens of at most {PackageStorageValidation.MaximumKeyLength} characters.",
+            "prefix");
+        AssertLocalArgumentNullException(
+            () => _ = context!.Secrets.SetSecretAsync("valid.key", null!),
+            "value");
+        AssertLocalArgumentException(
+            () => _ = context!.State.SetValueAsync(
                 "valid.key",
-                new string('x', PackageStorageValidation.MaximumValueUtf8Bytes + 1)));
+                new string('x', PackageStorageValidation.MaximumValueUtf8Bytes + 1)),
+            $"Package storage values cannot exceed {PackageStorageValidation.MaximumValueUtf8Bytes} UTF-8 bytes.",
+            "value");
+        AssertLocalArgumentException(
+            () => _ = context!.Files.ReadAsync(null!),
+            "Package file paths must be relative, portable, non-empty, free of traversal, and within the declared length limits.",
+            "relativePath");
+
+        var valid = context!.State.ListKeysAsync(null);
+        using (var request = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.state-list", request.RootElement.GetProperty("type").GetString());
+            Assert.Equal(JsonValueKind.Null, request.RootElement.GetProperty("prefix").ValueKind);
+            await worker.SendAsync(new
+            {
+                type = "host.result",
+                id = request.RootElement.GetProperty("id").GetString(),
+                value = new { kind = "inline", keys = Array.Empty<string>() },
+            });
+        }
+        Assert.Empty(await valid);
+        await worker.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task WorkerV3_HostPackageDataErrorsPreserveTranslationMappingsAndPassThrough()
+    {
+        SunderWorkerContext? context = null;
+        await using var worker = CreateWorker(value =>
+        {
+            context = value;
+            return new SunderWorkerOptions([WorkerHarness.Registration(new TestRpcHandler())]);
+        });
+        await worker.HandshakeAndActivateAsync();
+
+        await AssertHostValidationTranslationAsync(
+            worker,
+            () => context!.Settings.SetValueAsync("valid.key", "value"),
+            "worker.settings-set",
+            "value");
+        await AssertHostValidationTranslationAsync(
+            worker,
+            () => context!.State.ListKeysAsync("valid"),
+            "worker.state-list",
+            "prefix");
+        await AssertHostValidationTranslationAsync(
+            worker,
+            () => context!.Secrets.GetSecretAsync("valid.key"),
+            "worker.secrets-get",
+            "key");
+        await AssertHostValidationTranslationAsync(
+            worker,
+            () => context!.Files.DeleteAsync("cache/value.bin"),
+            "worker.files-delete",
+            "relativePath");
+
+        var unavailable = context!.State.ContainsKeyAsync("valid.key");
+        using (var request = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.state-get", request.RootElement.GetProperty("type").GetString());
+            Assert.Equal("contains", request.RootElement.GetProperty("mode").GetString());
+            await SendHostErrorAsync(
+                worker,
+                request.RootElement.GetProperty("id").GetString(),
+                "unavailable",
+                "package-data.unavailable",
+                "Package data is unavailable.");
+        }
+
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(() => unavailable);
+        Assert.Equal(SunderRpcErrorKind.Unavailable, failure.Error.Kind);
+        Assert.Equal("package-data.unavailable", failure.Error.Code);
+        Assert.Equal("Package data is unavailable.", failure.Message);
+        Assert.Null(failure.InnerException);
+        await worker.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task WorkerV3_MigrationPreparationUsesLocalValidationWithoutTranslatingHostErrors()
+    {
+        Exception? hostFailure = null;
+        await using var worker = CreateWorker(value => new SunderWorkerOptions(
+            [WorkerHarness.Registration(new TestRpcHandler())])
+        {
+            OnBeforeStorageMigrations = async (preparation, cancellationToken) =>
+            {
+                AssertLocalArgumentException(
+                    () => _ = preparation.GetStateValueAsync(null!),
+                    $"Package storage keys must be portable ASCII tokens of at most {PackageStorageValidation.MaximumKeyLength} characters.",
+                    "key");
+                AssertLocalArgumentException(
+                    () => _ = preparation.ListStateKeysAsync("invalid prefix"),
+                    $"Package storage key prefixes must be empty or portable ASCII tokens of at most {PackageStorageValidation.MaximumKeyLength} characters.",
+                    "prefix");
+                try
+                {
+                    await preparation.ContainsStateKeyAsync("valid.key", cancellationToken);
+                }
+                catch (Exception exception)
+                {
+                    hostFailure = exception;
+                }
+            },
+        });
+        await worker.HandshakeAsync();
+        await worker.StartCandidateAndCommitAsync();
+        await worker.SendAsync(new
+        {
+            type = "host.prepare-storage-migrations",
+            activationId = WorkerHarness.ActivationId,
+            sessionGeneration = 7,
+        });
+
+        using (var request = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.state-get", request.RootElement.GetProperty("type").GetString());
+            Assert.Equal("contains", request.RootElement.GetProperty("mode").GetString());
+            await SendHostErrorAsync(
+                worker,
+                request.RootElement.GetProperty("id").GetString(),
+                "validation",
+                "package-data.invalid",
+                "Host rejected migration state.");
+        }
+        using (var prepared = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.storage-migrations-prepared", prepared.RootElement.GetProperty("type").GetString());
+        }
+
+        var rpcFailure = Assert.IsType<SunderRpcException>(hostFailure);
+        Assert.Equal(SunderRpcErrorKind.Validation, rpcFailure.Error.Kind);
+        Assert.Equal("package-data.invalid", rpcFailure.Error.Code);
+        Assert.Equal("Host rejected migration state.", rpcFailure.Message);
+        await worker.SendAsync(new { type = "host.activate", sessionGeneration = 7 });
+        using (var activated = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.activated", activated.RootElement.GetProperty("type").GetString());
+        }
+        await worker.ShutdownAsync();
     }
 
     [Fact]
@@ -953,4 +1105,71 @@ public sealed class WorkerV3PackageDataTests
             value = (object?)null,
         });
     }
+
+    private static void AssertLocalArgumentException(
+        Action action,
+        string message,
+        string parameterName)
+    {
+        var exception = Assert.Throws<ArgumentException>(action);
+        Assert.Equal(new ArgumentException(message, parameterName).Message, exception.Message);
+        Assert.Equal(parameterName, exception.ParamName);
+        Assert.Null(exception.InnerException);
+    }
+
+    private static void AssertLocalArgumentNullException(Action action, string parameterName)
+    {
+        var exception = Assert.Throws<ArgumentNullException>(action);
+        Assert.Equal(new ArgumentNullException(parameterName).Message, exception.Message);
+        Assert.Equal(parameterName, exception.ParamName);
+        Assert.Null(exception.InnerException);
+    }
+
+    private static async Task AssertHostValidationTranslationAsync(
+        WorkerHarness worker,
+        Func<Task> invoke,
+        string requestType,
+        string parameterName)
+    {
+        const string message = "Host rejected package data.";
+        var operation = invoke();
+        using (var request = await worker.ReadAsync())
+        {
+            Assert.Equal(requestType, request.RootElement.GetProperty("type").GetString());
+            await SendHostErrorAsync(
+                worker,
+                request.RootElement.GetProperty("id").GetString(),
+                "validation",
+                "package-data.invalid",
+                message);
+        }
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => operation);
+        Assert.Equal(new ArgumentException(message, parameterName).Message, exception.Message);
+        Assert.Equal(parameterName, exception.ParamName);
+        var inner = Assert.IsType<SunderRpcException>(exception.InnerException);
+        Assert.Equal(SunderRpcErrorKind.Validation, inner.Error.Kind);
+        Assert.Equal("package-data.invalid", inner.Error.Code);
+        Assert.Equal(message, inner.Message);
+    }
+
+    private static Task SendHostErrorAsync(
+        WorkerHarness worker,
+        string? id,
+        string kind,
+        string code,
+        string message)
+        => worker.SendAsync(new
+        {
+            type = "host.error",
+            id,
+            error = new
+            {
+                kind,
+                code,
+                message,
+                dispatchState = "not-dispatched",
+                retrySafety = "safe",
+            },
+        });
 }

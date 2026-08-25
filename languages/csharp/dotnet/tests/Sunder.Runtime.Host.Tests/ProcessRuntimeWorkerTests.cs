@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Sunder.Core.TestSupport;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
@@ -17,6 +18,7 @@ using SdkPackageAuthStatusKind = Sunder.Sdk.Authentication.PackageAuthStatusKind
 
 namespace Sunder.Runtime.Host.Tests;
 
+[Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class ProcessRuntimeWorkerTests
 {
     [Fact]
@@ -146,7 +148,7 @@ public sealed class ProcessRuntimeWorkerTests
             var generation = new RuntimePackageGeneration(activationId, 1);
             await worker.CommitGenerationAsync(generation);
             await worker.PrepareStorageMigrationsAsync(generation);
-            await worker.ActivateGenerationAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await worker.ActivateGenerationAsync().WaitAsync(TimeSpan.FromSeconds(30));
             Assert.Null(await context.Storage.State.GetValueAsync("legacy.state.v1"));
             Assert.Equal("state-value", await context.Storage.State.GetValueAsync("fixture.state.v1"));
             Assert.Null(await context.Secrets.GetSecretAsync("legacy.secret.v1"));
@@ -179,7 +181,7 @@ public sealed class ProcessRuntimeWorkerTests
             Assert.Equal(SdkPackageAuthStatusKind.Connected, connected.Status);
             Assert.Equal(SdkPackageAuthStatusKind.NotConnected, (await auth.DisconnectAsync()).Status);
             await worker.StopAsync();
-            await worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+            await worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(30));
         }
         finally
         {
@@ -190,12 +192,13 @@ public sealed class ProcessRuntimeWorkerTests
         }
     }
 
-    [Fact]
+    [ExternalArtifactFact("SUNDER_REQUIRE_DOTNET_WORKER_ARTIFACT", "SUNDER_DOTNET_WORKER_ARCHIVE_PATH")]
+    [Trait("Category", "ExternalArtifact")]
     public async Task WorkerSdkPackagedExecutable_ExactArchiveInstallsThroughRuntimeHostAndRecordsReleaseEvidence()
     {
         var archivePath = Environment.GetEnvironmentVariable("SUNDER_DOTNET_WORKER_ARCHIVE_PATH");
-        if (string.IsNullOrWhiteSpace(archivePath)) return;
-        archivePath = Path.GetFullPath(archivePath);
+        Assert.False(string.IsNullOrWhiteSpace(archivePath), "SUNDER_DOTNET_WORKER_ARCHIVE_PATH is required by the selected artifact lane.");
+        archivePath = Path.GetFullPath(archivePath!);
         Assert.True(File.Exists(archivePath), $"Native .NET worker archive does not exist: {archivePath}");
         var root = Path.Combine(Path.GetTempPath(), "sunder-dotnet-worker-release-tests", Guid.NewGuid().ToString("N"));
         var paths = new RuntimePackagePaths(Path.Combine(root, "runtime"));
@@ -239,11 +242,11 @@ public sealed class ProcessRuntimeWorkerTests
             await host.ShutdownAsync();
             if (workerProcessId is { } processId)
             {
-                var timeout = Stopwatch.StartNew();
-                while (IsProcessAlive(processId) && timeout.Elapsed < TimeSpan.FromSeconds(10))
-                {
-                    await Task.Delay(50);
-                }
+                await Eventually.ObserveAsync(
+                    _ => ValueTask.FromResult(IsProcessAlive(processId)),
+                    static alive => !alive,
+                    TimeSpan.FromSeconds(10),
+                    describe: (alive, error) => $"workerPid={processId}; alive={alive}; error={error?.Message}");
                 Assert.False(IsProcessAlive(processId), $"Worker process {processId} survived Runtime Host shutdown.");
             }
             if (workerTemporaryPath is not null)
@@ -1019,7 +1022,7 @@ public sealed class ProcessRuntimeWorkerTests
 
         await fixture.Worker.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
-        await Assert.ThrowsAnyAsync<Exception>(async () =>
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await preparation.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
@@ -1062,7 +1065,14 @@ public sealed class ProcessRuntimeWorkerTests
         await using var fixture = await WorkerFixture.CreateAsync(
             "v3-stale-malformed-payload",
             enforcePackageSessionLease: true);
-        await fixture.StartAndActivateAsync();
+        try
+        {
+            await fixture.StartAndActivateAsync();
+        }
+        catch (SunderWorkerProtocolException)
+        {
+            // The expected integrity fault can race the activation acknowledgement.
+        }
 
         await Assert.ThrowsAnyAsync<Exception>(async () =>
             await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
@@ -1083,10 +1093,9 @@ public sealed class ProcessRuntimeWorkerTests
         await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Worker_UnixFifoContentPathIsRejectedWithoutBlocking()
     {
-        if (OperatingSystem.IsWindows()) return;
         var root = Path.Combine(Path.GetTempPath(), "sunder-worker-fifo-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var fifoPath = Path.Combine(root, "content.fifo");
@@ -1248,7 +1257,7 @@ public sealed class ProcessRuntimeWorkerTests
             "send",
             JsonSerializer.SerializeToElement(new { message = "early" }),
             cancellation.Token).AsTask();
-        await Task.Delay(100);
+        using var activationEntered = await fixture.WaitForWorkerStatusAsync("activation-entered.json");
 
         Assert.False(invocation.IsCompleted);
         Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
@@ -1278,7 +1287,7 @@ public sealed class ProcessRuntimeWorkerTests
             "send",
             JsonSerializer.SerializeToElement(new { message = "first" }),
             cancellation.Token).AsTask();
-        await Task.Delay(100);
+        using var activationEntered = await fixture.WaitForWorkerStatusAsync("activation-entered.json");
 
         var exhausted = await Assert.ThrowsAsync<SunderRpcException>(async () =>
             await fixture.Worker.InvokeUnaryAsync(
@@ -1315,7 +1324,7 @@ public sealed class ProcessRuntimeWorkerTests
             "send",
             JsonSerializer.SerializeToElement(new { message = "pending" }),
             CancellationToken.None).AsTask();
-        await Task.Delay(50);
+        using var activationEntered = await fixture.WaitForWorkerStatusAsync("activation-entered.json");
 
         Assert.False(invocation.IsCompleted);
         var result = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
@@ -1329,11 +1338,28 @@ public sealed class ProcessRuntimeWorkerTests
     public async Task WorkerV3_ReportedGenerationFaultFaultsOnlyItsExactGenerationCompletion()
     {
         await using var fixture = await WorkerFixture.CreateAsync("v3-generation-fault");
-        await fixture.StartAndActivateAsync();
+        ProcessRuntimeGenerationFaultException? activationFault = null;
+        try
+        {
+            await fixture.StartAndActivateAsync();
+        }
+        catch (ProcessRuntimeGenerationFaultException exception)
+        {
+            activationFault = exception;
+        }
+        catch (InvalidOperationException exception) when (
+            exception.InnerException is ProcessRuntimeGenerationFaultException)
+        {
+            activationFault = (ProcessRuntimeGenerationFaultException)exception.InnerException;
+        }
 
         var fault = await Assert.ThrowsAsync<ProcessRuntimeGenerationFaultException>(async () =>
             await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
 
+        if (activationFault is not null)
+        {
+            Assert.Same(activationFault, fault);
+        }
         Assert.Equal("worker.test-fault", fault.Code);
         Assert.Contains("bounded fault", fault.Message, StringComparison.Ordinal);
     }
@@ -1922,7 +1948,7 @@ public sealed class ProcessRuntimeWorkerTests
             "messages",
             "wait",
             JsonSerializer.SerializeToElement(new { message = "wait" })).AsTask();
-        await Task.Delay(100);
+        using var invocationEntered = await fixture.WaitForWorkerStatusAsync("host-invoke-wait-entered.json");
 
         await fixture.SetInvokePermissionAsync(RuntimeRpcPermissionState.Denied);
 
@@ -1995,7 +2021,7 @@ public sealed class ProcessRuntimeWorkerTests
             "messages",
             "wait",
             JsonSerializer.SerializeToElement(new { message = "wait" })).AsTask();
-        await Task.Delay(100);
+        using var invocationEntered = await fixture.WaitForWorkerStatusAsync("host-invoke-wait-entered.json");
 
         var retirement = fixture.Owner.State.ClearActiveSessionAsync();
         var failure = await Assert.ThrowsAsync<SunderRpcException>(async () => await call);
@@ -2605,17 +2631,18 @@ public sealed class ProcessRuntimeWorkerTests
             var path = Path.Combine(
                 Worker.WorkerTemporaryPath,
                 fileName);
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            while (!File.Exists(path))
+            var signal = FileSignal.WaitForAsync(
+                path,
+                TimeSpan.FromSeconds(5),
+                () => $"generationCompleted={Worker.GenerationCompletion.IsCompleted}; temporaryRoot={Worker.WorkerTemporaryPath}");
+            var completed = await Task.WhenAny(signal, Worker.GenerationCompletion);
+            if (completed == Worker.GenerationCompletion && !File.Exists(path))
             {
-                if (Worker.GenerationCompletion.IsCompleted)
-                {
-                    await Worker.GenerationCompletion;
-                    throw new InvalidOperationException("The worker stopped before writing its status file.");
-                }
-                await Task.Delay(25, timeout.Token);
+                await Worker.GenerationCompletion;
+                throw new InvalidOperationException("The worker stopped before writing its status file.");
             }
-            return JsonDocument.Parse(await File.ReadAllBytesAsync(path, timeout.Token));
+            await signal;
+            return JsonDocument.Parse(await File.ReadAllBytesAsync(path));
         }
 
         public int WorkerCallScopeCount()

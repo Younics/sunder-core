@@ -31,7 +31,7 @@ internal sealed class RuntimeStackImportService : IDisposable
         _plans = new StackImportPlanStore(transfers, _timeProvider, policy ?? new RuntimeStackPolicyOptions());
     }
 
-    public async Task<RuntimeStackImportPreviewResponse> PreviewAsync(
+    public async Task<RuntimeStackOperationResult<RuntimeStackImportPreviewResponse>> PreviewAsync(
         RuntimeStackImportPreviewRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -41,7 +41,9 @@ internal sealed class RuntimeStackImportService : IDisposable
         var upload = _transfers.AcquireUpload(request.UploadId, RuntimeUploadKind.Stack, lease.Generation, consume: true);
         if (upload is null)
         {
-            return PreviewFailure("Stack upload was not found or is stale.");
+            return FailedPreview(
+                PreviewFailure("Stack upload was not found or is stale."),
+                RuntimeStackFailureCategory.StaleGeneration);
         }
 
         var stagingPath = CreateStagingPath();
@@ -51,22 +53,43 @@ internal sealed class RuntimeStackImportService : IDisposable
             var loaded = await _archiveReader.LoadAsync(upload.FilePath, request.SelectedFragmentIds, stagingPath, linked.Token);
             if (!loaded.Success)
             {
-                return PreviewFailure(loaded.Warnings, loaded.Errors);
+                return FailedPreview(
+                    PreviewFailure(loaded.Warnings, loaded.Errors),
+                    loaded.FailureCategory ?? RuntimeStackFailureCategory.PackageValidation);
             }
 
             var errors = new List<string>();
+            RuntimeStackFailureCategory? failureCategory = null;
+            var priorErrorCount = errors.Count;
             var contributors = await RuntimeStackContributorCatalog.GetImportersAsync(
                 _rpcClient,
                 errors,
                 linked.Token).ConfigureAwait(false);
+            CaptureFailureCategory(
+                errors,
+                priorErrorCount,
+                RuntimeStackFailureCategory.PackageValidation,
+                ref failureCategory);
             var inputValues = Copy(request.InputValues);
             var idRemaps = Copy(request.IdRemaps);
             var actions = new List<RuntimeStackImportActionDescriptor>();
             var inputs = new List<RuntimeStackRequiredInputDescriptor>();
             var conflicts = new List<RuntimeStackImportConflictDescriptor>();
             var warnings = loaded.Warnings.ToList();
+            priorErrorCount = errors.Count;
             RuntimeStackContributorCatalog.ValidateScopedValues(inputValues, RuntimeStackScopedKey.InputKind, contributors, "input", errors);
+            CaptureFailureCategory(
+                errors,
+                priorErrorCount,
+                RuntimeStackFailureCategory.Unavailable,
+                ref failureCategory);
+            priorErrorCount = errors.Count;
             RuntimeStackContributorCatalog.ValidateScopedValues(idRemaps, RuntimeStackScopedKey.RemapKind, contributors, "remap", errors);
+            CaptureFailureCategory(
+                errors,
+                priorErrorCount,
+                RuntimeStackFailureCategory.Unavailable,
+                ref failureCategory);
             var bindings = new List<StackContributorBinding>();
             foreach (var group in loaded.Fragments.GroupBy(
                          fragment => RuntimeStackContributorCatalog.Key(fragment.OwnerPackageId, fragment.ContributorId),
@@ -75,6 +98,7 @@ internal sealed class RuntimeStackImportService : IDisposable
                 var first = group.First();
                 if (!contributors.TryGetValue(group.Key, out var registration))
                 {
+                    if (errors.Count == 0) failureCategory = RuntimeStackFailureCategory.PackageValidation;
                     errors.Add($"No active Stack contributor '{first.ContributorId}' from package '{first.OwnerPackageId}' is available.");
                     continue;
                 }
@@ -111,8 +135,14 @@ internal sealed class RuntimeStackImportService : IDisposable
                                 registration.PackageId,
                                 registration.ContributorId)),
                         linked.Token).ConfigureAwait(false);
+                    priorErrorCount = errors.Count;
                     if (!RuntimeStackContributorCatalog.ValidatePreviewIds(preview, registration.ContributorId, errors))
                     {
+                        CaptureFailureCategory(
+                            errors,
+                            priorErrorCount,
+                            RuntimeStackFailureCategory.PackageValidation,
+                            ref failureCategory);
                         continue;
                     }
                     var contributorActions = preview.Actions
@@ -126,6 +156,7 @@ internal sealed class RuntimeStackImportService : IDisposable
                 }
                 catch (Exception) when (!linked.IsCancellationRequested)
                 {
+                    if (errors.Count == 0) failureCategory = RuntimeStackFailureCategory.PackageValidation;
                     errors.Add($"Stack importer '{registration.ContributorId}' preview failed.");
                 }
             }
@@ -136,7 +167,9 @@ internal sealed class RuntimeStackImportService : IDisposable
                 StringComparison.OrdinalIgnoreCase));
             if (errors.Count > 0 || blocking)
             {
-                return new RuntimeStackImportPreviewResponse(false, null, null, actions, inputs, conflicts, warnings, errors);
+                return FailedPreview(
+                    new RuntimeStackImportPreviewResponse(false, null, null, actions, inputs, conflicts, warnings, errors),
+                    failureCategory ?? RuntimeStackFailureCategory.PackageValidation);
             }
 
             var planId = CreatePlanId();
@@ -155,11 +188,14 @@ internal sealed class RuntimeStackImportService : IDisposable
                 _plans.ExpiresAtUtc);
             if (!_plans.TryAdd(plan))
             {
-                throw new InvalidOperationException("Failed to allocate a Stack import plan.");
+                return FailedPreview(
+                    PreviewFailure("The Runtime Stack import plan capacity was reached."),
+                    RuntimeStackFailureCategory.Unavailable);
             }
 
             retainedByPlan = true;
-            return new RuntimeStackImportPreviewResponse(true, planId, plan.ExpiresAtUtc, actions, inputs, conflicts, warnings, []);
+            return RuntimeStackOperationResult<RuntimeStackImportPreviewResponse>.Succeeded(
+                new RuntimeStackImportPreviewResponse(true, planId, plan.ExpiresAtUtc, actions, inputs, conflicts, warnings, []));
         }
         finally
         {
@@ -168,6 +204,26 @@ internal sealed class RuntimeStackImportService : IDisposable
                 TryDeleteDirectory(stagingPath);
                 _transfers.ReleaseUpload(upload);
             }
+        }
+    }
+
+    private static RuntimeStackOperationResult<RuntimeStackImportPreviewResponse> FailedPreview(
+        RuntimeStackImportPreviewResponse response,
+        RuntimeStackFailureCategory category)
+        => RuntimeStackOperationResult<RuntimeStackImportPreviewResponse>.Failed(
+            response,
+            category,
+            response.Errors.FirstOrDefault());
+
+    private static void CaptureFailureCategory(
+        IReadOnlyCollection<string> errors,
+        int priorErrorCount,
+        RuntimeStackFailureCategory category,
+        ref RuntimeStackFailureCategory? failureCategory)
+    {
+        if (failureCategory is null && errors.Count > priorErrorCount)
+        {
+            failureCategory = category;
         }
     }
 

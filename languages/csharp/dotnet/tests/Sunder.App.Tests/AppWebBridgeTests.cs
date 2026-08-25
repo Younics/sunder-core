@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Avalonia.Controls;
 using Sunder.App.Services;
+using Sunder.Core.TestSupport;
 using Sunder.Package.Format;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.LocalState;
@@ -42,8 +44,23 @@ public sealed class AppWebBridgeTests
                 new ExternalBrowserService(),
                 _ => { });
             var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+            var expectedBootstrap = AppWebBootstrapScriptGenerator.Generate(
+                AppWebBridge.Protocol,
+                AppWebBridge.ProtocolVersion,
+                origin,
+                bridge.SessionNonce,
+                RuntimeClientResourceLimits.Standard);
+            Assert.Equal(
+                expectedBootstrap,
+                AppWebBootstrapScriptGenerator.Generate(
+                    AppWebBridge.Protocol,
+                    AppWebBridge.ProtocolVersion,
+                    origin,
+                    bridge.SessionNonce,
+                    RuntimeClientResourceLimits.Standard));
             await bridge.EstablishAsync(server.BaseUri);
             var bootstrap = Assert.Single(webView.Scripts);
+            Assert.Equal(expectedBootstrap, bootstrap);
             Assert.Contains(
                 "if (details !== undefined) error.details = freezeJson(details);",
                 bootstrap,
@@ -209,6 +226,70 @@ public sealed class AppWebBridgeTests
             await bridge.HandleMessageAsync(
                 Request(firstNonce, origin, "b_2", "rpc.discover", new { contractId = "example.rpc" }));
             Assert.Equal(2, rpc.DiscoverCalls);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Component")]
+    [Trait("Capability", "LoopbackNetwork")]
+    [Trait("Size", "Medium")]
+    public async Task Admission_RejectsWrongNonceAndOriginBeforeCreatingPendingRequest()
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var webView = new TestWebView();
+            var rpc = new BlockingRpcClient();
+            await using var bridge = new AppWebBridge(
+                webView,
+                server,
+                rpc,
+                EmptyCatalog(root),
+                new ExternalBrowserService(),
+                _ => { });
+            var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+            await bridge.EstablishAsync(server.BaseUri);
+            webView.ClearScripts();
+
+            await bridge.HandleMessageAsync(Request(
+                "wrong-nonce",
+                origin,
+                "b_wrong_nonce",
+                "rpc.discover",
+                new { contractId = "example.rpc" }));
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                "https://forged.example",
+                "b_wrong_origin",
+                "rpc.discover",
+                new { contractId = "example.rpc" }));
+
+            Assert.Equal(0, rpc.DiscoverCalls);
+            Assert.Equal(0, bridge.PendingRequestCount);
+            Assert.Equal(2, webView.Scripts.Count);
+            Assert.All(webView.Scripts, script => Assert.Equal(
+                "rpc.bridge.authentication",
+                ReadResponse(script).GetProperty("error").GetProperty("code").GetString()));
+            webView.ClearScripts();
+
+            var admitted = bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_admitted",
+                "rpc.discover",
+                new { contractId = "example.rpc" }));
+            await rpc.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(1, bridge.PendingRequestCount);
+            rpc.FirstRelease.TrySetResult();
+            await admitted.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(0, bridge.PendingRequestCount);
+            Assert.Single(webView.Scripts);
         }
         finally
         {
@@ -471,6 +552,367 @@ public sealed class AppWebBridgeTests
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
+
+    [ExternalArtifactFact("SUNDER_REQUIRE_APP_WEB_BRIDGE_VM")]
+    [Trait("Category", "Conformance")]
+    [Trait("Capability", "Process")]
+    [Trait("Size", "Medium")]
+    public async Task BootstrapJavaScriptCrossLanguageVm_ExecutesExactNativeContractAcrossNavigation()
+    {
+        await RunBootstrapVmOracleAsync(static script => script);
+    }
+
+    [ExternalArtifactFact("SUNDER_REQUIRE_APP_WEB_BRIDGE_VM")]
+    [Trait("Category", "Mutation")]
+    [Trait("Capability", "Process")]
+    [Trait("Size", "Medium")]
+    public async Task BootstrapJavaScriptCrossLanguageVm_RejectsSeededNonceOwnershipMutation()
+    {
+        var exception = await Assert.ThrowsAsync<AppWebBridgeVmOracleException>(() =>
+            RunBootstrapVmOracleAsync(static script =>
+            {
+                const string guard = "message?.nonce !== nonce";
+                var mutated = script.Replace(guard, "false", StringComparison.Ordinal);
+                Assert.NotEqual(script, mutated);
+                return mutated;
+            }));
+
+        Assert.Contains(
+            "current document accepted a prior-document response",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    private static async Task RunBootstrapVmOracleAsync(Func<string, string> adaptSecondBootstrap)
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var webView = new TestWebView();
+            await using var bridge = new AppWebBridge(
+                webView,
+                server,
+                UnavailableAppWebRpcClient.Instance,
+                EmptyCatalog(root),
+                new ExternalBrowserService(),
+                _ => Assert.Fail("The VM oracle must not accept its intentionally invalid route."));
+            var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+
+            await bridge.EstablishAsync(server.BaseUri);
+            var firstBootstrap = Assert.Single(webView.Scripts);
+            var firstNonce = bridge.SessionNonce;
+            webView.ClearScripts();
+            var firstResult = await CaptureVmResponseAsync(
+                bridge,
+                webView,
+                Request(firstNonce, origin, "b_1", "navigation.getState", new { }));
+            var firstError = await CaptureVmResponseAsync(
+                bridge,
+                webView,
+                Request(firstNonce, origin, "b_2", "navigation.navigate", new { route = "not-a-route" }));
+            var firstPending = await CaptureVmResponseAsync(
+                bridge,
+                webView,
+                Request(firstNonce, origin, "b_3", "navigation.getState", new { }));
+            var firstLateTarget = await CaptureVmResponseAsync(
+                bridge,
+                webView,
+                Request(firstNonce, origin, "b_4", "navigation.getState", new { }));
+
+            bridge.NavigationStarting();
+            var secondNonce = bridge.SessionNonce;
+            Assert.NotEqual(firstNonce, secondNonce);
+            await bridge.EstablishAsync(server.GetRouteUri("/workspace"));
+            var secondBootstrap = adaptSecondBootstrap(Assert.Single(webView.Scripts));
+            webView.ClearScripts();
+            var secondResult = await CaptureVmResponseAsync(
+                bridge,
+                webView,
+                Request(secondNonce, origin, "b_1", "navigation.getState", new { }));
+            var wrongNonceForFirstPending = RewriteVmResponseNonce(firstPending, secondNonce);
+
+            var harnessPath = Path.Combine(root, "app-web-bridge-vm-oracle.mjs");
+            var configurationPath = Path.Combine(root, "app-web-bridge-vm-oracle.json");
+            await File.WriteAllTextAsync(harnessPath, AppWebBridgeVmHarness);
+            await File.WriteAllTextAsync(configurationPath, JsonSerializer.Serialize(new
+            {
+                origin,
+                firstNonce,
+                secondNonce,
+                firstBootstrap,
+                secondBootstrap,
+                responses = new
+                {
+                    firstResult,
+                    firstError,
+                    firstPending,
+                    firstLateTarget,
+                    secondResult,
+                    wrongNonceForFirstPending,
+                },
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+            var startInfo = new ProcessStartInfo("node")
+            {
+                UseShellExecute = false,
+                WorkingDirectory = root,
+            };
+            startInfo.ArgumentList.Add(harnessPath);
+            startInfo.ArgumentList.Add(configurationPath);
+            await using var process = CapturedProcess.Start(startInfo);
+            Sunder.Core.TestSupport.CapturedProcessResult processResult;
+            try
+            {
+                processResult = await process.EnsureSuccessAsync(TimeSpan.FromSeconds(20));
+            }
+            catch (ProcessFixtureException exception)
+            {
+                throw new AppWebBridgeVmOracleException(exception.Message, exception);
+            }
+
+            using var resultDocument = JsonDocument.Parse(processResult.StandardOutput);
+            var result = resultDocument.RootElement;
+            Assert.Equal("/", result.GetProperty("firstRoute").GetString());
+            Assert.Equal("/workspace", result.GetProperty("secondRoute").GetString());
+            Assert.Equal("SunderRpcError", result.GetProperty("error").GetProperty("name").GetString());
+            Assert.True(JsonElement.DeepEquals(
+                firstError.Envelope.GetProperty("error"),
+                result.GetProperty("error").GetProperty("detail")));
+
+            var expectedRequests = new[]
+            {
+                new VmExpectedRequest("first", Request(firstNonce, origin, "b_1", "navigation.getState", new { })),
+                new VmExpectedRequest("first", Request(firstNonce, origin, "b_2", "navigation.navigate", new { route = "not-a-route" })),
+                new VmExpectedRequest("first", Request(firstNonce, origin, "b_3", "navigation.getState", new { })),
+                new VmExpectedRequest("first", Request(firstNonce, origin, "b_4", "navigation.getState", new { })),
+                new VmExpectedRequest("second", Request(secondNonce, origin, "b_1", "navigation.getState", new { })),
+            };
+            var actualRequests = result.GetProperty("requests").EnumerateArray().ToArray();
+            Assert.Equal(expectedRequests.Length, actualRequests.Length);
+            for (var index = 0; index < expectedRequests.Length; index++)
+            {
+                Assert.Equal(expectedRequests[index].Document, actualRequests[index].GetProperty("document").GetString());
+                using var expected = JsonDocument.Parse(expectedRequests[index].Body);
+                Assert.True(
+                    JsonElement.DeepEquals(expected.RootElement, actualRequests[index].GetProperty("body")),
+                    $"VM request {index} did not match the native bridge envelope. Actual: {actualRequests[index].GetProperty("raw").GetString()}");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static async Task<BridgeVmResponse> CaptureVmResponseAsync(
+        AppWebBridge bridge,
+        TestWebView webView,
+        string request)
+    {
+        await bridge.HandleMessageAsync(request);
+        var script = Assert.Single(webView.Scripts);
+        webView.ClearScripts();
+        return new BridgeVmResponse(script, ReadResponse(script));
+    }
+
+    private static BridgeVmResponse RewriteVmResponseNonce(BridgeVmResponse response, string nonce)
+    {
+        var root = response.Envelope;
+        var json = JsonSerializer.Serialize(new
+        {
+            protocol = root.GetProperty("protocol").GetString(),
+            version = root.GetProperty("version").GetInt32(),
+            nonce,
+            requestId = root.GetProperty("requestId").GetString(),
+            type = root.GetProperty("type").GetString(),
+            value = root.GetProperty("value").Clone(),
+            error = root.GetProperty("error").Clone(),
+        });
+        using var document = JsonDocument.Parse(json);
+        return new BridgeVmResponse(
+            $"window.__sunderReceive?.({JsonSerializer.Serialize(json)});",
+            document.RootElement.Clone());
+    }
+
+    private sealed record BridgeVmResponse(string Script, JsonElement Envelope);
+
+    private sealed record VmExpectedRequest(string Document, string Body);
+
+    private sealed class AppWebBridgeVmOracleException(string message, Exception innerException)
+        : Exception(message, innerException);
+
+    private const string AppWebBridgeVmHarness = """
+        import { readFile } from "node:fs/promises";
+        import { isDeepStrictEqual } from "node:util";
+        import vm from "node:vm";
+
+        const configuration = JSON.parse(await readFile(process.argv[2], "utf8"));
+        const requests = [];
+
+        function invariant(condition, message) {
+          if (!condition) throw new Error(message);
+        }
+
+        function exactKeys(value, expected, label) {
+          invariant(value !== null && typeof value === "object" && !Array.isArray(value), `${label} must be an object.`);
+          const actual = Object.keys(value).sort();
+          invariant(isDeepStrictEqual(actual, [...expected].sort()), `${label} keys were ${JSON.stringify(actual)}.`);
+        }
+
+        function createDocument(label, script, origin) {
+          const sandbox = { TextEncoder, AbortController, setTimeout, clearTimeout, queueMicrotask };
+          sandbox.window = sandbox;
+          sandbox.location = Object.freeze({ origin });
+          sandbox.invokeCSharpAction = (raw) => {
+            const body = JSON.parse(raw);
+            exactKeys(
+              body,
+              ["protocol", "version", "nonce", "origin", "requestId", "method", "deadlineUtc", "payload"],
+              `${label} native request`,
+            );
+            invariant(body.protocol === "sunder.bridge.v2" && body.version === 2, `${label} request protocol drifted.`);
+            invariant(body.origin === configuration.origin, `${label} request origin drifted.`);
+            const expectedNonce = label === "second" ? configuration.secondNonce : configuration.firstNonce;
+            invariant(body.nonce === expectedNonce, `${label} request nonce drifted.`);
+            requests.push({ document: label, raw, body });
+          };
+          const context = vm.createContext(sandbox, { name: `app-web-bridge-${label}` });
+          const compiled = new vm.Script(script, { filename: `app-web-bridge-${label}.js` });
+          const initialized = compiled.runInContext(context);
+          return { label, context, window: sandbox, compiled, initialized };
+        }
+
+        function validateResponse(response, label) {
+          exactKeys(
+            response.envelope,
+            ["protocol", "version", "nonce", "requestId", "type", "value", "error"],
+            `${label} native response`,
+          );
+          const prefix = "window.__sunderReceive?.(";
+          invariant(response.script.startsWith(prefix) && response.script.endsWith(");"), `${label} response script wrapper drifted.`);
+          const raw = JSON.parse(response.script.slice(prefix.length, -2));
+          invariant(isDeepStrictEqual(JSON.parse(raw), response.envelope), `${label} response script and envelope diverged.`);
+        }
+
+        function feed(document, response, label) {
+          validateResponse(response, label);
+          new vm.Script(response.script, { filename: `${label}.js` }).runInContext(document.context);
+        }
+
+        function track(promise) {
+          const state = { status: "pending", value: undefined, error: undefined };
+          const completion = Promise.resolve(promise).then(
+            (value) => {
+              state.status = "fulfilled";
+              state.value = value;
+              return value;
+            },
+            (error) => {
+              state.status = "rejected";
+              state.error = error;
+              throw error;
+            },
+          );
+          void completion.catch(() => {});
+          return { state, completion };
+        }
+
+        function begin(document, operation, label) {
+          const before = requests.length;
+          const tracked = track(operation());
+          invariant(requests.length === before + 1, `${label} did not synchronously invoke the native callback exactly once.`);
+          return tracked;
+        }
+
+        async function settleTurn() {
+          await Promise.resolve();
+          await Promise.resolve();
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+
+        async function run() {
+          const wrongOrigin = createDocument("wrong-origin", configuration.firstBootstrap, "https://forged.example");
+          invariant(wrongOrigin.initialized === false, "Bootstrap admitted the wrong origin.");
+          invariant(!Object.prototype.hasOwnProperty.call(wrongOrigin.window, "sunder"), "Wrong-origin bootstrap exposed the API.");
+
+          const first = createDocument("first", configuration.firstBootstrap, configuration.origin);
+          invariant(first.initialized === true, "First bootstrap did not initialize.");
+          const firstApi = first.window.sunder;
+          invariant(first.compiled.runInContext(first.context) === true, "Idempotent bootstrap did not report success.");
+          invariant(first.window.sunder === firstApi, "Idempotent bootstrap replaced the API object.");
+          invariant(Object.isFrozen(firstApi), "Bridge API is mutable.");
+          invariant(Object.isFrozen(firstApi.resourceProfile), "Resource profile is mutable.");
+          invariant(Object.isFrozen(firstApi.resourceProfile.effectivePolicy), "Effective resource policy is mutable.");
+
+          const firstCall = begin(first, () => firstApi.getNavigationState(), "first result");
+          invariant(firstCall.state.status === "pending", "Unary request did not remain pending before native response.");
+          feed(first, configuration.responses.firstResult, "first result");
+          const firstValue = await firstCall.completion;
+          invariant(firstValue?.route === "/", "First native result shape drifted.");
+
+          const errorCall = begin(first, () => firstApi.navigate("not-a-route"), "native error");
+          feed(first, configuration.responses.firstError, "native error");
+          let observedError;
+          try {
+            await errorCall.completion;
+          } catch (error) {
+            observedError = error;
+          }
+          invariant(observedError?.name === "SunderRpcError", "Native error did not become SunderRpcError.");
+          invariant(
+            isDeepStrictEqual(
+              JSON.parse(JSON.stringify(observedError.error)),
+              configuration.responses.firstError.envelope.error,
+            ),
+            "Native error detail shape drifted.",
+          );
+          invariant(Object.isFrozen(observedError.error), "Native error detail is mutable.");
+
+          const ownedPending = begin(first, () => firstApi.getNavigationState(), "owned pending request");
+          feed(first, configuration.responses.wrongNonceForFirstPending, "wrong nonce");
+          await settleTurn();
+          invariant(ownedPending.state.status === "pending", "Wrong-nonce response resolved an owned pending request.");
+          feed(first, configuration.responses.firstPending, "owned pending result");
+          await ownedPending.completion;
+
+          const lateIsolation = begin(first, () => firstApi.getNavigationState(), "late response target");
+          feed(first, configuration.responses.firstPending, "late completed response");
+          await settleTurn();
+          invariant(lateIsolation.state.status === "pending", "Late response completed a different pending request.");
+          feed(first, configuration.responses.firstLateTarget, "late response target result");
+          await lateIsolation.completion;
+
+          const second = createDocument("second", configuration.secondBootstrap, configuration.origin);
+          invariant(second.initialized === true, "Rotated bootstrap did not initialize.");
+          invariant(configuration.firstNonce !== configuration.secondNonce, "Navigation did not rotate the nonce.");
+          const rotated = begin(second, () => second.window.sunder.getNavigationState(), "rotated request");
+          feed(second, configuration.responses.firstResult, "prior document response");
+          await settleTurn();
+          invariant(
+            rotated.state.status === "pending",
+            "The current document accepted a prior-document response with the same request id.",
+          );
+          feed(second, configuration.responses.secondResult, "rotated request result");
+          const secondValue = await rotated.completion;
+          invariant(secondValue?.route === "/workspace", "Rotated native result shape drifted.");
+
+          process.stdout.write(JSON.stringify({
+            requests,
+            firstRoute: firstValue.route,
+            secondRoute: secondValue.route,
+            error: { name: observedError.name, detail: observedError.error },
+          }));
+        }
+
+        try {
+          await run();
+        } catch (error) {
+          console.error(`APP_WEB_BRIDGE_VM_ORACLE: ${error?.stack ?? error}`);
+          process.exitCode = 1;
+        }
+        """;
 
     private static string Request(
         string nonce,

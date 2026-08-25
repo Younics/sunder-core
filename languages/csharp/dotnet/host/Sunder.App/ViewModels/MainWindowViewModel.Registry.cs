@@ -9,6 +9,7 @@ namespace Sunder.App.ViewModels;
 public partial class MainWindowViewModel
 {
     private readonly LatestAsyncRequest _registryAuthRequest = new();
+    private readonly LatestAsyncRequest _registryAvatarRequest = new();
 
     [ObservableProperty]
     private bool _isRegistryAuthBusy;
@@ -33,6 +34,9 @@ public partial class MainWindowViewModel
 
     [ObservableProperty]
     private string? _registryAccountAvatarUrl;
+
+    [ObservableProperty]
+    private IImage? _registryAccountAvatarImage;
 
     public bool CanManageRegistryAccount => _registryAuthService is not null && !IsRegistryAuthBusy;
 
@@ -221,5 +225,66 @@ public partial class MainWindowViewModel
         RegistryAccountAvatarText = state.AvatarText;
         RegistryAccountAvatarBrush = state.AvatarBrush;
         RegistryAccountAvatarUrl = state.AvatarUrl;
+        QueueRegistryAvatarLoad(state);
+    }
+
+    private void QueueRegistryAvatarLoad(RegistryAccountPresentationState state)
+    {
+        _registryAvatarRequest.Invalidate();
+        PackageIconImageViewModelLoader.DisposeImage(RegistryAccountAvatarImage);
+        RegistryAccountAvatarImage = null;
+        if (_remoteImageService is null
+            || state.RegistryOrigin is null
+            || !Uri.TryCreate(state.AvatarUrl, UriKind.Absolute, out var avatarUri)
+            || !HttpMediaUriValidator.IsValid(avatarUri))
+        {
+            return;
+        }
+
+        var request = _registryAvatarRequest.Start(_tasks.Token);
+        _tasks.Observe(
+            LoadRegistryAvatarAsync(request, state.RegistryOrigin, avatarUri),
+            "loading the Registry account avatar");
+    }
+
+    private async Task LoadRegistryAvatarAsync(
+        LatestAsyncRequest.Lease request,
+        Uri registryOrigin,
+        Uri avatarUri)
+    {
+        using (request)
+        {
+            IImage? image = null;
+            try
+            {
+                var result = await _remoteImageService!
+                    .LoadAvatarAsync(registryOrigin, avatarUri, request.Token)
+                    .ConfigureAwait(false);
+                image = result.Image;
+                if (image is null || !request.IsCurrent)
+                {
+                    return;
+                }
+
+                await _uiDispatcher.InvokeAsync(() =>
+                {
+                    if (_disposed || !request.IsCurrent)
+                    {
+                        return;
+                    }
+
+                    PackageIconImageViewModelLoader.DisposeImage(RegistryAccountAvatarImage);
+                    RegistryAccountAvatarImage = image;
+                    image = null;
+                }).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+            {
+            }
+            finally
+            {
+                PackageIconImageViewModelLoader.DisposeImage(image);
+            }
+        }
     }
 }

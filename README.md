@@ -69,7 +69,7 @@ dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuratio
 sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
 ```
 
-Current authoring presets are managed in-process .NET Runtime, isolated .NET or Node worker Runtime, Avalonia App, and framework-agnostic web App with React/Vite as one template. The package format is not tied to those presets. Future Python, Rust, Go, or other worker toolchains, other .NET UI approaches, and other web frameworks can participate when their tooling emits the canonical archive and uses a target kind/protocol supported by the Host.
+Current Runtime authoring is Worker-only: the .NET and Node presets emit self-contained, exact-RID Worker V3 executables. Avalonia and framework-agnostic web App modules remain role-isolated, in-process extensions of `Sunder.App`, with React/Vite as one web template. The package format is not tied to those presets. Future Python, Rust, Go, or other worker toolchains, UI approaches, and web frameworks can participate when their tooling emits the canonical archive and uses a target kind/protocol supported by the Host.
 
 ## Architecture
 
@@ -145,7 +145,7 @@ dotnet test languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/Sunder.Pack
 
 ## Releases
 
-Release automation is tag-driven:
+Immutable publication is tag-driven; production acceptance and public promotion are separate gates:
 
 | Tag prefix | Release |
 | --- | --- |
@@ -154,7 +154,7 @@ Release automation is tag-driven:
 | `cli/v*` | Sunder CLI |
 | `sdk/v*` | Six coordinated NuGet packages, including `Sunder.Sdk.Worker`, and three coordinated npm packages for SDKs, build tooling, and templates |
 
-See [`docs/SUNDER-CORE-RELEASES.md`](docs/SUNDER-CORE-RELEASES.md) for workflow checks, draft publishing, and signing status.
+See [`docs/SUNDER-CORE-RELEASES.md`](docs/SUNDER-CORE-RELEASES.md) for publication evidence, the currently blocked external production-acceptance gate, protected promotion, workflow checks, and signing status.
 
 ## Contributing
 

@@ -39,40 +39,32 @@ internal sealed class SdkCapabilityCatalog
         return catalog;
     }
 
-    public bool AddTypeCapabilities(
+    public SdkCapabilityResolution ResolveType(
         string? assemblyName,
         string @namespace,
-        string name,
-        ISet<string> capabilities)
-        => AddCapabilities(_typeCapabilities, new ContractType(assemblyName ?? string.Empty, @namespace, name), capabilities);
+        string name)
+        => Resolve(_typeCapabilities, new ContractType(assemblyName ?? string.Empty, @namespace, name));
 
-    public bool AddMemberCapabilities(
+    public SdkCapabilityResolution ResolveMember(
         string? assemblyName,
         string @namespace,
         string typeName,
-        string memberName,
-        ISet<string> capabilities)
-        => AddCapabilities(
+        string memberName)
+        => Resolve(
             _memberCapabilities,
-            new ContractMember(new ContractType(assemblyName ?? string.Empty, @namespace, typeName), memberName),
-            capabilities);
+            new ContractMember(new ContractType(assemblyName ?? string.Empty, @namespace, typeName), memberName));
 
-    private static bool AddCapabilities<TKey>(
+    private static SdkCapabilityResolution Resolve<TKey>(
         IReadOnlyDictionary<TKey, HashSet<string>> source,
-        TKey key,
-        ISet<string> destination)
+        TKey key)
         where TKey : notnull
     {
-        if (!source.TryGetValue(key, out var declared) || declared.Count == 0)
+        if (!source.TryGetValue(key, out var declared))
         {
-            return false;
+            return SdkCapabilityResolution.Unresolved;
         }
 
-        foreach (var capability in declared)
-        {
-            destination.Add(capability);
-        }
-        return true;
+        return new SdkCapabilityResolution(true, declared);
     }
 
     private void ReadAssembly(string path)
@@ -246,4 +238,11 @@ internal sealed class SdkCapabilityCatalog
 
     private readonly record struct ContractType(string AssemblyName, string Namespace, string Name);
     private readonly record struct ContractMember(ContractType Type, string Name);
+}
+
+internal readonly record struct SdkCapabilityResolution(
+    bool IsResolved,
+    IReadOnlyCollection<string> DeclaredCapabilities)
+{
+    public static SdkCapabilityResolution Unresolved { get; } = new(false, Array.Empty<string>());
 }

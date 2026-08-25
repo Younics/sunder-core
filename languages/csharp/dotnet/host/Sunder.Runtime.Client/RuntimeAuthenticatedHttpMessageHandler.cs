@@ -56,7 +56,7 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         RuntimeProtocolNegotiationCache negotiations,
         RuntimeClientResourceProfileStore resourceProfiles,
         bool ownsNegotiations)
-        : base(innerHandler ?? new HttpClientHandler())
+        : base(innerHandler ?? new HttpClientHandler { AllowAutoRedirect = false })
     {
         _getConnection = getConnection ?? throw new ArgumentNullException(nameof(getConnection));
         _policy = policy;
@@ -99,8 +99,19 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
             }
             await PreflightJsonContentAsync(request, limits, deadline.Token).ConfigureAwait(false);
             var response = await base.SendAsync(request, deadline.Token).ConfigureAwait(false);
-            response.Content = new DeadlineHttpContent(response.Content, deadline);
+            EnsureResponseOrigin(connection, request, response);
+            response.Content = new DeadlineHttpContent(
+                response.Content,
+                deadline,
+                cancellationToken,
+                timeout);
             return response;
+        }
+        catch (OperationCanceledException exception)
+            when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            deadline.Dispose();
+            throw new TimeoutException($"Runtime request exceeded the {timeout} timeout.", exception);
         }
         catch
         {
@@ -173,42 +184,66 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
             HttpMethod.Get,
             new Uri(RuntimeConnectionInfo.Normalize(connection.RuntimeUrl), "api/handshake"));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", connection.BearerToken);
-        using var response = await base.SendAsync(request, timeout.Token).ConfigureAwait(false);
-        var reader = new RuntimeHttpResponseReader(_policy);
-        var payload = await reader.ReadRequiredPayloadAsync(
-                response,
-                _policy.MaxHandshakeResponseBytes,
-                timeout.Token)
-            .ConfigureAwait(false);
-        var handshake = payload.Length == 0
-            ? null
-            : JsonSerializer.Deserialize<RuntimeHandshakeResponse>(
-                payload,
-                new JsonSerializerOptions(JsonSerializerDefaults.Web) { MaxDepth = 16 });
-        if (handshake is null)
+        try
         {
-            throw new RuntimeProtocolException("Runtime did not return a handshake.");
-        }
-        if (requireCompatibility
-            && RuntimeProtocolCompatibility.GetIncompatibility(handshake) is { } incompatibility)
-        {
-            throw new RuntimeProtocolException(incompatibility);
-        }
-        if (requireCompatibility)
-        {
-            try
+            using var response = await base.SendAsync(request, timeout.Token).ConfigureAwait(false);
+            EnsureResponseOrigin(connection, request, response);
+            var reader = new RuntimeHttpResponseReader(_policy);
+            var payload = await reader.ReadRequiredPayloadAsync(
+                    response,
+                    _policy.MaxHandshakeResponseBytes,
+                    timeout.Token)
+                .ConfigureAwait(false);
+            var handshake = payload.Length == 0
+                ? null
+                : JsonSerializer.Deserialize<RuntimeHandshakeResponse>(
+                    payload,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web) { MaxDepth = 16 });
+            if (handshake is null)
             {
-                _resourceProfiles.Set(
-                    connection,
-                    RuntimeClientResourceProfileParser.Parse(handshake, payload));
+                throw new RuntimeProtocolException("Runtime did not return a handshake.");
             }
-            catch (InvalidDataException exception)
+            if (requireCompatibility
+                && RuntimeProtocolCompatibility.GetIncompatibility(handshake) is { } incompatibility)
             {
-                _resourceProfiles.Remove(connection);
-                throw new RuntimeProtocolException(exception.Message);
+                throw new RuntimeProtocolException(incompatibility);
             }
+            if (requireCompatibility)
+            {
+                try
+                {
+                    _resourceProfiles.Set(
+                        connection,
+                        RuntimeClientResourceProfileParser.Parse(handshake, payload));
+                }
+                catch (InvalidDataException exception)
+                {
+                    _resourceProfiles.Remove(connection);
+                    throw new RuntimeProtocolException(exception.Message);
+                }
+            }
+            return handshake;
         }
-        return handshake;
+        catch (OperationCanceledException exception)
+            when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Runtime request exceeded the {_policy.RequestTimeout} timeout.", exception);
+        }
+    }
+
+    private static void EnsureResponseOrigin(
+        RuntimeConnectionInfo connection,
+        HttpRequestMessage request,
+        HttpResponseMessage response)
+    {
+        var responseUri = response.RequestMessage?.RequestUri ?? request.RequestUri;
+        if (responseUri is not null && connection.CanSendTo(responseUri))
+        {
+            return;
+        }
+
+        response.Dispose();
+        throw new InvalidDataException("Runtime response changed to an untrusted origin.");
     }
 
     private async Task PreflightJsonContentAsync(
@@ -362,11 +397,19 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
     {
         private readonly HttpContent _inner;
         private readonly CancellationTokenSource _deadline;
+        private readonly CancellationToken _callerToken;
+        private readonly TimeSpan _timeout;
 
-        public DeadlineHttpContent(HttpContent inner, CancellationTokenSource deadline)
+        public DeadlineHttpContent(
+            HttpContent inner,
+            CancellationTokenSource deadline,
+            CancellationToken callerToken,
+            TimeSpan timeout)
         {
             _inner = inner;
             _deadline = deadline;
+            _callerToken = callerToken;
+            _timeout = timeout;
             foreach (var header in inner.Headers)
             {
                 Headers.TryAddWithoutValidation(header.Key, header.Value);
@@ -383,23 +426,56 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
             => CopyToWithDeadlineAsync(stream, cancellationToken);
 
         protected override async Task<Stream> CreateContentReadStreamAsync()
-            => new DeadlineReadStream(
-                await _inner.ReadAsStreamAsync(_deadline.Token).ConfigureAwait(false),
-                _deadline.Token);
+        {
+            try
+            {
+                return new DeadlineReadStream(
+                    await _inner.ReadAsStreamAsync(_deadline.Token).ConfigureAwait(false),
+                    _deadline.Token,
+                    _callerToken,
+                    _timeout);
+            }
+            catch (OperationCanceledException exception) when (DeadlineExceeded)
+            {
+                throw Timeout(exception);
+            }
+        }
 
         protected override async Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken)
         {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _deadline.Token);
-            return new DeadlineReadStream(
-                await _inner.ReadAsStreamAsync(linked.Token).ConfigureAwait(false),
-                _deadline.Token);
+            try
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _deadline.Token);
+                return new DeadlineReadStream(
+                    await _inner.ReadAsStreamAsync(linked.Token).ConfigureAwait(false),
+                    _deadline.Token,
+                    _callerToken,
+                    _timeout);
+            }
+            catch (OperationCanceledException exception) when (DeadlineExceeded)
+            {
+                throw Timeout(exception);
+            }
         }
 
         private async Task CopyToWithDeadlineAsync(Stream stream, CancellationToken cancellationToken)
         {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _deadline.Token);
-            await _inner.CopyToAsync(stream, linked.Token).ConfigureAwait(false);
+            try
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _deadline.Token);
+                await _inner.CopyToAsync(stream, linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException exception) when (DeadlineExceeded)
+            {
+                throw Timeout(exception);
+            }
         }
+
+        private bool DeadlineExceeded
+            => _deadline.IsCancellationRequested && !_callerToken.IsCancellationRequested;
+
+        private TimeoutException Timeout(OperationCanceledException exception)
+            => new($"Runtime response body exceeded the {_timeout} timeout.", exception);
 
         protected override bool TryComputeLength(out long length)
         {
@@ -418,7 +494,11 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         }
     }
 
-    private sealed class DeadlineReadStream(Stream inner, CancellationToken deadlineToken) : Stream
+    private sealed class DeadlineReadStream(
+        Stream inner,
+        CancellationToken deadlineToken,
+        CancellationToken callerToken,
+        TimeSpan timeout) : Stream
     {
         public override bool CanRead => inner.CanRead;
         public override bool CanSeek => inner.CanSeek;
@@ -429,23 +509,37 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
         public override int Read(byte[] buffer, int offset, int count)
         {
-            deadlineToken.ThrowIfCancellationRequested();
+            ThrowIfDeadlineExceeded();
             return inner.Read(buffer, offset, count);
         }
         public override int Read(Span<byte> buffer)
         {
-            deadlineToken.ThrowIfCancellationRequested();
+            ThrowIfDeadlineExceeded();
             return inner.Read(buffer);
         }
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
-            return await inner.ReadAsync(buffer.AsMemory(offset, count), linked.Token).ConfigureAwait(false);
+            try
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
+                return await inner.ReadAsync(buffer.AsMemory(offset, count), linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException exception) when (DeadlineExceeded)
+            {
+                throw Timeout(exception);
+            }
         }
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
-            return await inner.ReadAsync(buffer, linked.Token).ConfigureAwait(false);
+            try
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
+                return await inner.ReadAsync(buffer, linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException exception) when (DeadlineExceeded)
+            {
+                throw Timeout(exception);
+            }
         }
         public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
         public override void SetLength(long value) => inner.SetLength(value);
@@ -455,6 +549,22 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
             => inner.WriteAsync(buffer, offset, count, cancellationToken);
         public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
             => inner.WriteAsync(buffer, cancellationToken);
+
+        private bool DeadlineExceeded
+            => deadlineToken.IsCancellationRequested && !callerToken.IsCancellationRequested;
+
+        private void ThrowIfDeadlineExceeded()
+        {
+            if (DeadlineExceeded)
+            {
+                throw new TimeoutException($"Runtime response body exceeded the {timeout} timeout.");
+            }
+            deadlineToken.ThrowIfCancellationRequested();
+        }
+
+        private TimeoutException Timeout(OperationCanceledException exception)
+            => new($"Runtime response body exceeded the {timeout} timeout.", exception);
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)

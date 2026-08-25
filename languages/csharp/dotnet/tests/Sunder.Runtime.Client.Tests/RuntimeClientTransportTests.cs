@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Sunder.Core.TestSupport;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.LocalState;
@@ -98,6 +99,36 @@ public sealed class RuntimeClientTransportTests
 
         Assert.Equal(1, handler.Paths.Count(path => path == "/api/handshake"));
         Assert.All(handler.Authorizations, authorization => Assert.Equal("Bearer secret", authorization));
+    }
+
+    [Theory]
+    [InlineData("package-data")]
+    [InlineData("callback")]
+    public async Task SharedFacades_BoundChunkedJsonBeforeBuffering(string facade)
+    {
+        var body = new TrackingReadStream(new byte[128]);
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(body),
+            },
+        });
+        using var transport = new RuntimeClientTransport(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler,
+            new RuntimeClientPolicyOptions { MaxJsonResponseBytes = 8 });
+        using var data = new RuntimePackageDataClient(transport);
+        using var callbacks = new RuntimePackageCallbackClient(transport);
+
+        Task request = facade == "package-data"
+            ? data.GetStateAsync("demo", "key")
+            : callbacks.GetStatusAsync("demo", "session");
+        await Assert.ThrowsAsync<InvalidDataException>(() => request);
+
+        Assert.Equal(9, body.BytesRead);
+        Assert.True(body.IsDisposed);
     }
 
     [Fact]
@@ -563,8 +594,223 @@ public sealed class RuntimeClientTransportTests
         var completed = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(3)));
 
         Assert.Same(read, completed);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+        await Assert.ThrowsAsync<TimeoutException>(() => read);
         Assert.Equal(["/api/handshake", "/api/v1/content"], handler.Paths);
+    }
+
+    [Fact]
+    [Trait("Category", "Component")]
+    [Trait("Capability", "LoopbackNetwork")]
+    [Trait("Size", "Medium")]
+    public async Task ResponseHeadersRead_LoopbackChunkBarrierRetainsTransportDeadline()
+    {
+        var bodyGate = new ObservableGate();
+        var handshake = LoopbackHttpResponse.Json(
+            JsonSerializer.Serialize(CreateHandshake(), JsonSerializerOptions.Web));
+        var streaming = new LoopbackHttpResponse(
+            200,
+            [new LoopbackHttpChunk([0x2a], bodyGate)],
+            declaredContentLength: 1);
+        await using var server = LoopbackStreamingHttpServer.Start(handshake, streaming);
+        var connection = new RuntimeConnectionInfo(server.BaseAddress, "secret");
+        using var transport = new RuntimeClientTransport(
+            () => connection,
+            policy: new RuntimeClientPolicyOptions { RequestTimeout = TimeSpan.FromMilliseconds(250) });
+        await transport.NegotiateAsync();
+
+        using var response = await transport.GetAsync(
+            transport.CreateRequestUri("content"),
+            HttpCompletionOption.ResponseHeadersRead);
+        await streaming.HeadersSent.WaitAsync(TimeSpan.FromSeconds(2));
+        await using var stream = await response.Content.ReadAsStreamAsync();
+        var read = stream.ReadAsync(new byte[1], CancellationToken.None).AsTask();
+        await bodyGate.Entered.WaitAsync(TimeSpan.FromSeconds(2));
+
+        try
+        {
+            await Assert.ThrowsAsync<TimeoutException>(() => read.WaitAsync(TimeSpan.FromSeconds(3)));
+            Assert.Equal(["/api/handshake", "/api/v1/content"], server.Requests.Select(request => request.PathAndQuery));
+        }
+        finally
+        {
+            bodyGate.Release();
+        }
+    }
+
+    [Fact]
+    public async Task BoundedJsonResponse_StopsAtLimitPlusOneAndDisposesChunkedStream()
+    {
+        var body = new TrackingReadStream(Enumerable.Repeat((byte)'x', 128).ToArray());
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            "/api/v1/system" => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(body),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler,
+            new RuntimeClientPolicyOptions { MaxJsonResponseBytes = 8 });
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => client.GetSystemStatusAsync());
+
+        Assert.Contains("8 byte limit", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(9, body.BytesRead);
+        Assert.True(body.IsDisposed);
+    }
+
+    [Fact]
+    public async Task BoundedJsonResponse_AcceptsExactLimitAndDisposesStream()
+    {
+        var expected = new SystemStatusResponse("Runtime", "1.0.0", true, DateTimeOffset.UtcNow);
+        var payload = JsonSerializer.SerializeToUtf8Bytes(expected);
+        var body = new TrackingReadStream(payload);
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            "/api/v1/system" => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(body),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler,
+            new RuntimeClientPolicyOptions { MaxJsonResponseBytes = payload.Length });
+
+        var actual = await client.GetSystemStatusAsync();
+
+        Assert.Equal(expected, actual);
+        Assert.Equal(payload.Length, body.BytesRead);
+        Assert.True(body.IsDisposed);
+    }
+
+    [Fact]
+    public async Task BoundedJsonResponse_CallerCancellationDisposesStream()
+    {
+        var body = new CancellationBlockingStream();
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            "/api/v1/system" => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(body),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+        using var cancellation = new CancellationTokenSource();
+
+        var pending = client.GetSystemStatusAsync(cancellation.Token);
+        await body.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.True(body.IsDisposed);
+    }
+
+    [Fact]
+    public async Task BoundedJsonResponse_TransportTimeoutIsDeterministicAndDisposesStream()
+    {
+        var body = new CancellationBlockingStream();
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            "/api/v1/system" => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(body),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler,
+            new RuntimeClientPolicyOptions { RequestTimeout = TimeSpan.FromMilliseconds(30) });
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => client.GetSystemStatusAsync());
+
+        Assert.Contains("timeout", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(body.IsDisposed);
+    }
+
+    [Fact]
+    public async Task RuntimeResponse_RejectsChangedOrigin()
+    {
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            "/api/v1/system" => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://other.example/api/v1/system"),
+                Content = JsonContent.Create(new SystemStatusResponse(
+                    "Runtime",
+                    "1.0.0",
+                    true,
+                    DateTimeOffset.UtcNow)),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => client.GetSystemStatusAsync());
+
+        Assert.Contains("untrusted origin", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RpcContentStream_AcceptsExactLengthAndStopsOneByteOver(bool oversized)
+    {
+        const int expectedLength = 4;
+        var body = new TrackingReadStream(new byte[oversized ? 32 : expectedLength]);
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateResourceHandshake(RuntimeResourcePolicies.Standard)),
+            "/api/v1/rpc/app/call-scopes/content/open" => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(body),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+        var reference = new RuntimeRpcContentReferenceDescriptor(
+            "content-id",
+            expectedLength,
+            new string('a', 64),
+            "application/octet-stream",
+            "content.bin",
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            RuntimeRpcContentRepeatability.Repeatable);
+        var result = await client.OpenAppRpcContentAsync(
+            new RuntimeRpcAppContentOpenRequest("session", "scope", reference));
+        await using var content = Assert.IsAssignableFrom<Stream>(result.Content);
+
+        if (oversized)
+        {
+            using var destination = new MemoryStream();
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(async () =>
+                await content.CopyToAsync(destination));
+            Assert.Contains("4 byte limit", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(expectedLength + 1, body.BytesRead);
+        }
+        else
+        {
+            using var destination = new MemoryStream();
+            await content.CopyToAsync(destination);
+            Assert.Equal(expectedLength, destination.Length);
+            Assert.Equal(expectedLength, body.BytesRead);
+        }
     }
 
     [Fact]
@@ -976,7 +1222,9 @@ public sealed class RuntimeClientTransportTests
 
     private sealed class CancellationBlockingStream : Stream
     {
+        private int _disposed;
         public TaskCompletionSource ReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -994,5 +1242,48 @@ public sealed class RuntimeClientTransportTests
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Volatile.Write(ref _disposed, 1);
+            base.Dispose(disposing);
+        }
+    }
+
+    private sealed class TrackingReadStream(byte[] content) : Stream
+    {
+        private int _offset;
+        private int _disposed;
+        public int BytesRead => Volatile.Read(ref _offset);
+        public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _offset; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count)
+            => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            var count = Math.Min(buffer.Length, content.Length - _offset);
+            content.AsSpan(_offset, count).CopyTo(buffer);
+            _offset += count;
+            return count;
+        }
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(Read(buffer.Span));
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Volatile.Write(ref _disposed, 1);
+            base.Dispose(disposing);
+        }
     }
 }

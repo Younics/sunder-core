@@ -14,15 +14,10 @@ namespace Sunder.App.Tests;
 
 public sealed class RuntimeHostStartupIntegrationTests
 {
-    [Fact]
+    [MacOsFact]
     [SupportedOSPlatform("macos")]
     public async Task ManagedHost_RealLaunchdStartupPublishesMatchingDeploymentIdentity()
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            return;
-        }
-
         var root = Path.Combine(Path.GetTempPath(), "sunder-host-startup-integration", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var source = Path.Combine(TestPaths.GetSunderAppOutputDirectory(), "RuntimeHost");
@@ -43,7 +38,7 @@ public sealed class RuntimeHostStartupIntegrationTests
         var expectedPayload = store.Prepare();
         var expectedIdentity = expectedPayload.DeploymentIdentity;
         expectedPayload.Dispose();
-        using var manager = new RuntimeHostProcessManager(
+        using var manager = new RuntimeAvailabilityManager(
             new AppStartupOptions { RuntimeUrl = runtimeUrl },
             new RuntimeConnectionState(runtimeUrl),
             connectionInfoPath: connectionPath,

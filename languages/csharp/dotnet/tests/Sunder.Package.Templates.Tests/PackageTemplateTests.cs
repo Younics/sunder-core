@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Xml.Linq;
+using Sunder.Core.TestSupport;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
@@ -308,10 +309,18 @@ public sealed class PackageTemplateTests
             await PackLocalSunderFeedAsync(repositoryRoot, localFeed);
 
             var packagesPath = Path.Combine(root, "packages");
+            await AssertPackedInternalRpcBindingConsumerAsync(root, localFeed, packagesPath);
             var shapes = new[]
             {
                 new GeneratedShape("Default", [], 1, 6, HasApp: false, HasDependency: false),
                 new GeneratedShape("Avalonia", ["--withAvalonia"], 7, 12, HasApp: true, HasDependency: false),
+                new GeneratedShape(
+                    "AvaloniaNoDefaultView",
+                    ["--withAvalonia", "--noDefaultView"],
+                    7,
+                    12,
+                    HasApp: true,
+                    HasDependency: false),
                 new GeneratedShape("Stacks", ["--withStacks"], 1, 6, HasApp: false, HasDependency: false),
                 new GeneratedShape(
                     "HostDependency",
@@ -343,6 +352,10 @@ public sealed class PackageTemplateTests
                 };
                 generateArguments.AddRange(shape.Options);
                 AssertSuccess(await RunDotnetAsync(repositoryRoot, generateArguments.ToArray()));
+                if (shape.Name == "AvaloniaNoDefaultView")
+                {
+                    Assert.False(Directory.Exists(Path.Combine(output, projectName + ".App", "PackageViews")));
+                }
 
                 var primaryProject = Path.Combine(output, projectName + ".csproj");
                 AssertSuccess(await RunDotnetAsync(
@@ -471,6 +484,7 @@ public sealed class PackageTemplateTests
                             Assert.DoesNotContain("worker-protocol.v1", capabilities);
                             Assert.Contains("sdk-baseline-1-1.v1", capabilities);
                         }
+                        AssertExactTemplateCapabilities(shape.Name, target);
                     });
                     var contracts = manifest.RootElement.GetProperty("contractBundles").EnumerateArray().ToArray();
                     Assert.Equal(shape.Options.Contains("--withStacks", StringComparer.Ordinal) ? 2 : 1, contracts.Length);
@@ -586,6 +600,7 @@ public sealed class PackageTemplateTests
                     Assert.Equal(
                         shape.HasApp,
                         packedTargets.Any(target => target.GetProperty("role").GetString() == "app"));
+                    Assert.All(packedTargets, target => AssertExactTemplateCapabilities(shape.Name, target));
                 }
                 archive.Dispose();
 
@@ -669,6 +684,84 @@ public sealed class PackageTemplateTests
                 $"Local feed package was not created for {packageId}."));
     }
 
+    private static async Task AssertPackedInternalRpcBindingConsumerAsync(
+        string root,
+        string localFeed,
+        string packagesPath)
+    {
+        var consumerDirectory = Path.Combine(root, "packed-internal-rpc-consumer");
+        Directory.CreateDirectory(consumerDirectory);
+        var projectPath = Path.Combine(consumerDirectory, "PackedInternalRpcConsumer.csproj");
+        await File.WriteAllTextAsync(projectPath, $$"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+                <SunderPackageProject>false</SunderPackageProject>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="Sunder.Sdk" Version="{{CurrentVersion}}" />
+                <PackageReference Include="Sunder.Package.Build" Version="{{CurrentVersion}}" PrivateAssets="all" />
+                <SunderRpcBinding Include="sample.rpc.json"
+                                  Namespace="Packed.Internal.Generated"
+                                  OutputFile="Binding.g.cs"
+                                  Accessibility="Internal" />
+              </ItemGroup>
+            </Project>
+            """);
+        var descriptorPath = Path.Combine(consumerDirectory, "sample.rpc.json");
+        await File.WriteAllTextAsync(descriptorPath, PackedConsumerDescriptor);
+        await File.WriteAllTextAsync(
+            Path.Combine(consumerDirectory, "Consumer.cs"),
+            """
+            namespace Packed.Internal.Generated;
+
+            internal static class Consumer
+            {
+                internal static global::System.Type RequestType => typeof(Request);
+            }
+            """);
+
+        AssertSuccess(await RunDotnetAsync(
+            consumerDirectory,
+            "restore",
+            projectPath,
+            "--source",
+            localFeed,
+            "--source",
+            "https://api.nuget.org/v3/index.json",
+            "--packages",
+            packagesPath,
+            "--disable-parallel",
+            "--ignore-failed-sources"));
+        AssertSuccess(await RunDotnetAsync(
+            consumerDirectory,
+            "build",
+            projectPath,
+            "--no-restore",
+            "--disable-build-servers",
+            "-m:1"));
+
+        var generatedPath = Path.Combine(
+            consumerDirectory,
+            "obj",
+            "Debug",
+            "net10.0",
+            "sunder-rpc",
+            "Binding.g.cs");
+        var generated = await File.ReadAllTextAsync(generatedPath);
+        var descriptor = SunderRpcContractDescriptor.Parse(await File.ReadAllBytesAsync(descriptorPath));
+        Assert.Equal(
+            SunderRpcCSharpGenerator.Generate(
+                descriptor,
+                "Packed.Internal.Generated",
+                SunderRpcCSharpAccessibility.Internal),
+            generated);
+        Assert.Contains("internal sealed class Request", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("public sealed class Request", generated, StringComparison.Ordinal);
+    }
+
     private static async Task<ProcessResult> RunDotnetAsync(string workingDirectory, params string[] arguments)
     {
         var startInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
@@ -680,37 +773,28 @@ public sealed class PackageTemplateTests
         };
         startInfo.Environment["DOTNET_NOLOGO"] = "1";
         startInfo.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
+        startInfo.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
         startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start dotnet.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+        await using var process = CapturedProcess.Start(startInfo);
         try
         {
-            await process.WaitForExitAsync(timeout.Token);
+            var result = await process.WaitForExitAsync(TimeSpan.FromMinutes(4));
+            return new ProcessResult(result.ExitCode, result.StandardOutput, result.StandardError);
         }
-        catch (OperationCanceledException)
+        catch (ProcessFixtureException exception)
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync();
-            }
             return new ProcessResult(
                 -1,
-                standardOutput.IsCompletedSuccessfully ? await standardOutput : string.Empty,
-                $"dotnet {string.Join(' ', arguments)} timed out."
-                + (standardError.IsCompletedSuccessfully
-                    ? Environment.NewLine + await standardError
-                    : string.Empty));
+                process.StandardOutput,
+                $"dotnet {string.Join(' ', arguments)} failed its process watchdog."
+                + Environment.NewLine
+                + exception.Message);
         }
-        return new ProcessResult(process.ExitCode, await standardOutput, await standardError);
     }
 
     private static void AssertSuccess(ProcessResult result)
@@ -728,6 +812,53 @@ public sealed class PackageTemplateTests
             offset += expected.Length;
         }
         return count;
+    }
+
+    private static void AssertExactTemplateCapabilities(string shapeName, JsonElement target)
+    {
+        if (shapeName is not ("Default" or "Avalonia" or "AvaloniaNoDefaultView"))
+        {
+            return;
+        }
+
+        var role = target.GetProperty("role").GetString();
+        string[] expected = role switch
+        {
+            "runtime" =>
+            [
+                "contributions.v1",
+                "core.v1",
+                "packaging.v1",
+                "rpc.v2",
+                "sdk-baseline-1-1.v1",
+                "worker-protocol.v3",
+            ],
+            "app" when shapeName == "AvaloniaNoDefaultView" =>
+            [
+                "contributions.v1",
+                "core.v1",
+                "packaging.v1",
+                "rpc.v2",
+                "sdk-baseline-1-1.v1",
+            ],
+            "app" when shapeName == "Avalonia" =>
+            [
+                "contributions.v1",
+                "core.v1",
+                "packaging.v1",
+                "rpc.v2",
+                "sdk-baseline-1-1.v1",
+                "views.v1",
+            ],
+            _ => throw new InvalidDataException(
+                $"Template shape '{shapeName}' emitted unexpected target role '{role}'."),
+        };
+        Assert.Equal(
+            expected,
+            target.GetProperty("requiredHostCapabilities")
+                .EnumerateArray()
+                .Select(static capability => capability.GetString()!)
+                .ToArray());
     }
 
     private static string ResolveConfiguration()
@@ -773,6 +904,43 @@ public sealed class PackageTemplateTests
     }
 
     private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
+
+    private const string PackedConsumerDescriptor = """
+        {
+          "descriptorVersion": 2,
+          "schemaProfile": "sunder.rpc.values.v1",
+          "contractId": "test.packed.internal",
+          "version": "1.0.0",
+          "errors": {},
+          "services": {
+            "sample": {
+              "methods": {
+                "send": {
+                  "kind": "unary",
+                  "idempotency": "none",
+                  "errors": [],
+                  "requestSchema": { "$ref": "#/$defs/Request" },
+                  "responseSchema": { "$ref": "#/$defs/Response" }
+                }
+              }
+            }
+          },
+          "$defs": {
+            "Request": {
+              "type": "object",
+              "properties": { "message": { "type": "string", "minLength": 0, "maxLength": 128 } },
+              "required": ["message"],
+              "additionalProperties": false
+            },
+            "Response": {
+              "type": "object",
+              "properties": { "accepted": { "type": "boolean" } },
+              "required": ["accepted"],
+              "additionalProperties": false
+            }
+          }
+        }
+        """;
 
     private sealed record GeneratedShape(
         string Name,

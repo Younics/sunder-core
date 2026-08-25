@@ -20,11 +20,12 @@ internal sealed class PackageSessionState(
 {
     private readonly object _syncRoot = new();
     private SessionEntry _activeEntry = new(ActivePackageSession.CreateEmpty(), generation: 0);
-    private SessionPublication? _pendingPublication;
-    private SessionPublication? _rejectedPublication;
-    private SessionPublication? _recoveryPublication;
+    private MutableSessionPublication? _pendingPublication;
+    private MutableSessionPublication? _rejectedPublication;
+    private MutableSessionPublication? _recoveryPublication;
     private PackageRecoveryActivation? _packageRecoveryActivation;
     private PackageRecoveryCommit? _packageRecoveryCommit;
+    private FaultPublicationReservation? _faultPublication;
     private readonly List<PackageDeactivationWork> _quarantinedPackageCleanups = [];
     private long _generation;
     private readonly TimeSpan _sessionDrainTimeout = sessionDrainTimeout ?? TimeSpan.FromSeconds(10);
@@ -136,6 +137,32 @@ internal sealed class PackageSessionState(
         lock (_syncRoot)
         {
             return _activeEntry.Session.GetSessionPackages();
+        }
+    }
+
+    internal SessionPublicationSnapshot CapturePublicationSnapshot(
+        long expectedGeneration,
+        RuntimeRpcReadinessEvaluator? readinessEvaluator = null)
+    {
+        lock (_syncRoot)
+        {
+            if (_generation != expectedGeneration
+                || _activeEntry.Generation != expectedGeneration
+                || _activeEntry.Retired
+                || (_activeEntry.Draining && !HasFaultPublicationUnderLock(_activeEntry)))
+            {
+                throw new RuntimeStaleGenerationException(
+                    "The package session changed before its publication snapshot was captured.");
+            }
+
+            if (readinessEvaluator is not null
+                && !_activeEntry.Draining
+                && _activeEntry.AcceptingLeases)
+            {
+                readinessEvaluator.Evaluate(_activeEntry.Session);
+            }
+
+            return CapturePublicationSnapshotUnderLock();
         }
     }
 
@@ -253,7 +280,11 @@ internal sealed class PackageSessionState(
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return await CommitPublicationAsync(publication, committed);
+            return await CommitPublicationAsync(
+                publication,
+                committed is null
+                    ? null
+                    : snapshot => committed(snapshot.Generation));
         }
         catch
         {
@@ -330,7 +361,8 @@ internal sealed class PackageSessionState(
                 }
 
                 var candidateGeneration = checked(_generation + 1);
-                var publication = new SessionPublication(
+                var publication = new MutableSessionPublication(
+                    this,
                     session,
                     previousEntry,
                     retirement,
@@ -355,9 +387,10 @@ internal sealed class PackageSessionState(
     }
 
     internal async Task<(long Generation, IReadOnlyList<string> Warnings)> CommitPublicationAsync(
-        SessionPublication publication,
-        Action<long>? committed = null)
+        SessionPublication publicationHandle,
+        Action<SessionPublicationSnapshot>? committed = null)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         await publication.PreviousEntry.RetirementCallbacks.ConfigureAwait(false);
         long generation;
         Exception? publicationException = null;
@@ -396,7 +429,7 @@ internal sealed class PackageSessionState(
 
             try
             {
-                committed?.Invoke(generation);
+                committed?.Invoke(CapturePublicationSnapshotUnderLock());
                 clearAuthSessions();
             }
             catch (Exception exception)
@@ -417,16 +450,18 @@ internal sealed class PackageSessionState(
         return (generation, warnings);
     }
 
-    internal void DiscardPublication(SessionPublication publication)
+    internal void DiscardPublication(SessionPublication publicationHandle)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         if (RejectPublication(publication))
         {
             RestoreRejectedPublication(publication);
         }
     }
 
-    internal bool RejectPublication(SessionPublication publication)
+    internal bool RejectPublication(SessionPublication publicationHandle)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         SessionEntry candidate;
         lock (_syncRoot)
         {
@@ -453,8 +488,9 @@ internal sealed class PackageSessionState(
         return true;
     }
 
-    internal void RestoreRejectedPublication(SessionPublication publication)
+    internal void RestoreRejectedPublication(SessionPublication publicationHandle)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         if (!TryRestoreRejectedPublication(publication))
         {
             throw new InvalidOperationException(
@@ -462,8 +498,9 @@ internal sealed class PackageSessionState(
         }
     }
 
-    internal bool TryRestoreRejectedPublication(SessionPublication publication)
+    internal bool TryRestoreRejectedPublication(SessionPublication publicationHandle)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         Task retirementCallbacks;
         CancellationTokenSource cancelledRetirement;
         lock (_syncRoot)
@@ -498,11 +535,15 @@ internal sealed class PackageSessionState(
         return true;
     }
 
-    internal async Task WaitForPreviousRetirementCallbacksAsync(SessionPublication publication)
-        => await publication.PreviousEntry.RetirementCallbacks.ConfigureAwait(false);
-
-    internal void MarkPreviousWorkersQuiesced(SessionPublication publication)
+    internal async Task WaitForPreviousRetirementCallbacksAsync(SessionPublication publicationHandle)
     {
+        var publication = RequireMutablePublication(publicationHandle);
+        await publication.PreviousEntry.RetirementCallbacks.ConfigureAwait(false);
+    }
+
+    internal void MarkPreviousWorkersQuiesced(SessionPublication publicationHandle)
+    {
+        var publication = RequireMutablePublication(publicationHandle);
         lock (_syncRoot)
         {
             var isPending = ReferenceEquals(_pendingPublication, publication)
@@ -554,16 +595,18 @@ internal sealed class PackageSessionState(
         }
     }
 
-    internal IReadOnlyList<DrainingPackageFault> GetDrainingFaults(SessionPublication publication)
+    internal IReadOnlyList<DrainingPackageFault> GetDrainingFaults(SessionPublication publicationHandle)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         lock (_syncRoot)
         {
             return publication.DrainingFaults.ToArray();
         }
     }
 
-    internal async Task BeginRecoveryPublicationAsync(SessionPublication publication)
+    internal async Task BeginRecoveryPublicationAsync(SessionPublication publicationHandle)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         await publication.PreviousEntry.RetirementCallbacks.ConfigureAwait(false);
         CancellationTokenSource retiredCancellation;
         lock (_syncRoot)
@@ -598,9 +641,10 @@ internal sealed class PackageSessionState(
     }
 
     internal long CommitRecoveryPublication(
-        SessionPublication publication,
-        Action<long>? committed = null)
+        SessionPublication publicationHandle,
+        Action<SessionPublicationSnapshot>? committed = null)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         long generation;
         SessionGenerationEpoch retiredEpoch;
         int drainingFaultCount;
@@ -650,7 +694,7 @@ internal sealed class PackageSessionState(
             _recoveryPublication = null;
             try
             {
-                committed?.Invoke(generation);
+                committed?.Invoke(CapturePublicationSnapshotUnderLock());
                 clearAuthSessions();
             }
             catch (Exception exception)
@@ -670,9 +714,10 @@ internal sealed class PackageSessionState(
     }
 
     internal long AbandonRecoveryPublication(
-        SessionPublication publication,
-        Action<long>? committed = null)
+        SessionPublication publicationHandle,
+        Action<SessionPublicationSnapshot>? committed = null)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         SessionEntry abandoned;
         SessionGenerationEpoch abandonedEpoch;
         SessionEntry unavailableEntry;
@@ -725,7 +770,7 @@ internal sealed class PackageSessionState(
             }
             try
             {
-                committed?.Invoke(generation);
+                committed?.Invoke(CapturePublicationSnapshotUnderLock());
                 clearAuthSessions();
             }
             catch (Exception exception)
@@ -741,8 +786,9 @@ internal sealed class PackageSessionState(
     }
 
     internal Task<IReadOnlyList<string>> RetireAbandonedPublicationAsync(
-        SessionPublication publication)
+        SessionPublication publicationHandle)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         lock (_syncRoot)
         {
             if (!publication.Abandoned
@@ -756,8 +802,9 @@ internal sealed class PackageSessionState(
         return RetireSessionAsync(publication.PreviousEntry);
     }
 
-    internal Task WaitForRecoveryPackageCallsAsync(SessionPublication publication)
+    internal Task WaitForRecoveryPackageCallsAsync(SessionPublication publicationHandle)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         lock (_syncRoot)
         {
             if (!ReferenceEquals(_recoveryPublication, publication)
@@ -772,8 +819,9 @@ internal sealed class PackageSessionState(
         }
     }
 
-    internal async Task WaitForDiscardedCandidateDrainAsync(SessionPublication publication)
+    internal async Task WaitForDiscardedCandidateDrainAsync(SessionPublication publicationHandle)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         await publication.CandidateEntry.Drained.Task.ConfigureAwait(false);
         await publication.CandidateEntry.RetirementCallbacks.ConfigureAwait(false);
         RuntimeCancellation.DisposeAfterCallbacks(
@@ -808,98 +856,15 @@ internal sealed class PackageSessionState(
         string action,
         Func<long, Task>? committed,
         out RuntimePackageRecoveryRequest? recoveryRequest)
-    {
-        ActiveLoadedPackage? packageToDeactivate;
-        PackageDeactivationWork? deactivation;
-        SessionEntry sessionEntry;
-        SessionGenerationEpoch retiredEpoch;
-        SessionGenerationEpoch publishedEpoch;
-        long committedGeneration;
-        recoveryRequest = null;
-        lock (_syncRoot)
-        {
-            var failedAtUtc = _timeProvider.GetUtcNow();
-            if (_packageRecoveryCommit is not null
-                || expectedGeneration != _generation
-                || !ReferenceEquals(activationIdentity.SessionIdentity, _activeEntry)
-                || !_activeEntry.AcceptingLeases
-                || _activeEntry.Draining
-                || !_activeEntry.Session.OwnsPackageActivation(
-                    packageId,
-                    activationIdentity.RuntimeActivationId)
-                || !_activeEntry.Session.MarkPackageFailedInternal(
-                    packageId,
-                    origin,
-                    exception.Message,
-                    out packageToDeactivate,
-                    failedAtUtc))
-            {
-                return false;
-            }
-
-            sessionEntry = _activeEntry;
-            committedGeneration = checked(_generation + 1);
-            _generation = committedGeneration;
-            retiredEpoch = AdvanceGenerationUnderLock(sessionEntry, committedGeneration);
-            publishedEpoch = sessionEntry.GenerationEpoch;
-            deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
-            recoveryRequest = CreateRecoveryRequestLocked(
-                packageId,
-                packageToDeactivate,
-                deactivation,
-                origin,
-                exception,
-                failedAtUtc);
-        }
-
-        var generationRetirement = RetireGenerationEpochAsync(sessionEntry, retiredEpoch);
-        if (deactivation is not null)
-        {
-            deactivation.GenerationRetirementCallbacks = generationRetirement;
-        }
-
-        Exception? publicationException = null;
-        bool publicationCurrent;
-        lock (_syncRoot)
-        {
-            publicationCurrent = IsCurrentGenerationPublicationLocked(
-                sessionEntry,
-                publishedEpoch,
-                committedGeneration);
-            if (!publicationCurrent)
-            {
-                recoveryRequest = null;
-            }
-        }
-        if (publicationCurrent && committed is not null)
-        {
-            try
-            {
-                var retirementCallbacks = committed(committedGeneration) ?? Task.CompletedTask;
-                if (deactivation is not null)
-                {
-                    deactivation.RpcRetirementCallbacks = retirementCallbacks;
-                }
-                else
-                {
-                    _ = retirementCallbacks;
-                }
-            }
-            catch (Exception commitException)
-            {
-                recoveryRequest = null;
-                publicationException = commitException;
-            }
-        }
-        removePackageAuthSessions(packageId);
-        QueuePackageDeactivation(deactivation);
-        logger.LogError(exception, "Failed to {Action} for package {PackageId}; package disabled for current session", action, packageId);
-        if (publicationException is not null)
-        {
-            throw publicationException;
-        }
-        return publicationCurrent;
-    }
+        => HandlePackageFaultCore(
+            packageId,
+            PackageFaultTarget.ForPackageActivation(activationIdentity),
+            expectedGeneration,
+            origin,
+            exception,
+            action,
+            committed,
+            out recoveryRequest);
 
     public bool HandleRuntimeGenerationFault(
         string packageId,
@@ -928,22 +893,43 @@ internal sealed class PackageSessionState(
         string action,
         Func<long, Task>? committed,
         out RuntimePackageRecoveryRequest? recoveryRequest)
+        => HandlePackageFaultCore(
+            packageId,
+            PackageFaultTarget.ForRuntimeGeneration(runtimeGeneration),
+            expectedGeneration,
+            origin,
+            exception,
+            action,
+            committed,
+            out recoveryRequest);
+
+    private bool HandlePackageFaultCore(
+        string packageId,
+        PackageFaultTarget target,
+        long expectedGeneration,
+        PackageFailureOrigin origin,
+        Exception exception,
+        string action,
+        Func<long, Task>? committed,
+        out RuntimePackageRecoveryRequest? recoveryRequest)
     {
         ActiveLoadedPackage? packageToDeactivate;
         PackageDeactivationWork? deactivation;
         SessionEntry sessionEntry;
         SessionGenerationEpoch retiredEpoch;
-        SessionGenerationEpoch publishedEpoch;
+        FaultPublicationReservation publication;
         long committedGeneration;
         recoveryRequest = null;
         lock (_syncRoot)
         {
             var failedAtUtc = _timeProvider.GetUtcNow();
-            if (_packageRecoveryCommit is not null
+            if (_faultPublication is not null
+                || _packageRecoveryCommit is not null
                 || expectedGeneration != _generation
+                || !target.MatchesSession(_activeEntry)
                 || !_activeEntry.AcceptingLeases
                 || _activeEntry.Draining
-                || !_activeEntry.Session.OwnsRuntimeGeneration(packageId, runtimeGeneration)
+                || !target.IsOwnedBy(_activeEntry, packageId)
                 || !_activeEntry.Session.MarkPackageFailedInternal(
                     packageId,
                     origin,
@@ -958,7 +944,6 @@ internal sealed class PackageSessionState(
             committedGeneration = checked(_generation + 1);
             _generation = committedGeneration;
             retiredEpoch = AdvanceGenerationUnderLock(sessionEntry, committedGeneration);
-            publishedEpoch = sessionEntry.GenerationEpoch;
             deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
             recoveryRequest = CreateRecoveryRequestLocked(
                 packageId,
@@ -967,60 +952,54 @@ internal sealed class PackageSessionState(
                 origin,
                 exception,
                 failedAtUtc);
-        }
-
-        var generationRetirement = RetireGenerationEpochAsync(sessionEntry, retiredEpoch);
-        if (deactivation is not null)
-        {
-            deactivation.GenerationRetirementCallbacks = generationRetirement;
-        }
-
-        Exception? publicationException = null;
-        bool publicationCurrent;
-        lock (_syncRoot)
-        {
-            publicationCurrent = IsCurrentGenerationPublicationLocked(
+            publication = new FaultPublicationReservation(
                 sessionEntry,
-                publishedEpoch,
                 committedGeneration);
-            if (!publicationCurrent)
-            {
-                recoveryRequest = null;
-            }
+            _faultPublication = publication;
         }
-        if (publicationCurrent && committed is not null)
+
+        try
         {
-            try
+            var generationRetirement = RetireGenerationEpochAsync(sessionEntry, retiredEpoch);
+            if (deactivation is not null)
             {
-                var retirementCallbacks = committed(committedGeneration) ?? Task.CompletedTask;
-                if (deactivation is not null)
+                deactivation.GenerationRetirementCallbacks = generationRetirement;
+            }
+
+            Exception? publicationException = null;
+            if (committed is not null)
+            {
+                try
                 {
-                    deactivation.RpcRetirementCallbacks = retirementCallbacks;
+                    var retirementCallbacks = committed(committedGeneration) ?? Task.CompletedTask;
+                    if (deactivation is not null)
+                    {
+                        deactivation.RpcRetirementCallbacks = retirementCallbacks;
+                    }
+                    else
+                    {
+                        _ = retirementCallbacks;
+                    }
                 }
-                else
+                catch (Exception commitException)
                 {
-                    _ = retirementCallbacks;
+                    recoveryRequest = null;
+                    publicationException = commitException;
                 }
             }
-            catch (Exception commitException)
+            removePackageAuthSessions(packageId);
+            QueuePackageDeactivation(deactivation);
+            target.LogFault(logger, exception, action, packageId);
+            if (publicationException is not null)
             {
-                recoveryRequest = null;
-                publicationException = commitException;
+                throw publicationException;
             }
+            return true;
         }
-        removePackageAuthSessions(packageId);
-        QueuePackageDeactivation(deactivation);
-        logger.LogError(
-            exception,
-            "Failed to {Action} for exact Runtime generation {ActivationId} of package {PackageId}; package disabled for current session",
-            action,
-            runtimeGeneration.ActivationId,
-            packageId);
-        if (publicationException is not null)
+        finally
         {
-            throw publicationException;
+            CompleteFaultPublication(publication);
         }
-        return publicationCurrent;
     }
 
     internal RuntimePackageRecoveryValidation ValidatePackageRecovery(
@@ -1112,6 +1091,7 @@ internal sealed class PackageSessionState(
         {
             if (!ReferenceEquals(request.SessionIdentity, _activeEntry)
                 || !ReferenceEquals(request.Session, _activeEntry.Session)
+                || _faultPublication is not null
                 || _packageRecoveryCommit is not null
                 || _activeEntry.Retired
                 || _activeEntry.Draining
@@ -1131,7 +1111,7 @@ internal sealed class PackageSessionState(
         }
     }
 
-    internal bool RecordPackageRecoveryFailure(
+    internal SessionPublicationSnapshot? RecordPackageRecoveryFailure(
         RuntimePackageRecoveryRequest request,
         PackageFailureOrigin origin,
         Exception exception,
@@ -1139,13 +1119,18 @@ internal sealed class PackageSessionState(
     {
         lock (_syncRoot)
         {
-            return ValidatePackageRecoveryLocked(request) != RuntimePackageRecoveryValidation.Stale
-                   && request.Session.RecordRecoveryFailure(
-                       request.PackageId,
-                       request.Source,
-                       origin,
-                       exception.Message,
-                       failedAtUtc);
+            if (ValidatePackageRecoveryLocked(request) == RuntimePackageRecoveryValidation.Stale
+                || !request.Session.RecordRecoveryFailure(
+                    request.PackageId,
+                    request.Source,
+                    origin,
+                    exception.Message,
+                    failedAtUtc))
+            {
+                return null;
+            }
+
+            return CapturePublicationSnapshotUnderLock();
         }
     }
 
@@ -1267,9 +1252,10 @@ internal sealed class PackageSessionState(
     }
 
     internal RuntimePackageRecoveryRequest? CreateRestoredRecoveryRequest(
-        SessionPublication publication,
+        SessionPublication publicationHandle,
         DrainingPackageRecoveryCandidate candidate)
     {
+        var publication = RequireMutablePublication(publicationHandle);
         lock (_syncRoot)
         {
             if (!publication.RecoveryCommitted
@@ -1349,10 +1335,11 @@ internal sealed class PackageSessionState(
             {
                 return null;
             }
+            var snapshot = CapturePublicationSnapshotUnderLock();
             return new RpcReadinessRefresh(
-                _generation,
-                _activeEntry.Session.GetActivePackages(),
-                _activeEntry.Session.GetSessionPackages(),
+                snapshot.Generation,
+                snapshot.ActivePackages,
+                snapshot.SessionPackages,
                 changedPackageIds);
         }
     }
@@ -1436,6 +1423,7 @@ internal sealed class PackageSessionState(
         RuntimePackageRecoveryRequest request)
     {
         if (_packageRecoveryCommit is not null
+            || _faultPublication is not null
             || !ReferenceEquals(request.SessionIdentity, _activeEntry)
             || !ReferenceEquals(request.Session, _activeEntry.Session)
             || _activeEntry.Retired
@@ -1451,18 +1439,30 @@ internal sealed class PackageSessionState(
             : RuntimePackageRecoveryValidation.DependencyUnavailable;
     }
 
-    private bool IsCurrentGenerationPublicationLocked(
-        SessionEntry sessionEntry,
-        SessionGenerationEpoch generationEpoch,
-        long generation)
-        => ReferenceEquals(_activeEntry, sessionEntry)
-           && !sessionEntry.Retired
-           && !sessionEntry.Draining
-           && sessionEntry.AcceptingLeases
-           && _packageRecoveryCommit is null
-           && _generation == generation
-           && sessionEntry.Generation == generation
-           && ReferenceEquals(sessionEntry.GenerationEpoch, generationEpoch);
+    private void CompleteFaultPublication(FaultPublicationReservation publication)
+    {
+        TaskCompletionSource? drained = null;
+        var invalidated = false;
+        lock (_syncRoot)
+        {
+            invalidated = !ReferenceEquals(_faultPublication, publication)
+                          || !ReferenceEquals(_activeEntry, publication.SessionEntry)
+                          || publication.SessionEntry.Retired
+                          || publication.SessionEntry.Generation != publication.Generation;
+            _faultPublication = null;
+            if ((publication.SessionEntry.Draining || publication.SessionEntry.Retired)
+                && publication.SessionEntry.ActiveLeaseIds.Count == 0)
+            {
+                drained = publication.SessionEntry.Drained;
+            }
+        }
+        drained?.TrySetResult();
+        if (invalidated)
+        {
+            throw new InvalidOperationException(
+                "The admitted package fault publication changed before its callback completed.");
+        }
+    }
 
     private void QueuePackageDeactivation(PackageDeactivationWork? work)
     {
@@ -1763,7 +1763,9 @@ internal sealed class PackageSessionState(
                 }
             }
 
-            if ((entry.Draining || entry.Retired) && entry.ActiveLeaseIds.Count == 0)
+            if ((entry.Draining || entry.Retired)
+                && entry.ActiveLeaseIds.Count == 0
+                && !HasFaultPublicationUnderLock(entry))
             {
                 retirement = entry.Drained;
             }
@@ -1823,12 +1825,25 @@ internal sealed class PackageSessionState(
         leaseIds.Add(lease.LeaseId);
     }
 
-    private static void SignalRetirementIfDrained(SessionEntry entry)
+    private void SignalRetirementIfDrained(SessionEntry entry)
     {
-        if (entry.ActiveLeaseIds.Count == 0)
+        if (entry.ActiveLeaseIds.Count == 0 && !HasFaultPublicationUnderLock(entry))
         {
             entry.Drained.TrySetResult();
         }
+    }
+
+    private bool HasFaultPublicationUnderLock(SessionEntry entry)
+        => _faultPublication is { } publication
+           && ReferenceEquals(publication.SessionEntry, entry);
+
+    private SessionPublicationSnapshot CapturePublicationSnapshotUnderLock()
+    {
+        Debug.Assert(Monitor.IsEntered(_syncRoot));
+        return SessionPublicationSnapshot.Create(
+            _generation,
+            _activeEntry.Session.GetActivePackages(),
+            _activeEntry.Session.GetSessionPackages());
     }
 
     private async Task DeactivateLoadedPackageAsync(string packageId, ActiveLoadedPackage loadedPackage)
@@ -1840,7 +1855,18 @@ internal sealed class PackageSessionState(
             _sessionDrainTimeout).ConfigureAwait(false);
     }
 
-    internal sealed class SessionEntry(
+    private MutableSessionPublication RequireMutablePublication(SessionPublication publication)
+    {
+        if (publication is not MutableSessionPublication mutablePublication
+            || !ReferenceEquals(mutablePublication.Owner, this))
+        {
+            throw new InvalidOperationException(
+                "The package session publication does not belong to this session state.");
+        }
+        return mutablePublication;
+    }
+
+    private sealed class SessionEntry(
         ActivePackageSession session,
         long generation,
         bool acceptingLeases = true,
@@ -1865,21 +1891,83 @@ internal sealed class PackageSessionState(
         public bool AcceptingLeases { get; set; } = acceptingLeases;
     }
 
-    internal sealed class SessionPublication
+    internal interface SessionPublication
     {
-        private readonly SessionEntry _previousEntry;
-        private readonly CancellationTokenSource _retirement;
+        ActivePackageSession Session { get; }
+        ActivePackageSession PreviousSession { get; }
+        long? ExpectedGeneration { get; }
+        long CandidateGeneration { get; }
+        bool Completed { get; }
+        bool Committed { get; }
+        bool PreviousWorkersQuiesced { get; }
+        bool RecoveryCommitted { get; }
+        bool Abandoned { get; }
+    }
 
-        internal SessionPublication(
+    internal sealed class SessionPublicationSnapshot
+    {
+        private SessionPublicationSnapshot(
+            long generation,
+            IEnumerable<ActivePackageDescriptor> activePackages,
+            IEnumerable<SessionPackageDescriptor> sessionPackages)
+        {
+            Generation = generation;
+            ActivePackages = Freeze(activePackages.Select(Copy));
+            SessionPackages = Freeze(sessionPackages.Select(Copy));
+        }
+
+        public long Generation { get; }
+        public IReadOnlyList<ActivePackageDescriptor> ActivePackages { get; }
+        public IReadOnlyList<SessionPackageDescriptor> SessionPackages { get; }
+
+        internal static SessionPublicationSnapshot Create(
+            long generation,
+            IEnumerable<ActivePackageDescriptor> activePackages,
+            IEnumerable<SessionPackageDescriptor> sessionPackages)
+            => new(generation, activePackages, sessionPackages);
+
+        private static ActivePackageDescriptor Copy(ActivePackageDescriptor package)
+            => package with
+            {
+                Icon = Copy(package.Icon),
+                Views = Freeze(package.Views.Select(Copy)),
+            };
+
+        private static SessionPackageDescriptor Copy(SessionPackageDescriptor package)
+            => package with
+            {
+                Icon = Copy(package.Icon),
+                Views = Freeze(package.Views.Select(Copy)),
+                RpcContractUses = Freeze(package.RpcContractUses.Select(use => use with
+                {
+                    Actions = Freeze(use.Actions),
+                })),
+            };
+
+        private static PackageViewDescriptor Copy(PackageViewDescriptor view)
+            => view with { Icon = Copy(view.Icon) };
+
+        private static PackageIconDescriptor? Copy(PackageIconDescriptor? icon)
+            => icon is null ? null : icon with { };
+
+        private static IReadOnlyList<T> Freeze<T>(IEnumerable<T> values)
+            => Array.AsReadOnly(values.ToArray());
+    }
+
+    private sealed class MutableSessionPublication : SessionPublication
+    {
+        public MutableSessionPublication(
+            PackageSessionState owner,
             ActivePackageSession session,
             SessionEntry previousEntry,
             CancellationTokenSource retirement,
             long? expectedGeneration,
             long candidateGeneration)
         {
+            Owner = owner;
             Session = session;
-            _previousEntry = previousEntry;
-            _retirement = retirement;
+            PreviousEntry = previousEntry;
+            Retirement = retirement;
             ExpectedGeneration = expectedGeneration;
             CandidateGeneration = candidateGeneration;
             CandidateEntry = new SessionEntry(
@@ -1889,12 +1977,14 @@ internal sealed class PackageSessionState(
                 activationGeneration: candidateGeneration);
         }
 
+        public PackageSessionState Owner { get; }
         public ActivePackageSession Session { get; }
-        internal SessionEntry PreviousEntry => _previousEntry;
-        internal CancellationTokenSource Retirement => _retirement;
+        public ActivePackageSession PreviousSession => PreviousEntry.Session;
         public long? ExpectedGeneration { get; }
         public long CandidateGeneration { get; }
-        internal SessionEntry CandidateEntry { get; }
+        public SessionEntry PreviousEntry { get; }
+        public CancellationTokenSource Retirement { get; }
+        public SessionEntry CandidateEntry { get; }
         public bool Completed { get; set; }
         public bool Committed { get; set; }
         public bool PreviousWorkersQuiesced { get; set; }
@@ -1940,6 +2030,71 @@ internal sealed class PackageSessionState(
         SessionEntry SessionEntry,
         long PreviousGeneration,
         SessionGenerationEpoch PublishedEpoch);
+
+    private enum PackageFaultTargetKind
+    {
+        PackageActivation,
+        RuntimeGeneration,
+    }
+
+    private readonly record struct PackageFaultTarget(
+        PackageFaultTargetKind Kind,
+        PackageActivationIdentity PackageActivation,
+        RuntimePackageGeneration? RuntimeGeneration)
+    {
+        public static PackageFaultTarget ForPackageActivation(
+            PackageActivationIdentity activationIdentity)
+            => new(
+                PackageFaultTargetKind.PackageActivation,
+                activationIdentity,
+                RuntimeGeneration: null);
+
+        public static PackageFaultTarget ForRuntimeGeneration(
+            RuntimePackageGeneration runtimeGeneration)
+            => new(
+                PackageFaultTargetKind.RuntimeGeneration,
+                PackageActivation: default,
+                runtimeGeneration);
+
+        public bool MatchesSession(SessionEntry entry)
+            => Kind != PackageFaultTargetKind.PackageActivation
+               || ReferenceEquals(PackageActivation.SessionIdentity, entry);
+
+        public bool IsOwnedBy(SessionEntry entry, string packageId)
+            => Kind == PackageFaultTargetKind.PackageActivation
+                ? entry.Session.OwnsPackageActivation(
+                    packageId,
+                    PackageActivation.RuntimeActivationId)
+                : entry.Session.OwnsRuntimeGeneration(packageId, RuntimeGeneration!);
+
+        public void LogFault(
+            ILogger logger,
+            Exception exception,
+            string action,
+            string packageId)
+        {
+            if (Kind == PackageFaultTargetKind.RuntimeGeneration)
+            {
+                logger.LogError(
+                    exception,
+                    "Failed to {Action} for exact Runtime generation {ActivationId} of package {PackageId}; package disabled for current session",
+                    action,
+                    RuntimeGeneration!.ActivationId,
+                    packageId);
+                return;
+            }
+
+            logger.LogError(
+                exception,
+                "Failed to {Action} for package {PackageId}; package disabled for current session",
+                action,
+                packageId);
+        }
+    }
+
+    private sealed record FaultPublicationReservation(
+        SessionEntry SessionEntry,
+        long Generation);
 
     internal sealed class SessionGenerationEpoch(long generation)
     {

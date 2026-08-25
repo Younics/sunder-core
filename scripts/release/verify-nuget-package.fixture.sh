@@ -10,7 +10,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 verifier="$script_dir/verify-nuget-package.sh"
 [[ -f "$verifier" ]] || { printf 'Verifier not found: %s\n' "$verifier" >&2; exit 1; }
 
-for required_command in cmp curl grep unzip zip; do
+for required_command in cmp curl dotnet grep openssl unzip zip; do
   command -v "$required_command" >/dev/null 2>&1 \
     || { printf '%s is required to run the NuGet verification fixture.\n' "$required_command" >&2; exit 127; }
 done
@@ -21,6 +21,9 @@ trap 'rm -rf "$fixture_dir"' EXIT
 signed_package="$fixture_dir/published-signed.nupkg"
 unsigned_package="$fixture_dir/local-unsigned.nupkg"
 tampered_package="$fixture_dir/published-tampered.nupkg"
+wrong_signer_package="$fixture_dir/published-wrong-signer.nupkg"
+
+bash "$script_dir/verify-nuget-source.fixture.sh"
 
 if [[ $# -eq 1 ]]; then
   cp "$1" "$signed_package"
@@ -45,6 +48,29 @@ bash "$verifier" "$unsigned_package" "$signed_package"
 unsigned_failure_log="$fixture_dir/unsigned-verification.log"
 if bash "$verifier" "$unsigned_package" "$unsigned_package" > "$unsigned_failure_log" 2>&1; then
   printf 'Signature verification unexpectedly accepted an unsigned published package.\n' >&2
+  exit 1
+fi
+
+cp "$unsigned_package" "$wrong_signer_package"
+openssl req -x509 -newkey rsa:2048 -sha256 -nodes \
+  -keyout "$fixture_dir/wrong-signer.key" \
+  -out "$fixture_dir/wrong-signer.crt" \
+  -days 1 \
+  -subj '/CN=Sunder Wrong Signer Fixture/O=Sunder Tests/C=US' \
+  -addext 'keyUsage=critical,digitalSignature' \
+  -addext 'extendedKeyUsage=codeSigning' >/dev/null 2>&1
+openssl pkcs12 -export \
+  -out "$fixture_dir/wrong-signer.pfx" \
+  -inkey "$fixture_dir/wrong-signer.key" \
+  -in "$fixture_dir/wrong-signer.crt" \
+  -passout pass:sunder-fixture >/dev/null 2>&1
+dotnet nuget sign "$wrong_signer_package" \
+  --certificate-path "$fixture_dir/wrong-signer.pfx" \
+  --certificate-password sunder-fixture \
+  --overwrite >/dev/null
+wrong_signer_failure_log="$fixture_dir/wrong-signer-verification.log"
+if bash "$verifier" "$unsigned_package" "$wrong_signer_package" > "$wrong_signer_failure_log" 2>&1; then
+  printf 'NuGet verification unexpectedly trusted a signer not advertised by NuGet.org.\n' >&2
   exit 1
 fi
 
@@ -76,4 +102,38 @@ fi
 grep -Fq 'canonical content differs' "$failure_log" \
   || { printf 'Changed payload did not fail canonical comparison as expected.\n' >&2; exit 1; }
 
-printf 'NuGet verification fixture passed: signature-only changes accepted; unsigned and changed packages rejected.\n'
+real_unzip="$(command -v unzip)"
+mock_bin="$fixture_dir/mock-bin"
+mkdir -p "$mock_bin"
+cat > "$mock_bin/unzip" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${MOCK_UNZIP_LIST_FAILURE:-false}" == "true" && "${1:-}" == "-Z1" ]]; then
+  exit 10
+fi
+if [[ "${MOCK_UNZIP_EXTRACTION_FAILURE:-false}" == "true" && "${1:-}" == "-p" ]]; then
+  exit 11
+fi
+exec "$REAL_UNZIP" "$@"
+EOF
+chmod +x "$mock_bin/unzip"
+export REAL_UNZIP="$real_unzip"
+
+listing_failure_log="$fixture_dir/listing-failure.log"
+if MOCK_UNZIP_LIST_FAILURE=true PATH="$mock_bin:$PATH" \
+  bash "$verifier" "$unsigned_package" "$signed_package" > "$listing_failure_log" 2>&1; then
+  printf 'NuGet verifier masked a ZIP listing failure.\n' >&2
+  exit 1
+fi
+grep -Fq 'Failed to list NuGet package entries' "$listing_failure_log" \
+  || { printf 'NuGet verifier did not report the ZIP listing failure.\n' >&2; exit 1; }
+
+extraction_failure_log="$fixture_dir/extraction-failure.log"
+if MOCK_UNZIP_EXTRACTION_FAILURE=true PATH="$mock_bin:$PATH" \
+  bash "$verifier" "$unsigned_package" "$signed_package" > "$extraction_failure_log" 2>&1; then
+  printf 'NuGet verifier masked a ZIP extraction failure.\n' >&2
+  exit 1
+fi
+grep -Fq 'Failed to extract NuGet package entry' "$extraction_failure_log" \
+  || { printf 'NuGet verifier did not report the ZIP extraction failure.\n' >&2; exit 1; }
+
+printf 'NuGet verification fixture passed: valid repository signatures are accepted; unsigned, wrong-signer, changed, and unreadable packages are rejected.\n'

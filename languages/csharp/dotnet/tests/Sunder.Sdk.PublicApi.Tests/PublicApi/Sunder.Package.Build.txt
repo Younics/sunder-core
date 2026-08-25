@@ -1,0 +1,91 @@
+type sealed class Sunder.Package.Build.Tasks.AggregateSunderPackageTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  field static System.String MarkerFileSuffix = ".sunder-aggregate-generated-output"
+  property System.String ExpectedPackageVersion { get; set; }
+  property System.String NormalizedOutputPath { get; set; }
+  property System.String OutputDiscoveryRoot { get; set; }
+  property System.String OutputPath { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.String TargetDirectory { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] TargetLeaves { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.CleanSunderPackageOutputTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.String OutputDiscoveryRoot { get; set; }
+  property System.String OutputPath { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.String TargetDirectory { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property Microsoft.Build.Framework.ITaskItem[] AssetFiles { get; set; }
+  property System.String? AssetsDirectory { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ContractFiles { get; set; }
+  property System.String DevPackagePath { get; set; }
+  property System.String DiscoveryRoot { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ManagedFiles { get; set; }
+  property System.String ManifestPath { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] NativeRuntimeFiles { get; set; }
+  property System.String TargetDirectory { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] WorkerFiles { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.GenerateSunderPackageManifestTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.String? AssetsDirectory { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] AuthoredAssemblyPaths { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] BindingSnapshots { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ContractBundles { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] DynamicAccessAcknowledgements { get; set; }
+  property System.String EntryAssembly { get; set; }
+  property System.Boolean HasWorkerTarget { get; set; }
+  property System.String ManifestOutputPath { get; set; }
+  property System.String? OutputType { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] PackageTargets { get; set; }
+  property System.String PackageVersion { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] PackageViews { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.Boolean PublishSingleFile { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ResolvedContractFiles { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ResolvedTargets { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RpcProviders { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RuntimeCopyLocalPaths { get; set; }
+  property System.String? RuntimeIdentifier { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RuntimeIdentifiers { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] SdkCapabilities { get; set; }
+  property System.String? SdkPackageVersion { get; set; }
+  property System.Boolean SelfContained { get; set; }
+  property System.String TargetAssemblyPath { get; set; }
+  property System.String TargetFramework { get; set; }
+  property System.Boolean UseAppHost { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] UsesContracts { get; set; }
+  property System.String? WorkerEntryPointRelativePath { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property Microsoft.Build.Framework.ITaskItem[] BindingSnapshots { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] Bindings { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] CompileItems { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] FileWrites { get; set; }
+  property System.String IntermediateOutputPath { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.PackSunderPackageTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.String DevPackageDiscoveryRoot { get; set; }
+  property System.String DevPackagePath { get; set; }
+  property System.String PackageOutputPath { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  field static System.String GeneratedDirectoryName = "sunder-dev"
+  field static System.String MarkerFileName = ".sunder-generated-output"
+  property System.String DevOutputPath { get; set; }
+  property System.String DiscoveryRoot { get; set; }
+  property System.String NormalizedDevOutputPath { get; set; }
+  property System.String OwnershipMarkerPath { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.String TargetDirectory { get; set; }
+  method static System.String GetOwnershipMarkerPath(System.String devOutputPath)
+  method virtual System.Boolean Execute()

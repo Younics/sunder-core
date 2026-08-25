@@ -14,6 +14,23 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class RuntimeStackImportPlanTests
 {
     [Fact]
+    public async Task PreviewAsync_WhenUploadHandleIsMissing_ReturnsTypedStaleFailure()
+    {
+        await using var fixture = await StackImportFixture.CreateAsync(new TestContributor("one"));
+
+        var operation = await fixture.Service.PreviewAsync(
+            new RuntimeStackImportPreviewRequest(
+                "missing-upload",
+                [],
+                new Dictionary<string, string>(),
+                new Dictionary<string, string>()));
+
+        Assert.False(operation.Response.Success);
+        Assert.Equal(RuntimeStackFailureCategory.StaleGeneration, operation.Failure?.Category);
+        Assert.Equal("Stack upload was not found or is stale.", operation.Failure?.Detail);
+    }
+
+    [Fact]
     public async Task ImportAsync_WhenRuntimeGenerationChanged_RejectsStalePlanWithoutCallingContributor()
     {
         await using var fixture = await StackImportFixture.CreateAsync(new TestContributor("one"));
@@ -68,6 +85,44 @@ public sealed class RuntimeStackImportPlanTests
         var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ["one-action"]));
 
         Assert.Equal(RuntimeStackImportOutcome.Failed, result.Outcome);
+        Assert.Empty(Directory.EnumerateFiles(fixture.Paths.TransferRootPath));
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenPlanCountLimitReached_RejectsAndCleansNewPlan()
+    {
+        await using var fixture = await StackImportFixture.CreateWithPolicyAsync(
+            new RuntimeStackPolicyOptions { MaxImportPlans = 1 },
+            new TestContributor("one"));
+        var retained = await fixture.PreviewAsync(["one-fragment"]);
+
+        var rejected = await fixture.PreviewAsync(["one-fragment"]);
+
+        Assert.True(retained.Success);
+        Assert.False(rejected.Success);
+        Assert.Equal(
+            ["The Runtime Stack import plan capacity was reached."],
+            rejected.Errors);
+        Assert.Single(Directory.EnumerateFiles(fixture.Paths.TransferRootPath));
+        Assert.True(fixture.Service.DiscardPlan(retained.PlanId!));
+        Assert.Empty(Directory.EnumerateFiles(fixture.Paths.TransferRootPath));
+        var replacement = await fixture.PreviewAsync(["one-fragment"]);
+        Assert.True(replacement.Success, string.Join(Environment.NewLine, replacement.Errors));
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenExtractedByteLimitReached_RejectsAndCleansNewPlan()
+    {
+        await using var fixture = await StackImportFixture.CreateWithPolicyAsync(
+            new RuntimeStackPolicyOptions { MaxImportPlanExtractedBytes = 0 },
+            new TestContributor("one"));
+
+        var rejected = await fixture.PreviewAsync(["one-fragment"]);
+
+        Assert.False(rejected.Success);
+        Assert.Equal(
+            ["The Runtime Stack import plan capacity was reached."],
+            rejected.Errors);
         Assert.Empty(Directory.EnumerateFiles(fixture.Paths.TransferRootPath));
     }
 
@@ -306,6 +361,7 @@ public sealed class RuntimeStackImportPlanTests
             RuntimeRpcPermissionStore rpcPermissions,
             RuntimeRpcBroker rpcBroker,
             TestTimeProvider clock,
+            RuntimeStackPolicyOptions? policy,
             IReadOnlyList<TestContributor> contributors)
         {
             Paths = paths;
@@ -315,7 +371,7 @@ public sealed class RuntimeStackImportPlanTests
             RpcPermissions = rpcPermissions;
             Clock = clock;
             Contributors = contributors;
-            Service = new RuntimeStackImportService(owner, transfers, rpcBroker, clock);
+            Service = new RuntimeStackImportService(owner, transfers, rpcBroker, clock, policy);
         }
 
         public RuntimePackagePaths Paths { get; }
@@ -327,7 +383,17 @@ public sealed class RuntimeStackImportPlanTests
         public IReadOnlyList<TestContributor> Contributors { get; }
         public RuntimeStackImportService Service { get; }
 
-        public static async Task<StackImportFixture> CreateAsync(params TestContributor[] contributors)
+        public static Task<StackImportFixture> CreateAsync(params TestContributor[] contributors)
+            => CreateCoreAsync(policy: null, contributors);
+
+        public static Task<StackImportFixture> CreateWithPolicyAsync(
+            RuntimeStackPolicyOptions policy,
+            params TestContributor[] contributors)
+            => CreateCoreAsync(policy, contributors);
+
+        private static async Task<StackImportFixture> CreateCoreAsync(
+            RuntimeStackPolicyOptions? policy,
+            TestContributor[] contributors)
         {
             var root = Path.Combine(Path.GetTempPath(), "sunder-stack-import-plan-tests", Guid.NewGuid().ToString("N"));
             var paths = new RuntimePackagePaths(root);
@@ -354,6 +420,7 @@ public sealed class RuntimeStackImportPlanTests
                 rpcPermissions,
                 rpcBroker,
                 clock,
+                policy,
                 contributors);
             await fixture.PublishSessionAsync(contributors);
             return fixture;
@@ -454,11 +521,12 @@ public sealed class RuntimeStackImportPlanTests
                     "source"),
                 _ => "target",
                 StringComparer.OrdinalIgnoreCase);
-            return await Service.PreviewAsync(new RuntimeStackImportPreviewRequest(
+            var operation = await Service.PreviewAsync(new RuntimeStackImportPreviewRequest(
                 upload.UploadId,
                 selectedFragmentIds,
                 inputValues,
                 remaps));
+            return operation.Response;
         }
 
         public ValueTask DisposeAsync()

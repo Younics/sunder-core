@@ -11,6 +11,53 @@ public sealed class SunderStackArchiveInspectorTests
 {
     private const string RawApiKey = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDE";
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task ExtractAndValidateAsync_RejectsOldAndFutureManifestSchemaVersions(int version)
+    {
+        var root = CreateTempDirectory();
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(
+            CreateStackArchive(root, CreateManifest(schemaVersion: version)),
+            Path.Combine(root, "manifest-version-staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            $"Stack manifest must declare schemaVersion {SunderStackFormat.CurrentSchemaVersion}.",
+            result.Errors);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task ExtractAndValidateAsync_RejectsOldAndFutureContentIndexVersions(int version)
+    {
+        var root = CreateTempDirectory();
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(
+            CreateStackArchive(root, indexTransform: index => index with { SchemaVersion = version }),
+            Path.Combine(root, "content-index-version-staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            $"Stack content index must declare schemaVersion {SunderStackFormat.CurrentContentIndexVersion}.",
+            result.Errors);
+    }
+
+    [Fact]
+    public async Task ExtractAndValidateAsync_RejectsFutureReaderVersion()
+    {
+        var root = CreateTempDirectory();
+        var future = SunderStackFormat.CurrentReaderVersion + 1;
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(
+            CreateStackArchive(root, CreateManifest(minReaderVersion: future)),
+            Path.Combine(root, "reader-version-staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            $"Stack manifest requires reader version {future}, but this Sunder reader supports {SunderStackFormat.CurrentReaderVersion}.",
+            result.Errors);
+    }
+
     [Fact]
     public async Task ExtractAndValidateAsync_WhenArchiveIsValid_ReturnsManifest()
     {
@@ -401,6 +448,22 @@ public sealed class SunderStackArchiveInspectorTests
         Assert.Contains(result.Errors, error => error.Contains("null file entry", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ValidateExtractedStackAsync_WhenFragmentPayloadIsMissing_RecordsTypedMissingEntry()
+    {
+        var root = CreateTempDirectory();
+        var staging = Path.Combine(root, "staging");
+        SunderStackArchiveInspector.ExtractArchive(CreateStackArchive(root), staging);
+        File.Delete(Path.Combine(staging, "payload", "fragments", "agent-profile.fullstack.json"));
+
+        var result = await SunderStackArchiveInspector.ValidateExtractedStackAsync(staging);
+
+        var errorIndex = result.Errors.ToList().FindIndex(error =>
+            error.Contains("was not found in the Stack archive", StringComparison.Ordinal));
+        Assert.True(errorIndex >= 0);
+        Assert.Equal(SunderStackArchiveErrorCategory.MissingEntry, result.ErrorCategories[errorIndex]);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -446,6 +509,37 @@ public sealed class SunderStackArchiveInspectorTests
 
         Assert.False(result.Success);
         Assert.Contains(result.Errors, error => error.Contains("Failed to parse Stack metadata", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("manifest/sunder-stack.json", "{", "schemaVersion", "1")]
+    [InlineData("manifest/content-index.json", "{", "schemaVersion", "1")]
+    [InlineData("manifest/sunder-stack.json", "\"packages\":[{", "packageId", "\"duplicate.package\"")]
+    [InlineData("manifest/content-index.json", "\"files\":[{", "path", "\"payload/duplicate.json\"")]
+    public async Task ValidateExtractedStackAsync_RejectsDuplicateMetadataProperties(
+        string metadataPath,
+        string objectPrefix,
+        string propertyName,
+        string duplicateValue)
+    {
+        var root = CreateTempDirectory();
+        var staging = Path.Combine(root, "duplicate-metadata-staging");
+        SunderStackArchiveInspector.ExtractArchive(CreateStackArchive(root), staging);
+        var path = Path.Combine([staging, .. metadataPath.Split('/')]);
+        var json = await File.ReadAllTextAsync(path);
+        var insertionIndex = json.IndexOf(objectPrefix, StringComparison.Ordinal);
+        Assert.True(insertionIndex >= 0, $"Could not locate '{objectPrefix}' in {metadataPath}.");
+        insertionIndex += objectPrefix.Length;
+        await File.WriteAllTextAsync(
+            path,
+            json.Insert(insertionIndex, $"\"{propertyName}\":{duplicateValue},"));
+
+        var result = await SunderStackArchiveInspector.ValidateExtractedStackAsync(staging);
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            result.Errors,
+            error => error.Contains($"Duplicate JSON property '{propertyName}'", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -527,11 +621,13 @@ public sealed class SunderStackArchiveInspectorTests
         IReadOnlyList<SunderStackMediaManifest>? media = null,
         IReadOnlyList<string>? features = null,
         IReadOnlyList<string>? requiredFeatures = null,
-        IReadOnlyList<SunderStackRequiredInputManifest>? requiredInputs = null)
+        IReadOnlyList<SunderStackRequiredInputManifest>? requiredInputs = null,
+        int schemaVersion = SunderStackFormat.CurrentSchemaVersion,
+        int minReaderVersion = SunderStackFormat.CurrentReaderVersion)
         => new()
         {
-            SchemaVersion = SunderStackFormat.CurrentSchemaVersion,
-            MinReaderVersion = SunderStackFormat.CurrentReaderVersion,
+            SchemaVersion = schemaVersion,
+            MinReaderVersion = minReaderVersion,
             Features = features,
             RequiredFeatures = requiredFeatures,
             StackId = "sunder.stack.agent.fullstack-dev",
