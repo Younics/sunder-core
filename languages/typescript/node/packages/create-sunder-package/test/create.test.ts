@@ -12,30 +12,21 @@ test("npm create entrypoint scaffolds a usable token-free Node Runtime package",
     const cli = resolve(__dirname, "..", "..", "dist", "cli.js");
     await run(process.execPath, [cli, output, "--package-id", "sample.node", "--package-name", "Sample Node", "--yes"], process.cwd());
     const config = JSON.parse(await readFile(resolve(output, "sunder.package.json"), "utf8")) as ScaffoldPackageConfig;
-    assert.equal(config.schemaVersion, 2);
+    assert.equal(config.schemaVersion, 3);
     assert.equal(config.id, "sample.node");
     assert.equal(config.name, "Sample Node");
     assert.deepEqual(config.workerCapabilities, []);
-    assert.deepEqual(config.contracts, [{
-      path: "contracts/example.rpc.json",
-      exposure: "package",
-    }]);
-    assert.deepEqual(config.providers, [{
-      providerId: "sample.node.provider",
-      role: "runtime",
-      contractId: "example.messages",
-      contractVersion: "2.0.0",
-      audience: "owner",
-    }]);
-    assert.deepEqual(config.usesContracts, []);
-    assert.deepEqual(config.rpcBindings, [{
-      path: "contracts/example.rpc.json",
-      outputFile: "example-messages.g.ts",
-    }]);
-    await assertExampleRpcV2Descriptor(output);
+    assert.deepEqual(config.rpc, { module: "src/rpc.ts", export: "packageRpc" });
+    for (const key of ["contracts", "providers", "usesContracts", "rpcBindings"]) assert.equal(key in config, false);
+    const packageManifest = JSON.parse(await readFile(resolve(output, "package.json"), "utf8")) as {
+      readonly engines: { readonly node: string };
+      readonly allowScripts: Readonly<Record<string, boolean>>;
+    };
+    assert.equal(packageManifest.engines.node, ">=24.18.1 <25.0.0");
+    assert.deepEqual(packageManifest.allowScripts, { "esbuild@0.28.1": true, fsevents: false });
+    await assertOwnedSource(output, "sample.node");
     const worker = await readFile(resolve(output, "src", "worker.ts"), "utf8");
-    assert.match(worker, /const messagesService: IMessagesProvider/u);
-    assert.match(worker, /createExampleMessagesRpcProviderRegistration\(\s*"sample\.node\.provider"/u);
+    assert.match(worker, /providers: packageRpc\.providerRegistrations/u);
     assert.doesNotMatch(worker, /sunder:contracts|JsonValue|contractIdentity/u);
     assert.equal(await exists(resolve(output, "src", "sunder-contracts.d.ts")), false);
     for (const file of await files(output)) {
@@ -68,46 +59,30 @@ test("react-node template scaffolds a namespaced web view with the browser-only 
       "--yes",
     ], process.cwd());
     const config = JSON.parse(await readFile(resolve(output, "sunder.package.json"), "utf8")) as ReactScaffoldPackageConfig;
-    assert.equal(config.schemaVersion, 2);
+    assert.equal(config.schemaVersion, 3);
     assert.deepEqual(config.workerCapabilities, []);
     assert.equal(config.app.views[0]?.viewId, "sample.react.main");
     assert.equal(config.app.views[0]?.route, "/");
     assert.equal("icon" in config.app.views[0]!, false);
-    assert.deepEqual(config.contracts, [{
-      path: "contracts/example.rpc.json",
-      exposure: "package",
-    }]);
-    assert.deepEqual(config.providers, [{
-      providerId: "sample.react.provider",
-      role: "runtime",
-      contractId: "example.messages",
-      contractVersion: "2.0.0",
-      audience: "owner",
-    }]);
-    assert.deepEqual(config.usesContracts, [{
-      role: "app",
-      contractId: "example.messages",
-      contractVersion: "2.0.0",
-      required: true,
-      actions: ["discover", "invoke"],
-    }]);
-    assert.equal("versionRange" in config.usesContracts[0]!, false);
-    assert.deepEqual(config.rpcBindings, [{
-      path: "contracts/example.rpc.json",
-      outputFile: "example-messages.g.ts",
-    }]);
-    await assertExampleRpcV2Descriptor(output);
+    assert.deepEqual(config.rpc, { module: "src/rpc.ts", export: "packageRpc" });
+    for (const key of ["contracts", "providers", "usesContracts", "rpcBindings"]) assert.equal(key in config, false);
+    const packageManifest = JSON.parse(await readFile(resolve(output, "package.json"), "utf8")) as {
+      readonly engines: { readonly node: string };
+      readonly allowScripts: Readonly<Record<string, boolean>>;
+    };
+    assert.equal(packageManifest.engines.node, ">=24.18.1 <25.0.0");
+    assert.deepEqual(packageManifest.allowScripts, { "esbuild@0.28.1": true, fsevents: false });
+    await assertOwnedSource(output, "sample.react");
     const app = await readFile(resolve(output, "app", "src", "App.tsx"), "utf8");
     assert.match(
       app,
       /from "@sunder\/sdk\/browser"/u,
     );
-    assert.match(app, /new ExampleMessagesRpcClient\(rpc, provider\.providerHandle\)/u);
-    assert.match(app, /catalog\.providers\.find/u);
-    assert.doesNotMatch(app, /rpc\.invoke</u);
+    assert.match(app, /createPackageApi\(getSunder\(\)\.rpc\)/u);
+    assert.match(app, /api\.messages\.resolve/u);
+    assert.doesNotMatch(app, /rpc\.invoke<|providerHandle|contractId|\.discover\(|\.find\(/u);
     const worker = await readFile(resolve(output, "src", "worker.ts"), "utf8");
-    assert.match(worker, /const messagesService: IMessagesProvider/u);
-    assert.match(worker, /createExampleMessagesRpcProviderRegistration\(\s*"sample\.react\.provider"/u);
+    assert.match(worker, /providers: packageRpc\.providerRegistrations/u);
     assert.doesNotMatch(worker, /sunder:contracts|JsonValue|contractIdentity/u);
     assert.equal(await exists(resolve(output, "src", "sunder-contracts.d.ts")), false);
     assert.equal(await exists(resolve(output, "app", "vite.config.ts")), true);
@@ -147,8 +122,8 @@ test("scaffold substitutions preserve adversarial display names in JSON, TypeScr
     ], process.cwd());
     const config = JSON.parse(await readFile(resolve(output, "sunder.package.json"), "utf8")) as { readonly name: string };
     assert.equal(config.name, packageName);
-    const worker = await readFile(resolve(output, "src", "worker.ts"), "utf8");
-    assert.ok(worker.includes(JSON.stringify(packageName)));
+    const source = await readFile(resolve(output, "src", "rpc.ts"), "utf8");
+    assert.ok(source.includes(JSON.stringify(packageName)));
     const html = await readFile(resolve(output, "app", "index.html"), "utf8");
     assert.doesNotMatch(html, /<script>/u);
     assert.match(html, /&lt;\/title&gt;&lt;script&gt;/u);
@@ -195,12 +170,11 @@ test("all presets accept the longest package id whose generated provider id fits
       await run(process.execPath, [cli, output, "--preset", preset, "--package-id", packageId, "--yes"], process.cwd());
       const config = JSON.parse(await readFile(resolve(output, "sunder.package.json"), "utf8")) as {
         readonly id: string;
-        readonly providers: readonly { readonly providerId: string }[];
         readonly app?: { readonly views: readonly { readonly viewId: string }[] };
       };
       assert.equal(config.id, packageId);
-      assert.equal(config.providers[0]?.providerId, `${packageId}.provider`);
-      assert.equal(config.providers[0]?.providerId.length, 128);
+      assert.ok((await readFile(resolve(output, "src/rpc.ts"), "utf8")).includes(`id: "${packageId}.provider"`));
+      assert.equal(`${packageId}.messages`.length, 128);
       if (preset === "react-node") assert.equal(config.app?.views[0]?.viewId, `${packageId}.main`);
     }
   } finally {
@@ -241,31 +215,21 @@ async function run(file: string, argumentsList: readonly string[], cwd: string):
   });
 }
 
-async function assertExampleRpcV2Descriptor(root: string): Promise<void> {
-  const descriptor = JSON.parse(await readFile(resolve(root, "contracts", "example.rpc.json"), "utf8")) as ExampleRpcDescriptor;
-  assert.equal(descriptor.descriptorVersion, 2);
-  assert.equal(descriptor.schemaProfile, "sunder.rpc.values.v1");
-  assert.equal(descriptor.contractId, "example.messages");
-  assert.equal(descriptor.version, "2.0.0");
-  assert.deepEqual(descriptor.errors, {});
-  assert.equal(Array.isArray(descriptor.services), false);
-  assert.deepEqual(Object.keys(descriptor.services), ["messages"]);
-  assert.equal(Array.isArray(descriptor.services.messages.methods), false);
-  assert.deepEqual(Object.keys(descriptor.services.messages.methods), ["send", "watch"]);
-
-  const send = descriptor.services.messages.methods.send;
-  assert.equal(send.kind, "unary");
-  assert.equal(send.idempotency, "idempotent");
-  assert.deepEqual(send.errors, []);
-  assert.deepEqual(send.requestSchema, { $ref: "#/$defs/Request" });
-  assert.deepEqual(send.responseSchema, { $ref: "#/$defs/Response" });
-
-  const watch = descriptor.services.messages.methods.watch;
-  assert.equal(watch.kind, "server-stream");
-  assert.equal(watch.idempotency, "none");
-  assert.deepEqual(watch.errors, []);
-  assert.deepEqual(watch.requestSchema, { $ref: "#/$defs/Request" });
-  assert.deepEqual(watch.eventSchema, { $ref: "#/$defs/Response" });
+async function assertOwnedSource(root: string, packageId: string): Promise<void> {
+  const source = await readFile(resolve(root, "src/rpc.ts"), "utf8");
+  assert.match(source, /export const packageRpc = rpc\.router\(/u);
+  assert.ok(source.includes(`id: "${packageId}.provider"`));
+  assert.match(source, /async send\(request, context\)/u);
+  assert.match(source, /async \*watch\(request, context\)/u);
+  assert.doesNotMatch(source, /contractId|contractVersion|descriptorSha256|abiSha256|\.rpc\.json/u);
+  assert.equal((await files(root)).some((path) => path.endsWith(".rpc.json")), false);
+  assert.equal(await exists(resolve(root, "sunder-contracts.owned.json")), false);
+  assert.equal(await readFile(resolve(root, "sunder-contracts.lock.json"), "utf8"),
+    `${JSON.stringify({ lockVersion: 1, packageArtifacts: {}, packageImports: {}, providerImports: {}, platformImports: {} }, null, 2)}\n`);
+  const manifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+  assert.equal(manifest.scripts["contracts:accept"], "sunder-package contracts accept");
+  assert.equal(manifest.scripts["contracts:check"], "sunder-package contracts check");
+  assert.equal(manifest.scripts["contracts:freeze"], "sunder-package contracts freeze");
 }
 
 async function files(root: string): Promise<string[]> {
@@ -298,49 +262,9 @@ interface ScaffoldPackageConfig {
   readonly id: string;
   readonly name: string;
   readonly workerCapabilities: readonly string[];
-  readonly contracts: readonly { readonly path: string; readonly exposure: string }[];
-  readonly providers: readonly {
-    readonly providerId: string;
-    readonly role: string;
-    readonly contractId: string;
-    readonly contractVersion: string;
-    readonly audience: string;
-  }[];
-  readonly usesContracts: readonly {
-    readonly role: string;
-    readonly contractId: string;
-    readonly contractVersion: string;
-    readonly required: boolean;
-    readonly actions: readonly string[];
-  }[];
-  readonly rpcBindings: readonly { readonly path: string; readonly outputFile: string }[];
+  readonly rpc: { readonly module: string; readonly export: string };
 }
 
 interface ReactScaffoldPackageConfig extends ScaffoldPackageConfig {
   readonly app: { readonly views: readonly { readonly viewId: string; readonly route: string }[] };
-}
-
-interface ExampleRpcMethod {
-  readonly kind: string;
-  readonly idempotency: string;
-  readonly errors: readonly string[];
-  readonly requestSchema: Readonly<Record<string, string>>;
-  readonly responseSchema?: Readonly<Record<string, string>>;
-  readonly eventSchema?: Readonly<Record<string, string>>;
-}
-
-interface ExampleRpcDescriptor {
-  readonly descriptorVersion: number;
-  readonly schemaProfile: string;
-  readonly contractId: string;
-  readonly version: string;
-  readonly errors: Readonly<Record<string, unknown>>;
-  readonly services: {
-    readonly messages: {
-      readonly methods: {
-        readonly send: ExampleRpcMethod;
-        readonly watch: ExampleRpcMethod;
-      };
-    };
-  };
 }

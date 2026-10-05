@@ -38,11 +38,11 @@ internal static class RuntimeStackContributorCatalog
         await using var callScope = await client.CreateCallScopeAsync(
             cancellationToken: cancellationToken).ConfigureAwait(false);
         var catalog = await callScope.DiscoverAsync(
-            SunderStackContributorRpc.ContractId,
+            StackTransport.CoreStackContract.ContractId,
             cancellationToken).ConfigureAwait(false);
         foreach (var provider in catalog.Providers)
         {
-            var rpc = SunderStackContributorRpc.CreateClient(callScope, provider.Endpoint);
+            var rpc = new StackTransport.StackDomainClient(callScope, provider.Endpoint);
             try
             {
                 var metadata = await rpc.GetMetadataAsync(cancellationToken).ConfigureAwait(false);

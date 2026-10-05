@@ -8,6 +8,8 @@ internal sealed record WorkerLimits
 
     public int MaximumRpcValueBytes { get; set; } = 32 * Mebibyte;
     public int MaximumValueDepth { get; set; } = 64;
+    public int MaximumValueNodes { get; set; } = 524_288;
+    public int MaximumObjectMembers { get; set; } = 4_096;
     public int MaximumFrameBytes { get; set; } = 32 * Mebibyte + WorkerProtocol.EnvelopeReserveBytes;
     public int MaximumHeaderBytes { get; init; } = 8 * 1024;
     public int MaximumMessageDepth { get; set; } = 72;
@@ -34,6 +36,8 @@ internal sealed record WorkerLimits
         if (MaximumFrameBytes <= 0
             || MaximumRpcValueBytes <= 0
             || MaximumValueDepth <= 0
+            || MaximumValueNodes <= 0
+            || MaximumObjectMembers <= 0
             || MaximumHeaderBytes <= 0
             || MaximumMessageDepth <= 0
             || MaximumInboundCalls <= 0
@@ -65,6 +69,8 @@ internal sealed record WorkerLimits
         ArgumentNullException.ThrowIfNull(profile);
         MaximumRpcValueBytes = profile.RpcValueBytes;
         MaximumValueDepth = profile.ValueDepth;
+        MaximumValueNodes = profile.ValueNodes;
+        MaximumObjectMembers = profile.ObjectMembers;
         MaximumFrameBytes = checked(profile.RpcValueBytes + WorkerProtocol.EnvelopeReserveBytes);
         MaximumMessageDepth = checked(profile.ValueDepth + 8);
         MaximumContentBytes = profile.ContentReferenceBytes;

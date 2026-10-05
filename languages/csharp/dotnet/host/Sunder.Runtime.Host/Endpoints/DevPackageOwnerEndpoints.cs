@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 
@@ -7,6 +8,23 @@ internal static class DevPackageOwnerEndpoints
 {
     public static IEndpointRouteBuilder MapDevPackageOwnerEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapPost("/dev-packages/prepare-imports", async (RuntimePrepareDevPackageImportsRequest request,
+            DevelopmentImportAuthorityPreparation preparation, CancellationToken token) =>
+        {
+            try
+            {
+                return Results.Ok(await preparation.PrepareAsync(request, token));
+            }
+            catch (Exception exception) when (exception is InvalidDataException or JsonException)
+            {
+                // This operation validates caller-selected evidence. Parser/archive diagnostics
+                // may contain local paths or untrusted metadata; expose fixed guidance instead.
+                // Cancellation, transport and persistence failures retain their normal handling.
+                throw new RuntimeValidationException(
+                    "contract-authority.release-conflict: Development import evidence is invalid or incomplete. "
+                    + "Supply the exact local candidate archives and Core catalog, or explicitly select the published dependency Registry.");
+            }
+        });
         var owners = endpoints.MapGroup("/dev-package-owners");
         owners.MapPut(
             "{ownerId}",

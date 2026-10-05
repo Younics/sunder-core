@@ -6,9 +6,10 @@
     <Version>1.0.0</Version>
     <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
     <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
-    <SelfContained>true</SelfContained>
-    <UseAppHost>true</UseAppHost>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>false</UseAppHost>
     <PublishSingleFile>false</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
     <SunderSdkPackageVersion>1.1.0</SunderSdkPackageVersion>
     <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\sunder-package.json'))</SunderGeneratedPackageManifest>
   </PropertyGroup>
@@ -18,7 +19,7 @@
     <ProjectReference Include="..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj"
                       ReferenceOutputAssembly="false"
                       PrivateAssets="all" />
-    <SunderContractBundle Include="..\..\..\..\typescript\node\fixtures\sea-smoke\contracts\example.rpc.json"
+    <SunderContractBundle Include="Contracts\example.rpc.json"
                           ContractId="example.messages"
                           Version="2.0.0"
                           DescriptorPath="contracts/example.rpc.json"

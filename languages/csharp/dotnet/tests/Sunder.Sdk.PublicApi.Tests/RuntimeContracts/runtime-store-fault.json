@@ -1,0 +1,13 @@
+{
+  "code": "execution-runtime.integrity-failed",
+  "message": "Execution runtime integrity verification failed.",
+  "retryable": false,
+  "operation": "verify",
+  "runtimeId": "sunder.runtime.dotnet",
+  "version": "10.0.1",
+  "packagingRevision": 2,
+  "rid": "win-x64",
+  "packageId": "sunder.package.sample",
+  "targetRole": "runtime",
+  "occurredAtUtc": "2026-07-11T10:10:00+00:00"
+}

@@ -1,0 +1,20 @@
+{
+  "type": "about:blank",
+  "title": "No matching provider is available.",
+  "status": 404,
+  "detail": "No matching provider is available.",
+  "instance": "/api/v1/packages/example.consumer/activate",
+  "code": "rpc.provider-not-found",
+  "traceId": "trace-policy-1",
+  "correlationId": "correlation-policy-1",
+  "details": {
+    "contract": {
+      "contractId": "example.agent.tools",
+      "contractVersion": "1.0.0",
+      "descriptorSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "abiSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "selectedPackageId": "example.agent",
+    "matchCount": 0
+  }
+}

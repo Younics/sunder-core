@@ -1,0 +1,28 @@
+{
+  "descriptorVersion": 1,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "contractId": "example.rpc.v1.logicalbounds",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "example": {
+      "methods": {
+        "read": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
+          "requestSchema": { "$ref": "#/$defs/Id" },
+          "responseSchema": { "$ref": "#/$defs/Id" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Id": {
+      "type": "string",
+      "logicalType": "uuid",
+      "minLength": 36,
+      "maxLength": 36
+    }
+  }
+}

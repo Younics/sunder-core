@@ -11,7 +11,6 @@ internal sealed record WorkerEnvironment(
     string SessionId,
     string PackageContentPath,
     string PackageDataPath,
-    string PackageWorkspacePath,
     bool RpcExtendedDeadlineV1)
 {
     private const string RpcExtendedDeadlineEnvironmentVariable = "SUNDER_RPC_EXTENDED_DEADLINE_V1";
@@ -31,7 +30,7 @@ internal sealed record WorkerEnvironment(
             throw new InvalidOperationException("SUNDER_PACKAGE_ID is not a canonical package identifier.");
         }
 
-        var packageVersion = Required(getEnvironmentVariable, "SUNDER_PACKAGE_VERSION", 128);
+        var packageVersion = Required(getEnvironmentVariable, "SUNDER_PACKAGE_VERSION", SemanticVersion.MaximumLength);
         if (!SemanticVersion.TryParse(packageVersion, out _))
         {
             throw new InvalidOperationException("SUNDER_PACKAGE_VERSION is not a strict semantic version.");
@@ -51,16 +50,13 @@ internal sealed record WorkerEnvironment(
 
         var contentPath = RequiredPath(getEnvironmentVariable, "SUNDER_PACKAGE_CONTENT_ROOT");
         var temporaryPath = RequiredPath(getEnvironmentVariable, "SUNDER_WORKER_TEMP_ROOT");
-        var workspacePath = RequiredPath(getEnvironmentVariable, "SUNDER_PACKAGE_WORKSPACE_ROOT");
         var rpcExtendedDeadlineV1 = OptionalFlag(
             getEnvironmentVariable,
             RpcExtendedDeadlineEnvironmentVariable);
-        if (PathsEqual(contentPath, temporaryPath)
-            || PathsEqual(contentPath, workspacePath)
-            || PathsEqual(temporaryPath, workspacePath))
+        if (PathsEqual(contentPath, temporaryPath))
         {
             throw new InvalidOperationException(
-                "Worker V3 content, temporary, and persistent workspace roots must be distinct.");
+                "Worker V1 content and temporary roots must be distinct.");
         }
 
         return new WorkerEnvironment(
@@ -72,7 +68,6 @@ internal sealed record WorkerEnvironment(
             sessionId,
             contentPath,
             temporaryPath,
-            workspacePath,
             rpcExtendedDeadlineV1);
     }
 

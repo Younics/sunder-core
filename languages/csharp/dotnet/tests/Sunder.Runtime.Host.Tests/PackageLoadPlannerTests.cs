@@ -83,6 +83,56 @@ public sealed class PackageLoadPlannerTests
         Assert.Contains(errors, error => error.Contains("Dependency cycle detected", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void ResolveLoadWaves_GroupsIndependentPackagesAndDelaysDependentsDeterministically()
+    {
+        var errors = new List<string>();
+        var planner = new PackageLoadPlanner();
+
+        var waves = planner.ResolveLoadWaves(
+            [
+                CreatePackage("package.leaf", ["package.app", "package.tools"]),
+                CreatePackage("package.app", ["package.core"]),
+                CreatePackage("package.tools"),
+                CreatePackage("package.core"),
+            ],
+            errors);
+
+        Assert.Empty(errors);
+        Assert.Equal(3, waves.Count);
+        Assert.Equal(["package.tools", "package.core"], waves[0].Select(static package => package.PackageId));
+        Assert.Equal(["package.app"], waves[1].Select(static package => package.PackageId));
+        Assert.Equal(["package.leaf"], waves[2].Select(static package => package.PackageId));
+    }
+
+    [Fact]
+    public void ResolveLoadWaves_UsesStablePlanOrderWithinEveryKahnWave()
+    {
+        var errors = new List<string>();
+        var planner = new PackageLoadPlanner();
+
+        var waves = planner.ResolveLoadWaves(
+            [
+                CreatePackage("package.z"),
+                CreatePackage("package.a"),
+                CreatePackage("package.dependent", ["package.z", "package.a"]),
+            ],
+            errors);
+
+        Assert.Empty(errors);
+        Assert.Equal(["package.z", "package.a"], waves[0].Select(static package => package.PackageId));
+        Assert.Equal(["package.dependent"], waves[1].Select(static package => package.PackageId));
+        Assert.Equal(
+            waves.SelectMany(static wave => wave).Select(static package => package.PackageId),
+            planner.ResolveLoadOrder(
+                [
+                    CreatePackage("package.z"),
+                    CreatePackage("package.a"),
+                    CreatePackage("package.dependent", ["package.z", "package.a"]),
+                ],
+                []).Select(static package => package.PackageId));
+    }
+
     private static PreparedRuntimePackage CreatePackage(
         string packageId,
         IReadOnlyList<string>? dependencyIds = null,

@@ -26,7 +26,13 @@ public sealed class PackagesWindowFactory(
             backgroundProcessPopoverWidth: shellState.BackgroundProcessPopoverWidth,
             backgroundProcessPopoverHeight: shellState.BackgroundProcessPopoverHeight,
             persistBackgroundProcessPopoverSize: persistBackgroundProcessPopoverSize,
-            remoteImageService: remoteImageService);
+            remoteImageService: remoteImageService,
+            confirmSharedRuntimeRepair: async (impact, cancellationToken) =>
+            {
+                var dialog = new ExecutionRuntimeRepairConfirmationWindow(
+                    new ExecutionRuntimeRepairConfirmationViewModel(impact));
+                return await dialog.ShowDialog<bool>(window).WaitAsync(cancellationToken);
+            });
         return window;
     }
 }

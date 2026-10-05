@@ -15,8 +15,36 @@ public sealed record SystemStatusResponse(
 
 public sealed record RuntimeStartupDiagnostic(string Code, string Message);
 
-public sealed record RuntimeResetChallengeResponse(string Challenge, DateTimeOffset ExpiresAtUtc);
+public sealed record RuntimeResetChallengeResponse(string Challenge, DateTimeOffset ExpiresAtUtc)
+{
+    public bool SupportsBoundStateRoot { get; init; }
 
-public sealed record RuntimeResetConfirmRequest(string Challenge);
+    public bool SupportsHostExecutedReset { get; init; }
+}
 
-public sealed record RuntimeResetDrainResponse(IReadOnlyList<string> Categories);
+public sealed record RuntimeResetConfirmRequest(string Challenge)
+{
+    public bool RequireBoundStateRoot { get; init; }
+
+    public bool RequireHostExecutedReset { get; init; }
+
+    public bool StartupCacheOnly { get; init; }
+}
+
+public sealed record RuntimeResetCategoryResult(
+    string Category,
+    string Status,
+    IReadOnlyList<string>? RelativePaths = null);
+
+public sealed record RuntimeResetDrainResponse(IReadOnlyList<string> Categories)
+{
+    public IReadOnlyList<RuntimeResetCategoryResult>? CategoryResults { get; init; }
+
+    public bool HostExecutedReset { get; init; }
+
+    public string? ReceiptRelativePath { get; init; }
+
+    public string? RuntimeStateRootPath { get; init; }
+
+    public string? RuntimeStateRootIdentity { get; init; }
+}

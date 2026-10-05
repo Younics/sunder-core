@@ -1,13 +1,17 @@
-import { readFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { lstat } from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import ts from "typescript";
 import {
   isArchiveRelativePath,
   isPackageId,
-  isPackageVersionRange,
   isSemanticVersion,
   type JsonValue,
-  type RpcContractDescriptorV2,
+  type RpcContractDescriptor,
 } from "@sunder/sdk";
+import { validateDependencyVersionRange } from "./dependency-range";
+import { analyzeOwnedRpc, type OwnedRpcAnalysis, type OwnedAnalysisOptions } from "./rpc-authoring";
+import { BASELINE_FILE, exists } from "./rpc-baseline-store";
+import { readProjectDescriptorFile } from "./descriptor-files";
 
 export const SUPPORTED_RIDS = ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"] as const;
 export type SunderRid = (typeof SUPPORTED_RIDS)[number];
@@ -34,11 +38,24 @@ const RPC_BINDINGS_OUTPUT_PATH = ".sunder/generated/rpc";
 const MAXIMUM_CONTRACTS = 128;
 const MAXIMUM_CONTRACT_USES = 128;
 const MAXIMUM_DEPENDENCIES = 128;
+const MAXIMUM_NATIVE_ASSETS = 256;
 const MAXIMUM_PROVIDERS = 128;
 const MAXIMUM_RPC_BINDINGS = 128;
 
-export interface SunderNodePackageConfig {
-  readonly schemaVersion: 2;
+export type SunderNodePackageConfig =
+  | (Omit<ResolvedNodePackageConfig, "schemaVersion" | "rpc"> & { readonly schemaVersion: 2 })
+  | (Omit<ResolvedNodePackageConfig, "schemaVersion" | "contracts" | "providers" | "usesContracts" | "rpcBindings"> & {
+    readonly schemaVersion: 3;
+    readonly contracts?: never;
+    readonly providers?: never;
+    readonly usesContracts?: never;
+    readonly rpcBindings?: never;
+  });
+
+/** Validated build projection; V3 RPC declarations are derived, never authored. */
+export interface ResolvedNodePackageConfig {
+  readonly schemaVersion: 2 | 3;
+  readonly rpc?: { readonly module: string; readonly export: string };
   readonly id: string;
   readonly name: string;
   readonly summary?: string;
@@ -50,10 +67,17 @@ export interface SunderNodePackageConfig {
   readonly usesContracts?: readonly ContractUseConfig[];
   readonly dependencies?: readonly PackageDependencyConfig[];
   readonly outputDirectory?: string;
-  readonly maximumExecutableBytes?: number;
   readonly maximumPackageBytes?: number;
   readonly app?: AppConfig;
   readonly rpcBindings?: readonly RpcBindingConfig[];
+  readonly nativeAssets?: NativeAssetsConfig;
+}
+
+export type NativeAssetsConfig = Readonly<Partial<Record<SunderRid, readonly NativeAssetConfig[]>>>;
+
+export interface NativeAssetConfig {
+  readonly sourcePath: string;
+  readonly targetPath: string;
 }
 
 export interface RpcBindingConfig {
@@ -104,10 +128,14 @@ export interface PackageDependencyConfig {
 }
 
 export interface LoadedContract {
+  readonly appUse?: Readonly<{ required: boolean; actions: readonly ("discover" | "invoke" | "subscribe")[] }>;
+  readonly runtimeUse?: Readonly<{ required: boolean; actions: readonly ("discover" | "invoke" | "subscribe")[] }>;
+  readonly imported?: import("./rpc-contract-lock").ArtifactContract;
+  readonly contractKey?: string;
   readonly configuredPath: string;
   readonly sourcePath: string;
   readonly descriptorPath: string;
-  readonly descriptor: RpcContractDescriptorV2;
+  readonly descriptor: RpcContractDescriptor;
   readonly canonicalBytes: Buffer;
   readonly canonical: string;
   readonly descriptorSha256: string;
@@ -116,24 +144,71 @@ export interface LoadedContract {
 }
 
 export interface LoadedProject {
+  readonly ownedRpc?: OwnedRpcAnalysis;
   readonly root: string;
   readonly configPath: string;
-  readonly config: SunderNodePackageConfig;
+  readonly config: ResolvedNodePackageConfig;
   readonly outputRoot: string;
   readonly contracts: readonly LoadedContract[];
 }
 
-export async function loadProject(projectPath: string): Promise<LoadedProject> {
+export async function loadProject(projectPath: string, options: import("./rpc-contract-lock").RegistryOriginOptions = {}): Promise<LoadedProject> {
+  return loadProjectWithOwnedFrame(projectPath, options.allowDevelopmentRegistryOrigin === undefined ? {} : { allowDevelopmentRegistryOrigin: options.allowDevelopmentRegistryOrigin });
+}
+
+/** Tool-private acceptance frame; not exported by the package entry point. */
+export async function loadProjectWithOwnedFrame(projectPath: string, analysisOptions: OwnedAnalysisOptions = {}): Promise<LoadedProject> {
+  const { project, configBytes } = await loadProjectConfiguration(projectPath);
+  const { root, config } = project;
+  if (config.rpc === undefined) {
+    for (const name of [BASELINE_FILE, `${BASELINE_FILE}.sunder-output.lock`, "sunder-contracts.lock.json",
+      ".sunder/generated/rpc/authoring-receipt.v1.json", ".sunder/generated/rpc/package-export.v1.json", ".sunder/generated/rpc/owned-baseline.sha256"]) {
+      if (await exists(resolve(root, name))) throw new Error("Existing V3 authoring source/baseline/lock evidence cannot be consumed through descriptor-first or non-RPC fallback.");
+    }
+    if (analysisOptions.requireBaseline || analysisOptions.allowDrift) throw new Error("contracts commands require a configured V3 owned RPC source module.");
+    return project;
+  }
+  const ownedRpc = await analyzeOwnedRpc(project, configBytes, analysisOptions);
+  return { ...project, ownedRpc, contracts: [...ownedRpc.contracts, ...ownedRpc.imports.contracts], config: { ...config, providers: ownedRpc.providers, usesContracts: [...ownedRpc.appUses, ...ownedRpc.runtimeUses, ...ownedRpc.imports.uses] } };
+}
+
+/** Tool-private configuration reader shared by initial dependency selection and source analysis. */
+export async function loadProjectConfiguration(projectPath: string): Promise<{ project: LoadedProject; configBytes: Buffer }> {
   const root = resolve(projectPath);
   const configPath = resolve(root, "sunder.package.json");
-  const value = JSON.parse(await readFile(configPath, "utf8")) as unknown;
+  const configBytes = await readProjectDescriptorFile(root, configPath, "Package config");
+  const configText = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(configBytes);
+  const value = JSON.parse(configText) as unknown;
+  const configTree = ts.parseJsonText(configPath, configText);
+  const checkKeys = (node: ts.Node): void => {
+    if (ts.isObjectLiteralExpression(node)) {
+      const keys = new Set<string>();
+      for (const property of node.properties) {
+        const key = (property.name as ts.StringLiteral).text.toLowerCase();
+        if (keys.has(key)) throw new Error("Package config has duplicate or ASCII-case-colliding JSON members.");
+        keys.add(key);
+      }
+    }
+    ts.forEachChild(node, checkKeys);
+  };
+  checkKeys(configTree);
   const config = validateConfig(value);
   const outputDirectory = config.outputDirectory ?? "dist";
   if (portablePathsContainOneAnother(outputDirectory, RPC_BINDINGS_OUTPUT_PATH)) {
     throw new Error(`outputDirectory '${outputDirectory}' must not equal, contain, or be contained by the owned RPC binding output '${RPC_BINDINGS_OUTPUT_PATH}'.`);
   }
+  for (const assets of Object.values(config.nativeAssets ?? {})) {
+    for (const asset of assets) {
+      if (portablePathsContainOneAnother(outputDirectory, asset.sourcePath)) {
+        throw new Error(`Native asset source '${asset.sourcePath}' must not be inside or contain outputDirectory '${outputDirectory}'.`);
+      }
+    }
+  }
   const outputRoot = resolveInside(root, outputDirectory, "outputDirectory");
-  return { root, configPath, config, outputRoot, contracts: [] };
+  if (config.rpc !== undefined && (portablePathsContainOneAnother(outputDirectory, config.rpc.module)
+    || portablePathsContainOneAnother(outputDirectory, config.entry))) throw new Error("V3 RPC source and Worker entry must remain outside generated outputDirectory.");
+  const project = { root, configPath, config, outputRoot, contracts: [] };
+  return { project, configBytes };
 }
 
 export function resolveInside(root: string, path: string, label: string): string {
@@ -152,14 +227,27 @@ export function currentRid(): SunderRid {
   return rid as SunderRid;
 }
 
-function validateConfig(value: unknown): SunderNodePackageConfig {
+function validateConfig(value: unknown): ResolvedNodePackageConfig {
   const config = record(value, "sunder.package.json");
-  const allowed = new Set(["schemaVersion", "id", "name", "summary", "version", "entry", "workerCapabilities", "contracts", "providers", "usesContracts", "dependencies", "outputDirectory", "maximumExecutableBytes", "maximumPackageBytes", "app", "rpcBindings"]);
+  const allowed = new Set(["schemaVersion", "id", "name", "summary", "version", "entry", "workerCapabilities", "contracts", "providers", "usesContracts", "dependencies", "outputDirectory", "maximumPackageBytes", "app", "rpcBindings", "nativeAssets"]);
+  if (config.schemaVersion === 3) {
+    for (const key of ["contracts", "providers", "usesContracts", "rpcBindings"]) allowed.delete(key);
+    allowed.add("rpc");
+  }
   for (const key of Object.keys(config)) if (!allowed.has(key)) throw new Error(`sunder.package.json contains unknown property '${key}'.`);
   if (config.schemaVersion === 1) {
     throw new Error("sunder.package.json schemaVersion 1 is no longer supported; migrate RPC package authoring to schemaVersion 2.");
   }
-  if (config.schemaVersion !== 2) throw new Error("sunder.package.json schemaVersion must be exactly 2.");
+  if (config.schemaVersion !== 2 && config.schemaVersion !== 3) throw new Error("sunder.package.json schemaVersion must be exactly 2 (migration) or 3 (source authoring).");
+  let rpc: ResolvedNodePackageConfig["rpc"];
+  if (config.schemaVersion === 3 && config.rpc !== undefined) {
+    const input = record(config.rpc, "rpc"); only(input, "module", "export");
+    const module = projectPath(input.module, "rpc.module", 240, 32);
+    if (!/\.(ts|js)$/u.test(module) || module.toLowerCase().endsWith(".d.ts") || module.toLowerCase().startsWith(".sunder/") || module.toLowerCase().startsWith("node_modules/")) throw new Error("rpc.module must be authored .ts or .js source outside generated output.");
+    const exportName = text(input.export, "rpc.export", 128);
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(exportName)) throw new Error("rpc.export must be an identifier.");
+    rpc = { module, export: exportName };
+  }
   const id = text(config.id, "id", 128);
   if (!isPackageId(id)) throw new Error("Package id must be lowercase dot-separated ASCII.");
   const name = displayText(config.name, "name", 256);
@@ -172,7 +260,7 @@ function validateConfig(value: unknown): SunderNodePackageConfig {
   ).map((item, index) => {
     const capability = text(item, `workerCapabilities[${index}]`, 128);
     if (!SUPPORTED_WORKER_CAPABILITIES.includes(capability as WorkerCapability)) {
-      throw new Error(`workerCapabilities[${index}] '${capability}' is not implemented by the TypeScript Worker V3 SDK.`);
+      throw new Error(`workerCapabilities[${index}] '${capability}' is not implemented by the TypeScript Worker V1 SDK.`);
     }
     return capability as WorkerCapability;
   });
@@ -184,9 +272,10 @@ function validateConfig(value: unknown): SunderNodePackageConfig {
     workerCapabilities.push("storage.v1");
   }
   workerCapabilities.sort();
-  const contracts = boundedArray(config.contracts, "contracts", MAXIMUM_CONTRACTS).map((item, index) => {
+  const contracts = boundedArray(config.schemaVersion === 3 ? [] : config.contracts, "contracts", MAXIMUM_CONTRACTS).map((item, index) => {
     const contract = record(item, `contracts[${index}]`);
     only(contract, "path", "descriptorPath", "exposure");
+    if (typeof contract.path === "string" && contract.path.toLowerCase().startsWith(".sunder/")) throw new Error("Generated descriptor snapshots are not descriptor-first authoring inputs.");
     return {
       path: projectPath(contract.path, `contracts[${index}].path`, 240, 32),
       descriptorPath: contract.descriptorPath === undefined
@@ -195,7 +284,7 @@ function validateConfig(value: unknown): SunderNodePackageConfig {
       exposure: oneOf(contract.exposure, `contracts[${index}].exposure`, "package", "public"),
     };
   });
-  const providers = boundedArray(config.providers, "providers", MAXIMUM_PROVIDERS).map((item, index) => {
+  const providers = boundedArray(config.schemaVersion === 3 ? [] : config.providers, "providers", MAXIMUM_PROVIDERS).map((item, index) => {
     const provider = record(item, `providers[${index}]`);
     only(provider, "providerId", "role", "contractId", "contractVersion", "audience");
     const providerId = text(provider.providerId, `providers[${index}].providerId`, 128);
@@ -240,7 +329,7 @@ function validateConfig(value: unknown): SunderNodePackageConfig {
     const packageId = text(dependency.packageId, `dependencies[${index}].packageId`, 128);
     const versionRange = text(dependency.versionRange, `dependencies[${index}].versionRange`, 1024);
     if (!isPackageId(packageId)) throw new Error(`dependencies[${index}].packageId must be a canonical package id.`);
-    if (!isPackageVersionRange(versionRange)) throw new Error(`dependencies[${index}].versionRange is unsupported.`);
+    validateDependencyVersionRange(versionRange, `dependencies[${index}].versionRange`);
     return { packageId, versionRange };
   });
   const rpcBindings = config.rpcBindings === undefined ? undefined : boundedArray(config.rpcBindings, "rpcBindings", MAXIMUM_RPC_BINDINGS).map((item, index) => {
@@ -251,14 +340,18 @@ function validateConfig(value: unknown): SunderNodePackageConfig {
       outputFile: rpcBindingOutputFile(binding.outputFile, `rpcBindings[${index}].outputFile`),
     };
   });
+  const nativeAssets = config.nativeAssets === undefined
+    ? undefined
+    : validateNativeAssets(config.nativeAssets, contracts);
   requireUnique(contracts.map((contract) => contract.path), "Contract path");
   requireUnique(providers.map((provider) => `${provider.role}/${provider.providerId}`), "Provider role/id");
   requireUnique(usesContracts.map((use) => `${use.role}/${use.contractId}`), "Contract use role/id");
   requireUnique(dependencies.map((dependency) => dependency.packageId), "Dependency package id");
   requireUnique((rpcBindings ?? []).map((binding) => binding.path), "RPC binding input path");
   validateRpcBindingOutputPaths(rpcBindings ?? []);
-  const result: SunderNodePackageConfig = {
-    schemaVersion: 2,
+  const result: ResolvedNodePackageConfig = {
+    schemaVersion: config.schemaVersion,
+    ...(rpc === undefined ? {} : { rpc }),
     id,
     name,
     version,
@@ -269,6 +362,7 @@ function validateConfig(value: unknown): SunderNodePackageConfig {
     usesContracts,
     dependencies,
     ...(rpcBindings === undefined ? {} : { rpcBindings }),
+    ...(nativeAssets === undefined ? {} : { nativeAssets }),
   };
   const app = config.app === undefined ? undefined : validateApp(config.app, id);
   for (const use of usesContracts) {
@@ -280,10 +374,107 @@ function validateConfig(value: unknown): SunderNodePackageConfig {
     ...result,
     ...(config.summary === undefined ? {} : { summary: displayText(config.summary, "summary", 2048) }),
     ...(config.outputDirectory === undefined ? {} : { outputDirectory: projectPath(config.outputDirectory, "outputDirectory", 200, 24) }),
-    ...(config.maximumExecutableBytes === undefined ? {} : { maximumExecutableBytes: positiveInteger(config.maximumExecutableBytes, "maximumExecutableBytes") }),
     ...(config.maximumPackageBytes === undefined ? {} : { maximumPackageBytes: boundedPositiveInteger(config.maximumPackageBytes, "maximumPackageBytes", MAXIMUM_COMPRESSED_PACKAGE_BYTES) }),
     ...(app === undefined ? {} : { app }),
   };
+}
+
+function validateNativeAssets(
+  value: unknown,
+  contracts: readonly ContractConfig[],
+): NativeAssetsConfig {
+  const configured = record(value, "nativeAssets");
+  only(configured, ...SUPPORTED_RIDS);
+  if (Object.keys(configured).length === 0) throw new Error("nativeAssets must declare at least one exact RID.");
+  const result: Partial<Record<SunderRid, readonly NativeAssetConfig[]>> = {};
+  let total = 0;
+  for (const rid of SUPPORTED_RIDS) {
+    if (!Object.hasOwn(configured, rid)) continue;
+    const values = boundedArray(configured[rid], `nativeAssets.${rid}`, MAXIMUM_NATIVE_ASSETS);
+    if (values.length === 0) throw new Error(`nativeAssets.${rid} must contain at least one asset.`);
+    if (values.length > MAXIMUM_NATIVE_ASSETS - total) {
+      throw new Error(`nativeAssets may contain at most ${MAXIMUM_NATIVE_ASSETS} entries across all exact RIDs.`);
+    }
+    total += values.length;
+    const assets = values.map((item, index): NativeAssetConfig => {
+      const asset = record(item, `nativeAssets.${rid}[${index}]`);
+      only(asset, "sourcePath", "targetPath");
+      const sourcePath = projectPath(asset.sourcePath, `nativeAssets.${rid}[${index}].sourcePath`, 240, 32);
+      const targetPath = logicalPath(asset.targetPath, `nativeAssets.${rid}[${index}].targetPath`);
+      assertNotExecutionRuntimeAssetPath(sourcePath, `nativeAssets.${rid}[${index}].sourcePath`);
+      assertNotExecutionRuntimeAssetPath(targetPath, `nativeAssets.${rid}[${index}].targetPath`);
+      return { sourcePath, targetPath };
+    });
+    validateNativeAssetTargetPaths(rid, assets, contracts);
+    result[rid] = assets;
+  }
+  return result;
+}
+
+function validateNativeAssetTargetPaths(
+  rid: SunderRid,
+  assets: readonly NativeAssetConfig[],
+  contracts: readonly ContractConfig[],
+): void {
+  const paths = [
+    { path: "bin/worker.cjs", label: "generated Worker entry point" },
+    { path: "THIRD-PARTY-NOTICES/Bundled-Worker-Dependencies.txt", label: "generated Worker notice" },
+    ...contracts.map((contract) => ({
+      path: contract.descriptorPath ?? `contracts/${basename(contract.path)}`,
+      label: `contract descriptor '${contract.path}'`,
+    })),
+    ...assets.map((asset, index) => ({
+      path: asset.targetPath,
+      label: `nativeAssets.${rid}[${index}].targetPath`,
+    })),
+  ];
+  const entries = new Map<string, { readonly path: string; readonly kind: "directory" | "file"; readonly label: string }>();
+  for (const item of paths) {
+    const segments = item.path.split("/");
+    for (let index = 1; index <= segments.length; index++) {
+      const candidate = segments.slice(0, index).join("/");
+      const kind = index === segments.length ? "file" : "directory";
+      const folded = asciiCaseFold(candidate);
+      const existing = entries.get(folded);
+      if (existing !== undefined && (kind === "file" || existing.path !== candidate || existing.kind !== kind)) {
+        throw new Error(`${item.label} '${item.path}' collides with ${existing.label} '${existing.path}' on portable filesystems.`);
+      }
+      entries.set(folded, { path: candidate, kind, label: item.label });
+    }
+  }
+}
+
+function assertNotExecutionRuntimeAssetPath(path: string, label: string): void {
+  const segments = path.toLowerCase().split("/");
+  const fileName = segments.at(-1)!;
+  const forbiddenNodeFile = fileName === "node"
+    || fileName === "node.exe"
+    || fileName === "node.dll"
+    || fileName === "node.lib"
+    || fileName === "libnode.dylib"
+    || fileName === "node.js-license.txt"
+    || fileName === "node.js-license"
+    || fileName === "node_pdb"
+    || fileName === "node_etw_provider.man"
+    || fileName === "node.h"
+    || fileName.startsWith("libnode.so");
+  const forbiddenDotNetFile = [
+    "apphost", "apphost.exe", "coreclr.dll", "hostfxr.dll", "hostpolicy.dll",
+    "libcoreclr.dylib", "libcoreclr.so", "libhostfxr.dylib", "libhostfxr.so",
+    "libhostpolicy.dylib", "libhostpolicy.so", "libclrjit.dylib", "libclrjit.so",
+    "clrjit.dll", "mscordaccore.dll", "mscordbi.dll", "system.private.corelib.dll",
+    "dotnet", "dotnet.exe",
+  ].includes(fileName);
+  const includesToolchain = segments.some((segment) => /^node-v\d/iu.test(segment))
+    || segments.some((segment, index) => segment === "node_modules"
+      && (segments[index + 1] === "npm" || segments[index + 1] === "corepack"))
+    || segments.some((segment, index) => segment === "shared"
+      && segments[index + 1] === "microsoft.netcore.app")
+    || segments.some((segment, index) => segment === "packs"
+      && segments[index + 1]?.startsWith("microsoft.netcore.app.runtime.") === true);
+  if (forbiddenNodeFile || forbiddenDotNetFile || includesToolchain) {
+    throw new Error(`${label} '${path}' must not include a Node or .NET execution runtime or toolchain asset.`);
+  }
 }
 
 function validateApp(value: unknown, packageId: string): AppConfig {

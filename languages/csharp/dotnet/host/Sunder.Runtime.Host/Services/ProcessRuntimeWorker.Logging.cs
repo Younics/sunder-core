@@ -271,25 +271,18 @@ internal sealed partial class ProcessRuntimeWorker
 
     private static PackageLogLevel ReadWorkerLogLevel(JsonElement root)
     {
-        var value = SunderWorkerProtocol.RequiredValue(root, "level");
-        if (value.ValueKind != JsonValueKind.Number
-            || !value.TryGetInt32(out var number)
-            || !Enum.IsDefined((PackageLogLevel)number))
+        var number = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "level");
+        if (number > int.MaxValue || !Enum.IsDefined((PackageLogLevel)(int)number))
         {
             throw new SunderWorkerProtocolException(
                 "Worker logging level must be a supported integer value.");
         }
-        return (PackageLogLevel)number;
+        return (PackageLogLevel)(int)number;
     }
 
     private static int ReadWorkerLogEventId(JsonElement root)
     {
-        var value = SunderWorkerProtocol.RequiredValue(root, "eventId");
-        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var eventId))
-        {
-            throw new SunderWorkerProtocolException("Worker logging eventId must be an integer.");
-        }
-        return eventId;
+        return SunderWorkerProtocol.RequiredInt32(root, "eventId");
     }
 
     private static string ReadWorkerLogString(

@@ -10,8 +10,8 @@ namespace Sunder.App.Services;
 
 internal sealed class AppWebBridge : IAsyncDisposable
 {
-    internal const string Protocol = "sunder.bridge.v2";
-    internal const int ProtocolVersion = 2;
+    internal const string Protocol = "sunder.bridge.v1";
+    internal const int ProtocolVersion = 1;
     private readonly IAppWebView _webView;
     private readonly AppWebContentServer _contentServer;
     private readonly IAppWebRpcClient _rpc;
@@ -279,136 +279,136 @@ internal sealed class AppWebBridge : IAsyncDisposable
             switch (request.Method)
             {
                 case "rpc.discover":
-                {
-                    var payload = RequireObject(request.Payload, "RPC discover payload", "contractId");
-                    var contractId = RequiredText(payload, "contractId", 256);
-                    var snapshot = await _rpc.DiscoverAsync(contractId, pending.Token).ConfigureAwait(false);
-                    await FinishResultAsync(request.RequestId, pending, MapCatalog(snapshot)).ConfigureAwait(false);
-                    return;
-                }
+                    {
+                        var payload = RequireObject(request.Payload, "RPC discover payload", "contractId");
+                        var contractId = RequiredText(payload, "contractId", 256);
+                        var snapshot = await _rpc.DiscoverAsync(contractId, pending.Token).ConfigureAwait(false);
+                        await FinishResultAsync(request.RequestId, pending, MapCatalog(snapshot)).ConfigureAwait(false);
+                        return;
+                    }
                 case "rpc.watch":
-                {
-                    var payload = RequireObject(
-                        request.Payload,
-                        "RPC watch payload",
-                        "afterRevision",
-                        "afterSequence");
-                    var afterRevision = RequiredNonNegativeInteger(payload, "afterRevision");
-                    var afterSequence = RequiredNonNegativeInteger(payload, "afterSequence");
-                    await foreach (var item in _rpc.WatchAsync(
-                                       afterRevision,
-                                       afterSequence,
-                                       pending.Token).WithCancellation(pending.Token).ConfigureAwait(false))
                     {
-                        await SendEventAsync(request.RequestId, pending, MapCatalogEvent(item)).ConfigureAwait(false);
+                        var payload = RequireObject(
+                            request.Payload,
+                            "RPC watch payload",
+                            "afterRevision",
+                            "afterSequence");
+                        var afterRevision = RequiredNonNegativeInteger(payload, "afterRevision");
+                        var afterSequence = RequiredNonNegativeInteger(payload, "afterSequence");
+                        await foreach (var item in _rpc.WatchAsync(
+                                           afterRevision,
+                                           afterSequence,
+                                           pending.Token).WithCancellation(pending.Token).ConfigureAwait(false))
+                        {
+                            await SendEventAsync(request.RequestId, pending, MapCatalogEvent(item)).ConfigureAwait(false);
+                        }
+                        await FinishCompleteAsync(request.RequestId, pending).ConfigureAwait(false);
+                        return;
                     }
-                    await FinishCompleteAsync(request.RequestId, pending).ConfigureAwait(false);
-                    return;
-                }
                 case "rpc.invoke":
-                {
-                    var invocation = ReadInvocation(request.Payload);
-                    var provider = ResolveProvider(invocation.ProviderHandle);
-                    var method = _contracts.GetMethod(
-                        provider,
-                        invocation.ServiceId,
-                        invocation.MethodId,
-                        SunderRpcMethodKind.Unary);
-                    _contracts.ValidateRequest(provider, method, invocation.Request);
-                    pending.MarkPossiblyDispatched(
-                        method.Idempotency == SunderRpcMethodIdempotency.Idempotent
-                            ? SunderRpcRetrySafety.Safe
-                            : SunderRpcRetrySafety.Unsafe);
-                    var response = await _rpc.InvokeAsync(
-                        provider.Endpoint.Value,
-                        invocation.ServiceId,
-                        invocation.MethodId,
-                        invocation.Request,
-                        request.DeadlineUtc,
-                        pending.Token).ConfigureAwait(false);
-                    try
                     {
-                        EnsureBounded(response);
-                        _contracts.ValidateOutput(provider, method, response);
-                    }
-                    catch (SunderRpcException exception)
-                    {
-                        throw WithDispatchMetadata(exception, pending);
-                    }
-                    await FinishResultAsync(request.RequestId, pending, response).ConfigureAwait(false);
-                    return;
-                }
-                case "rpc.subscribe":
-                {
-                    var invocation = ReadInvocation(request.Payload);
-                    var provider = ResolveProvider(invocation.ProviderHandle);
-                    var method = _contracts.GetMethod(
-                        provider,
-                        invocation.ServiceId,
-                        invocation.MethodId,
-                        SunderRpcMethodKind.ServerStream);
-                    _contracts.ValidateRequest(provider, method, invocation.Request);
-                    pending.MarkPossiblyDispatched(SunderRpcRetrySafety.Unsafe);
-                    await foreach (var item in _rpc.SubscribeAsync(
-                                       provider.Endpoint.Value,
-                                       invocation.ServiceId,
-                                       invocation.MethodId,
-                                       invocation.Request,
-                                       request.DeadlineUtc,
-                                       pending.Token).WithCancellation(pending.Token).ConfigureAwait(false))
-                    {
+                        var invocation = ReadInvocation(request.Payload);
+                        var provider = ResolveProvider(invocation.ProviderHandle);
+                        var method = _contracts.GetMethod(
+                            provider,
+                            invocation.ServiceId,
+                            invocation.MethodId,
+                            SunderRpcMethodKind.Unary);
+                        _contracts.ValidateRequest(provider, method, invocation.Request);
+                        pending.MarkPossiblyDispatched(
+                            method.Idempotency == SunderRpcMethodIdempotency.Idempotent
+                                ? SunderRpcRetrySafety.Safe
+                                : SunderRpcRetrySafety.Unsafe);
+                        var response = await _rpc.InvokeAsync(
+                            provider.Endpoint.Value,
+                            invocation.ServiceId,
+                            invocation.MethodId,
+                            invocation.Request,
+                            request.DeadlineUtc,
+                            pending.Token).ConfigureAwait(false);
                         try
                         {
-                            EnsureBounded(item);
-                            _contracts.ValidateOutput(provider, method, item);
+                            EnsureBounded(response);
+                            _contracts.ValidateOutput(provider, method, response);
                         }
                         catch (SunderRpcException exception)
                         {
                             throw WithDispatchMetadata(exception, pending);
                         }
-                        await SendEventAsync(request.RequestId, pending, item).ConfigureAwait(false);
+                        await FinishResultAsync(request.RequestId, pending, response).ConfigureAwait(false);
+                        return;
                     }
-                    await FinishCompleteAsync(request.RequestId, pending).ConfigureAwait(false);
-                    return;
-                }
+                case "rpc.subscribe":
+                    {
+                        var invocation = ReadInvocation(request.Payload);
+                        var provider = ResolveProvider(invocation.ProviderHandle);
+                        var method = _contracts.GetMethod(
+                            provider,
+                            invocation.ServiceId,
+                            invocation.MethodId,
+                            SunderRpcMethodKind.ServerStream);
+                        _contracts.ValidateRequest(provider, method, invocation.Request);
+                        pending.MarkPossiblyDispatched(SunderRpcRetrySafety.Unsafe);
+                        await foreach (var item in _rpc.SubscribeAsync(
+                                           provider.Endpoint.Value,
+                                           invocation.ServiceId,
+                                           invocation.MethodId,
+                                           invocation.Request,
+                                           request.DeadlineUtc,
+                                           pending.Token).WithCancellation(pending.Token).ConfigureAwait(false))
+                        {
+                            try
+                            {
+                                EnsureBounded(item);
+                                _contracts.ValidateOutput(provider, method, item);
+                            }
+                            catch (SunderRpcException exception)
+                            {
+                                throw WithDispatchMetadata(exception, pending);
+                            }
+                            await SendEventAsync(request.RequestId, pending, item).ConfigureAwait(false);
+                        }
+                        await FinishCompleteAsync(request.RequestId, pending).ConfigureAwait(false);
+                        return;
+                    }
                 case "host.openExternal":
-                {
-                    var payload = RequireObject(request.Payload, "external link payload", "url");
-                    var text = RequiredText(payload, "url", 2048);
-                    if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)
-                        || !AppWebNavigationPolicy.IsExternalUri(uri))
                     {
-                        throw Validation("bridge.external.invalid", "The external link is invalid.");
+                        var payload = RequireObject(request.Payload, "external link payload", "url");
+                        var text = RequiredText(payload, "url", 2048);
+                        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)
+                            || !AppWebNavigationPolicy.IsExternalUri(uri))
+                        {
+                            throw Validation("bridge.external.invalid", "The external link is invalid.");
+                        }
+                        pending.Token.ThrowIfCancellationRequested();
+                        _externalBrowser.Open(uri);
+                        await FinishResultAsync(request.RequestId, pending, new { opened = true }).ConfigureAwait(false);
+                        return;
                     }
-                    pending.Token.ThrowIfCancellationRequested();
-                    _externalBrowser.Open(uri);
-                    await FinishResultAsync(request.RequestId, pending, new { opened = true }).ConfigureAwait(false);
-                    return;
-                }
                 case "navigation.getState":
-                {
-                    RequireObject(request.Payload, "navigation state payload");
-                    Uri? current;
-                    lock (_gate) current = _currentUri;
-                    var route = current is null
-                        ? "/"
-                        : "/" + current.AbsolutePath[_contentServer.BasePath.Length..];
-                    await FinishResultAsync(request.RequestId, pending, new { route }).ConfigureAwait(false);
-                    return;
-                }
-                case "navigation.navigate":
-                {
-                    var payload = RequireObject(request.Payload, "navigation payload", "route");
-                    var route = RequiredText(payload, "route", SunderPackageFormat.MaxWebViewRouteLength);
-                    if (!SunderPackageFormat.IsWebViewRoute(route))
                     {
-                        throw Validation("bridge.navigation.invalid", "The package route is invalid.");
+                        RequireObject(request.Payload, "navigation state payload");
+                        Uri? current;
+                        lock (_gate) current = _currentUri;
+                        var route = current is null
+                            ? "/"
+                            : "/" + current.AbsolutePath[_contentServer.BasePath.Length..];
+                        await FinishResultAsync(request.RequestId, pending, new { route }).ConfigureAwait(false);
+                        return;
                     }
-                    pending.Token.ThrowIfCancellationRequested();
-                    _navigate(_contentServer.GetRouteUri(route));
-                    await FinishResultAsync(request.RequestId, pending, new { accepted = true }).ConfigureAwait(false);
-                    return;
-                }
+                case "navigation.navigate":
+                    {
+                        var payload = RequireObject(request.Payload, "navigation payload", "route");
+                        var route = RequiredText(payload, "route", SunderPackageFormat.MaxWebViewRouteLength);
+                        if (!SunderPackageFormat.IsWebViewRoute(route))
+                        {
+                            throw Validation("bridge.navigation.invalid", "The package route is invalid.");
+                        }
+                        pending.Token.ThrowIfCancellationRequested();
+                        _navigate(_contentServer.GetRouteUri(route));
+                        await FinishResultAsync(request.RequestId, pending, new { accepted = true }).ConfigureAwait(false);
+                        return;
+                    }
                 default:
                     throw Validation("bridge.method.unknown", "The browser bridge method is not supported.");
             }
@@ -557,7 +557,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
             contractVersion = provider.ContractVersion,
             descriptorSha256 = provider.DescriptorSha256,
             abiSha256 = provider.AbiSha256
-                ?? throw new InvalidDataException("The Runtime provider is missing its V2 ABI identity."),
+                ?? throw new InvalidDataException("The Runtime provider is missing its ABI identity."),
             providerHandle = handle,
             catalogRevision = provider.CatalogRevision,
             state = provider.State switch

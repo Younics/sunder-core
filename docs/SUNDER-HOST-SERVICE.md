@@ -56,6 +56,21 @@ The Host Supervisor creates a stable Host identity and a new external bearer cre
 
 `RuntimeWorkerCoordinator` is the sole mutable owner of the Runtime worker process, private IPC and pipe leases, worker connection publication, durable lifecycle state, termination, and crash recovery. The stateless `RuntimeWorkerLaunchProbe` creates launch metadata, returns a launched process for immediate coordinator adoption, and borrows process and diagnostic handles only while probing readiness; it never retains or disposes those resources or mutates lifecycle state. Authenticated Host shutdown remains available for App-owned payload replacement.
 
+## Package Session Startup
+
+The Runtime worker validates the complete package dependency graph before activation. It prepares independent packages concurrently, partitions valid packages into stable dependency waves, and starts Workers concurrently only within the current wave. A dependent wave cannot start until every Worker in the preceding wave is candidate-ready. Publication remains sequential, and Runtime commits the candidate generation only after the complete graph is ready. A candidate failure cancels pending starts, strictly stops started candidate Workers in reverse plan order, and leaves the previous generation recoverable.
+
+Package preparation and Worker startup have separate conservative concurrency limits. Both default to `2`, accept integers from `1` through `8`, and can be configured for the Runtime process with:
+
+| Command-line option | Environment variable |
+| --- | --- |
+| `--package-preparation-concurrency <1-8>` | `SUNDER_PACKAGE_PREPARATION_CONCURRENCY` |
+| `--package-worker-startup-concurrency <1-8>` | `SUNDER_PACKAGE_WORKER_STARTUP_CONCURRENCY` |
+
+An explicit command-line value takes precedence over its environment value. These controls bound work; they do not alter dependency ordering or generation commit semantics.
+
+For startup diagnostics and benchmark evidence, `SUNDER_RUNTIME_TRACE_PATH` enables append-only NDJSON from the Runtime process. Trace schema `2` preserves the canonical `package.session.load.started` to `package.generation.committed` interval and records source discovery, graph planning, projection-cache lookup/build, projection preparation, exact execution-runtime binding, Worker wave boundaries, process start, protocol readiness, candidate readiness, and a terminal commit or failure. Package events include monotonic elapsed time, queue/active duration, byte counters, cache result, activation identity, exact runtime identity, process ID/birth identity, outcome, and generation correlation. The trace contains no package file paths, process arguments, credentials, or environment values.
+
 ## Distribution And Removal
 
 - The Windows App release workflow requires Azure Trusted Signing for the Velopack `Setup.exe`.

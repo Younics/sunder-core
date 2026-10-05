@@ -11,7 +11,8 @@ internal static class SunderArchiveMetadataReader
         string rootPath,
         ArchiveRelativePath relativePath,
         int maxBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ISunderPackageValidationIoObserver? ioObserver = null)
     {
         var filePath = SunderArchiveFileSystem.ResolveFile(rootPath, relativePath);
         await using var stream = new FileStream(
@@ -27,7 +28,22 @@ internal static class SunderArchiveMetadataReader
         }
 
         var bytes = new byte[checked((int)stream.Length)];
-        await stream.ReadExactlyAsync(bytes, cancellationToken);
-        return StrictUtf8.GetString(bytes);
+        var startPosition = stream.Position;
+        try
+        {
+            await stream.ReadExactlyAsync(bytes, cancellationToken);
+            return StrictUtf8.GetString(bytes);
+        }
+        finally
+        {
+            try
+            {
+                ioObserver.TryRecord(stream.Position - startPosition, bytesHashed: 0);
+            }
+            catch
+            {
+                // Diagnostics must not affect metadata reads.
+            }
+        }
     }
 }

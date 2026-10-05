@@ -1,6 +1,6 @@
 namespace Sunder.Registry.Contracts;
 
-public sealed record RegistryPublishLocalStackRequest(string StackPath);
+public sealed record RegistryPublishLocalStackRequest(string StackPath, string? IdempotencyKey = null, long? ExpectedPublicationAuthorityRevision = null);
 
 public sealed record RegistryPublishStackResponse(
     bool Success,
@@ -11,6 +11,8 @@ public sealed record RegistryPublishStackResponse(
 {
     public bool Forbidden { get; init; }
     public bool NotFound { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryStackPolicySnapshot? Policy { get; init; }
 }
 
 public sealed record RegistryStackManagementOperationResponse(
@@ -32,6 +34,7 @@ public sealed record RegistryStackStarResponse(
     public bool NotFound { get; init; }
 }
 
+/// <summary>A Stack maintainer identified by an opaque Registry principal ID, never a provider subject or handle.</summary>
 public sealed record RegistryStackMaintainer(
     string UserId,
     bool IsOwner,
@@ -45,6 +48,7 @@ public sealed record RegistryStackMaintainersResponse(
     string StackId,
     IReadOnlyList<RegistryStackMaintainer> Maintainers);
 
+/// <summary>Selects an existing Registry principal by its exact opaque ID.</summary>
 public sealed record RegistryAddStackMaintainerRequest(string UserId);
 
 public sealed record RegistryStackMaintainerOperationResponse(

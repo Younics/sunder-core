@@ -1,0 +1,1033 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sunder.dev/specs/rpc/v1/authoring/authoring-receipt.schema.json",
+  "title": "Sunder RPC Authoring Receipt V1",
+  "description": "Validated internal package-build metadata joining canonical contract snapshots, lock evidence, manifest import groups, providers, uses, and generated logical names.",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 18,
+  "required": [
+    "schemaVersion",
+    "producer",
+    "inputFingerprint",
+    "lockSha256",
+    "packageId",
+    "packageVersion",
+    "contracts",
+    "packageArtifacts",
+    "bundles",
+    "packageArtifactImports",
+    "packageApiImports",
+    "providerImports",
+    "platformImports",
+    "providers",
+    "uses",
+    "generatedPackageFacades",
+    "generatedBindings"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "inputFingerprint": {
+      "$ref": "#/$defs/sha256"
+    },
+    "lockSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "packageId": {
+      "$ref": "#/$defs/packageId"
+    },
+    "packageVersion": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "contracts": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/receiptContract"
+      }
+    },
+    "packageArtifacts": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/packageArtifact"
+      }
+    },
+    "bundles": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/bundle"
+      }
+    },
+    "packageArtifactImports": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/packageArtifactImport"
+      }
+    },
+    "packageApiImports": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/packageApiImport"
+      }
+    },
+    "providerImports": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/providerImport"
+      }
+    },
+    "platformImports": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/platformImport"
+      }
+    },
+    "providers": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/provider"
+      }
+    },
+    "uses": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/use"
+      }
+    },
+    "generatedPackageFacades": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/generatedPackageFacade"
+      }
+    },
+    "generatedBindings": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/generatedBinding"
+      }
+    },
+    "role": {
+      "const": "app"
+    }
+  },
+  "$defs": {
+    "packageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:\\.[a-z0-9]+)*$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 256,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "versionRange": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 1024,
+      "oneOf": [
+        {
+          "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+        },
+        {
+          "pattern": "^(?:<=|>=|<|>|=)(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?: (?:<=|>=|<|>|=)(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)*$"
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "strongDescriptorEtag": {
+      "type": "string",
+      "minLength": 66,
+      "maxLength": 66,
+      "pattern": "^\"[0-9a-f]{64}\"$"
+    },
+    "portableKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
+    },
+    "localName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][A-Za-z0-9]{0,127}$"
+    },
+    "logicalName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 257,
+      "pattern": "^@?[A-Za-z_][A-Za-z0-9_]*(?:\\.@?[A-Za-z_][A-Za-z0-9_]*)*$"
+    },
+    "canonicalDescriptor": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4194304,
+      "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f])\\{[\\s\\S]*\\}$"
+    },
+    "registryOrigin": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 268,
+      "anyOf": [
+        {
+          "pattern": "^https://(?=[^:/]{1,253}(?::[0-9]{1,5})?/$)(?![0-9]+(?:\\.[0-9]+)*(?::[0-9]+)?/)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::(?!443/)(?:[1-9]|[1-9][0-9]{1,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?/$"
+        },
+        {
+          "pattern": "^http://localhost(?::(?!80/)(?:[1-9]|[1-9][0-9]{1,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?/$"
+        }
+      ]
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 3,
+      "required": [
+        "name",
+        "version",
+        "language"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "Sunder.Package.Build",
+            "@sunder/package-tool"
+          ]
+        },
+        "version": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "language": {
+          "enum": [
+            "csharp",
+            "typescript",
+            "javascript"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "name": {
+                "const": "Sunder.Package.Build"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "then": {
+            "properties": {
+              "language": {
+                "const": "csharp"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "language": {
+                "enum": [
+                  "typescript",
+                  "javascript"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "receiptContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 10,
+      "required": [
+        "contractKey",
+        "contractId",
+        "contractVersion",
+        "exposure",
+        "descriptorBytes",
+        "canonicalDescriptor",
+        "descriptorSha256",
+        "abiSha256"
+      ],
+      "properties": {
+        "contractKey": {
+          "$ref": "#/$defs/portableKey"
+        },
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "exposure": {
+          "enum": [
+            "package",
+            "public"
+          ]
+        },
+        "descriptorBytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4194304
+        },
+        "canonicalDescriptor": {
+          "$ref": "#/$defs/canonicalDescriptor"
+        },
+        "descriptorSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "abiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "appUse": {
+          "$ref": "#/$defs/ownedUsePolicy"
+        },
+        "runtimeUse": {
+          "$ref": "#/$defs/ownedUsePolicy"
+        }
+      }
+    },
+    "ownedUsePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 2,
+      "required": [
+        "required",
+        "actions"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "discover",
+              "invoke",
+              "subscribe"
+            ]
+          }
+        }
+      }
+    },
+    "packageArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 9,
+      "required": [
+        "packageId",
+        "requestedVersionRange",
+        "includePrerelease",
+        "selectedPackageVersion",
+        "selectedPackageContentIdentity",
+        "publicContractCount",
+        "publicInventorySha256",
+        "contracts"
+      ],
+      "properties": {
+        "packageId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "requestedVersionRange": {
+          "$ref": "#/$defs/versionRange"
+        },
+        "includePrerelease": {
+          "type": "boolean"
+        },
+        "selectedPackageVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "selectedPackageContentIdentity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "registryOrigin": {
+          "$ref": "#/$defs/registryOrigin"
+        },
+        "publicContractCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128
+        },
+        "publicInventorySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contracts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/artifactContract"
+          }
+        }
+      }
+    },
+    "artifactContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 11,
+      "required": [
+        "contractId",
+        "artifactSource",
+        "authorityKind",
+        "authorityId",
+        "selectedAuthorityRelease",
+        "selectedAuthorityContentIdentity",
+        "resolvedContractVersion",
+        "descriptorBytes",
+        "descriptorSha256",
+        "abiSha256",
+        "etag"
+      ],
+      "properties": {
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "artifactSource": {
+          "enum": [
+            "owned",
+            "imported"
+          ]
+        },
+        "authorityKind": {
+          "enum": [
+            "package",
+            "platform"
+          ]
+        },
+        "authorityId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "selectedAuthorityRelease": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "selectedAuthorityContentIdentity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "resolvedContractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "descriptorBytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4194304
+        },
+        "descriptorSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "abiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "etag": {
+          "$ref": "#/$defs/strongDescriptorEtag"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "artifactSource": {
+                "const": "owned"
+              }
+            },
+            "required": [
+              "artifactSource"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authorityKind": {
+                "const": "package"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "authorityKind": {
+                "const": "platform"
+              }
+            },
+            "required": [
+              "authorityKind"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "authorityId": {
+                "const": "sunder.core"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 6,
+      "required": [
+        "contractKey",
+        "source",
+        "authorityKind",
+        "authorityId"
+      ],
+      "properties": {
+        "contractKey": {
+          "$ref": "#/$defs/portableKey"
+        },
+        "source": {
+          "enum": [
+            "owned",
+            "imported"
+          ]
+        },
+        "authorityKind": {
+          "enum": [
+            "package",
+            "platform"
+          ]
+        },
+        "authorityId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "selectedAuthorityRelease": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "selectedAuthorityContentIdentity": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "owned"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authorityKind": {
+                "const": "package"
+              },
+              "selectedAuthorityRelease": false,
+              "selectedAuthorityContentIdentity": false
+            }
+          },
+          "else": {
+            "type": "object",
+            "required": [
+              "selectedAuthorityRelease",
+              "selectedAuthorityContentIdentity"
+            ],
+            "properties": {
+              "selectedAuthorityRelease": {
+                "$ref": "#/$defs/semanticVersion"
+              },
+              "selectedAuthorityContentIdentity": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "authorityKind": {
+                "const": "platform"
+              }
+            },
+            "required": [
+              "authorityKind"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "selectedAuthorityRelease",
+              "selectedAuthorityContentIdentity"
+            ],
+            "properties": {
+              "source": {
+                "const": "imported"
+              },
+              "authorityId": {
+                "const": "sunder.core"
+              },
+              "selectedAuthorityRelease": {
+                "$ref": "#/$defs/semanticVersion"
+              },
+              "selectedAuthorityContentIdentity": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "packageArtifactImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 8,
+      "required": [
+        "packageId",
+        "requestedVersionRange",
+        "includePrerelease",
+        "selectedPackageVersion",
+        "selectedPackageContentIdentity",
+        "publicContractCount",
+        "publicInventorySha256",
+        "authorityConstraints"
+      ],
+      "properties": {
+        "packageId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "requestedVersionRange": {
+          "$ref": "#/$defs/versionRange"
+        },
+        "includePrerelease": {
+          "type": "boolean"
+        },
+        "selectedPackageVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "selectedPackageContentIdentity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "publicContractCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128
+        },
+        "publicInventorySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorityConstraints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/authorityConstraint"
+          }
+        }
+      }
+    },
+    "authorityConstraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 4,
+      "required": [
+        "authorityKind",
+        "authorityId",
+        "selectedAuthorityRelease",
+        "selectedAuthorityContentIdentity"
+      ],
+      "properties": {
+        "authorityKind": {
+          "enum": [
+            "package",
+            "platform"
+          ]
+        },
+        "authorityId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "selectedAuthorityRelease": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "selectedAuthorityContentIdentity": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "authorityKind": {
+                "const": "platform"
+              }
+            },
+            "required": [
+              "authorityKind"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "authorityId": {
+                "const": "sunder.core"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "contractRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 2,
+      "required": [
+        "contractId",
+        "contractVersion"
+      ],
+      "properties": {
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        }
+      }
+    },
+    "useRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 3,
+      "required": [
+        "role",
+        "contractId",
+        "contractVersion"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "app",
+            "runtime"
+          ]
+        },
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        }
+      }
+    },
+    "providerRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 4,
+      "required": [
+        "role",
+        "providerId",
+        "contractId",
+        "contractVersion"
+      ],
+      "properties": {
+        "role": {
+          "const": "runtime"
+        },
+        "providerId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        }
+      }
+    },
+    "packageApiImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 4,
+      "required": [
+        "packageId",
+        "presence",
+        "bundleRefs",
+        "useRefs"
+      ],
+      "properties": {
+        "packageId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "presence": {
+          "enum": [
+            "required",
+            "optional"
+          ]
+        },
+        "bundleRefs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/contractRef"
+          }
+        },
+        "useRefs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/useRef"
+          }
+        }
+      }
+    },
+    "providerImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 6,
+      "required": [
+        "key",
+        "packageId",
+        "contractId",
+        "contractVersion",
+        "bundleRef",
+        "providerRefs"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/localName"
+        },
+        "packageId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "bundleRef": {
+          "$ref": "#/$defs/contractRef"
+        },
+        "providerRefs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/providerRef"
+          }
+        }
+      }
+    },
+    "platformImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 11,
+      "required": [
+        "key",
+        "authorityKind",
+        "authorityId",
+        "authorityReleaseRange",
+        "includePrerelease",
+        "selectedAuthorityRelease",
+        "selectedAuthorityContentIdentity",
+        "contractId",
+        "contractVersion",
+        "bundleRef",
+        "providerRefs"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/localName"
+        },
+        "authorityKind": {
+          "const": "platform"
+        },
+        "authorityId": {
+          "const": "sunder.core"
+        },
+        "authorityReleaseRange": {
+          "$ref": "#/$defs/versionRange"
+        },
+        "includePrerelease": {
+          "const": false
+        },
+        "selectedAuthorityRelease": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "selectedAuthorityContentIdentity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "bundleRef": {
+          "$ref": "#/$defs/contractRef"
+        },
+        "providerRefs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/providerRef"
+          }
+        }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 4,
+      "required": [
+        "providerId",
+        "role",
+        "audience",
+        "contractKey"
+      ],
+      "properties": {
+        "providerId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "role": {
+          "const": "runtime"
+        },
+        "audience": {
+          "enum": [
+            "owner",
+            "public"
+          ]
+        },
+        "contractKey": {
+          "$ref": "#/$defs/portableKey"
+        }
+      }
+    },
+    "use": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 4,
+      "required": [
+        "role",
+        "required",
+        "actions",
+        "contractKey"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "app",
+            "runtime"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "discover",
+              "invoke",
+              "subscribe"
+            ]
+          }
+        },
+        "contractKey": {
+          "$ref": "#/$defs/portableKey"
+        }
+      }
+    },
+    "generatedPackageFacade": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 3,
+      "required": [
+        "packageId",
+        "localName",
+        "logicalName"
+      ],
+      "properties": {
+        "packageId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "localName": {
+          "$ref": "#/$defs/localName"
+        },
+        "logicalName": {
+          "$ref": "#/$defs/logicalName"
+        }
+      }
+    },
+    "generatedBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 2,
+      "required": [
+        "contractKey",
+        "logicalName"
+      ],
+      "properties": {
+        "contractKey": {
+          "$ref": "#/$defs/portableKey"
+        },
+        "logicalName": {
+          "$ref": "#/$defs/logicalName"
+        }
+      }
+    }
+  }
+}

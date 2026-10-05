@@ -1,0 +1,12 @@
+{
+  "session": {
+    "sessionId": "0123456789abcdef0123456789abcdef",
+    "appGenerationId": "11111111-2222-4333-8444-555555555555",
+    "runtimeInstanceId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+  },
+  "package": {
+    "packageId": "example.agent",
+    "version": "2.0.0",
+    "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

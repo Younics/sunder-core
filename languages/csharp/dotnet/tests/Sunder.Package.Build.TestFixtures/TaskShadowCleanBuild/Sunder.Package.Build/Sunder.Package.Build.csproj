@@ -1,0 +1,145 @@
+<Project>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Sunder.Package.Build</AssemblyName>
+    <RootNamespace>Sunder.Package.Build.Tasks</RootNamespace>
+    <SunderPackageBuildTaskSourceLockOwner>true</SunderPackageBuildTaskSourceLockOwner>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sunder.Package.Format\Sunder.Package.Format.csproj" />
+    <Reference Include="Microsoft.Build.Framework"
+               HintPath="$(MSBuildBinPath)\Microsoft.Build.Framework.dll"
+               Private="false" />
+    <Reference Include="Microsoft.Build.Utilities.Core"
+               HintPath="$(MSBuildBinPath)\Microsoft.Build.Utilities.Core.dll"
+               Private="false" />
+  </ItemGroup>
+
+  <UsingTask TaskName="_WriteTaskShadowBuildNodeIdentity"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <File ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.Diagnostics" />
+      <Using Namespace="System.Globalization" />
+      <Using Namespace="System.IO" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        System.IO.File.WriteAllText(File, Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <UsingTask TaskName="_SignalAndWaitTaskShadowFixture"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <StartedFile ParameterType="System.String" Required="true" />
+      <ContinueFile ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Threading" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        File.WriteAllText(StartedFile, "started");
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!File.Exists(ContinueFile))
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    $"Timed out waiting for task-shadow fixture continuation file '{ContinueFile}'.");
+            }
+            Thread.Sleep(10);
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="_FailTaskShadowFixtureAfterSourceLockAcquisition"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="_AcquireSunderPackageBuildTaskSourceLockForOwner"
+          Condition="'$(TaskShadowFailAfterSourceLockAcquisition)' == 'true'">
+    <_WriteTaskShadowBuildNodeIdentity File="$(TaskShadowBuildNodeIdentityFile)" />
+    <Error Text="Intentional task-shadow fixture failure after source-lock acquisition." />
+  </Target>
+
+  <Target Name="_CaptureTaskShadowFixtureBuildNodeIdentity"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="_AcquireSunderPackageBuildTaskSourceLockForOwner"
+          Condition="'$(TaskShadowFailAfterSourceLockAcquisition)' != 'true' and '$(TaskShadowBuildNodeIdentityFile)' != ''">
+    <_WriteTaskShadowBuildNodeIdentity File="$(TaskShadowBuildNodeIdentityFile)" />
+  </Target>
+
+  <Target Name="_WaitTaskShadowFixtureAfterOutput"
+           AfterTargets="_CreateTaskShadowFixtureCompanions"
+           Condition="'$(TaskShadowAfterOutputContinueFile)' != ''">
+    <_SignalAndWaitTaskShadowFixture StartedFile="$(TaskShadowAfterOutputWaitStartedFile)"
+                                     ContinueFile="$(TaskShadowAfterOutputContinueFile)" />
+  </Target>
+
+  <Target Name="_WaitTaskShadowFixtureBeforePack"
+           BeforeTargets="GenerateNuspec"
+           Condition="'$(TaskShadowBeforePackContinueFile)' != ''">
+    <_SignalAndWaitTaskShadowFixture StartedFile="$(TaskShadowBeforePackWaitStartedFile)"
+                                     ContinueFile="$(TaskShadowBeforePackContinueFile)" />
+  </Target>
+
+  <Target Name="_WaitTaskShadowFixtureAfterBuild"
+          AfterTargets="Build"
+          Condition="'$(TaskShadowAfterBuildContinueFile)' != ''">
+    <_SignalAndWaitTaskShadowFixture StartedFile="$(TaskShadowAfterBuildWaitStartedFile)"
+                                     ContinueFile="$(TaskShadowAfterBuildContinueFile)" />
+  </Target>
+
+  <Target Name="_FailTaskShadowFixturePackAfterSourceLockAcquisition"
+          BeforeTargets="GenerateNuspec"
+          Condition="'$(TaskShadowFailPackAfterSourceLockAcquisition)' == 'true'">
+    <_WriteTaskShadowBuildNodeIdentity File="$(TaskShadowBuildNodeIdentityFile)" />
+    <Error Text="Intentional task-shadow fixture Pack failure after source-lock acquisition." />
+  </Target>
+
+  <Target Name="_CaptureTaskShadowFixturePackNodeIdentity"
+          BeforeTargets="GenerateNuspec"
+          Condition="'$(TaskShadowFailPackAfterSourceLockAcquisition)' != 'true' and '$(TaskShadowPackNodeIdentityFile)' != ''">
+    <_WriteTaskShadowBuildNodeIdentity File="$(TaskShadowPackNodeIdentityFile)" />
+  </Target>
+
+  <Target Name="_FailTaskShadowFixtureAfterOuterPack"
+          AfterTargets="Pack"
+          Condition="'$(TaskShadowFailAfterOuterPack)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
+    <_WriteTaskShadowBuildNodeIdentity File="$(TaskShadowBuildNodeIdentityFile)" />
+    <Error Text="Intentional task-shadow fixture outer Pack failure after Pack." />
+  </Target>
+
+  <Target Name="_RecordTaskShadowFixturePack"
+          AfterTargets="Pack"
+          Condition="'$(TaskShadowPackRecordFile)' != ''">
+    <WriteLinesToFile File="$(TaskShadowPackRecordFile)"
+                      Lines="pack"
+                      Overwrite="false" />
+  </Target>
+
+  <Target Name="_CreateTaskShadowFixtureCompanions" AfterTargets="CopyFilesToOutputDirectory">
+    <Copy SourceFiles="$(TargetDir)Sunder.Package.Format.dll"
+          DestinationFiles="$(TargetDir)Sunder.Package.Build.Editor.dll" />
+    <Copy SourceFiles="$(TargetDir)Sunder.Package.Format.dll"
+          DestinationFiles="$(TargetDir)Sunder.Sdk.dll" />
+    <Copy SourceFiles="$(TargetDir)Sunder.Package.Format.dll"
+          DestinationFiles="$(TargetDir)Microsoft.Extensions.DependencyInjection.Abstractions.dll" />
+    <Copy SourceFiles="$(TargetDir)Sunder.Package.Format.dll"
+          DestinationFiles="$(TargetDir)Microsoft.Extensions.Logging.Abstractions.dll" />
+    <Copy SourceFiles="$(TargetDir)Sunder.Package.Format.dll"
+          DestinationFiles="$(TargetDir)Microsoft.CodeAnalysis.dll" />
+    <Copy SourceFiles="$(TargetDir)Sunder.Package.Format.dll"
+          DestinationFiles="$(TargetDir)Microsoft.CodeAnalysis.CSharp.dll" />
+  </Target>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+  <Import Project="$(SunderPackageBuildSourceLockTargetsPath)"
+          Condition="'$(SunderPackageBuildSourceLockTargetsPath)' != '' and Exists('$(SunderPackageBuildSourceLockTargetsPath)')" />
+</Project>

@@ -8,18 +8,18 @@ namespace Sunder.Host.Client.Tests;
 public sealed class HostContractTests
 {
     [Fact]
-    public void ProtocolRevision2_IsACleanBreakFromRevision1()
+    public void ProtocolRevision1_IsExactAndRejectsOtherRevisions()
     {
-        var revision1 = new HostHandshakeResponse(
+        var otherRevision = new HostHandshakeResponse(
             HostProtocol.Identity,
-            ProtocolRevision: 1,
-            MinimumSupportedRevision: 1,
-            MaximumSupportedRevision: 1,
+            ProtocolRevision: 2,
+            MinimumSupportedRevision: 2,
+            MaximumSupportedRevision: 2,
             Guid.NewGuid(),
             Guid.NewGuid(),
             [HostProtocolFeatures.RuntimeGatewayV1],
             new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "Development", "Development"));
-        var revision2 = new HostHandshakeResponse(
+        var revision1 = new HostHandshakeResponse(
             HostProtocol.Identity,
             HostProtocol.CurrentRevision,
             HostProtocol.MinimumSupportedRevision,
@@ -28,10 +28,17 @@ public sealed class HostContractTests
             Guid.NewGuid(),
             [HostProtocolFeatures.RuntimeGatewayV1],
             new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "Development", "Development"));
+        var overlappingRange = revision1 with
+        {
+            ProtocolRevision = 2,
+            MinimumSupportedRevision = 1,
+            MaximumSupportedRevision = 2,
+        };
 
-        Assert.Equal(2, HostProtocol.CurrentRevision);
-        Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(revision1));
-        Assert.Null(HostProtocolCompatibility.GetIncompatibility(revision2));
+        Assert.Equal(1, HostProtocol.CurrentRevision);
+        Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(otherRevision));
+        Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(overlappingRange));
+        Assert.Null(HostProtocolCompatibility.GetIncompatibility(revision1));
     }
 
     [Fact]

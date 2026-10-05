@@ -1,0 +1,98 @@
+{
+  "stageId": "stage-runtime-001",
+  "release": {
+    "runtimeId": "sunder.runtime.dotnet",
+    "version": "10.0.1",
+    "packagingRevision": 2,
+    "moduleAbi": "sunder.dotnet-worker-module.v1",
+    "workerProtocol": "sunder.worker.v1",
+    "minimumHostTrustGeneration": 2,
+    "lifecycle": {
+      "state": "staged",
+      "stagedAtUtc": "2026-07-09T12:00:00+00:00",
+      "supportedFromUtc": null,
+      "deprecatedAtUtc": null,
+      "installBlockedAtUtc": null,
+      "activationBlockedAtUtc": null,
+      "revokedAtUtc": null,
+      "message": null
+    },
+    "supportedRids": [
+      "linux-arm64",
+      "linux-x64",
+      "osx-arm64",
+      "osx-x64",
+      "win-arm64",
+      "win-x64"
+    ],
+    "publishedAtUtc": "2026-07-10T12:00:00+00:00"
+  },
+  "expectedReleaseSigningKeyId": "sunder-runtime-release-2026-01",
+  "expectedNativeAttestations": [
+    {
+      "rid": "linux-arm64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "linux-x64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "osx-arm64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "osx-x64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "win-arm64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "win-x64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    }
+  ],
+  "expectedRids": [
+    "linux-arm64",
+    "linux-x64",
+    "osx-arm64",
+    "osx-x64",
+    "win-arm64",
+    "win-x64"
+  ],
+  "publishedRids": [
+    "linux-x64",
+    "win-x64"
+  ],
+  "missingRids": [
+    "linux-arm64",
+    "osx-arm64",
+    "osx-x64",
+    "win-arm64"
+  ],
+  "readyToPromote": false,
+  "artifacts": [
+    {
+      "rid": "linux-x64",
+      "artifactSha256": "runtime-artifact-sha-001",
+      "artifactSize": 104857600,
+      "manifestSha256": "runtime-manifest-sha-001",
+      "contentIdentity": "runtime-content-identity-001",
+      "signingKeyId": "sunder-runtime-release-2026-01",
+      "nativeAttestationSha256": "native-attestation-sha-001",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "win-x64",
+      "artifactSha256": "runtime-artifact-sha-001",
+      "artifactSize": 104857600,
+      "manifestSha256": "runtime-manifest-sha-001",
+      "contentIdentity": "runtime-content-identity-001",
+      "signingKeyId": "sunder-runtime-release-2026-01",
+      "nativeAttestationSha256": "native-attestation-sha-001",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    }
+  ]
+}

@@ -19,11 +19,26 @@ internal sealed class RuntimePackagePaths
         TombstoneRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.TombstonesDirectory);
         TransferRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.TransfersDirectory);
         CacheRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.CacheDirectory);
+        ExecutionRuntimeStoreRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimesDirectory);
+        ExecutionRuntimeArtifactRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeArtifactSha256Directory);
+        ExecutionRuntimeManifestRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeManifestSha256Directory);
+        ExecutionRuntimeRootsPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeRootSha256Directory);
+        ExecutionRuntimeReceiptRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeReceiptsDirectory);
+        ExecutionRuntimeHealthRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeHealthDirectory);
+        ExecutionRuntimePolicyRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimePolicyDirectory);
+        ExecutionRuntimeLifecyclePolicyFilePath = Path.Combine(
+            RootPath,
+            RuntimeV1StateDescriptor.ExecutionRuntimeLifecyclePolicyFile);
+        ExecutionRuntimeStagingRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeStagingDirectory);
+        ExecutionRuntimeTransactionRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeTransactionsDirectory);
+        ExecutionRuntimeQuarantineRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeQuarantineDirectory);
+        ExecutionRuntimeLeaseRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeLeasesDirectory);
+        ExecutionRuntimeTombstoneRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeTombstonesDirectory);
         PackageDataRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.PackageDataDirectory);
         RegistryCredentialRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.RegistryCredentialsDirectory);
         RegistryCredentialFilePath = Path.Combine(RegistryCredentialRootPath, RuntimeV1StateDescriptor.RegistryCredentialFile);
-        StateFilePath = Path.Combine(CatalogRootPath, "installed-packages.json");
-        RpcPermissionFilePath = Path.Combine(CatalogRootPath, "rpc-permissions.json");
+        StateFilePath = Path.Combine(RootPath, RuntimeV1StateDescriptor.InstalledPackageCatalogFile);
+        RpcPermissionFilePath = Path.Combine(RootPath, RuntimeV1StateDescriptor.RpcPermissionFile);
         SchemaFilePath = Path.Combine(RootPath, RuntimeLocalState.SchemaFileName);
         LeaseFilePath = Path.Combine(RootPath, RuntimeLocalState.LeaseFileName);
         ConnectionInfoFilePath = Path.Combine(RootPath, "connection.json");
@@ -44,6 +59,32 @@ internal sealed class RuntimePackagePaths
     public string TransferRootPath { get; }
 
     public string CacheRootPath { get; }
+
+    public string ExecutionRuntimeStoreRootPath { get; }
+
+    public string ExecutionRuntimeArtifactRootPath { get; }
+
+    public string ExecutionRuntimeManifestRootPath { get; }
+
+    public string ExecutionRuntimeRootsPath { get; }
+
+    public string ExecutionRuntimeReceiptRootPath { get; }
+
+    public string ExecutionRuntimeHealthRootPath { get; }
+
+    public string ExecutionRuntimePolicyRootPath { get; }
+
+    public string ExecutionRuntimeLifecyclePolicyFilePath { get; }
+
+    public string ExecutionRuntimeStagingRootPath { get; }
+
+    public string ExecutionRuntimeTransactionRootPath { get; }
+
+    public string ExecutionRuntimeQuarantineRootPath { get; }
+
+    public string ExecutionRuntimeLeaseRootPath { get; }
+
+    public string ExecutionRuntimeTombstoneRootPath { get; }
 
     public string PackageDataRootPath { get; }
 

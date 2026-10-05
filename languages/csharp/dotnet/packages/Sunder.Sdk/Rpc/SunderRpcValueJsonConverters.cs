@@ -178,7 +178,7 @@ internal sealed class SunderRpcSafeIntegerJsonConverter : JsonConverter<long>
         writer.WriteNumberValue(value);
     }
 
-    private static bool TryParseSafeInteger(string text, out long result)
+    internal static bool TryParseSafeInteger(string text, out long result)
     {
         result = default;
         var span = text.AsSpan();
@@ -257,14 +257,19 @@ internal sealed class SunderRpcFloat32JsonConverter : JsonConverter<float>
             throw new JsonException("An RPC float32 must be a JSON number.");
         }
         using var document = JsonDocument.ParseValue(ref reader);
-        return float.TryParse(
+        if (!double.TryParse(
                    document.RootElement.GetRawText(),
                    NumberStyles.Float,
                    CultureInfo.InvariantCulture,
-                   out var result)
-               && float.IsFinite(result)
+                   out var binary64)
+            || !double.IsFinite(binary64))
+        {
+            throw new JsonException("An RPC float32 must first decode to a finite binary64 value.");
+        }
+        var result = (float)binary64;
+        return float.IsFinite(result)
             ? result
-            : throw new JsonException("An RPC float32 must decode to a finite binary32 value.");
+            : throw new JsonException("An RPC float32 must narrow to a finite binary32 value.");
     }
 
     public override void Write(Utf8JsonWriter writer, float value, JsonSerializerOptions options)

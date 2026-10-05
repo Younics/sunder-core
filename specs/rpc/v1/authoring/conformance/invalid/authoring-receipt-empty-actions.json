@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "producer": {
+    "name": "Sunder.Package.Build",
+    "version": "1.0.0",
+    "language": "csharp"
+  },
+  "inputFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "lockSha256": "48300c172fe8e323956ee95aa7cde02e30ca9ebd330179e328e3209fe31ead5a",
+  "packageId": "example.owner",
+  "packageVersion": "1.0.0",
+  "contracts": [],
+  "packageArtifacts": [],
+  "bundles": [],
+  "packageArtifactImports": [],
+  "packageApiImports": [],
+  "providerImports": [],
+  "platformImports": [],
+  "providers": [],
+  "uses": [
+    {
+      "role": "runtime",
+      "required": false,
+      "actions": [],
+      "contractKey": "minimal"
+    }
+  ],
+  "generatedPackageFacades": [],
+  "generatedBindings": []
+}

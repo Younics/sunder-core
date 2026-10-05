@@ -42,7 +42,9 @@ public static class RuntimeLocalState
             RuntimeV1StateDescriptor.RootVersionDirectory);
     }
 
-    public static void EnsureInitialized(string? rootPath = null)
+    public static void EnsureInitialized(
+        string? rootPath = null,
+        bool deleteStaleSchemaTemporaryFiles = true)
     {
         var root = Path.GetFullPath(rootPath ?? GetV1RootPath());
         Directory.CreateDirectory(root);
@@ -50,7 +52,7 @@ public static class RuntimeLocalState
         if (File.Exists(schemaPath))
         {
             ValidateSchema(schemaPath);
-            DeleteStaleSchemaTemps(root);
+            if (deleteStaleSchemaTemporaryFiles) DeleteStaleSchemaTemps(root);
             return;
         }
 
@@ -77,7 +79,7 @@ public static class RuntimeLocalState
             }
 
             File.Move(temporaryPath, schemaPath);
-            DeleteStaleSchemaTemps(root, temporaryPath);
+            if (deleteStaleSchemaTemporaryFiles) DeleteStaleSchemaTemps(root, temporaryPath);
         }
         catch (IOException) when (File.Exists(schemaPath))
         {
@@ -114,7 +116,6 @@ public static class RuntimeLocalState
         }
 
         ValidateSchema(schemaPath);
-        DeleteStaleSchemaTemps(root);
     }
 
     public static bool IsLeaseAvailable(string? rootPath = null)

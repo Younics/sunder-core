@@ -1,0 +1,89 @@
+{
+  "packagePolicy": {
+    "revision": 42,
+    "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "checkpoint": {
+    "sequence": 99,
+    "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "topologyGeneration": 1,
+    "topologyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "requirements": [
+    {
+      "packageId": "example.agent",
+      "versionRange": "\u003E=2.0.0 \u003C3.0.0",
+      "includePrerelease": false,
+      "presence": "required",
+      "requiredByPackageId": "example.consumer",
+      "contracts": [
+        {
+          "contractId": "example.agent.tools",
+          "contractVersion": "1.0.0",
+          "descriptorSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "abiSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ]
+    }
+  ],
+  "restoreProvenance": [
+    {
+      "registryOrigin": "https://registry.example",
+      "artifact": {
+        "inventory": {
+          "schemaVersion": 1,
+          "packageId": "example.agent",
+          "packageVersion": "2.0.0",
+          "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "publicContractCount": 1,
+          "contracts": [
+            {
+              "contractId": "example.agent.tools",
+              "contractVersion": "1.0.0",
+              "descriptorBytes": 420,
+              "descriptorSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "abiSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+              "artifactSource": "owned",
+              "authorityKind": "package",
+              "authorityId": "example.agent",
+              "selectedAuthorityRelease": "2.0.0",
+              "selectedAuthorityContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        },
+        "publicInventorySha256": "9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "requestedVersionRange": "\u003E=2.0.0 \u003C3.0.0",
+      "includePrerelease": false,
+      "authorityRequirements": [
+        {
+          "packageId": "example.agent",
+          "versionRange": "\u003E=2.0.0 \u003C3.0.0",
+          "includePrerelease": false
+        }
+      ]
+    }
+  ],
+  "optionalPackages": [
+    {
+      "consumerPackageId": "example.consumer",
+      "packageId": "example.optional",
+      "disposition": "omitted",
+      "selectedPackage": null,
+      "errorCode": "package-api.package-unavailable"
+    }
+  ],
+  "platformCatalogs": [
+    {
+      "catalog": {
+        "authorityId": "sunder.core",
+        "releaseVersion": "1.1.0",
+        "catalogSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "lifecycleState": "Supported",
+      "disposition": "Allowed",
+      "errorCode": null,
+      "revokedAtUtc": null
+    }
+  ]
+}

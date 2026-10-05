@@ -1,0 +1,41 @@
+{
+  "identity": {
+    "stackId": "example.stack",
+    "revision": 7,
+    "artifactSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "ownerPrincipalId": "0123456789abcdef0123456789abcdef",
+  "publishedByPrincipalId": "0123456789abcdef0123456789abcdef",
+  "publishedAtUtc": "2026-09-14T10:00:00+00:00",
+  "name": "Example Stack",
+  "summary": "Immutable revision.",
+  "readmeMarkdown": null,
+  "manifestSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "artifactBytes": 512,
+  "artifactDownloadUrl": "https://registry.example/api/v1/stacks/example.stack/revisions/7/download",
+  "packages": [
+    {
+      "packageId": "example.agent",
+      "installTag": "latest",
+      "createdWithVersion": "2.0.0",
+      "minimumVersion": "2.0.0",
+      "required": true,
+      "name": null,
+      "iconUrl": null
+    }
+  ],
+  "fragments": [],
+  "requiredInputs": [],
+  "media": [
+    {
+      "mediaId": "11111111-2222-4333-8444-555555555555",
+      "fileName": "cover.png",
+      "contentType": "image/png",
+      "size": 128,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "downloadUrl": "https://registry.example/media/cover.png",
+      "sortOrder": 0,
+      "altText": null
+    }
+  ]
+}

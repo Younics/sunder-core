@@ -5,6 +5,7 @@
     <ProjectReference Include="..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />
+    <ProjectReference Include="..\..\packages\Sunder.Sdk.Worker\Sunder.Sdk.Worker.csproj" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\AuthoredReflection\AuthoredReflection.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\AuthoredDynamicReflection\AuthoredDynamicReflection.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\ExternalDependency\ExternalDependency.csproj" ReferenceOutputAssembly="false" />
@@ -12,12 +13,24 @@
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\MissingExternal\MissingExternal.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\MissingSdkDependency\MissingSdkDependency.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\SourceReferencePackage\SourceReferencePackage.csproj" ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerV3Executable\WorkerV3Executable.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerV1Executable\WorkerV1Executable.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Build.Framework" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.CodeAnalysis">
+      <HintPath>$(MSBuildSDKsPath)/../Roslyn/bincore/Microsoft.CodeAnalysis.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+      <HintPath>$(MSBuildSDKsPath)/../Roslyn/bincore/Microsoft.CodeAnalysis.CSharp.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -27,5 +40,31 @@
     <None Include="..\..\..\..\..\eng\test-oracles\core-public-packages.json"
           Link="TestOracles\core-public-packages.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\expectations.json"
+          Link="RpcAuthoringParity\expectations.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\valid\naming-defaults.cs"
+          Link="RpcAuthoringParity\valid\naming-defaults.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\valid\provider-forms.cs"
+          Link="RpcAuthoringParity\valid\provider-forms.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\valid\identity-limits.cs"
+          Link="RpcAuthoringParity\valid\identity-limits.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\valid\complete.cs"
+          Link="RpcAuthoringParity\valid\complete.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\invalid\*.cs"
+          Link="RpcAuthoringParity\invalid\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <Target Name="_CopyEditorAnalyzerForTests" AfterTargets="CopyFilesToOutputDirectory">
+    <ItemGroup>
+      <_EditorToolOwner Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)' == 'Sunder.Package.Build.dll'" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_EditorToolOwner->'%(RootDir)%(Directory)Sunder.Package.Build.Editor.dll')"
+          DestinationFiles="$(TargetDir)Sunder.Package.Build.Editor.dll" SkipUnchangedFiles="true" />
+    <ItemGroup><FileWrites Include="$(TargetDir)Sunder.Package.Build.Editor.dll" /></ItemGroup>
+  </Target>
 </Project>

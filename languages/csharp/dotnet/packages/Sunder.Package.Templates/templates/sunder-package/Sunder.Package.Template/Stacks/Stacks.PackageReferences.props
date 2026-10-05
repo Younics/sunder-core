@@ -1,0 +1,24 @@
+<Project>
+  <ItemGroup>
+    <PackageReference Include="Sunder.Sdk.Stacks" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" ExcludeAssets="buildTransitive" SunderPackageAssetRole="worker" />
+  </ItemGroup>
+  <PropertyGroup>
+    <_SunderTemplateStackSupportSource>$(MSBuildThisFileDirectory)StackSupport.cs</_SunderTemplateStackSupportSource>
+  </PropertyGroup>
+  <!-- First Accept owns only the greeting. The import-only contributor is checked
+       after explicit platform selection. Ordinary Build never excludes its source. -->
+  <Target Name="_PrepareSunderTemplateOwnedBootstrap" AfterTargets="_PrepareSunderContractCommand"
+          Condition="!Exists('$(SunderOwnedContractsPath)')">
+    <ItemGroup>
+      <_SunderTemplateStackBootstrapSource Include="$(_SunderTemplateStackSupportSource)" />
+      <_SunderRpcCommandSource Remove="@(_SunderTemplateStackBootstrapSource)" MatchOnMetadata="FullPath" MatchOnMetadataOptions="PathLike" />
+    </ItemGroup>
+  </Target>
+  <Target Name="_RestoreSunderTemplateStackCommandSource" AfterTargets="AcceptSunderContracts"
+          Condition="'@(_SunderTemplateStackBootstrapSource)' != ''">
+    <ItemGroup>
+      <_SunderRpcCommandSource Include="@(_SunderTemplateStackBootstrapSource)" />
+      <_SunderTemplateStackBootstrapSource Remove="@(_SunderTemplateStackBootstrapSource)" />
+    </ItemGroup>
+  </Target>
+</Project>

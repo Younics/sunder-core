@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
+using Sunder.Package.Projections;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
@@ -25,21 +26,35 @@ internal sealed class PackageUiSnapshotLease(
     }
 }
 
-internal sealed class PackageUiSnapshotStore : IDisposable
+internal interface IAppPolicySnapshotSource
+{
+    RuntimePackageSource? PolicySource(string snapshotId);
+    bool IsPublished(string snapshotId) => true;
+}
+
+internal sealed class PackageUiSnapshotStore : IDisposable, IAppPolicySnapshotSource
 {
     internal const long MaxUncompressedBytes = 256L * 1024 * 1024;
     internal const int MaxFileCount = 20_000;
     private readonly ConcurrentDictionary<string, SnapshotAlias> _aliases = new(StringComparer.Ordinal);
     private readonly PackageUiSnapshotObjectCache _objects;
+    private readonly PackageProjectionCache _projections;
+    private readonly Guid _hostInstanceId;
     private readonly object _promotionGate = new();
     private int _garbageCollectionScheduled;
 
     public PackageUiSnapshotStore(
         RuntimePackagePaths paths,
-        ILogger<PackageUiSnapshotStore>? logger = null)
+        ILogger<PackageUiSnapshotStore>? logger = null,
+        PackageProjectionCache? projections = null,
+        Guid? hostInstanceId = null)
     {
         Directory.CreateDirectory(paths.TransferRootPath);
         _objects = new PackageUiSnapshotObjectCache(paths.CacheRootPath, logger);
+        _projections = projections ?? new PackageProjectionCache(paths.RootPath);
+        _hostInstanceId = hostInstanceId is { } instanceId && instanceId != Guid.Empty
+            ? instanceId
+            : Guid.NewGuid();
     }
 
     public IReadOnlyList<PackageUiSnapshotDescriptor> CreateSnapshots(
@@ -82,6 +97,10 @@ internal sealed class PackageUiSnapshotStore : IDisposable
         }
         try
         {
+            if (alias.ObjectPath is null)
+            {
+                return null;
+            }
             var stream = new FileStream(
                 alias.ObjectPath,
                 FileMode.Open,
@@ -102,9 +121,17 @@ internal sealed class PackageUiSnapshotStore : IDisposable
     {
         foreach (var (id, alias) in _aliases)
         {
-            if (string.Equals(alias.StageId, stageId, StringComparison.Ordinal)) Remove(id);
+            if (string.Equals(alias.StageId, stageId, StringComparison.Ordinal)) Remove(id, force: true);
         }
     }
+
+    public RuntimePackageSource? PolicySource(string snapshotId)
+        => _aliases.TryGetValue(snapshotId, out var alias) ? alias.PolicySource : null;
+    public bool IsPublished(string snapshotId) => _aliases.TryGetValue(snapshotId, out var alias) && alias.StageId is null;
+
+    internal static RuntimePackagePolicySubject? PolicySubject(RuntimePackageSource source)
+        => source.Manifest?.Version is { } version && (source.RegistryPolicyContentIdentity ?? source.ContentIdentity) is { } content
+            ? new(source.PackageId, version, content) : null;
 
     public IReadOnlyList<PackageUiSnapshotDescriptor> PromoteStage(
         string stageId,
@@ -125,7 +152,9 @@ internal sealed class PackageUiSnapshotStore : IDisposable
             foreach (var item in aliases) _aliases[item.Descriptor.SnapshotId] = item.Alias with { StageId = null };
             return descriptors.Select(descriptor => descriptor with
             {
-                SnapshotUri = $"packages/ui-snapshots/{descriptor.SnapshotId}",
+                SnapshotUri = descriptor.ProjectionReference is null
+                    ? $"packages/ui-snapshots/{descriptor.SnapshotId}"
+                    : descriptor.SnapshotUri,
             }).ToArray();
         }
     }
@@ -134,7 +163,7 @@ internal sealed class PackageUiSnapshotStore : IDisposable
     {
         foreach (var (id, alias) in _aliases)
         {
-            if (alias.StageId is null && alias.Generation != generation) Remove(id);
+            if (alias.StageId is null && alias.Generation != generation) Remove(id, force: true);
         }
     }
 
@@ -150,7 +179,10 @@ internal sealed class PackageUiSnapshotStore : IDisposable
         {
             try
             {
-                _objects.CollectGarbage(_aliases.Values.Select(static alias => alias.ContentHash).ToHashSet(StringComparer.Ordinal));
+                _objects.CollectGarbage(_aliases.Values
+                    .Where(static alias => alias.ObjectPath is not null)
+                    .Select(static alias => alias.ContentHash)
+                    .ToHashSet(StringComparer.Ordinal));
             }
             finally
             {
@@ -159,11 +191,21 @@ internal sealed class PackageUiSnapshotStore : IDisposable
         });
     }
 
-    public void Dispose() => _aliases.Clear();
+    public void Dispose()
+    {
+        foreach (var id in _aliases.Keys)
+        {
+            Remove(id, force: true);
+        }
+    }
 
     private PackageUiSnapshotDescriptor CreateSnapshot(RuntimePackageTargetSource targetSource, long generation, string? stageId)
     {
         var source = targetSource.Source;
+        if (source.Kind == PackageSourceKind.Installed)
+        {
+            return CreateInstalledProjectionSnapshot(targetSource, generation, stageId);
+        }
         var snapshotObject = _objects.GetOrCreate(targetSource);
         var snapshotId = Guid.NewGuid().ToString("N");
         _aliases[snapshotId] = new SnapshotAlias(
@@ -171,7 +213,8 @@ internal sealed class PackageUiSnapshotStore : IDisposable
             snapshotObject.ContentHash,
             snapshotObject.Length,
             generation,
-            stageId);
+            stageId,
+            PolicySource: source);
         var uri = stageId is null
             ? $"packages/ui-snapshots/{snapshotId}"
             : $"packages/session/stage/{stageId}/ui-snapshots/{snapshotId}";
@@ -182,15 +225,146 @@ internal sealed class PackageUiSnapshotStore : IDisposable
             PackageTargetSelection.ToDescriptor(targetSource.Target),
             snapshotObject.ContentHash,
             snapshotId,
-            uri);
+            uri) { PolicySubject = PolicySubject(source) };
     }
 
-    private void Remove(string id) => _aliases.TryRemove(id, out _);
+    private PackageUiSnapshotDescriptor CreateInstalledProjectionSnapshot(
+        RuntimePackageTargetSource targetSource,
+        long generation,
+        string? stageId)
+    {
+        var source = targetSource.Source;
+        var request = PackageProjectionRequestFactory.CreateApp(targetSource);
+        lock (_promotionGate)
+        {
+            foreach (var (existingId, existing) in _aliases)
+            {
+                if (Matches(existing, source.PackageId, generation, stageId, request))
+                {
+                    _aliases[existingId] = existing with
+                    {
+                        ReferenceCount = existing.ReferenceCount == int.MaxValue
+                            ? int.MaxValue
+                            : existing.ReferenceCount + 1,
+                    };
+                    return CreateInstalledDescriptor(targetSource, generation, existingId, existing);
+                }
+            }
+
+            var acquisition = _projections.GetOrBuildAndLeaseAsync(
+                    request,
+                    new PackageProjectionOwner(
+                        "runtime-host-app-source",
+                        _hostInstanceId,
+                        source.PackageId,
+                        stageId ?? generation.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                .GetAwaiter()
+                .GetResult();
+            var snapshotId = Guid.NewGuid().ToString("N");
+            try
+            {
+                var alias = new SnapshotAlias(
+                    ObjectPath: null,
+                    acquisition.Reference.CacheKey,
+                    Length: 0,
+                    generation,
+                    stageId,
+                    acquisition,
+                    source.PackageId,
+                    PolicySource: source);
+                _aliases[snapshotId] = alias;
+                return CreateInstalledDescriptor(targetSource, generation, snapshotId, alias);
+            }
+            catch
+            {
+                acquisition.Dispose();
+                throw;
+            }
+        }
+    }
+
+    private static bool Matches(
+        SnapshotAlias alias,
+        string packageId,
+        long generation,
+        string? stageId,
+        PackageProjectionRequest request)
+        => alias.Projection is { } projection
+           && alias.Generation == generation
+           && string.Equals(alias.StageId, stageId, StringComparison.Ordinal)
+           && string.Equals(alias.PackageId, packageId, StringComparison.Ordinal)
+           && projection.Reference.ConsumerRole == request.ConsumerRole
+           && string.Equals(
+               projection.Reference.SourceContentIdentity,
+               request.SourceContentIdentity,
+               StringComparison.Ordinal)
+           && string.Equals(
+               projection.Reference.ProjectionRulesIdentity,
+               request.ProjectionRulesIdentity,
+               StringComparison.Ordinal)
+           && projection.Reference.TargetKeys.SequenceEqual(request.TargetKeys, StringComparer.Ordinal);
+
+    private static PackageUiSnapshotDescriptor CreateInstalledDescriptor(
+        RuntimePackageTargetSource targetSource,
+        long generation,
+        string snapshotId,
+        SnapshotAlias alias)
+        => new(
+            targetSource.Source.PackageId,
+            targetSource.Source.Kind,
+            generation,
+            PackageTargetSelection.ToDescriptor(targetSource.Target),
+            alias.ContentHash,
+            snapshotId,
+            SnapshotUri: string.Empty)
+        {
+            ProjectionReference = ToDescriptor(alias.Projection!.Reference),
+            PolicySubject = PolicySubject(targetSource.Source),
+        };
+
+    private void Remove(string id, bool force = false)
+    {
+        lock (_promotionGate)
+        {
+            if (!_aliases.TryGetValue(id, out var alias))
+            {
+                return;
+            }
+            if (!force && alias.ReferenceCount > 1)
+            {
+                _aliases[id] = alias with { ReferenceCount = alias.ReferenceCount - 1 };
+                return;
+            }
+            alias.Projection?.Dispose();
+            _aliases.TryRemove(new KeyValuePair<string, SnapshotAlias>(id, alias));
+        }
+    }
+
+    private static PackageUiProjectionReferenceDescriptor ToDescriptor(PackageProjectionReference reference)
+        => new(
+            reference.FormatRevision,
+            reference.CacheKey,
+            PackageProjectionLayoutRole(reference.ConsumerRole),
+            reference.SourceContentIdentity,
+            reference.ProjectionRulesIdentity,
+            reference.TargetKeys);
+
+    private static string PackageProjectionLayoutRole(PackageProjectionRole role)
+        => role switch
+        {
+            PackageProjectionRole.App => "app",
+            PackageProjectionRole.Runtime => "runtime",
+            _ => throw new ArgumentOutOfRangeException(nameof(role)),
+        };
 
     private sealed record SnapshotAlias(
-        string ObjectPath,
+        string? ObjectPath,
         string ContentHash,
         long Length,
         long Generation,
-        string? StageId);
+        string? StageId,
+        PackageProjectionAcquisition? Projection = null,
+        string? PackageId = null,
+        int ReferenceCount = 1,
+        RuntimePackageSource? PolicySource = null);
 }

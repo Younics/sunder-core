@@ -50,18 +50,18 @@ internal static partial class SunderRpcSchemaProfile
             return true;
         }
 
-        if (state.IsV2 && schema.EnumerateObject().All(static property =>
+        if (schema.EnumerateObject().All(static property =>
                 property.Name is "title" or "description"))
         {
             return ValidateUnconstrainedJsonValue(value, path, state, out error);
         }
 
         var type = schema.GetProperty("type").GetString()!;
-        if (state.IsV2 && schema.TryGetProperty("logicalType", out var logicalType))
+        if (schema.TryGetProperty("logicalType", out var logicalType))
         {
             return ValidateLogicalInstance(logicalType.GetString()!, value, path, state, out error);
         }
-        if (!MatchesType(value, type, state.IsV2))
+        if (!MatchesType(value, type))
         {
             return state.Reject("type-mismatch", path, $"{path} must be of type '{type}'.", out error);
         }
@@ -71,12 +71,12 @@ internal static partial class SunderRpcSchemaProfile
             return state.Reject("invalid-unicode", path, $"{path} must contain Unicode scalar values.", out error);
         }
         if (schema.TryGetProperty("const", out var constant)
-            && !LiteralEquals(value, constant, state.IsV2, schema))
+            && !LiteralEquals(value, constant, schema))
         {
             return state.Reject("const-mismatch", path, $"{path} does not match its const value.", out error);
         }
         if (schema.TryGetProperty("enum", out var enumElement)
-            && !enumElement.EnumerateArray().Any(item => LiteralEquals(value, item, state.IsV2, schema)))
+            && !enumElement.EnumerateArray().Any(item => LiteralEquals(value, item, schema)))
         {
             return state.Reject("enum-mismatch", path, $"{path} is not an allowed enum value.", out error);
         }
@@ -84,7 +84,7 @@ internal static partial class SunderRpcSchemaProfile
         switch (type)
         {
             case "object":
-                if (state.IsV2 && !schema.TryGetProperty("additionalProperties", out _))
+                if (!schema.TryGetProperty("additionalProperties", out _))
                 {
                     return ValidateDynamicObjectInstance(schema, value, path, state, out error);
                 }
@@ -92,11 +92,11 @@ internal static partial class SunderRpcSchemaProfile
             case "array":
                 return ValidateArrayInstance(schema, value, path, state, pending, out error);
             case "string":
-                if (state.IsV2 && schema.TryGetProperty("contentEncoding", out _))
+                if (schema.TryGetProperty("contentEncoding", out _))
                 {
                     return ValidateBase64Instance(schema, scalarText!, path, state, out error);
                 }
-                if (state.IsV2 && schema.TryGetProperty("format", out var format))
+                if (schema.TryGetProperty("format", out var format))
                 {
                     if (!ValidateFormattedStringInstance(schema, format.GetString()!, scalarText!, path, state, out error))
                     {

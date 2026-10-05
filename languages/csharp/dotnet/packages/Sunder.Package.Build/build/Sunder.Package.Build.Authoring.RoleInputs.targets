@@ -1,0 +1,90 @@
+<Project>
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ManageSunderPackageRoleInputsTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory" Runtime="NET" Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ManageSunderPackageRoleInputsTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+
+  <!-- Capture the evaluated authored set before compiler/resource generation adds
+       intermediate Compile items or inferred resource metadata. No restore runs. -->
+  <Target Name="_CaptureSunderQualifiedRoleInputs" DependsOnTargets="_PrepareSunderPackageBuildTasks;ResolveLockFileAnalyzers;AddImplicitDefineConstants;_CaptureSunderPackageResourceItems">
+    <ItemGroup>
+      <_SunderQualificationProperty Remove="@(_SunderQualificationProperty)" />
+      <_SunderQualificationProperty Include="RootNamespace" Value="$(RootNamespace)" />
+      <_SunderQualificationProperty Include="DefineConstants" Value="$(DefineConstants)" />
+      <_SunderQualificationProperty Include="Nullable" Value="$(Nullable)" />
+      <_SunderQualificationProperty Include="LangVersion" Value="$(LangVersion)" />
+      <_SunderQualificationProperty Include="ImplicitUsings" Value="$(ImplicitUsings)" />
+      <_SunderQualificationProperty Include="AllowUnsafeBlocks" Value="$(AllowUnsafeBlocks)" />
+      <_SunderQualificationProperty Include="Optimize" Value="$(Optimize)" />
+      <_SunderQualificationProperty Include="CheckForOverflowUnderflow" Value="$(CheckForOverflowUnderflow)" />
+      <_SunderQualificationProperty Include="SelfContained" Value="$(SelfContained)" />
+      <_SunderQualificationProperty Include="UseAppHost" Value="$(UseAppHost)" />
+      <_SunderQualificationProperty Include="PublishSingleFile" Value="$(PublishSingleFile)" />
+      <_SunderQualificationProperty Include="PublishTrimmed" Value="$(PublishTrimmed)" />
+      <_SunderQualificationProperty Include="SdkVersion" Value="$(NETCoreSdkVersion)" />
+      <_SunderQualificationProperty Include="RuntimeIdentifiers" Value="$(RuntimeIdentifiers)" />
+      <_SunderQualificationProperty Include="SunderPackageRuntimeIdentifiers" Value="$(SunderPackageRuntimeIdentifiers)" />
+      <_SunderQualificationProperty Include="@(_SunderGeneratorProperty)" />
+      <_SunderQualifiedAuthoredCompile Include="@(Compile)" Exclude="$(GeneratedGlobalUsingsFile);$(GeneratedAssemblyInfoFile);$(TargetFrameworkMonikerAssemblyAttributesPath);$(AssemblyAttributesPath)" />
+    </ItemGroup>
+    <ManageSunderPackageRoleInputsTask Action="Capture" ProjectDirectory="$(MSBuildProjectDirectory)" ProjectFile="$(MSBuildProjectFullPath)" ProjectAssetsFile="$(ProjectAssetsFile)"
+                                      SourceRoot="$(SunderPackageRoleInputSourceRoot)" ProjectIdentity="$(MSBuildProjectName)" PackageVersion="$(Version)"
+                                      Configuration="$(Configuration)" TargetFramework="$(TargetFramework)" RuntimeIdentifier="$(RuntimeIdentifier)" AssemblyName="$(AssemblyName)" AssetsDirectory="$(SunderPackageAssetsDirectory)"
+                                      OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                                      SourceFiles="@(_SunderQualifiedAuthoredCompile)" ResourceItems="@(_SunderResourceInputs)" PackageReferences="@(PackageReference)"
+                                      ProjectReferences="@(ProjectReference)" References="@(Reference)" ProjectImports="$(MSBuildAllProjects)"
+                                      GeneratorAnalyzers="@(Analyzer)" Properties="@(_SunderQualificationProperty)" Usings="@(Using)">
+      <Output TaskParameter="Result" ItemName="_SunderQualifiedRoleInputFrame" />
+    </ManageSunderPackageRoleInputsTask>
+  </Target>
+
+  <Target Name="_ValidateSunderPrebuiltPackMode">
+    <Error Condition="'$(SunderPackageUsePrebuiltLeaves)' != 'true' or '$(BuildProjectReferences)' != 'false'"
+           Text="package-authoring.prebuilt-input-invalid: Qualified prebuilt Pack requires SunderPackageUsePrebuiltLeaves=true and BuildProjectReferences=false." />
+    <Error Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'"
+           Text="package-authoring.prebuilt-input-invalid: Prebuilt Pack requires an installed or explicitly supplied complete immutable toolset; it cannot compile bootstrap tooling." />
+    <Error Condition="'$(SunderPackagePrebuiltRoleInputsFile)' == ''"
+           Text="package-authoring.prebuilt-input-invalid: Supply SunderPackagePrebuiltRoleInputsFile with exact RID/path/SHA-256 selections." />
+  </Target>
+
+  <Target Name="_ValidateSunderPrebuiltRoleInput" DependsOnTargets="_ValidateSunderPrebuiltPackMode;_CaptureSunderQualifiedRoleInputs" Returns="@(_SunderValidatedRoleInput)">
+    <ManageSunderPackageRoleInputsTask Action="Validate" ProjectDirectory="$(MSBuildProjectDirectory)"
+                                      CapturedInputs="@(_SunderQualifiedRoleInputFrame)" SelectionFile="$(SunderPackagePrebuiltRoleInputsFile)">
+      <Output TaskParameter="Result" ItemName="_SunderValidatedRoleInput" />
+    </ManageSunderPackageRoleInputsTask>
+  </Target>
+
+  <Target Name="_PackSunderPackagePrebuilt" DependsOnTargets="_ValidateSunderPrebuiltPackMode;_ValidateSunderPackageBuildFramework;_PrepareSunderPackageBuildTasks">
+    <PropertyGroup>
+      <_SunderPrebuiltDeclaredRids Condition="'$(RuntimeIdentifiers)' != ''">$(RuntimeIdentifiers)</_SunderPrebuiltDeclaredRids>
+      <_SunderPrebuiltDeclaredRids Condition="'$(_SunderPrebuiltDeclaredRids)' == '' and '$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_SunderPrebuiltDeclaredRids>
+      <_SunderPrebuiltDeclaredRids Condition="'$(_SunderPrebuiltDeclaredRids)' == ''">$(SunderPackageRuntimeIdentifiers)</_SunderPrebuiltDeclaredRids>
+      <_SunderPrebuiltRids Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_SunderPrebuiltRids>
+      <_SunderPrebuiltRids Condition="'$(_SunderPrebuiltRids)' == '' and '$(_SunderPackageComposeRidsWereSpecified)' == 'true'">$(SunderPackageComposeRuntimeIdentifiers)</_SunderPrebuiltRids>
+      <_SunderPrebuiltRids Condition="'$(_SunderPrebuiltRids)' == ''">$(_SunderPrebuiltDeclaredRids)</_SunderPrebuiltRids>
+      <SunderPackageOutputPath Condition="'$(SunderPackageOutputPath)' == ''">$([System.IO.Path]::Combine('$(SunderPackageComposedOutputRoot)', '$(AssemblyName).$(Version).sunderpkg'))</SunderPackageOutputPath>
+      <SunderPackagePrebuiltRoleInputsFile>$([System.IO.Path]::GetFullPath('$(SunderPackagePrebuiltRoleInputsFile)', '$(MSBuildProjectDirectory)'))</SunderPackagePrebuiltRoleInputsFile>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderPrebuiltDeclaredRid Include="$(_SunderPrebuiltDeclaredRids)" />
+      <_SunderPrebuiltRid Include="$(_SunderPrebuiltRids)" />
+      <_SunderPrebuiltUnsupportedRid Include="@(_SunderPrebuiltDeclaredRid)" Exclude="win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64" />
+      <_SunderPrebuiltUnknownRid Include="@(_SunderPrebuiltRid)" Exclude="@(_SunderPrebuiltDeclaredRid)" />
+    </ItemGroup>
+    <Error Condition="'@(_SunderPrebuiltUnsupportedRid)' != '' or '@(_SunderPrebuiltUnknownRid)' != '' or '@(_SunderPrebuiltRid)' == ''"
+           Text="package-authoring.prebuilt-input-invalid: Prebuilt Pack must select supported declared RIDs." />
+    <Error Condition="'@(_SunderPrebuiltRid->Count())' != '@(_SunderPrebuiltRid->Distinct()->Count())'"
+           Text="package-authoring.prebuilt-input-invalid: Prebuilt Pack RID selection contains duplicates." />
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_ValidateSunderPrebuiltRoleInput" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=%(_SunderPrebuiltRid.Identity);SunderPackageRidBuild=true;SunderPackagePrebuiltRoleInputsFile=$(SunderPackagePrebuiltRoleInputsFile)"
+             RemoveProperties="SunderPackageCompilationRole;SunderPackageReferenceRole;OutDir">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderPrebuiltValidatedInput" />
+    </MSBuild>
+    <ManageSunderPackageRoleInputsTask Action="Pack" ProjectDirectory="$(MSBuildProjectDirectory)" PackageVersion="$(Version)"
+                                      ValidatedInputs="@(_SunderPrebuiltValidatedInput)" SelectionFile="$(SunderPackagePrebuiltRoleInputsFile)"
+                                      PackageOutputPath="$(SunderPackageOutputPath)" ExpectedRuntimeIdentifiers="$(_SunderPrebuiltRids)" />
+  </Target>
+</Project>

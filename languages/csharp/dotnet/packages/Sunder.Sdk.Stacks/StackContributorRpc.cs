@@ -1,6 +1,4 @@
-using System.Collections.ObjectModel;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Rpc;
@@ -13,7 +11,7 @@ namespace Sunder.Sdk.Stacks;
 public static class SunderStackContributorRpc
 {
     /// <summary>The Stack contributor descriptor version.</summary>
-    public const int DescriptorVersion = SunderRpcProtocol.DescriptorVersionV2;
+    public const int DescriptorVersion = SunderRpcProtocol.DescriptorVersion;
 
     /// <summary>The Stack contributor contract id.</summary>
     public const string ContractId = "sunder.stack.contributor";
@@ -22,10 +20,10 @@ public static class SunderStackContributorRpc
     public const string ContractVersion = "2.0.0";
 
     /// <summary>The canonical Stack contributor descriptor SHA-256.</summary>
-    public const string DescriptorSha256 = "45a44571c87d4ce9a400e1ace862c3678fa8fcb60b6fc7e0d91ebb54ba36c8b8";
+    public const string DescriptorSha256 = "38c8f49840f951aec29398d3641ff2306c906aee12ea80c2277db734bce49898";
 
-    /// <summary>The domain-separated Stack contributor V2 ABI SHA-256.</summary>
-    public const string AbiSha256 = "9a9687eb234e901e59ebb00c9e5eaccb405b292b3d340021b8e929907b36437a";
+    /// <summary>The domain-separated Stack contributor ABI SHA-256.</summary>
+    public const string AbiSha256 = "6ca6d6385c720290548592de890f3e3ceb86f3d999167f4e80c6afb15f8a02d8";
 
     /// <summary>The Stack contributor service id.</summary>
     public const string ServiceId = "stack-contributor";
@@ -41,12 +39,6 @@ public static class SunderStackContributorRpc
     /// <summary>Creates a JSON RPC handler over convenient package-local Stack interfaces.</summary>
     public static ISunderRpcServiceHandler CreateHandler(IPackageStackContributor contributor)
         => new StackContributorRpcHandler(contributor);
-
-    /// <summary>Creates a typed client for one exact Stack contributor endpoint.</summary>
-    public static StackContributorRpcClient CreateClient(
-        ISunderRpcCallScope scope,
-        SunderRpcEndpointReference endpoint)
-        => new(scope, endpoint);
 
     private static SunderRpcContractDescriptor LoadDescriptor()
     {
@@ -64,7 +56,7 @@ public static class SunderStackContributorRpc
             || !string.Equals(descriptor.AbiSha256, AbiSha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
-                $"Embedded Stack RPC descriptor '{DescriptorResourceName}' does not match its V2 contract identity.");
+                $"Embedded Stack RPC descriptor '{DescriptorResourceName}' does not match its contract identity.");
         }
         return descriptor;
     }
@@ -130,146 +122,15 @@ public sealed record StackRpcImportRequest(
     IReadOnlyDictionary<string, string> IdRemaps,
     IReadOnlyList<string> SelectedActionIds);
 
-/// <summary>Invokes one exact Stack contributor endpoint through the Sunder RPC broker.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-[SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
-public sealed class StackContributorRpcClient
-{
-    private readonly ISunderRpcCallScope _scope;
-    private readonly SunderRpcEndpointReference _endpoint;
-
-    /// <summary>Creates a client for one exact endpoint reference.</summary>
-    public StackContributorRpcClient(
-        ISunderRpcCallScope scope,
-        SunderRpcEndpointReference endpoint)
-    {
-        _scope = scope ?? throw new ArgumentNullException(nameof(scope));
-        _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
-    }
-
-    /// <summary>Gets stable contributor metadata.</summary>
-    public ValueTask<StackContributorMetadata> GetMetadataAsync(
-        CancellationToken cancellationToken = default)
-        => InvokeAsync<StackRpcEmpty, StackContributorMetadata>(
-            "metadata",
-            StackRpcEmpty.Instance,
-            cancellationToken);
-
-    /// <summary>Lists an immutable snapshot of exportable items.</summary>
-    public async ValueTask<IReadOnlyList<StackExportItemDescriptor>> ListExportItemsAsync(
-        StackExportDiscoveryContext context,
-        CancellationToken cancellationToken = default)
-        => (await InvokeAsync<StackExportDiscoveryContext, StackExportItemList>(
-            "list-export-items",
-            context,
-            cancellationToken).ConfigureAwait(false)).Items;
-
-    /// <summary>Exports selected Stack items.</summary>
-    public ValueTask<StackRpcExportContribution> ExportAsync(
-        StackExportRequest request,
-        CancellationToken cancellationToken = default)
-        => InvokeAsync<StackExportRequest, StackRpcExportContribution>(
-            "export",
-            request,
-            cancellationToken);
-
-    /// <summary>Previews selected Stack fragments without mutation.</summary>
-    public ValueTask<StackImportPreview> PreviewImportAsync(
-        StackRpcImportPreviewRequest request,
-        CancellationToken cancellationToken = default)
-        => InvokeAsync<StackRpcImportPreviewRequest, StackImportPreview>(
-            "preview-import",
-            request,
-            cancellationToken);
-
-    /// <summary>Applies selected actions from a previewed Stack plan.</summary>
-    public ValueTask<StackImportResult> ImportAsync(
-        StackRpcImportRequest request,
-        CancellationToken cancellationToken = default)
-        => InvokeAsync<StackRpcImportRequest, StackImportResult>(
-            "import",
-            request,
-            cancellationToken);
-
-    /// <summary>Notifies the exact contributor activation after committed import effects.</summary>
-    public async ValueTask ImportAppliedAsync(
-        StackImportAppliedContext context,
-        CancellationToken cancellationToken = default)
-        => _ = await InvokeAsync<StackImportAppliedContext, StackRpcEmpty>(
-            "import-applied",
-            context,
-            cancellationToken).ConfigureAwait(false);
-
-    private ValueTask<TResponse> InvokeAsync<TRequest, TResponse>(
-        string methodId,
-        TRequest request,
-        CancellationToken cancellationToken)
-        where TRequest : notnull
-        where TResponse : notnull
-        => _scope.InvokeAsync<TRequest, TResponse>(
-            _endpoint,
-            SunderStackContributorRpc.ServiceId,
-            methodId,
-            request,
-            requestAllowsNull: false,
-            responseAllowsNull: false,
-            useV2WireFormat: true,
-            cancellationToken: cancellationToken);
-}
-
 internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler, ISunderRpcDeclaredErrorMetadata
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        PropertyNameCaseInsensitive = false,
-        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-        Converters = { new SunderRpcV2JsonConverterFactory() },
-    };
-
-    private readonly IPackageStackExporter? _exporter;
-    private readonly IPackageStackImporter? _importer;
-    private readonly IPackageStackImportAppliedHandler? _appliedHandler;
-    private readonly StackContributorMetadata _metadata;
-    private static readonly Lazy<IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>>>
-        DeclaredErrorCatalog = new(CreateDeclaredErrorCatalog, LazyThreadSafetyMode.ExecutionAndPublication);
+    private readonly ISunderRpcServiceHandler _handler;
 
     public StackContributorRpcHandler(IPackageStackContributor contributor)
-    {
-        ArgumentNullException.ThrowIfNull(contributor);
-        _exporter = contributor as IPackageStackExporter;
-        _importer = contributor as IPackageStackImporter;
-        _appliedHandler = contributor as IPackageStackImportAppliedHandler;
-        if (_exporter is null && _importer is null && _appliedHandler is null)
-        {
-            throw new ArgumentException(
-                "A Stack RPC contributor must implement at least one package-local Stack interface.",
-                nameof(contributor));
-        }
-
-        if (string.IsNullOrWhiteSpace(contributor.ContributorId))
-        {
-            throw new ArgumentException(
-                "A Stack RPC contributor must expose a non-empty contributor id.",
-                nameof(contributor));
-        }
-        if (string.IsNullOrWhiteSpace(contributor.DisplayName))
-        {
-            throw new ArgumentException(
-                "A Stack RPC contributor must expose a non-empty display name.",
-                nameof(contributor));
-        }
-
-        _metadata = new StackContributorMetadata(
-            contributor.ContributorId,
-            contributor.DisplayName,
-            _exporter is not null,
-            _importer is not null,
-            _appliedHandler is not null);
-    }
+        => _handler = new StackContributorRpcServiceAdapter(contributor).CreateSunderRpcServiceHandler();
 
     public IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>> DeclaredErrors
-        => DeclaredErrorCatalog.Value;
+        => ((ISunderRpcDeclaredErrorMetadata)_handler).DeclaredErrors;
 
     public async ValueTask<JsonElement> InvokeUnaryAsync(
         SunderRpcInvocationContext context,
@@ -278,34 +139,17 @@ internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler, ISu
         JsonElement request,
         CancellationToken cancellationToken = default)
     {
-        if (!string.Equals(serviceId, SunderStackContributorRpc.ServiceId, StringComparison.Ordinal))
+        var service = SunderStackContributorRpc.Descriptor.FindService(serviceId);
+        if (service is null)
         {
             throw NotFound("stack.service.not-found", "The Stack contributor service was not found.");
         }
 
-        return methodId switch
+        if (service.FindMethod(methodId) is null)
         {
-            "metadata" => Serialize(_metadata),
-            "list-export-items" => Serialize(new StackExportItemList(
-                await Required(_exporter, methodId).ListExportItemsAsync(
-                    Deserialize<StackExportDiscoveryContext>(request),
-                    cancellationToken).ConfigureAwait(false))),
-            "export" => Serialize(await ExportAsync(
-                context,
-                Deserialize<StackExportRequest>(request),
-                cancellationToken).ConfigureAwait(false)),
-            "preview-import" => Serialize(await Required(_importer, methodId).PreviewImportAsync(
-                ToLocal(context, Deserialize<StackRpcImportPreviewRequest>(request)),
-                cancellationToken).ConfigureAwait(false)),
-            "import" => Serialize(await Required(_importer, methodId).ImportAsync(
-                ToLocal(context, Deserialize<StackRpcImportRequest>(request)),
-                cancellationToken).ConfigureAwait(false)),
-            "import-applied" => await ImportAppliedAsync(
-                context,
-                Deserialize<StackImportAppliedContext>(request),
-                cancellationToken).ConfigureAwait(false),
-            _ => throw NotFound("stack.method.not-found", "The Stack contributor method was not found."),
-        };
+            throw NotFound("stack.method.not-found", "The Stack contributor method was not found.");
+        }
+        return await _handler.InvokeUnaryAsync(context, serviceId, methodId, request, cancellationToken).ConfigureAwait(false);
     }
 
     public IAsyncEnumerable<JsonElement> InvokeServerStreamAsync(
@@ -318,144 +162,15 @@ internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler, ISu
             "stack.stream.unsupported",
             "The Stack contributor contract defines unary methods only.");
 
-    private async ValueTask<StackRpcExportContribution> ExportAsync(
-        SunderRpcInvocationContext context,
-        StackExportRequest request,
-        CancellationToken cancellationToken)
-    {
-        var contribution = await Required(_exporter, "export")
-            .ExportAsync(request, cancellationToken).ConfigureAwait(false);
-        var fragments = new List<StackRpcFragmentExport>(contribution.Fragments.Count);
-        foreach (var fragment in contribution.Fragments)
-        {
-            var files = new List<StackRpcPayloadFile>();
-            foreach (var file in fragment.Files ?? [])
-            {
-                await using var stream = await file.OpenReadAsync(cancellationToken).ConfigureAwait(false);
-                var content = await context.RegisterContentAsync(
-                    stream,
-                    new SunderRpcContentRegistrationOptions(
-                        "application/octet-stream",
-                        Path.GetFileName(file.RelativePath),
-                        file.Length,
-                        null,
-                        SunderRpcContentRepeatability.SingleUse,
-                        1),
-                    cancellationToken).ConfigureAwait(false);
-                files.Add(new StackRpcPayloadFile(file.RelativePath, content));
-            }
-
-            fragments.Add(new StackRpcFragmentExport(
-                fragment.FragmentId,
-                fragment.SchemaId,
-                fragment.SchemaVersion,
-                fragment.DisplayName,
-                fragment.JsonPayload,
-                fragment.Description,
-                fragment.DefaultSelected,
-                fragment.RequiredInputs,
-                files.Count == 0 ? null : files,
-                fragment.SourceItemId));
-        }
-
-        return new StackRpcExportContribution(
-            fragments,
-            contribution.PackageRequirements,
-            contribution.Warnings);
-    }
-
-    private async ValueTask<JsonElement> ImportAppliedAsync(
-        SunderRpcInvocationContext invocation,
-        StackImportAppliedContext context,
-        CancellationToken cancellationToken)
-    {
-        context = context with
-        {
-            OwnerPackageId = invocation.Provider.PackageId,
-            ContributorId = _metadata.ContributorId,
-        };
-        await Required(_appliedHandler, "import-applied")
-            .OnStackImportAppliedAsync(context, cancellationToken).ConfigureAwait(false);
-        return Serialize(StackRpcEmpty.Instance);
-    }
-
-    private StackImportPreviewRequest ToLocal(
-        SunderRpcInvocationContext context,
-        StackRpcImportPreviewRequest request)
-        => new(
-            request.Fragments.Select(fragment => ToLocal(context, fragment)).ToArray(),
-            request.InputValues,
-            request.IdRemaps);
-
-    private StackImportRequest ToLocal(
-        SunderRpcInvocationContext context,
-        StackRpcImportRequest request)
-        => new(
-            request.Fragments.Select(fragment => ToLocal(context, fragment)).ToArray(),
-            request.InputValues,
-            request.IdRemaps,
-            request.SelectedActionIds);
-
-    private StackFragmentImport ToLocal(
-        SunderRpcInvocationContext context,
-        StackRpcFragmentImport fragment)
-        => new(
-            fragment.FragmentId,
-            context.Provider.PackageId,
-            _metadata.ContributorId,
-            fragment.SchemaId,
-            fragment.SchemaVersion,
-            fragment.DisplayName,
-            fragment.JsonPayload,
-            fragment.Description,
-            fragment.Files?.Select(file => new StackImportPayloadHandle(
-                file.RelativePath,
-                cancellationToken => context.OpenContentAsync(
-                    file.Content,
-                    cancellationToken),
-                file.Content.Length)).ToArray());
-
-    private static T Required<T>(T? contribution, string methodId)
-        where T : class
-        => contribution ?? throw new SunderRpcException(new SunderRpcError(
-            SunderRpcErrorKind.Domain,
-            "stack.method.unsupported",
-            $"This Stack contributor does not support '{methodId}'."));
-
-    private static T Deserialize<T>(JsonElement value)
-        where T : notnull
-        => value.Deserialize<T>(JsonOptions)
-           ?? throw new InvalidOperationException(
-               $"The validated Stack RPC request could not be deserialized as {typeof(T).Name}.");
-
-    private static JsonElement Serialize<T>(T value)
-        where T : notnull
-        => JsonSerializer.SerializeToElement(value, JsonOptions);
-
     private static Exception NotFound(string code, string message)
         => new InvalidOperationException($"{code}: {message}");
-
-    private static IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>>
-        CreateDeclaredErrorCatalog()
-    {
-        var services = SunderStackContributorRpc.Descriptor.Services.ToDictionary(
-            static service => service.ServiceId,
-            static service => (IReadOnlyDictionary<string, IReadOnlyList<string>>)
-                new ReadOnlyDictionary<string, IReadOnlyList<string>>(
-                    service.Methods.ToDictionary(
-                        static method => method.MethodId,
-                        static method => (IReadOnlyList<string>)Array.AsReadOnly(method.Errors.ToArray()),
-                        StringComparer.Ordinal)),
-            StringComparer.Ordinal);
-        return new ReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>>(services);
-    }
 }
 
 internal sealed class StackRpcEmpty
 {
     public static StackRpcEmpty Instance { get; } = new();
 
-    private StackRpcEmpty()
+    public StackRpcEmpty()
     {
     }
 }

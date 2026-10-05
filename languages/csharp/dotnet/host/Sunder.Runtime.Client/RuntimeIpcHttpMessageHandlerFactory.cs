@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Net.Sockets;
+using System.Security.Principal;
 
 namespace Sunder.Runtime.Client;
 
@@ -30,7 +31,8 @@ public static class RuntimeIpcHttpMessageHandlerFactory
                 ".",
                 endpoint.Address,
                 PipeDirection.InOut,
-                PipeOptions.Asynchronous);
+                PipeOptions.Asynchronous,
+                TokenImpersonationLevel.Identification);
             try
             {
                 await pipe.ConnectAsync(cancellationToken).ConfigureAwait(false);

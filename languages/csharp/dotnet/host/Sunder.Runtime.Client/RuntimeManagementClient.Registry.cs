@@ -59,6 +59,6 @@ public sealed partial class RuntimeManagementClient
     public Task<RegistryPackageManagementOperationResponse> SetDistTagAsync(RuntimeRegistryDistTagRequest request, CancellationToken token = default)
         => PostAsync<RuntimeRegistryDistTagRequest, RegistryPackageManagementOperationResponse>("registry/packages/dist-tag", request, token);
 
-    public Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken token = default)
-        => PostAsync<RuntimeRegistryDeleteStackRequest, RegistryStackManagementOperationResponse>("registry/stacks/delete", request, token);
+    public Task<RegistryStackManagementOperationResponse> SetRegistryStackVisibilityAsync(RuntimeRegistryStackVisibilityRequest request, CancellationToken token = default)
+        => PostAsync<RuntimeRegistryStackVisibilityRequest, RegistryStackManagementOperationResponse>("registry/stacks/visibility", request, token);
 }

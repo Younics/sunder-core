@@ -294,7 +294,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public bool CanUseSelectedStack => !IsBusy && Local.SelectedStack is not null;
 
-    public bool CanDeleteSelectedRegistryStack => !IsBusy && Registry.SelectedStack is not null;
+    public bool CanUnlistSelectedRegistryStack => !IsBusy && Registry.SelectedStack is not null;
 
     public bool CanExportSelectedStack => !IsBusy && Local.SelectedStack is not null;
 

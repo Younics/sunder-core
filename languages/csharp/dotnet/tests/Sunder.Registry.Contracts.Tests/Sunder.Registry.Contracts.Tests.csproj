@@ -5,5 +5,8 @@
 
   <ItemGroup>
     <None Update="Fixtures\**\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\conformance\valid\package-public-inventory-*.json"
+          Link="RpcV1Authoring\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

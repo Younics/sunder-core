@@ -1,0 +1,6 @@
+{
+  "idempotencyKey": "unlist-stack",
+  "expectedPublicationAuthorityRevision": 41,
+  "expectedVisibility": "Listed",
+  "visibility": "Unlisted"
+}

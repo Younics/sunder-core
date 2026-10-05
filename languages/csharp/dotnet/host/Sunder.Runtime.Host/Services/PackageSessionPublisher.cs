@@ -10,11 +10,63 @@ internal sealed record PreparedPackageSession(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     long BaseGeneration,
-    string? StageId);
+    string? StageId,
+    bool RequiresPackageStoreCommit);
 
-internal sealed record PendingPackageSessionPublication(
-    PreparedPackageSession Candidate,
-    PackageSessionState.SessionPublication Publication);
+internal sealed class PendingPackageSessionPublication(
+    PreparedPackageSession candidate,
+    PackageSessionState.SessionPublication publication)
+{
+    private readonly object _gate = new();
+    private Task? _candidateStartTask;
+
+    public PreparedPackageSession Candidate { get; } = candidate;
+
+    public PackageSessionState.SessionPublication Publication { get; } = publication;
+
+    public bool DurablePackageStoreCommitted { get; private set; }
+
+    public bool PackageStoreOutcomeIndeterminate { get; private set; }
+
+    internal bool PreviousAuthorityCannotBeRestored =>
+        DurablePackageStoreCommitted || PackageStoreOutcomeIndeterminate;
+
+    internal bool CandidateStartRequested
+    {
+        get
+        {
+            lock (_gate) return _candidateStartTask is not null;
+        }
+    }
+
+    internal Task GetOrStartCandidate(Func<Task> start)
+    {
+        lock (_gate)
+        {
+            return _candidateStartTask ??= start();
+        }
+    }
+
+    internal void MarkPackageStoreCommitted()
+    {
+        if (!Candidate.RequiresPackageStoreCommit)
+        {
+            throw new InvalidOperationException(
+                "Only a package-store publication can cross the durable package-store boundary.");
+        }
+        DurablePackageStoreCommitted = true;
+    }
+
+    internal void MarkPackageStoreIndeterminate()
+    {
+        if (!Candidate.RequiresPackageStoreCommit)
+        {
+            throw new InvalidOperationException(
+                "Only a package-store publication can have an indeterminate package-store outcome.");
+        }
+        PackageStoreOutcomeIndeterminate = true;
+    }
+}
 
 internal sealed record PackageSessionPublicationResult(
     RuntimePackageStamp Stamp,
@@ -40,15 +92,18 @@ internal sealed class PackageSessionPublisher(
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors,
         long baseGeneration,
-        string? stageId = null)
+        string? stageId = null,
+        bool requiresPackageStoreCommit = false)
     {
+        if (rpcReadiness is not null) session.RequiredProviderPlan = rpcReadiness.Plan(session);
         return new PreparedPackageSession(
             session,
             sources,
             warnings.ToArray(),
             errors.ToArray(),
             baseGeneration,
-            stageId);
+            stageId,
+            requiresPackageStoreCommit);
     }
 
     public async Task<PackageSessionPublicationResult> PublishAsync(
@@ -58,7 +113,11 @@ internal sealed class PackageSessionPublisher(
         IReadOnlyList<string> errors,
         long expectedGeneration,
         CancellationToken cancellationToken,
-        Action<PendingPackageSessionPublication>? publicationPrepared = null)
+        Action<PendingPackageSessionPublication>? publicationPrepared = null,
+        string? committedStoreTransactionId = null,
+        Func<Task>? candidateGenerationCommitted = null,
+        Func<Task>? previousWorkersQuiesced = null,
+        Func<CancellationToken, Task>? storageActivationPreparing = null)
     {
         PreparedPackageSession candidate;
         try
@@ -68,7 +127,9 @@ internal sealed class PackageSessionPublisher(
                 sources ?? sessions.Sources.Snapshot(),
                 warnings,
                 errors,
-                expectedGeneration);
+                expectedGeneration,
+                stageId: committedStoreTransactionId,
+                requiresPackageStoreCommit: committedStoreTransactionId is not null);
         }
         catch
         {
@@ -78,7 +139,16 @@ internal sealed class PackageSessionPublisher(
 
         var publication = await BeginPublishAsync(candidate, cancellationToken);
         publicationPrepared?.Invoke(publication);
-        return await CommitAsync(publication, cancellationToken);
+        if (committedStoreTransactionId is not null)
+        {
+            MarkPackageStoreCommitted(publication);
+        }
+        return await CommitAsync(
+            publication,
+            cancellationToken,
+            candidateGenerationCommitted,
+            previousWorkersQuiesced,
+            storageActivationPreparing);
     }
 
     public async Task<PendingPackageSessionPublication> BeginPublishAsync(
@@ -92,14 +162,17 @@ internal sealed class PackageSessionPublisher(
                 candidate.Session,
                 candidate.BaseGeneration,
                 cancellationToken);
+            candidate.Session.StartupTrace?.BindCandidateGeneration(publication.CandidateGeneration);
             logger.LogInformation(
                 "Prepared package session publication for generation {SessionGeneration} in {ElapsedMilliseconds} ms",
                 publication.CandidateGeneration,
                 Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
             return new PendingPackageSessionPublication(candidate, publication);
         }
-        catch
+        catch (Exception exception)
         {
+            candidate.Session.StartupTrace?.TryFail(
+                exception is OperationCanceledException ? "canceled" : "failed");
             logger.LogWarning(
                 "Package session publication preparation from generation {BaseGeneration} failed after {ElapsedMilliseconds} ms",
                 candidate.BaseGeneration,
@@ -109,9 +182,58 @@ internal sealed class PackageSessionPublisher(
         }
     }
 
-    public async Task<PackageSessionPublicationResult> CommitAsync(
+    public Task StartCandidateAsync(
         PendingPackageSessionPublication pending,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(pending);
+        return pending.GetOrStartCandidate(
+            () => StartCandidateCoreAsync(pending, cancellationToken));
+    }
+
+    public void MarkPackageStoreCommitted(PendingPackageSessionPublication pending)
+    {
+        ArgumentNullException.ThrowIfNull(pending);
+        pending.MarkPackageStoreCommitted();
+    }
+
+    public void MarkPackageStoreIndeterminate(PendingPackageSessionPublication pending)
+    {
+        ArgumentNullException.ThrowIfNull(pending);
+        pending.MarkPackageStoreIndeterminate();
+    }
+
+    private async Task StartCandidateCoreAsync(
+        PendingPackageSessionPublication pending,
+        CancellationToken cancellationToken)
+    {
+        var session = pending.Candidate.Session;
+        if (session.RequiredProviderPlan is not null)
+        {
+            session.BindStartupGeneration(pending.Publication.CandidateGeneration);
+            rpcCatalog?.PrepareStartingCandidate(session, pending.Publication.CandidateGeneration);
+            session.CandidateProviderReady = (id, ready) => rpcCatalog?.MarkCandidateProviderReady(session, id, ready);
+        }
+        await session.StartWorkersAsync(
+            logger,
+            _lifecyclePolicy.PackageWorkerStartupTimeout,
+            _lifecyclePolicy.PackageWorkerCleanupTimeout,
+            cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (session.RequiredProviderPlan is not null) rpcCatalog?.CompleteStartingCandidate(session);
+        rpcReadiness?.Evaluate(session);
+        rpcCatalog?.PrepareCandidateSession(
+            session,
+            pending.Publication.CandidateGeneration);
+    }
+
+    public async Task<PackageSessionPublicationResult> CommitAsync(
+        PendingPackageSessionPublication pending,
+        CancellationToken cancellationToken = default,
+        Func<Task>? candidateGenerationCommitted = null,
+        Func<Task>? previousWorkersQuiesced = null,
+        Func<CancellationToken, Task>? storageActivationPreparing = null)
     {
         var candidate = pending.Candidate;
         var publicationStarted = Stopwatch.GetTimestamp();
@@ -121,17 +243,29 @@ internal sealed class PackageSessionPublisher(
         try
         {
             var previousSession = pending.Publication.PreviousSession;
-            if (previousSession.SharesPersistentWorkspaceWith(candidate.Session))
+            var storageActivationStarted = false;
+            if (!candidate.RequiresPackageStoreCommit
+                && !pending.CandidateStartRequested
+                && previousSession.SharesPersistentWorkspaceWith(candidate.Session))
             {
-                sessions.MarkPreviousWorkersQuiesced(pending.Publication);
-                await sessions.WaitForPreviousRetirementCallbacksAsync(pending.Publication)
+                await QuiescePreviousWorkersAsync(pending.Publication)
                     .ConfigureAwait(false);
-                await previousSession.QuiesceWorkersAsync(
-                    logger,
-                    _lifecyclePolicy.PackageWorkerCleanupTimeout).ConfigureAwait(false);
+                if (storageActivationPreparing is not null)
+                {
+                    await storageActivationPreparing(cancellationToken).ConfigureAwait(false);
+                }
+                await candidate.Session.BeginStorageActivationTransactionAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                storageActivationStarted = true;
             }
-            await candidate.Session.BeginStorageActivationTransactionAsync(cancellationToken)
-                .ConfigureAwait(false);
+
+            await StartCandidateAsync(pending, cancellationToken).ConfigureAwait(false);
+            if (candidate.RequiresPackageStoreCommit && !pending.DurablePackageStoreCommitted)
+            {
+                throw new InvalidOperationException(
+                    "The package session cannot commit its Runtime generation before the package store is authoritative.");
+            }
+
             if (rpcPermissions is not null)
             {
                 await rpcPermissions.GrantDeclaredInstalledActionsAsync(
@@ -139,21 +273,36 @@ internal sealed class PackageSessionPublisher(
                     cancellationToken);
             }
             rpcReadiness?.Evaluate(candidate.Session);
-            await candidate.Session.StartWorkersAsync(
-                logger,
-                _lifecyclePolicy.PackageWorkerStartupTimeout,
-                _lifecyclePolicy.PackageWorkerCleanupTimeout,
-                cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             await ActivateRuntimeGenerationAsync(
                 candidate.Session,
                 pending.Publication.CandidateGeneration,
                 () =>
                 {
-                    rpcCatalog?.PrepareCandidateSession(
-                        candidate.Session,
-                        pending.Publication.CandidateGeneration);
                     candidate.Session.StartRuntimeGenerationMonitoring(sessions.HandleRuntimeGenerationFault);
+                },
+                async () =>
+                {
+                    if (candidateGenerationCommitted is not null)
+                    {
+                        await candidateGenerationCommitted().ConfigureAwait(false);
+                    }
+                    await QuiescePreviousWorkersAsync(pending.Publication)
+                        .ConfigureAwait(false);
+                    if (previousWorkersQuiesced is not null)
+                    {
+                        await previousWorkersQuiesced().ConfigureAwait(false);
+                    }
+                    if (!storageActivationStarted)
+                    {
+                        if (storageActivationPreparing is not null)
+                        {
+                            await storageActivationPreparing(cancellationToken).ConfigureAwait(false);
+                        }
+                        await candidate.Session.BeginStorageActivationTransactionAsync(cancellationToken)
+                            .ConfigureAwait(false);
+                        storageActivationStarted = true;
+                    }
                 },
                 cancellationToken);
             var snapshotPublicationStarted = Stopwatch.GetTimestamp();
@@ -167,6 +316,7 @@ internal sealed class PackageSessionPublisher(
                     candidate.Errors.Concat(DrainingFaultDiagnostics(pending.Publication)).ToArray(),
                     generation =>
                     {
+                        candidate.Session.StartupTrace?.TryCommitGeneration(generation);
                         rpcCatalog?.ActivateSession(candidate.Session, generation);
                         rpcCatalog?.VerifySessionGeneration(generation);
                     });
@@ -188,6 +338,11 @@ internal sealed class PackageSessionPublisher(
         }
         catch (Exception exception)
         {
+            if (!pending.Publication.Committed)
+            {
+                candidate.Session.StartupTrace?.TryFail(
+                    exception is OperationCanceledException ? "canceled" : "failed");
+            }
             logger.LogWarning(
                 "Package session publication for generation {SessionGeneration} failed after {ElapsedMilliseconds} ms; starting failure recovery",
                 pending.Publication.CandidateGeneration,
@@ -212,6 +367,20 @@ internal sealed class PackageSessionPublisher(
                     [warning],
                     ReconciliationPending: true);
             }
+            if (pending.PreviousAuthorityCannotBeRestored)
+            {
+                var committedFailure = await RejectUnrestorableStorePublicationAsync(
+                    pending,
+                    exception).ConfigureAwait(false);
+                if (committedFailure is not null)
+                {
+                    throw new AggregateException(
+                        "Package session publication failed after the package store commit and Runtime unavailability cleanup did not complete cleanly.",
+                        exception,
+                        committedFailure);
+                }
+                throw;
+            }
             if (!sessions.RejectPublication(pending.Publication))
             {
                 throw new InvalidOperationException(
@@ -234,6 +403,21 @@ internal sealed class PackageSessionPublisher(
                     "Package session publication failed and candidate rollback did not complete cleanly.",
                     failures);
             }
+            if (exception is PackageStorageRollbackException)
+            {
+                var abandonmentFailure = await AbandonPreviousSessionAsync(
+                    pending.Publication,
+                    [$"Package storage rollback failed during candidate publication: {exception.Message}"],
+                    "package storage rollback failure").ConfigureAwait(false);
+                if (abandonmentFailure is not null)
+                {
+                    throw new AggregateException(
+                        "Package session publication failed, storage rollback was incomplete, and Runtime unavailability cleanup failed.",
+                        exception,
+                        abandonmentFailure);
+                }
+                throw;
+            }
             var recoveryFailure = await RecoverOrRestorePreviousSessionAsync(
                 pending.Publication,
                 exception).ConfigureAwait(false);
@@ -247,6 +431,23 @@ internal sealed class PackageSessionPublisher(
             AlignRpcCatalogToActiveSession();
             throw;
         }
+    }
+
+    private async Task QuiescePreviousWorkersAsync(
+        PackageSessionState.SessionPublication publication)
+    {
+        if (publication.PreviousWorkersQuiesced
+            || publication.PreviousSession.LoadedPackageMap.Count == 0)
+        {
+            return;
+        }
+
+        sessions.MarkPreviousWorkersQuiesced(publication);
+        await sessions.WaitForPreviousRetirementCallbacksAsync(publication)
+            .ConfigureAwait(false);
+        await publication.PreviousSession.QuiesceWorkersAsync(
+            logger,
+            _lifecyclePolicy.PackageWorkerCleanupTimeout).ConfigureAwait(false);
     }
 
     private void AlignRpcCatalogToActiveSession()
@@ -324,6 +525,7 @@ internal sealed class PackageSessionPublisher(
         ActivePackageSession session,
         long sessionGeneration,
         Action prepareActivation,
+        Func<Task>? generationCommitted,
         CancellationToken cancellationToken)
     {
         var activationStarted = Stopwatch.GetTimestamp();
@@ -341,6 +543,10 @@ internal sealed class PackageSessionPublisher(
                     sessionGeneration,
                     activationCancellation.Token).ConfigureAwait(false);
                 prepareActivation();
+                if (generationCommitted is not null)
+                {
+                    await generationCommitted().ConfigureAwait(false);
+                }
                 await session.ActivateCommittedRuntimeGenerationAsync(activationCancellation.Token)
                     .ConfigureAwait(false);
             }
@@ -370,12 +576,31 @@ internal sealed class PackageSessionPublisher(
 
     public async Task DiscardAsync(PendingPackageSessionPublication pending)
     {
+        pending.Candidate.Session.StartupTrace?.TryFail("discarded");
+        rpcCatalog?.DiscardCandidateSession(pending.Candidate.Session);
         if (pending.Publication.Committed)
         {
             sessions.DiscardPublication(pending.Publication);
             return;
         }
         var reason = new OperationCanceledException("The package session candidate was discarded before publication.");
+        if (pending.PreviousAuthorityCannotBeRestored)
+        {
+            if (pending.Candidate.StageId is not null)
+            {
+                sessions.RemoveStage(pending.Candidate.StageId);
+            }
+            var committedFailure = await RejectUnrestorableStorePublicationAsync(
+                pending,
+                reason).ConfigureAwait(false);
+            if (committedFailure is not null)
+            {
+                throw new AggregateException(
+                    "Discarding a package session after its package-store commit did not complete cleanly.",
+                    committedFailure);
+            }
+            return;
+        }
         if (!sessions.RejectPublication(pending.Publication))
         {
             return;
@@ -412,8 +637,50 @@ internal sealed class PackageSessionPublisher(
         AlignRpcCatalogToActiveSession();
     }
 
+    private async Task<Exception?> RejectUnrestorableStorePublicationAsync(
+        PendingPackageSessionPublication pending,
+        Exception publicationFailure)
+    {
+        List<Exception>? failures = null;
+        if (!pending.Publication.Completed
+            && !sessions.RejectPublication(pending.Publication))
+        {
+            (failures ??= []).Add(new InvalidOperationException(
+                "The failed committed-store candidate publication could not be rejected."));
+        }
+
+        if (pending.Publication.Completed && !pending.Publication.Committed)
+        {
+            var cleanupFailure = await DisposeFailedCandidateAsync(
+                pending.Candidate.Session,
+                pending.Publication).ConfigureAwait(false);
+            if (cleanupFailure is not null)
+            {
+                (failures ??= []).Add(cleanupFailure);
+            }
+
+            var abandonmentFailure = await AbandonPreviousSessionAfterStoreBoundaryFailureAsync(
+                pending.Publication,
+                publicationFailure,
+                cleanupFailure,
+                pending.DurablePackageStoreCommitted).ConfigureAwait(false);
+            if (abandonmentFailure is not null)
+            {
+                (failures ??= []).Add(abandonmentFailure);
+            }
+        }
+
+        return failures switch
+        {
+            null => null,
+            { Count: 1 } => failures[0],
+            _ => new AggregateException("Committed-store publication cleanup failed.", failures),
+        };
+    }
+
     public async Task DiscardAsync(PreparedPackageSession candidate)
     {
+        candidate.Session.StartupTrace?.TryFail("discarded");
         if (candidate.StageId is not null) sessions.RemoveStage(candidate.StageId);
         await DisposeSessionAsync(candidate.Session);
     }
@@ -570,11 +837,19 @@ internal sealed class PackageSessionPublisher(
                     _lifecyclePolicy.PackageWorkerCleanupTimeout).ConfigureAwait(false);
                 await previousSession.BeginStorageActivationTransactionAsync(CancellationToken.None)
                     .ConfigureAwait(false);
+                if (rpcReadiness is not null)
+                {
+                    previousSession.RequiredProviderPlan = rpcReadiness.Plan(previousSession);
+                    previousSession.BindStartupGeneration(publication.CandidateGeneration);
+                    rpcCatalog?.PrepareStartingCandidate(previousSession, publication.CandidateGeneration);
+                    previousSession.CandidateProviderReady = (id, ready) => rpcCatalog?.MarkCandidateProviderReady(previousSession, id, ready);
+                }
                 await previousSession.StartWorkersAsync(
                     logger,
                     _lifecyclePolicy.PackageWorkerStartupTimeout,
                     _lifecyclePolicy.PackageWorkerCleanupTimeout,
                     CancellationToken.None).ConfigureAwait(false);
+                if (previousSession.RequiredProviderPlan is not null) rpcCatalog?.CompleteStartingCandidate(previousSession);
                 await ActivateRuntimeGenerationAsync(
                     previousSession,
                     publication.CandidateGeneration,
@@ -586,7 +861,8 @@ internal sealed class PackageSessionPublisher(
                             publication.CandidateGeneration);
                         previousSession.StartRuntimeGenerationMonitoring(sessions.HandleRuntimeGenerationFault);
                     },
-                    CancellationToken.None).ConfigureAwait(false);
+                    generationCommitted: null,
+                    cancellationToken: CancellationToken.None).ConfigureAwait(false);
                 previousSession.PublishCommittedRuntimeGeneration(PublishRecovery);
                 previousSession.CompleteStorageMigrations();
             }
@@ -693,6 +969,38 @@ internal sealed class PackageSessionPublisher(
         PackageSessionState.SessionPublication publication,
         Exception candidateFailure,
         Exception recoveryFailure)
+        => await AbandonPreviousSessionAsync(
+            publication,
+            [
+                $"Package session recovery failed after candidate rejection: {recoveryFailure.Message}",
+                $"Rejected candidate failure: {candidateFailure.Message}",
+            ],
+            "failed recovery").ConfigureAwait(false);
+
+    private async Task<Exception?> AbandonPreviousSessionAfterStoreBoundaryFailureAsync(
+        PackageSessionState.SessionPublication publication,
+        Exception publicationFailure,
+        Exception? cleanupFailure,
+        bool packageStoreAuthoritative)
+    {
+        var storeBoundary = packageStoreAuthoritative
+            ? "became authoritative"
+            : "outcome became indeterminate";
+        return await AbandonPreviousSessionAsync(
+            publication,
+            cleanupFailure is null
+                ? [$"Runtime session publication failed after the package store {storeBoundary}: {publicationFailure.Message}"]
+                : [
+                    $"Runtime session publication failed after the package store {storeBoundary}: {publicationFailure.Message}",
+                    $"Failed candidate cleanup: {cleanupFailure.Message}",
+                ],
+            "package-store publication failure").ConfigureAwait(false);
+    }
+
+    private async Task<Exception?> AbandonPreviousSessionAsync(
+        PackageSessionState.SessionPublication publication,
+        IReadOnlyList<string> diagnostics,
+        string operation)
     {
         var abandonmentStarted = Stopwatch.GetTimestamp();
         Exception? failure = null;
@@ -704,8 +1012,7 @@ internal sealed class PackageSessionPublisher(
                 sessions.Sources.Snapshot(),
                 snapshot.Warnings,
                 snapshot.Errors
-                    .Append($"Package session recovery failed after candidate rejection: {recoveryFailure.Message}")
-                    .Append($"Rejected candidate failure: {candidateFailure.Message}")
+                    .Concat(diagnostics)
                     .Concat(DrainingFaultDiagnostics(publication))
                     .ToArray());
         }
@@ -713,7 +1020,8 @@ internal sealed class PackageSessionPublisher(
         {
             logger.LogCritical(
                 abandonFailure,
-                "Failed to publish explicit Runtime unavailability after package session recovery failed");
+                "Failed to publish explicit Runtime unavailability after {Operation}",
+                operation);
             failure = abandonFailure;
         }
         if (publication.Abandoned)
@@ -742,14 +1050,16 @@ internal sealed class PackageSessionPublisher(
         if (failure is null)
         {
             logger.LogInformation(
-                "Completed failed recovery handling for package session generation {SessionGeneration} in {ElapsedMilliseconds} ms",
+                "Completed {Operation} handling for package session generation {SessionGeneration} in {ElapsedMilliseconds} ms",
+                operation,
                 publication.CandidateGeneration,
                 Stopwatch.GetElapsedTime(abandonmentStarted).TotalMilliseconds);
         }
         else
         {
             logger.LogWarning(
-                "Failed recovery handling for package session generation {SessionGeneration} completed with cleanup failures after {ElapsedMilliseconds} ms",
+                "{Operation} handling for package session generation {SessionGeneration} completed with cleanup failures after {ElapsedMilliseconds} ms",
+                operation,
                 publication.CandidateGeneration,
                 Stopwatch.GetElapsedTime(abandonmentStarted).TotalMilliseconds);
         }

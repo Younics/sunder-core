@@ -1,33 +1,93 @@
 # SUNDER_PACKAGE_NAME_TEXT
 
-This scaffold builds current-RID development output and one universal Sunder package directly from a canonical Worker/package project plus optional Avalonia App leaves.
+This package is authored in one `Sunder.Package.Template.csproj`. Add services,
+ordinary value types and optional UI source; Sunder owns typed APIs, DI/bootstrap,
+isolated Worker/App compilation and package composition.
 
-## Projects
+## Source
 
-- `Sunder.Package.Template.Protocol` is an always-present, non-packable package-local project containing the descriptorVersion 2 `Contracts/sample.rpc.json`, build-generated DTO/client/provider adapters under `obj`, and an embedded descriptor loader.
-- `Sunder.Package.Template.csproj` is the self-contained canonical Worker/package project. Its source stays under `Sunder.Package.Template.Worker/`; that folder has no separate csproj.
-- `Sunder.Package.Template.App` is generated with `--withAvalonia`.
+- `Services/SampleService.cs` owns the annotated greeting and its value types.
+- Optional `Views/` source declares `[SunderPackageView]` and injects the generated
+  `ISampleService`. No provider discovery, caller scope or JSON mapper is needed.
+- Optional `Stacks/` source implements the selected platform extension.
+- `PackageMetadata.cs` owns package identity and ordinary package dependencies.
 
-Worker and App consume the Protocol project through private project references. The App csproj is also supplied to the canonical project through build-only `SunderPackageAppProject`; tooling retains it in the outer restore graph without making it a Worker compile/runtime reference, and guarded inner Worker builds omit it. Generated CLR helpers are not checked in and remain local to this package; cross-package compatibility is the bundled language-neutral RPC descriptor and its ABI hash.
+Folders are organizational. The App has generated role-local RPC clients and does
+not reference the Worker implementation assembly. All coordinated SDK references
+use `SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE`.
 
-## Build
+## Build, Run And Pack
 
-Set the package version once in `Sunder.Package.props`; every generated project imports it.
+Set the package version in the project file. Accept the initial owned contract once:
+
+If this package includes Stack support, perform the local platform selection below
+before the first Accept command.
 
 ```bash
-dotnet build Sunder.Package.Template.csproj
+dotnet restore Sunder.Package.Template.csproj
+dotnet msbuild Sunder.Package.Template.csproj -t:AcceptSunderContracts -p:SunderContractKey=sample -p:SunderContractNextVersion=2.0.0
+dotnet build Sunder.Package.Template.csproj --no-restore
+dotnet run --project Sunder.Package.Template.csproj --no-build
+dotnet msbuild Sunder.Package.Template.csproj -t:FreezeSunderContracts
 dotnet msbuild Sunder.Package.Template.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
 
-Build emits the exact current-RID Worker leaf under `bin/Debug/net10.0/<rid>/sunder-dev`, then composes it with the optional App under `bin/Debug/net10.0/sunder-dev`. Output has archive format 1, manifest version 3, descriptor and ABI hashes, `rpc.v2`, `worker-protocol.v3`, the SDK baseline, `payload/shared`, and exact App/Runtime RID layers. The canonical pack target sequentially builds all six Worker leaves and emits one validated universal `.sunderpkg` under `bin/Release/net10.0`.
+Retain `sunder-contracts.owned.json` and `sunder-contracts.lock.json`. Ordinary builds
+remain offline and do not accept, freeze or update selections. Later contract edits
+use explicit Accept; breaking changes require the reviewed old/new version pair and
+acknowledgement. Freeze is required before release Pack.
 
-All coordinated Sunder references use `SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE`. `Sunder.Sdk.Avalonia` and `Sunder.Sdk.Stacks` are included only by their matching options. RPC uses and providers bind the exact contract version `2.0.0`; only the independent installed-package dependency added by `--withHostDependency` retains a version range.
+Build creates `bin/Debug/net10.0/sunder-dev` for the current RID. Internal outputs are
+under `sunder-roles/<role>/<rid>`. Pack builds every declared RID into one universal
+archive, with shared descriptors/content and exact role/RID payloads. Workers are
+framework-dependent modules; Sunder manages the shared execution runtime.
 
-Package identity and dependencies come from `PackageMetadata.cs`; `Sunder.Package.Build` generates all manifests and indexes. Worker code uses `SunderWorkerContext` for Host-mediated settings, state, files, secrets, logging, and RPC.
+Run delegates to `sunder dev package run`; install Sunder and put its CLI on PATH,
+or set `-p:SunderCliPath=...`. Use `dotnet run --no-build -- --watch` to watch rebuilt
+development output. Runtime acquisition remains explicit. No package module is
+executed directly outside its Host lifecycle.
 
-TypeScript worker leaves produced by `npm create sunder-package@latest` may join the same composition through `SunderNodePackageTargetLeaf`; set each item's `DiscoveryRoot` metadata to the producer's `dist/targets` root. Do not include two leaves for the same exact role/RID key.
+## Optional Stack Contributor
 
-## Documentation
+With `--withStacks`, select the platform import before first Accept:
+
+```bash
+dotnet msbuild Sunder.Package.Template.csproj -t:ImplementSunderPlatformApi -p:SunderContractId=sunder.stack.contributor -p:SunderPlatformCatalogPath=./catalog.json
+```
+
+`Stacks/StackSupport.cs` implements domain behavior. Generated composition registers
+the provider and wraps the SDK semantic adapter; the exact platform lock supplies
+its descriptor and identity. A local Core-exported catalog needs no Registry. To select
+a published catalog, use `SunderRegistryOrigin=https://registry.example/` instead.
+No catalog signing key or trust bundle is needed.
+Exact `RestoreSunderContracts` can hydrate an existing selection without updating it.
+
+## Consume Another Package's API
+
+A fresh project can select imports before first Accept. One command selects the
+complete public API from an unpublished local archive:
+
+```bash
+dotnet msbuild Sunder.Package.Template.csproj -t:AddSunderPackageApi -p:SunderPackageId=example.weather -p:SunderPackageVersionRange=">=1.0.0 <2.0.0" -p:SunderPackageApiPresence=optional -p:SunderPackageCandidatePath=./weather.sunderpkg
+dotnet msbuild Sunder.Package.Template.csproj -t:AcceptSunderContracts -p:SunderContractKey=sample -p:SunderContractNextVersion=2.0.0
+dotnet build Sunder.Package.Template.csproj --no-restore
+```
+
+The generated package facade exposes typed catalog and selected-provider operations.
+Public APIs are selected as a whole; package-private contracts stay private. No
+descriptor, hash, contract-version inventory or Protocol reference is authored.
+Imported selection does not grant additional caller authority.
+
+Package presence and provider readiness are independent. Add defaults to required
+package presence and optional provider readiness. `RequireSunderPackageApi` and
+`UnrequireSunderPackageApi` review a contract's readiness override. Discovery includes
+authorized providers; selected-package resolution requires one matching active provider.
+
+Use `SunderRegistryOrigin` instead of a candidate for published selection.
+`UpdateSunderPackageApi` changes selections explicitly using a new local candidate or the locked origin.
+`RestoreSunderContracts` restores exact existing selections offline/from that origin.
+`SunderPackageCandidatePath` supports local unpublished development; publication still
+independently establishes authority. Content hashes are provenance, not routing pins.
 
 - Package development: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
 - Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md

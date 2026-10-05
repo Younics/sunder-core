@@ -109,6 +109,13 @@ MOCK_API_FAIL_ONCE=true PATH="$mock_bin:$PATH" \
 [[ -f "$MOCK_API_FAILURE_MARKER" ]] \
   || { printf 'GitHub release verifier fixture did not exercise transient API failure recovery.\n' >&2; exit 1; }
 
+printf 'durable production acceptance\n' > "$remote_dir/production-acceptance.json"
+build_release_json "$fixture_dir/release.json"
+SUNDER_ADDITIONAL_RELEASE_ASSETS=production-acceptance.json PATH="$mock_bin:$PATH" \
+  bash "$verifier" "$release_id" 'fixture/v1.2.3' "$local_dir" "${expected_names[@]}"
+rm "$remote_dir/production-acceptance.json"
+build_release_json "$fixture_dir/release.json"
+
 cp "$local_dir/release-provenance.json" "$fixture_dir/original-provenance.json"
 jq '.invocation.releaseId = 9999' "$local_dir/release-provenance.json" > "$fixture_dir/wrong-release-provenance.json"
 cp "$fixture_dir/wrong-release-provenance.json" "$local_dir/release-provenance.json"
@@ -136,4 +143,4 @@ fi
 grep -Fq 'inventory counts differ' "$fixture_dir/incomplete.log" \
   || { printf 'Incomplete GitHub release evidence did not fail the inventory gate.\n' >&2; exit 1; }
 
-printf 'GitHub release verifier fixture passed: remote bytes, API digests, provenance, checksums, and SBOM inventory are enforced.\n'
+printf 'GitHub release verifier fixture passed: remote bytes, explicit durable extras, API digests, provenance, checksums, and SBOM inventory are enforced.\n'

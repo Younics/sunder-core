@@ -1,0 +1,30 @@
+{
+  "success": false,
+  "runtimeArtifact": null,
+  "resolutionFingerprint": "replacement-fingerprint-001",
+  "runtimePolicyRevision": 43,
+  "expiresAtUtc": "2026-07-11T10:05:00+00:00",
+  "warnings": [],
+  "conflicts": [
+    {
+      "code": "execution-runtime.host-trust-update-required",
+      "message": "Host runtime trust generation 2 is required.",
+      "requirement": {
+        "runtimeId": "sunder.runtime.dotnet",
+        "versionRange": "\u003E=10.0.0 \u003C11.0.0",
+        "moduleAbi": "sunder.dotnet-worker-module.v1"
+      },
+      "rid": "win-x64",
+      "packageId": null,
+      "targetRole": null,
+      "currentRuntime": {
+        "runtimeId": "sunder.runtime.dotnet",
+        "version": "10.0.0",
+        "packagingRevision": 1,
+        "rid": "win-x64",
+        "moduleAbi": "sunder.dotnet-worker-module.v1"
+      },
+      "requiredHostTrustGeneration": 2
+    }
+  ]
+}

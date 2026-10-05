@@ -58,6 +58,65 @@
       </Border>
     </Grid>
 
+    <Border Classes="card-surface">
+      <StackPanel Spacing="12">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+          <StackPanel Spacing="2">
+            <TextBlock Classes="section-title" Text="Execution Runtime" />
+            <TextBlock Classes="caption" Text="Shared by compatible packages; not installed as a package dependency." TextWrapping="Wrap" />
+          </StackPanel>
+          <Border Grid.Column="1" Classes="package-row-badge" VerticalAlignment="Top">
+            <TextBlock Text="{Binding Marketplace.CurrentRid}" />
+          </Border>
+        </Grid>
+
+        <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+          <Border Classes="settings-note-card">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="caption" Text="Package download" />
+              <TextBlock FontWeight="SemiBold" Text="{Binding Marketplace.PackageDownloadText}" />
+            </StackPanel>
+          </Border>
+          <Border Grid.Column="1" Classes="settings-note-card">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="caption" Text="Shared runtime download" />
+              <TextBlock FontWeight="SemiBold" Text="{Binding Marketplace.SharedRuntimeDownloadText}" />
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <TextBlock Text="{Binding Marketplace.RuntimeCompatibilitySummary}"
+                   TextWrapping="Wrap" />
+        <TextBlock Classes="muted"
+                   IsVisible="{Binding Marketplace.HasRuntimePreflightError}"
+                   Text="{Binding Marketplace.RuntimePreflightError}"
+                   TextWrapping="Wrap" />
+
+        <ItemsControl ItemsSource="{Binding Marketplace.ExecutionRuntimeRequirements}"
+                      IsVisible="{Binding Marketplace.HasExecutionRuntimeRequirements}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:MarketplaceExecutionRuntimeRequirementViewModel">
+              <Border Classes="settings-note-card" Margin="0,0,0,8">
+                <StackPanel Spacing="6">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding RuntimeId}" TextWrapping="Wrap" />
+                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding Lifecycle}" />
+                  </Grid>
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <TextBlock Classes="caption" Text="{Binding VersionRange}" TextWrapping="Wrap" />
+                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding ResolvedRuntime}" />
+                  </Grid>
+                  <TextBlock Classes="muted" Text="{Binding Rid}" />
+                  <TextBlock Classes="muted" Text="{Binding Availability}" TextWrapping="Wrap" />
+                  <TextBlock Classes="muted" Text="{Binding LifecycleMessage}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+    </Border>
+
     <Border Classes="card-surface"
             IsVisible="{Binding HasMarketplaceProfileMedia}">
       <controls:MarketplaceMediaStrip Items="{Binding Marketplace.ProfileMedia}" />

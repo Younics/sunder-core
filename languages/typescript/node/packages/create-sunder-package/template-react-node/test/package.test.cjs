@@ -1,39 +1,21 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const descriptor = require("../contracts/example.rpc.json");
+const descriptor = require("../.sunder/generated/rpc/contracts/messages.rpc.json");
 const config = require("../sunder.package.json");
 
-test("package identity, web view, and RPC V2 metadata are configured", () => {
-  assert.equal(config.schemaVersion, 2);
+test("package identity, web view, and RPC V1 metadata are configured", () => {
+  assert.equal(config.schemaVersion, 3);
   assert.equal(config.id, "sunderpackageidscaffoldtoken");
   assert.deepEqual(config.workerCapabilities, []);
   assert.equal(config.app.views[0].viewId, "sunderpackageidscaffoldtoken.main");
   assert.equal(config.app.views[0].route, "/");
-  assert.deepEqual(config.contracts, [{
-    path: "contracts/example.rpc.json",
-    exposure: "package",
-  }]);
-  assert.deepEqual(config.providers, [{
-    providerId: "sunderpackageidscaffoldtoken.provider",
-    role: "runtime",
-    contractId: "example.messages",
-    contractVersion: "2.0.0",
-    audience: "owner",
-  }]);
-  assert.deepEqual(config.usesContracts, [{
-    role: "app",
-    contractId: "example.messages",
-    contractVersion: "2.0.0",
-    required: true,
-    actions: ["discover", "invoke"],
-  }]);
-  assert.deepEqual(config.rpcBindings, [{
-    path: "contracts/example.rpc.json",
-    outputFile: "example-messages.g.ts",
-  }]);
+  assert.deepEqual(config.rpc, { module: "src/rpc.ts", export: "packageRpc" });
+  const receipt = require("../.sunder/generated/rpc/app-authoring-receipt.v1.json");
+  assert.deepEqual(receipt.providers, []);
+  assert.deepEqual(receipt.uses, [{ role: "app", required: true, actions: ["discover", "invoke", "subscribe"], contractKey: "messages" }]);
 
-  assert.equal(descriptor.descriptorVersion, 2);
-  assert.equal(descriptor.version, "2.0.0");
+  assert.equal(descriptor.descriptorVersion, 1);
+  assert.equal(descriptor.contractId, `${config.id}.messages`);
   assert.deepEqual(descriptor.errors, {});
   assert.equal(Array.isArray(descriptor.services), false);
   assert.equal(Array.isArray(descriptor.services.messages.methods), false);

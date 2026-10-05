@@ -62,10 +62,16 @@ internal sealed partial class InstalledPackageLifecycleService
             }
             _reconciliationPendingStages.Clear();
             _sessions.ClearStages();
-            await RunShutdownStepAsync(
-                "discard durable package store stages",
-                _ => _storeCoordinator.DiscardAllStagesAsync(),
-                shutdownToken);
+            try
+            {
+                await _storeCoordinator.DiscardAllStagesAsync();
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Failed to discard durable package store stages during Runtime shutdown");
+            }
             try
             {
                 _sessions.Callbacks.Clear();
@@ -125,9 +131,15 @@ internal sealed partial class InstalledPackageLifecycleService
                      || pair.Value.BaseCatalogGeneration != _storeCoordinator.CatalogGeneration).ToArray())
         {
             if (!_stages.Remove(stageId)) continue;
-            if (stage.Candidate is not null) await _publisher.DiscardAsync(stage.Candidate);
-            else _sessions.RemoveStage(stageId);
-            await _storeCoordinator.DiscardStageAsync(stageId);
+            try
+            {
+                if (stage.Candidate is not null) await _publisher.DiscardAsync(stage.Candidate);
+                else _sessions.RemoveStage(stageId);
+            }
+            finally
+            {
+                await _storeCoordinator.DiscardStageAsync(stageId);
+            }
             _sessions.MarkStageFailed(
                 stageId,
                 stage.ExpiresAtUtc <= now

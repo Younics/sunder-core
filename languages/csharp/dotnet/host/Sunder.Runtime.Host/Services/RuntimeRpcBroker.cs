@@ -14,7 +14,6 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed class RuntimeRpcBroker
 {
     internal const string InvariantViolationFaultCode = "rpc.provider.invariant-violation";
-    private const string InvariantReporterPackageId = "sunder.package.agent";
     private static readonly AsyncLocal<RuntimeRpcCallFrame?> CurrentCall = new();
     private readonly RuntimeRpcCatalog _catalog;
     private readonly RuntimeRpcPermissionStore _permissions;
@@ -28,6 +27,8 @@ internal sealed class RuntimeRpcBroker
     private readonly TimeProvider _timeProvider;
     private readonly CancellationToken _hostStopping;
     private readonly RuntimeRpcCallScopeRegistry _callScopeRegistry;
+    private readonly PackagePolicyAdmission? _packagePolicy;
+    private readonly RuntimeRpcReadinessEvaluator? _readiness;
 
     public RuntimeRpcBroker(
         RuntimeRpcCatalog catalog,
@@ -39,7 +40,9 @@ internal sealed class RuntimeRpcBroker
         IHostApplicationLifetime? hostLifetime = null,
         RuntimeRpcAppSessionManager? appSessions = null,
         RuntimeContentTransferStore? contentStore = null,
-        RuntimeTransportPolicyOptions? transportPolicy = null)
+        RuntimeTransportPolicyOptions? transportPolicy = null,
+        PackagePolicyAdmission? packagePolicy = null,
+        RuntimeRpcReadinessEvaluator? readiness = null)
         : this(
             catalog,
             permissions,
@@ -50,7 +53,9 @@ internal sealed class RuntimeRpcBroker
             hostLifetime?.ApplicationStopping ?? CancellationToken.None,
             appSessions,
             contentStore,
-            transportPolicy)
+            transportPolicy,
+            packagePolicy,
+            readiness)
     {
     }
 
@@ -64,9 +69,13 @@ internal sealed class RuntimeRpcBroker
         CancellationToken hostStopping,
         RuntimeRpcAppSessionManager? appSessions = null,
         RuntimeContentTransferStore? contentStore = null,
-        RuntimeTransportPolicyOptions? transportPolicy = null)
+        RuntimeTransportPolicyOptions? transportPolicy = null,
+        PackagePolicyAdmission? packagePolicy = null,
+        RuntimeRpcReadinessEvaluator? readiness = null)
     {
         _catalog = catalog;
+        _packagePolicy = packagePolicy;
+        _readiness = readiness;
         _permissions = permissions;
         _sessions = sessions;
         _sessionOwner = sessionOwner;
@@ -82,12 +91,31 @@ internal sealed class RuntimeRpcBroker
             _hostStopping,
             _contentStore is null ? null : _contentStore.DiscardRpcContentAuthority);
         _stackHostCaller = new RuntimeRpcHostCallerActivation(
-            SunderStackContributorRpc.Descriptor,
+            StackTransport.CoreStackContract.Descriptor,
             hostStopping);
     }
 
     public ISunderRpcClient CreateStackHostClient()
         => new RuntimeRpcHostClient(this, _stackHostCaller);
+
+    internal Task RequirePackagePolicyAsync(PreparedRuntimePackage package, CancellationToken token)
+        => _packagePolicy?.RequireAsync(package.Source, package.ExecutionRuntimeBinding, token) ?? Task.CompletedTask;
+
+    internal void RequirePackagePolicy(RuntimePackageSource source, RuntimePackageExecutionRuntimeBinding? binding)
+    {
+        try { _packagePolicy?.Require(source, binding); }
+        catch (PackagePolicyDeniedException error) { throw Unavailable(error.Code, "Current package policy does not permit execution."); }
+    }
+
+    private void RequireCallerPolicy(IRuntimeRpcCallerActivation caller)
+    {
+        if (caller is RuntimeRpcPackageActivation package) RequirePackagePolicy(package.Package.Source, package.Package.ExecutionRuntimeBinding);
+        if (caller is RuntimeRpcAppCallerSession app) RequirePackagePolicy(app.Source, null);
+        if (_readiness is not null && caller.SourceKind is not null
+            && !(caller is RuntimeRpcPackageActivation candidate && _catalog.IsCandidateCaller(candidate))
+            && _readiness.UnsatisfiedConsumers(_sessions.ActiveSession, caller.Role).Contains(caller.PackageId, StringComparer.Ordinal))
+            throw Unavailable(Sunder.Registry.Contracts.RpcReadinessErrorCodes.RequiredProviderUnsatisfied, "A required provider is no longer available.");
+    }
 
     internal IDisposable EnterCallFrame(RuntimeRpcCallFrame? frame)
     {
@@ -284,11 +312,6 @@ internal sealed class RuntimeRpcBroker
         RuntimeRpcCallerScopeState? scope = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!string.Equals(caller.PackageId, InvariantReporterPackageId, StringComparison.Ordinal))
-        {
-            return ValueTask.FromResult(false);
-        }
-
         using var sessionLease = AcquireSessionLease(caller);
         if (!caller.IsCurrent(sessionLease)) return ValueTask.FromResult(false);
         EnsureScope(scope, caller, sessionLease);
@@ -298,6 +321,7 @@ internal sealed class RuntimeRpcBroker
             || provider.Snapshot.SessionGeneration != sessionLease.Generation
             || _sessions.GetLoadedPackage(sessionLease, provider.Snapshot.PackageId) is not { } activePackage
             || activePackage.RuntimeActivationId != provider.Snapshot.ActivationId
+            || !OwnsReportedContract(caller, provider)
             || !CanUseContract(caller, provider, SunderRpcProtocol.DiscoverAction, out _))
         {
             return ValueTask.FromResult(false);
@@ -324,6 +348,21 @@ internal sealed class RuntimeRpcBroker
                 InvariantViolationFaultCode);
             return ValueTask.FromResult(accepted);
         }
+    }
+
+    private static bool OwnsReportedContract(IRuntimeRpcCallerActivation caller, RuntimeRpcProviderActivation provider)
+    {
+        if (caller is RuntimeRpcHostCallerActivation) return caller.RpcContracts.Values.Any(contract => contract.Sha256 == provider.Registration.DescriptorSha256);
+        var source = caller switch
+        {
+            RuntimeRpcPackageActivation package => package.Package.Source,
+            RuntimeRpcAppCallerSession app => app.Source,
+            _ => null,
+        };
+        return source?.Manifest?.ContractBundles?.Any(bundle => bundle is not null && bundle.Source == "owned"
+            && bundle.AuthorityKind == "package" && bundle.AuthorityId == caller.PackageId
+            && bundle.ContractId == provider.Registration.ContractId && bundle.Version == provider.Registration.ContractVersion
+            && bundle.DescriptorSha256 == provider.Registration.DescriptorSha256 && bundle.AbiSha256 == provider.Registration.Contract.AbiSha256) == true;
     }
 
     public ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
@@ -985,6 +1024,7 @@ internal sealed class RuntimeRpcBroker
             var callerGeneration = RuntimeRpcCallAcquisitionPolicy.ValidateCallerGeneration(
                 caller.IsCurrent(sessionLease));
             ThrowAcquisitionFailure(callerGeneration.Failure);
+            RequireCallerPolicy(caller);
             EnsureScope(scope, caller, sessionLease);
             var endpointFound = TryGetEndpoint(caller, endpoint, out var provider, out var stale)
                                 && provider is not null;
@@ -1338,9 +1378,12 @@ internal sealed class RuntimeRpcBroker
     }
 
     private RuntimeRpcPackageActivation GetCaller(RuntimeRpcCallerStamp stamp)
-        => _catalog.TryGetPackage(stamp.PackageId, stamp.ActivationId, out var caller) && caller is not null
-            ? caller
-            : throw StaleEndpoint("rpc.caller-retired", "The caller package activation is retired.");
+    {
+        if (!_catalog.TryGetPackage(stamp.PackageId, stamp.ActivationId, out var caller) || caller is null)
+            throw StaleEndpoint("rpc.caller-retired", "The caller package activation is retired.");
+        RequireCallerPolicy(caller);
+        return caller;
+    }
 
     private PackageSessionLease AcquireSessionLease(IRuntimeRpcCallerActivation caller)
     {
@@ -1366,20 +1409,34 @@ internal sealed class RuntimeRpcBroker
         SunderRpcEndpointReference endpoint,
         out RuntimeRpcProviderActivation? provider,
         out bool stale)
-        => caller is RuntimeRpcPackageActivation package
+    {
+        var found = caller is RuntimeRpcPackageActivation package
             ? _catalog.TryGetEndpoint(package, endpoint, out provider, out stale)
             : _catalog.TryGetActiveEndpoint(endpoint, out provider, out stale);
+        if (found && provider is not null) RequirePackagePolicy(provider.Owner.Package.Source, provider.Owner.Package.ExecutionRuntimeBinding);
+        return found;
+    }
 
     private SunderRpcCatalogSnapshot GetSnapshot(
         IRuntimeRpcCallerActivation caller,
         Func<RuntimeRpcProviderActivation, bool> filter)
         => caller is RuntimeRpcPackageActivation package
-            ? _catalog.GetSnapshot(package, filter)
-            : _catalog.GetSnapshot(filter);
+            ? _catalog.GetSnapshot(package, provider => ProviderPolicyAllows(provider) && filter(provider))
+            : _catalog.GetSnapshot(provider => ProviderPolicyAllows(provider) && filter(provider));
+
+    private bool ProviderPolicyAllows(RuntimeRpcProviderActivation provider)
+    {
+        try { _packagePolicy?.Require(provider.Owner.Package.Source, provider.Owner.Package.ExecutionRuntimeBinding); return true; }
+        catch (PackagePolicyDeniedException) { return false; }
+    }
 
     private RuntimeRpcAppCallerSession GetAppCaller(string sessionId)
-        => _appSessions?.GetRequired(sessionId)
-           ?? throw Unavailable("rpc.app-session.unavailable", "App RPC caller sessions are unavailable.");
+    {
+        var caller = _appSessions?.GetRequired(sessionId)
+            ?? throw Unavailable("rpc.app-session.unavailable", "App RPC caller sessions are unavailable.");
+        RequireCallerPolicy(caller);
+        return caller;
+    }
 
     private RuntimeRpcActivationLease AcquireCallerLease(IRuntimeRpcCallerActivation caller)
         => caller.TryAcquireCaller(_policy.MaxConcurrentCallsPerCaller, out var lease) && lease is not null
@@ -1388,7 +1445,7 @@ internal sealed class RuntimeRpcBroker
                 "rpc.caller.concurrency-limit",
                 "The caller RPC concurrency limit was reached.");
 
-    private static void EnsureCurrent(
+    private void EnsureCurrent(
         IRuntimeRpcCallerActivation caller,
         PackageSessionLease sessionLease)
     {
@@ -1396,6 +1453,7 @@ internal sealed class RuntimeRpcBroker
         {
             throw StaleEndpoint("rpc.caller-retired", "The caller package activation is retired.");
         }
+        RequireCallerPolicy(caller);
     }
 
     private void EnsureScope(
@@ -1474,16 +1532,16 @@ internal sealed class RuntimeRpcBroker
         string action,
         out RuntimeRpcPermissionLease? lease)
     {
-        if (caller.SourceKind == PackageSourceKind.Dev)
-        {
-            lease = new RuntimeRpcPermissionLease(caller.RetirementToken);
-            return true;
-        }
         var use = FindUse(caller, contractId, action);
         if (use?.ContractVersion is null || use.AbiSha256 is null)
         {
             lease = null;
             return false;
+        }
+        if (caller.SourceKind == PackageSourceKind.Dev)
+        {
+            lease = new RuntimeRpcPermissionLease(caller.RetirementToken);
+            return true;
         }
         return _permissions.TryAcquire(
             new RuntimeRpcPermissionKey(

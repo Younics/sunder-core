@@ -1,16 +1,16 @@
 # Package Trust And Security
 
-> **Applies to:** Sunder SDK `1.1.x`, package archive V1, package manifest V3, Stack format V1, .NET 10, and Runtime protocol revision 8.
+> **Applies to:** Sunder SDK `1.1.x`, package archive V1, package manifest V1, Stack format V1, .NET 10, and Runtime protocol revision 1.
 
 Installing a Sunder package is a code-trust decision. V1 validates package integrity and structure, but it does not sandbox package code or cryptographically attest a package publisher.
 
 ## Execution Trust
 
-Runtime targets execute only as supervised Worker V3 child processes; App modules execute inside `Sunder.App`. Every process runs with the current desktop user's operating-system permissions. Worker isolation contains lifecycle and failures but is not an operating-system sandbox. Package code can use normal platform APIs to access resources available to that user, including files, network, processes, and user credentials outside Sunder.
+Runtime targets execute only as supervised Worker V1 child processes; App modules execute inside `Sunder.App`. Every process runs with the current desktop user's operating-system permissions. Worker isolation contains lifecycle and failures but is not an operating-system sandbox. Package code can use normal platform APIs to access resources available to that user, including files, network, processes, and user credentials outside Sunder.
 
 Process supervision, App load contexts, separate role lifetimes, path validation, and package-scoped APIs improve lifecycle and integrity. They are **not** a security boundary. Native libraries are supported and execute with the same permissions.
 
-Workers receive an explicit environment rather than the Runtime process environment. The baseline is limited to OS process lookup, home, locale, package-local temp, and documented activation variables. It excludes Runtime/Registry tokens, cloud credentials, managed/native profiler injection, startup hooks, and arbitrary `SUNDER_*` bootstrap values. `docker-environment.v1` is an install/update consent requirement that admits only the bounded Docker connection allowlist; it never admits Docker auth JSON or passphrases. This reduces accidental ambient leakage but is not a sandbox: package code still runs as the user and can read resources that user can access.
+Workers receive a closed environment rather than the Runtime process environment. `PATH`, home, locale, language-runtime selectors, Runtime/Registry tokens, cloud credentials, managed/native profiler injection, startup hooks, and arbitrary `SUNDER_*` bootstrap values are not inherited. Every platform receives only activation-owned `TMPDIR`/`TMP`/`TEMP` paths plus documented Sunder activation values. Windows also receives `SystemRoot` and `WINDIR`; macOS receives `__CF_USER_TEXT_ENCODING`; Linux inherits no OS values. These platform values are retained only for operating-system runtime support. The Host invokes an absolute launcher below the verified execution-runtime store root, and its path, size, and SHA-256 identity come from that root's signed receipt. `docker-environment.v1` is an install/update consent requirement that admits only the bounded Docker connection allowlist; it never admits Docker auth JSON or passphrases. This reduces accidental ambient leakage but is not a sandbox: package code still runs as the user and can read resources that user can access.
 
 Only install packages whose code and distribution source you trust. A Registry ownership record controls publication; it does not make the contained code safe.
 
@@ -22,7 +22,7 @@ RPC content references are not ambient bearer capabilities. Caller-owned call sc
 
 The V1 package validator checks the generated manifest, exact content index, SHA-256 hashes and sizes, canonical roots/paths, ZIP entry safety and expansion limits, target kind/role/entry-point shape, declared compatibility, dependencies, RPC descriptors, web view declarations, and icon content. Runtime stages and validates before committing install/update state. Validation does not execute target code or prove that an entry point behaves safely.
 
-Current `.sunderpkg` archives contain no signature file. A C# build may platform-sign its apphost and native closure through the pre-index signing hook; those embedded signature bytes are then hash-bound like all other content, and post-index tampering is rejected. Content hashes and embedded platform signatures still do not establish a Sunder publisher identity. Do not describe V1 package validation as package signing or Registry publisher attestation.
+Current `.sunderpkg` archives contain no signature file. A C# build may platform-sign package-owned managed modules and native dependencies through the pre-index signing hook; those embedded signature bytes are then hash-bound like all other content, and post-index tampering is rejected. Content hashes and embedded platform signatures still do not establish a Sunder publisher identity. Do not describe V1 package validation as package signing or Registry publisher attestation.
 
 The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative source for archive and extraction validation. Avoid copying those rules into package policy or implementing a second validator.
 

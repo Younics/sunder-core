@@ -161,13 +161,11 @@ internal sealed class WorkerPackageFileStore(WorkerRpcClient client) : IPackageF
 
 internal sealed class WorkerPackageStorageContext : IPackageStorageContext
 {
-    public WorkerPackageStorageContext(WorkerRpcClient client, WorkerEnvironment environment)
+    public WorkerPackageStorageContext(WorkerRpcClient client)
     {
         Files = new WorkerPackageFileStore(client);
         State = new WorkerPackageKeyValueStore(client);
-        RoleLocalWorkspace = new WorkerPackageRoleLocalWorkspace(
-            environment.PackageWorkspacePath
-            ?? throw new InvalidOperationException("Worker V3 persistent workspace is unavailable."));
+        RoleLocalWorkspace = client.RoleLocalWorkspace;
     }
 
     public IPackageFileStore Files { get; }
@@ -179,10 +177,60 @@ internal sealed class WorkerPackageStorageContext : IPackageStorageContext
 
 internal sealed class WorkerPackageRoleLocalWorkspace : IPackageRoleLocalWorkspace
 {
-    public WorkerPackageRoleLocalWorkspace(string rootPath)
-        => WorkspaceRootPath = Path.GetFullPath(rootPath);
+    private string? _workspaceRootPath;
 
-    public string WorkspaceRootPath { get; }
+    public string WorkspaceRootPath => Volatile.Read(ref _workspaceRootPath)
+        ?? throw new InvalidOperationException(
+            "The persistent workspace is unavailable until the Host activates this worker generation.");
+
+    internal void Bind(string rootPath, WorkerEnvironment environment)
+    {
+        if (Volatile.Read(ref _workspaceRootPath) is not null)
+        {
+            throw new WorkerProtocolException("The persistent workspace is already bound.");
+        }
+        if (string.IsNullOrWhiteSpace(rootPath) || rootPath.Length > 4096 || !Path.IsPathFullyQualified(rootPath))
+        {
+            throw new WorkerProtocolException(
+                "host.activate workspaceRootPath must identify an existing absolute directory.");
+        }
+
+        string canonicalPath;
+        try
+        {
+            canonicalPath = Path.GetFullPath(rootPath);
+            var directory = new DirectoryInfo(canonicalPath);
+            if (!directory.Exists
+                || directory.LinkTarget is not null
+                || (directory.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new WorkerProtocolException(
+                    "host.activate workspaceRootPath must identify an existing non-link directory.");
+            }
+        }
+        catch (WorkerProtocolException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is
+            ArgumentException or NotSupportedException or PathTooLongException or IOException or UnauthorizedAccessException)
+        {
+            throw new WorkerProtocolException(
+                "host.activate workspaceRootPath is not a valid persistent workspace directory.",
+                exception);
+        }
+
+        if (PathsEqual(canonicalPath, environment.PackageContentPath)
+            || PathsEqual(canonicalPath, environment.PackageDataPath))
+        {
+            throw new WorkerProtocolException(
+                "Worker V1 content, temporary, and persistent workspace roots must be distinct.");
+        }
+        if (Interlocked.CompareExchange(ref _workspaceRootPath, canonicalPath, null) is not null)
+        {
+            throw new WorkerProtocolException("The persistent workspace is already bound.");
+        }
+    }
 
     public string GetLocalPath(string relativePath)
     {
@@ -232,4 +280,10 @@ internal sealed class WorkerPackageRoleLocalWorkspace : IPackageRoleLocalWorkspa
         {
         }
     }
+
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(
+            Path.TrimEndingDirectorySeparator(left),
+            Path.TrimEndingDirectorySeparator(right),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 }

@@ -22,6 +22,9 @@ internal sealed class RuntimeRpcCatalog : IDisposable
     private IReadOnlyDictionary<string, RuntimeRpcPackageActivation>? _candidatePackages;
     private IReadOnlyDictionary<string, RuntimeRpcProviderActivation>? _candidateProviders;
     private IReadOnlyDictionary<string, RuntimeRpcProviderActivation>? _candidateEndpoints;
+    private bool _candidateStarting;
+    private readonly HashSet<string> _candidateComposed = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _candidateReady = new(StringComparer.Ordinal);
     private RuntimeRpcPackageActivation? _recoveryCandidatePackage;
     private IReadOnlyDictionary<string, RuntimeRpcProviderActivation>? _recoveryCandidateProviders;
     private IReadOnlyDictionary<string, RuntimeRpcProviderActivation>? _recoveryCandidateEndpoints;
@@ -188,6 +191,37 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         foreach (var package in displaced) _ = package.Retire();
     }
 
+    internal void PrepareStartingCandidate(ActivePackageSession session, long generation)
+    {
+        PrepareCandidateSession(session, generation);
+        lock (_gate)
+        {
+            _candidateStarting = true;
+            _candidateComposed.Clear();
+            _candidateReady.Clear();
+        }
+    }
+
+    internal void MarkCandidateProviderReady(ActivePackageSession session, string packageId, bool ready)
+    {
+        lock (_gate)
+        {
+            if (!ReferenceEquals(_candidateSession, session)) throw new InvalidOperationException("Candidate RPC generation changed during startup.");
+            _candidateComposed.Add(packageId);
+            if (ready) _candidateReady.Add(packageId);
+        }
+    }
+
+    internal void CompleteStartingCandidate(ActivePackageSession session)
+    {
+        lock (_gate)
+        {
+            if (!ReferenceEquals(_candidateSession, session) || session.LoadedPackageMap.Keys.Any(id => !_candidateReady.Contains(id)))
+                throw new InvalidOperationException("The complete candidate provider graph is not ready.");
+            _candidateStarting = false;
+        }
+    }
+
     public void DiscardCandidateSession(ActivePackageSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -341,7 +375,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                 registration.Contract?.AbiSha256
                 ?? registration.Manifest?.AbiSha256
                 ?? throw new InvalidDataException(
-                    $"RPC provider '{registration.ProviderId}' is missing its V2 ABI identity."),
+                    $"RPC provider '{registration.ProviderId}' is missing its ABI identity."),
                 package.RuntimeActivationId,
                 checked(++_activationEpoch),
                 sessionGeneration,
@@ -361,6 +395,9 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         _candidatePackages = null;
         _candidateProviders = null;
         _candidateEndpoints = null;
+        _candidateStarting = false;
+        _candidateComposed.Clear();
+        _candidateReady.Clear();
     }
 
     private void ClearRecoveryCandidateUnderLock()
@@ -379,7 +416,8 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             && _candidatePackages.TryGetValue(caller.PackageId, out var candidate)
             && ReferenceEquals(candidate, caller))
         {
-            providers = _candidateProviders;
+            providers = _candidateStarting ? _candidateProviders.Where(pair => CandidateProviderVisible(caller, pair.Value))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal) : _candidateProviders;
             return true;
         }
         if (_recoveryCandidatePackage is not null
@@ -409,7 +447,8 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             && _candidatePackages.TryGetValue(caller.PackageId, out var candidate)
             && ReferenceEquals(candidate, caller))
         {
-            endpoints = _candidateEndpoints;
+            endpoints = _candidateStarting ? _candidateEndpoints.Where(pair => CandidateProviderVisible(caller, pair.Value))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal) : _candidateEndpoints;
             return true;
         }
         if (_recoveryCandidatePackage is not null
@@ -436,6 +475,10 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         bool faulted,
         string? faultCode = null)
         => TryDeactivatePackage(packageId, activationId, faulted, faultCode, out _);
+
+    private bool CandidateProviderVisible(RuntimeRpcPackageActivation caller, RuntimeRpcProviderActivation provider)
+        => _candidateReady.Contains(provider.Snapshot.PackageId)
+            || caller.PackageId == provider.Snapshot.PackageId && _candidateComposed.Contains(caller.PackageId);
 
     public void ReconcileActiveSession(
         ActivePackageSession session,
@@ -871,6 +914,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
 
 internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
 {
+    private readonly IReadOnlyList<SunderPackageContractUseManifest> _contractUses;
     private readonly object _gate = new();
     private readonly CancellationTokenSource _retirement = new();
     private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -890,6 +934,9 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
         long? activationGeneration = null)
     {
         Package = package;
+        _contractUses = package.Source.Kind == PackageSourceKind.Dev
+            ? Array.AsReadOnly(package.RpcContractUses.Where(use => PackageCompatibilityAuthority.DevelopmentUseEnabled(package.Source, use.Role!, use.ContractId!, use.ContractVersion!)).ToArray())
+            : package.RpcContractUses;
         _sessionGeneration = sessionGeneration;
         _activationGeneration = activationGeneration ?? sessionGeneration;
         _allowsPrePublicationLease = allowsPrePublicationLease ? 1 : 0;
@@ -906,7 +953,7 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
     public string ManifestSha256 => Package.RpcManifestSha256;
     public PackageSourceKind? SourceKind => Package.Source.Kind;
     public IReadOnlyDictionary<string, SunderRpcContractDescriptor> RpcContracts => Package.RpcContracts;
-    public IReadOnlyList<SunderPackageContractUseManifest> RpcContractUses => Package.RpcContractUses;
+    public IReadOnlyList<SunderPackageContractUseManifest> RpcContractUses => _contractUses;
     public CancellationToken RetirementToken => _retirement.Token;
     public Task Drained => _drained.Task;
 
@@ -1104,7 +1151,7 @@ internal static class RuntimeRpcContractMapper
             provider.ContractVersion,
             provider.DescriptorSha256,
             provider.AbiSha256
-            ?? throw new InvalidDataException("A Runtime RPC provider snapshot is missing its V2 ABI identity."),
+            ?? throw new InvalidDataException("A Runtime RPC provider snapshot is missing its ABI identity."),
             provider.ActivationId,
             provider.ActivationEpoch,
             provider.SessionGeneration,

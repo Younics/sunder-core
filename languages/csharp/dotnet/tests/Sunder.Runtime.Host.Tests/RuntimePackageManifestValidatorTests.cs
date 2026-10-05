@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Text.Json;
 using Sunder.Package.Format;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Compatibility;
@@ -35,7 +34,7 @@ public sealed class RuntimePackageManifestValidatorTests
     }
 
     [Fact]
-    public void Validate_WhenSelectedTargetRequiresRpcV2_AcceptsWithoutRpcV1()
+    public void Validate_WhenSelectedTargetRequiresRpcV1_AcceptsCanonicalCapability()
     {
         var errors = SunderSdkCompatibilityProfile.Validate(
             "test.package",
@@ -43,7 +42,7 @@ public sealed class RuntimePackageManifestValidatorTests
             CreateTarget(capabilities:
             [
                 SunderSdkCapabilities.Baseline11V1,
-                SunderSdkCapabilities.RpcV2,
+                SunderSdkCapabilities.RpcV1,
             ]));
 
         Assert.Empty(errors);
@@ -54,6 +53,7 @@ public sealed class RuntimePackageManifestValidatorTests
     [InlineData("runtime-invocation-errors.v2")]
     [InlineData("view-navigation-preparation.v2")]
     [InlineData("rpc.v3")]
+    [InlineData("worker-protocol.v3")]
     public void Validate_WhenSelectedTargetCapabilityIsUnknown_RejectsBeforeActivation(string capability)
     {
         var errors = SunderSdkCompatibilityProfile.Validate(
@@ -65,7 +65,7 @@ public sealed class RuntimePackageManifestValidatorTests
     }
 
     [Fact]
-    public void Validate_WhenRuntimeWorkerRequiresProtocolV3_AcceptsExactOptIn()
+    public void Validate_WhenRuntimeWorkerRequiresProtocolV1_AcceptsExactOptIn()
     {
         var errors = SunderSdkCompatibilityProfile.Validate(
             "test.package",
@@ -82,21 +82,20 @@ public sealed class RuntimePackageManifestValidatorTests
                     SunderSdkCapabilities.StorageV1,
                     SunderSdkCapabilities.SecretsV1,
                     SunderSdkCapabilities.LoggingV1,
-                    SunderSdkCapabilities.RpcV2,
-                    SunderWorkerProtocol.V3Capability,
+                    SunderSdkCapabilities.RpcV1,
+                    SunderWorkerProtocol.V1Capability,
                 ]));
 
         Assert.Empty(errors);
     }
 
     [Fact]
-    public void Validate_WhenV3WorkerRequiresReservedCapability_RejectsBeforeProcessLaunch()
+    public void Validate_WhenV1WorkerRequiresReservedCapability_RejectsBeforeProcessLaunch()
     {
         string[] reservedCapabilities =
         [
             "runtime-operations.v1",
             "runtime-invocation-errors.v1",
-            SunderSdkCapabilities.RpcV1,
         ];
 
         foreach (var capability in reservedCapabilities)
@@ -108,7 +107,7 @@ public sealed class RuntimePackageManifestValidatorTests
                     capabilities:
                     [
                         SunderSdkCapabilities.Baseline11V1,
-                        SunderWorkerProtocol.V3Capability,
+                        SunderWorkerProtocol.V1Capability,
                         capability,
                     ]));
 
@@ -116,19 +115,19 @@ public sealed class RuntimePackageManifestValidatorTests
             Assert.Contains($"Host capability '{capability}'", error, StringComparison.Ordinal);
             Assert.True(
                 error.Contains("this Host does not support", StringComparison.Ordinal)
-                || error.Contains("Worker Protocol V3 does not implement", StringComparison.Ordinal));
+                || error.Contains("Worker Protocol V1 does not implement", StringComparison.Ordinal));
         }
     }
 
     [Fact]
-    public void Validate_WhenManagedTargetRequiresWorkerProtocolV3_RejectsBeforeActivation()
+    public void Validate_WhenManagedTargetRequiresWorkerProtocolV1_RejectsBeforeActivation()
     {
         var errors = SunderSdkCompatibilityProfile.Validate(
             "test.package",
             RuntimeTargetKey,
             CreateTarget(
                 kind: "dotnet",
-                capabilities: ["sdk-baseline-1-1.v1", "worker-protocol.v3"]));
+                capabilities: ["sdk-baseline-1-1.v1", "worker-protocol.v1"]));
 
         Assert.Contains(errors, error => error.Contains("valid only for Runtime worker targets", StringComparison.Ordinal));
     }
@@ -176,7 +175,9 @@ public sealed class RuntimePackageManifestValidatorTests
             CanonicalPackageTestBuilder.WriteContentIndex(source);
             var errors = new List<string>();
 
-            var prepared = await new PackageSessionPreparer(currentRid).PrepareDevPackageAsync(
+            var prepared = await new PackageSessionPreparer(
+                currentRid,
+                ephemeralRuntimeBindingResolver: TestExecutionRuntimeLaunchResolver.Instance).PrepareDevPackageAsync(
                 0,
                 source,
                 Path.Combine(root, "session"),
@@ -214,7 +215,9 @@ public sealed class RuntimePackageManifestValidatorTests
                 runtimeIdentifiers: [GetAlternateRid(currentRid)]);
             var errors = new List<string>();
 
-            var prepared = await new PackageSessionPreparer(currentRid).PrepareDevPackageAsync(
+            var prepared = await new PackageSessionPreparer(
+                currentRid,
+                ephemeralRuntimeBindingResolver: TestExecutionRuntimeLaunchResolver.Instance).PrepareDevPackageAsync(
                 0,
                 Path.Combine(root, "source"),
                 Path.Combine(root, "session"),
@@ -232,7 +235,7 @@ public sealed class RuntimePackageManifestValidatorTests
     }
 
     [Fact]
-    public async Task PrepareDevPackageAsync_WhenRuntimeTargetKindIsWorker_SelectsExecutableAdapter()
+    public async Task PrepareDevPackageAsync_WhenRuntimeTargetKindIsWorker_ProjectsNonExecutableModule()
     {
         var root = CreateTempDirectory();
         var currentRid = RuntimeInformation.RuntimeIdentifier;
@@ -248,7 +251,9 @@ public sealed class RuntimePackageManifestValidatorTests
                 runtimeTargetKind: SunderPackageFormat.WorkerTargetKind);
             var errors = new List<string>();
 
-            var prepared = await new PackageSessionPreparer(currentRid).PrepareDevPackageAsync(
+            var prepared = await new PackageSessionPreparer(
+                currentRid,
+                ephemeralRuntimeBindingResolver: TestExecutionRuntimeLaunchResolver.Instance).PrepareDevPackageAsync(
                 0,
                 Path.Combine(root, "source"),
                 Path.Combine(root, "session"),
@@ -263,9 +268,53 @@ public sealed class RuntimePackageManifestValidatorTests
             if (!OperatingSystem.IsWindows())
             {
                 var mode = File.GetUnixFileMode(prepared.EntryAssemblyPath);
-                Assert.True((mode & UnixFileMode.UserExecute) != 0);
-                Assert.False((mode & (UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0);
+                Assert.False((mode & (UnixFileMode.UserExecute
+                                      | UnixFileMode.GroupExecute
+                                      | UnixFileMode.OtherExecute)) != 0);
             }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CanonicalWorkerFixture_UsesOnlyThinFrameworkDependentPayload()
+    {
+        var root = CreateTempDirectory();
+        var currentRid = RuntimeInformation.RuntimeIdentifier;
+        try
+        {
+            CanonicalPackageTestBuilder.WriteExplodedPackage(
+                root,
+                "test.thin.worker",
+                "1.0.0",
+                typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
+                roles: [SunderPackageFormat.RuntimeHostRole],
+                runtimeIdentifiers: [currentRid]);
+
+            var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(root);
+
+            Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+            var target = Assert.Single(validation.Manifest!.Targets ?? [])!;
+            Assert.Equal("lib/Sunder.Runtime.Host.TestWorker.dll", target.EntryPoint);
+            Assert.Equal("sunder.runtime.dotnet", target.ExecutionRuntime!.Id);
+            Assert.Equal(">=10.0.0 <11.0.0", target.ExecutionRuntime.VersionRange);
+            Assert.Equal("sunder.dotnet-worker-module.v1", target.ExecutionRuntime.ModuleAbi);
+            var payloadFiles = Directory.EnumerateFiles(
+                    Path.Combine(root, "payload", "runtime", currentRid, "lib"))
+                .Select(Path.GetFileName)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(
+                new[]
+                {
+                    "Sunder.Runtime.Host.TestWorker.deps.json",
+                    "Sunder.Runtime.Host.TestWorker.dll",
+                    "Sunder.Runtime.Host.TestWorker.runtimeconfig.json",
+                },
+                payloadFiles);
         }
         finally
         {
@@ -309,7 +358,7 @@ public sealed class RuntimePackageManifestValidatorTests
     }
 
     [Fact]
-    public async Task ExternalNodeMetadata_IsContentBoundAndDevOnly()
+    public async Task ExternalNodeMetadata_IsIgnoredAndCannotOverrideGenericLaunch()
     {
         var root = CreateTempDirectory();
         var source = Path.Combine(root, "source");
@@ -324,30 +373,13 @@ public sealed class RuntimePackageManifestValidatorTests
                 roles: [SunderPackageFormat.RuntimeHostRole],
                 runtimeIdentifiers: [currentRid],
                 runtimeTargetKind: SunderPackageFormat.WorkerTargetKind);
-            var record = CanonicalPackageTestBuilder.CreateInstalledRecord(source, "test.package", "1.0.0");
-            var manifest = JsonSerializer.Deserialize<SunderPackageManifest>(await File.ReadAllTextAsync(
-                Path.Combine(source, "manifest", "sunder-package.json")))!;
-            Assert.True(SunderPackageTargetResolver.TryResolveTarget(
-                manifest,
-                new SunderPackageTargetKey(SunderPackageFormat.RuntimeHostRole, currentRid),
-                out var target));
-            var entryPoint = target!.EntryPoint;
-            var metadataPath = DevProcessLaunchMetadata.GetPath(source);
-            await File.WriteAllTextAsync(metadataPath, JsonSerializer.Serialize(new
-            {
-                schemaVersion = 1,
-                kind = "node",
-                packageId = "test.package",
-                packageVersion = "1.0.0",
-                rid = currentRid,
-                entryPoint,
-                nodePath = typeof(RuntimePackageManifestValidatorTests).Assembly.Location,
-                nodeVersion = "24.0.0",
-                contentIdentity = record.ContentIdentity,
-            }));
+            var metadataPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source)) + ".sunder-node-dev.json";
+            await File.WriteAllTextAsync(metadataPath, "{\"nodePath\":\"/ambient/node\"}");
 
             var devErrors = new List<string>();
-            var dev = await new PackageSessionPreparer(currentRid).PrepareDevPackageAsync(
+            var dev = await new PackageSessionPreparer(
+                currentRid,
+                ephemeralRuntimeBindingResolver: TestExecutionRuntimeLaunchResolver.Instance).PrepareDevPackageAsync(
                 0,
                 source,
                 Path.Combine(root, "dev-session"),
@@ -355,30 +387,8 @@ public sealed class RuntimePackageManifestValidatorTests
                 CancellationToken.None);
             Assert.NotNull(dev);
             Assert.Empty(devErrors);
-            Assert.NotNull(dev.DevProcessLaunch);
-
-            var installedErrors = new List<string>();
-            var installed = await new PackageSessionPreparer(currentRid).PrepareInstalledPackageAsync(
-                0,
-                record,
-                source,
-                Path.Combine(root, "installed-session"),
-                installedErrors,
-                CancellationToken.None);
-            Assert.Null(installed);
-            Assert.Contains(installedErrors, error => error.Contains("forbidden external Node dev metadata", StringComparison.Ordinal));
-
-            var stale = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(await File.ReadAllTextAsync(metadataPath))!;
-            stale["contentIdentity"] = JsonSerializer.SerializeToElement(new string('0', 64));
-            await File.WriteAllTextAsync(metadataPath, JsonSerializer.Serialize(stale));
-            var staleErrors = new List<string>();
-            Assert.Null(await new PackageSessionPreparer(currentRid).PrepareDevPackageAsync(
-                0,
-                source,
-                Path.Combine(root, "stale-session"),
-                staleErrors,
-                CancellationToken.None));
-            Assert.Contains(staleErrors, error => error.Contains("does not exactly bind", StringComparison.Ordinal));
+            Assert.NotNull(dev.ExecutionRuntimeBinding);
+            Assert.DoesNotContain("ambient", dev.EntryAssemblyPath!, StringComparison.Ordinal);
         }
         finally
         {
@@ -405,7 +415,7 @@ public sealed class RuntimePackageManifestValidatorTests
             TargetFramework = "net10.0",
             SdkVersion = sdkVersion,
             RequiredHostCapabilities = capabilities ?? (role == SunderPackageFormat.RuntimeHostRole
-                ? ["sdk-baseline-1-1.v1", "core.v1", "rpc.v2", "worker-protocol.v3"]
+                ? ["sdk-baseline-1-1.v1", "core.v1", "rpc.v1", "worker-protocol.v1"]
                 : ["sdk-baseline-1-1.v1", "core.v1"]),
         };
 

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Sunder.Registry.Contracts;
 
 public sealed record RegistryContractDescriptorMetadata(
@@ -10,4 +12,8 @@ public sealed record RegistryContractDescriptorMetadata(
     string DescriptorDownloadUrl,
     string FirstPublisherPackageId,
     string FirstPublisherPackageVersion,
-    DateTimeOffset PublishedAtUtc);
+    DateTimeOffset PublishedAtUtc)
+{
+    [JsonPropertyName("etag"), JsonPropertyOrder(1)]
+    public string ETag => $"\"{DescriptorSha256}\"";
+}

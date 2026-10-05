@@ -1,6 +1,11 @@
 # Getting Started
 
-> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V3, .NET 10, and Runtime protocol revision 8. Use the matching `sdk/v*` tag for released template behavior.
+> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 1. Use the matching `sdk/v*` tag for released template behavior.
+
+> **RPC authoring transition:** The generated Protocol project and authored
+> descriptor steps below describe current pre-cutover source. The accepted final
+> design is [Implementation-First RPC Authoring](IMPLEMENTATION-FIRST-RPC.md),
+> which is not implemented yet.
 
 This guide creates a package, runs it as a development package, and produces a validated distributable artifact. The repository also contains a [compiled quickstart package](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) used by the Sunder Core build.
 
@@ -29,7 +34,7 @@ Use `dotnet new uninstall Sunder.Package.Templates` before changing to a differe
 
 ## Create A Package
 
-Create a headless Worker V3 Runtime package:
+Create a headless Worker V1 Runtime package:
 
 ```powershell
 dotnet new sunder-package `
@@ -38,7 +43,7 @@ dotnet new sunder-package `
   --packageName "My Package"
 ```
 
-Create an App and Worker V3 Runtime package with a default Avalonia view:
+Create an App and Worker V1 Runtime package with a default Avalonia view:
 
 ```powershell
 dotnet new sunder-package `
@@ -48,7 +53,7 @@ dotnet new sunder-package `
   --withAvalonia
 ```
 
-Use `--output .\MyPackage` when you need an explicit destination. The generated family contains `Sunder.Package.props` as its single package-version source, a root unsuffixed canonical Worker/package project, an always-present non-packable `*.Protocol` project, and optional App/Stack code. Worker source remains under `*.Worker/`, but there is no separate Worker csproj or Aggregate wrapper. The Protocol project starts with an RPC descriptor plus generated DTO, client, and provider adapters. The canonical project sets `SunderPackagePrimaryProject=true`; build composes its current-RID Worker leaf with the optional App, while `PackSunderPackage` builds all six self-contained Worker leaves into one universal package. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates the canonical Manifest V3 document from compiled metadata and MSBuild items.
+Use `--output .\MyPackage` when you need an explicit destination. The generated family contains `Sunder.Package.props` as its single package-version source, a root unsuffixed canonical Worker/package project, an always-present non-packable `*.Protocol` project, and optional App/Stack code. Worker source remains under `*.Worker/`, but there is no separate Worker csproj or Aggregate wrapper. The Protocol project starts with an RPC descriptor plus generated DTO, client, and provider adapters. The canonical project sets `SunderPackagePrimaryProject=true`; build composes its current-RID framework-dependent Worker module with the optional App, while `PackSunderPackage` builds all six exact-RID module leaves into one universal package. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates the canonical Manifest V1 document from compiled metadata and MSBuild items.
 
 ### Template Options
 
@@ -110,6 +115,7 @@ Set the strict SemVer package version once in the generated `Sunder.Package.prop
 Create and validate the artifact:
 
 ```powershell
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:FreezeSunderContracts
 dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
 ```

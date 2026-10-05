@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Sunder.Runtime.LocalState;
 
@@ -45,10 +46,25 @@ public static class RuntimeConnectionInfoStore
             }
 
             var token = UnprotectToken(document, path);
-            return string.IsNullOrWhiteSpace(token)
-                || !Uri.TryCreate(document.RuntimeUrl, UriKind.Absolute, out var runtimeUrl)
-                    ? null
-                    : new RuntimeConnectionInfo(RuntimeConnectionInfo.Normalize(runtimeUrl), token);
+            if (string.IsNullOrWhiteSpace(token)
+                || !Uri.TryCreate(document.RuntimeUrl, UriKind.Absolute, out var runtimeUrl))
+            {
+                return null;
+            }
+            var endpoint = document.IpcEndpoint is null ? null : RuntimeIpcEndpoint.Parse(document.IpcEndpoint);
+            endpoint?.EnsureSupportedPlatform();
+            runtimeUrl = RuntimeConnectionInfo.Normalize(runtimeUrl);
+            if (endpoint is not null && runtimeUrl != RuntimeIpcEndpoint.LogicalRuntimeUrl
+                || document.WorkerConnectionInfoPath is { } workerPath
+                && (!Path.IsPathFullyQualified(workerPath) || endpoint is not null))
+            {
+                return null;
+            }
+            return new RuntimeConnectionInfo(runtimeUrl, token)
+            {
+                IpcEndpoint = endpoint,
+                WorkerConnectionInfoPath = document.WorkerConnectionInfoPath,
+            };
         }
         catch
         {
@@ -75,6 +91,15 @@ public static class RuntimeConnectionInfoStore
         {
             throw new ArgumentException("Runtime bearer token is required.", nameof(connection));
         }
+        connection.IpcEndpoint?.EnsureSupportedPlatform();
+        if (connection.IpcEndpoint is not null && RuntimeConnectionInfo.Normalize(connection.RuntimeUrl) != RuntimeIpcEndpoint.LogicalRuntimeUrl)
+        {
+            throw new ArgumentException("Local IPC discovery must use the logical Runtime origin.", nameof(connection));
+        }
+        if (connection.WorkerConnectionInfoPath is { } workerPath && (!Path.IsPathFullyQualified(workerPath) || connection.IpcEndpoint is not null))
+        {
+            throw new ArgumentException("A gateway connection must name an absolute private worker connection path.", nameof(connection));
+        }
 
         var useDefaultPath = path is null || IsDefaultPath(path);
         path ??= GetDefaultPath();
@@ -92,7 +117,11 @@ public static class RuntimeConnectionInfoStore
         }
 
         using var mutationLock = AcquireMutationLock(fullPath);
-        var document = ProtectToken(connection);
+        var document = ProtectToken(connection) with
+        {
+            IpcEndpoint = connection.IpcEndpoint?.ToEnvironmentValue(),
+            WorkerConnectionInfoPath = connection.WorkerConnectionInfoPath,
+        };
         var bytes = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
         var tempPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
         try
@@ -302,5 +331,11 @@ public static class RuntimeConnectionInfoStore
                && (File.GetUnixFileMode(path) & nonOwnerPermissions) == 0;
     }
 
-    private sealed record ConnectionDocument(int Version, string RuntimeUrl, string? Token, string? ProtectedToken);
+    private sealed record ConnectionDocument(int Version, string RuntimeUrl, string? Token, string? ProtectedToken)
+    {
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? IpcEndpoint { get; init; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? WorkerConnectionInfoPath { get; init; }
+    }
 }

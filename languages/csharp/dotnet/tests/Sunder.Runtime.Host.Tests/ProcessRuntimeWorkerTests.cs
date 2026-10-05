@@ -54,6 +54,34 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
+    public void WorkerProtocolIntegerReader_ExecutesSharedSafeIntegerTokenCorpus()
+    {
+        using var corpus = JsonDocument.Parse(File.ReadAllBytes(
+            Path.Combine(AppContext.BaseDirectory, "WorkerV1Conformance", "corpus.json")));
+        foreach (var fixture in corpus.RootElement.GetProperty("safeIntegerTokens").EnumerateArray())
+        {
+            var token = fixture.GetProperty("token").GetString()!;
+            using var document = JsonDocument.Parse($"{{\"value\":{token}}}");
+            var exception = Record.Exception(() =>
+                SunderWorkerProtocol.RequiredNonNegativeInt64(document.RootElement, "value"));
+            Assert.Equal(fixture.GetProperty("valid").GetBoolean(), exception is null);
+            if (exception is not null)
+            {
+                Assert.IsType<SunderWorkerProtocolException>(exception);
+            }
+        }
+
+        using var signed = JsonDocument.Parse("{\"value\":-2147483648}");
+        Assert.Equal(int.MinValue, SunderWorkerProtocol.RequiredInt32(signed.RootElement, "value"));
+        foreach (var token in new[] { "-0", "1.0", "1e0", "2147483648", "-2147483649" })
+        {
+            using var document = JsonDocument.Parse($"{{\"value\":{token}}}");
+            Assert.Throws<SunderWorkerProtocolException>(() =>
+                SunderWorkerProtocol.RequiredInt32(document.RootElement, "value"));
+        }
+    }
+
+    [Fact]
     public async Task WorkerProtocolReader_UsesAsciiOnlyCollisionFoldingForNestedRpcValues()
     {
         var body = "{\"type\":\"worker.result\",\"id\":\"unicode1\",\"value\":{\"k\":true,\"\u212a\":false,\"\u00e9\":1,\"\u00c9\":2}}"u8.ToArray();
@@ -89,9 +117,42 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerSdkPackagedExecutable_HandshakesActivatesAndShutsDown()
+    public async Task WorkerTransport_EnforcesNegotiatedValueNodeAndObjectMemberLimits()
     {
-        var root = Path.Combine(Path.GetTempPath(), "sunder-worker-sdk-host-tests", Guid.NewGuid().ToString("N"));
+        var limits = WorkerTransportLimits.Create(RuntimeResourcePolicies.CustomMinimums, maximumHeaderBytes: 8192);
+        var excessiveNodes = $"{{\"type\":\"worker.result\",\"value\":[{string.Join(',', Enumerable.Repeat("null", 16_384))}]}}";
+        var excessiveMembers = $"{{\"type\":\"worker.result\",\"value\":{{{string.Join(',', Enumerable.Range(0, 257).Select(static index => $"\"p{index}\":null"))}}}}}";
+
+        await AssertWorkerFrameRejectedAsync(excessiveNodes, limits);
+        await AssertWorkerFrameRejectedAsync(excessiveMembers, limits);
+        Assert.Throws<WorkerTransportResourceException>(() =>
+            SunderWorkerProtocol.SerializeFrameBody(
+                new { type = "host.result", value = Enumerable.Repeat<object?>(null, 16_384).ToArray() },
+                limits));
+        Assert.Throws<WorkerTransportResourceException>(() =>
+            SunderWorkerProtocol.SerializeFrameBody(
+                new
+                {
+                    type = "host.result",
+                    value = Enumerable.Range(0, 257).ToDictionary(static index => $"p{index}", static _ => (object?)null),
+                },
+                limits));
+    }
+
+    private static async Task AssertWorkerFrameRejectedAsync(string json, WorkerTransportLimits limits)
+    {
+        var body = Encoding.UTF8.GetBytes(json);
+        var header = Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
+        using var stream = new MemoryStream(header.Concat(body).ToArray());
+        await Assert.ThrowsAsync<WorkerTransportResourceException>(async () =>
+            await SunderWorkerProtocol.ReadFrameAsync(stream, limits, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task WorkerSdkPackagedExecutable_AcceptsMaximumVersionAndCompletesLifecycle()
+    {
+        await using var temporary = TemporaryDirectoryScope.Create("sunder-worker-sdk-host-tests");
+        var root = temporary.RootPath;
         var catalog = new RuntimeRpcCatalog();
         RuntimeRpcPermissionStore? permissions = null;
         RuntimeContentTransferStore? transfers = null;
@@ -99,7 +160,9 @@ public sealed class ProcessRuntimeWorkerTests
         {
             var rid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
             var errors = new List<string>();
-            var prepared = await new PackageSessionPreparer(rid).PrepareDevPackageAsync(
+            var prepared = await new PackageSessionPreparer(
+                rid,
+                ephemeralRuntimeBindingResolver: TestExecutionRuntimeLaunchResolver.Instance).PrepareDevPackageAsync(
                 0,
                 GetWorkerSdkFixtureOutput(rid),
                 Path.Combine(root, "session"),
@@ -107,9 +170,11 @@ public sealed class ProcessRuntimeWorkerTests
                 CancellationToken.None);
             Assert.NotNull(prepared);
             Assert.Empty(errors);
+            prepared = prepared with { Version = GetMaximumSemanticVersion() };
+            Assert.Equal(256, prepared.Version.Length);
             Assert.Equal(SunderPackageFormat.WorkerTargetKind, prepared.SelectedTarget?.Kind);
             Assert.Contains(
-                SunderWorkerProtocol.V3Capability,
+                SunderWorkerProtocol.V1Capability,
                 prepared.SelectedTarget?.RequiredHostCapabilities ?? []);
 
             var paths = new RuntimePackagePaths(Path.Combine(root, "runtime-data"));
@@ -136,19 +201,25 @@ public sealed class ProcessRuntimeWorkerTests
                 paths.PackageDataRootPath);
             await context.Storage.State.SetValueAsync("legacy.state.v1", "state-value");
             await context.Secrets.SetSecretAsync("legacy.secret.v1", "secret-value");
+            var launch = await TestExecutionRuntimeLaunchResolver.Instance.ResolveAsync(
+                prepared,
+                activationId,
+                CancellationToken.None);
             await using var worker = new ProcessRuntimeWorker(
                 NullLogger.Instance,
                 prepared,
                 context,
                 activationId,
-                broker);
+                broker,
+                launch);
 
-            await worker.ComposeAsync();
-            await worker.StartAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await worker.ComposeAsync().WaitAsync(timeout.Token);
+            await worker.StartAsync().WaitAsync(timeout.Token);
             var generation = new RuntimePackageGeneration(activationId, 1);
-            await worker.CommitGenerationAsync(generation);
-            await worker.PrepareStorageMigrationsAsync(generation);
-            await worker.ActivateGenerationAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            await worker.CommitGenerationAsync(generation).WaitAsync(timeout.Token);
+            await worker.PrepareStorageMigrationsAsync(generation).WaitAsync(timeout.Token);
+            await worker.ActivateGenerationAsync().WaitAsync(timeout.Token);
             Assert.Null(await context.Storage.State.GetValueAsync("legacy.state.v1"));
             Assert.Equal("state-value", await context.Storage.State.GetValueAsync("fixture.state.v1"));
             Assert.Null(await context.Secrets.GetSecretAsync("legacy.secret.v1"));
@@ -180,15 +251,14 @@ public sealed class ProcessRuntimeWorkerTests
                     new Dictionary<string, string?> { ["code"] = "accepted" }));
             Assert.Equal(SdkPackageAuthStatusKind.Connected, connected.Status);
             Assert.Equal(SdkPackageAuthStatusKind.NotConnected, (await auth.DisconnectAsync()).Status);
-            await worker.StopAsync();
-            await worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(30));
+            await worker.StopAsync().WaitAsync(timeout.Token);
+            await worker.GenerationCompletion.WaitAsync(timeout.Token);
         }
         finally
         {
             catalog.Dispose();
             permissions?.Dispose();
             transfers?.Dispose();
-            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
 
@@ -200,7 +270,8 @@ public sealed class ProcessRuntimeWorkerTests
         Assert.False(string.IsNullOrWhiteSpace(archivePath), "SUNDER_DOTNET_WORKER_ARCHIVE_PATH is required by the selected artifact lane.");
         archivePath = Path.GetFullPath(archivePath!);
         Assert.True(File.Exists(archivePath), $"Native .NET worker archive does not exist: {archivePath}");
-        var root = Path.Combine(Path.GetTempPath(), "sunder-dotnet-worker-release-tests", Guid.NewGuid().ToString("N"));
+        await using var temporary = TemporaryDirectoryScope.Create("sunder-dotnet-worker-release-tests");
+        var root = temporary.RootPath;
         var paths = new RuntimePackagePaths(Path.Combine(root, "runtime"));
         var host = new RuntimePackageSessionTestHost(
             NullLogger<RuntimePackageSessionTestHost>.Instance,
@@ -221,7 +292,7 @@ public sealed class ProcessRuntimeWorkerTests
             startup.Stop();
             Assert.True(install.Success, string.Join(Environment.NewLine, install.Errors));
             var installed = Assert.Single(await host.GetInstalledPackagesAsync());
-            Assert.Equal("test.worker.v3.executable", installed.PackageId);
+            Assert.Equal("test.worker.v1.executable", installed.PackageId);
             var worker = Assert.IsType<ProcessRuntimeWorker>(
                 host.ActiveSession.LoadedPackageMap[installed.PackageId].Worker);
             var process = WorkerReleaseMetrics.GetProcess(worker);
@@ -255,7 +326,6 @@ public sealed class ProcessRuntimeWorkerTests
                     Directory.Exists(workerTemporaryPath),
                     $"Worker temporary directory survived Runtime Host shutdown: {workerTemporaryPath}");
             }
-            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
 
@@ -273,9 +343,9 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_CannotAcknowledgeBeforeDeclaredStorageMigrationsComplete()
+    public async Task WorkerV1_CannotAcknowledgeBeforeDeclaredStorageMigrationsComplete()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-skip-declared-migration");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-skip-declared-migration");
 
         await Assert.ThrowsAnyAsync<Exception>(() => fixture.StartAndActivateAsync());
         await Assert.ThrowsAsync<SunderWorkerProtocolException>(async () =>
@@ -283,9 +353,9 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_MigrationPreparationAdmitsOnlyHostMediatedStateReads()
+    public async Task WorkerV1_MigrationPreparationAdmitsOnlyHostMediatedStateReads()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-migration-preparation-state");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-migration-preparation-state");
         await fixture.Context.Storage.State.SetValueAsync("legacy.value", "stored");
         await fixture.Worker.StartAsync();
         var generation = new RuntimePackageGeneration(fixture.ActivationId, 1);
@@ -293,7 +363,7 @@ public sealed class ProcessRuntimeWorkerTests
 
         await fixture.Worker.PrepareStorageMigrationsAsync(generation);
 
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-migration-preparation-state.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-migration-preparation-state.json");
         Assert.Equal("stored", status.RootElement.GetProperty("stateValue").GetString());
         Assert.Equal(
             ["legacy.value"],
@@ -303,10 +373,10 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_RecoveryCandidateUsesPackageDataUntilExactAuthorityIsRevoked()
+    public async Task WorkerV1_RecoveryCandidateUsesPackageDataUntilExactAuthorityIsRevoked()
     {
         await using var fixture = await WorkerFixture.CreateAsync(
-            "v3-recovery-candidate-package-data",
+            "v1-recovery-candidate-package-data",
             enforcePackageSessionLease: true);
         await fixture.Context.Storage.State.SetValueAsync("legacy.value", "candidate-value");
         var (request, candidate) = await fixture.BeginRecoveryCandidateAsync();
@@ -319,7 +389,7 @@ public sealed class ProcessRuntimeWorkerTests
         await fixture.Worker.PrepareStorageMigrationsAsync(generation);
 
         using (var candidateStatus = await fixture.WaitForWorkerStatusAsync(
-                   "v3-migration-preparation-state.json"))
+                   "v1-migration-preparation-state.json"))
         {
             Assert.Equal(
                 "candidate-value",
@@ -333,7 +403,7 @@ public sealed class ProcessRuntimeWorkerTests
         await fixture.RevokeRecoveryCandidateAsync(request, candidate);
         await fixture.Worker.ActivateGenerationAsync();
 
-        using var staleStatus = await fixture.WaitForWorkerStatusAsync("v3-stale-package-data.json");
+        using var staleStatus = await fixture.WaitForWorkerStatusAsync("v1-stale-package-data.json");
         Assert.Equal("unavailable", staleStatus.RootElement.GetProperty("kind").GetString());
         Assert.Equal(
             "worker.activation.unavailable",
@@ -343,9 +413,9 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_MigrationPreparationRejectsStateMutation()
+    public async Task WorkerV1_MigrationPreparationRejectsStateMutation()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-migration-preparation-mutation");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-migration-preparation-mutation");
         await fixture.Worker.StartAsync();
         var generation = new RuntimePackageGeneration(fixture.ActivationId, 1);
         await fixture.Worker.CommitGenerationAsync(generation);
@@ -359,7 +429,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_MigrationPreparationRequiresExactCommittedGeneration()
+    public async Task WorkerV1_MigrationPreparationRequiresExactCommittedGeneration()
     {
         await using var fixture = await WorkerFixture.CreateAsync("normal");
         await fixture.Worker.StartAsync();
@@ -375,10 +445,10 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_FailedActivationRollsBackHostMediatedStateSecretsAndJournal()
+    public async Task WorkerV1_FailedActivationRollsBackHostMediatedStateSecretsAndJournal()
     {
         await using var fixture = await WorkerFixture.CreateAsync(
-            "v3-transaction-migration-fail",
+            "v1-transaction-migration-fail",
             enforcePackageSessionLease: true);
         await fixture.Context.Storage.State.SetValueAsync("legacy.state.v1", "state-value");
         await fixture.Context.Secrets.SetSecretAsync("legacy.secret.v1", "secret-value");
@@ -397,10 +467,10 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_SuccessfulActivationCommitsCanonicalMigrationJournal()
+    public async Task WorkerV1_SuccessfulActivationCommitsCanonicalMigrationJournal()
     {
         await using var fixture = await WorkerFixture.CreateAsync(
-            "v3-transaction-migration",
+            "v1-transaction-migration",
             enforcePackageSessionLease: true);
         await fixture.Context.Storage.State.SetValueAsync("legacy.state.v1", "state-value");
         await fixture.Context.Secrets.SetSecretAsync("legacy.secret.v1", "secret-value");
@@ -422,7 +492,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_MigrationJournalSkipsCompletedVersionAndRunsAfterVersionJump()
+    public async Task WorkerV1_MigrationJournalSkipsCompletedVersionAndRunsAfterVersionJump()
     {
         var sharedDataRoot = Path.Combine(
             Path.GetTempPath(),
@@ -431,7 +501,7 @@ public sealed class ProcessRuntimeWorkerTests
         try
         {
             await using (var first = await WorkerFixture.CreateAsync(
-                             "v3-transaction-migration",
+                             "v1-transaction-migration",
                              enforcePackageSessionLease: true,
                              packageDataRoot: sharedDataRoot))
             {
@@ -441,7 +511,7 @@ public sealed class ProcessRuntimeWorkerTests
             }
 
             await using (var sameVersion = await WorkerFixture.CreateAsync(
-                             "v3-transaction-migration",
+                             "v1-transaction-migration",
                              enforcePackageSessionLease: true,
                              packageDataRoot: sharedDataRoot))
             {
@@ -464,7 +534,7 @@ public sealed class ProcessRuntimeWorkerTests
             }
 
             await using (var jumpedVersion = await WorkerFixture.CreateAsync(
-                             "v3-transaction-migration",
+                             "v1-transaction-migration",
                              enforcePackageSessionLease: true,
                              packageVersion: "3.0.0",
                              packageDataRoot: sharedDataRoot))
@@ -530,6 +600,29 @@ public sealed class ProcessRuntimeWorkerTests
 
         await Task.WhenAll(fixture.Worker.StopAsync(), fixture.Worker.StopAsync());
         await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Worker_FailedExecutionRootReleaseFailsWaitersAndCanBeRetried()
+    {
+        var lease = new FailOnceExecutionRuntimeProcessLease(
+            new TestExecutionRuntimeProcessLease(TestExecutionRuntimeLaunchResolver.Instance.RuntimeRootPath));
+        await using var fixture = await WorkerFixture.CreateAsync(
+            "normal",
+            executionRuntimeLease: lease);
+        await fixture.StartAndActivateAsync();
+
+        var firstStop = fixture.Worker.StopAsync();
+        var waitingStop = fixture.Worker.StopAsync();
+
+        await Assert.ThrowsAsync<IOException>(() => firstStop);
+        await Assert.ThrowsAsync<IOException>(() => waitingStop);
+        Assert.Equal(1, lease.ReleaseAttempts);
+
+        await fixture.Worker.StopAsync();
+
+        Assert.Equal(2, lease.ReleaseAttempts);
+        Assert.True(lease.Released);
     }
 
     [Theory]
@@ -741,7 +834,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_ComposesStartsCommitsActivatesInvokesAndShutsDown()
+    public async Task WorkerV1_ComposesStartsCommitsActivatesInvokesAndShutsDown()
     {
         await using var fixture = await WorkerFixture.CreateAsync("normal");
         await fixture.StartAndActivateAsync();
@@ -760,13 +853,13 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_ProviderFaultPersistsOnlySafeIdentityAndCorrelatesBrokerFailure()
+    public async Task WorkerV1_ProviderFaultPersistsOnlySafeIdentityAndCorrelatesBrokerFailure()
     {
         const string secret = "provider-secret=must-never-persist";
         const string exceptionType = "SecretBearingProviderException";
         var logger = new CapturingLogger();
         await using var fixture = await WorkerFixture.CreateAsync(
-            "v3-provider-fault",
+            "v1-provider-fault",
             logger: logger);
         var activation = await fixture.PublishBrokerSessionAsync();
 
@@ -827,28 +920,30 @@ public sealed class ProcessRuntimeWorkerTests
             error => error.Contains(secret, StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task WorkerV3_WhenReadyBindsV1_FailsWithoutFallback()
+    [Theory]
+    [InlineData("protocol-mismatch")]
+    [InlineData("protocol-v3-mismatch")]
+    public async Task WorkerV1_WhenReadyBindsNonV1_FailsWithoutFallback(string mode)
     {
         await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await WorkerFixture.CreateAsync("protocol-mismatch"));
+            await WorkerFixture.CreateAsync(mode));
     }
 
     [Fact]
-    public async Task WorkerV3_LoggingIsAdmittedAtomicallyWithReady()
+    public async Task WorkerV1_LoggingIsAdmittedAtomicallyWithReady()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-ready-logging");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-ready-logging");
 
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-ready-logging.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-ready-logging.json");
         Assert.True(status.RootElement.GetProperty("accepted").GetBoolean());
         Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
     }
 
     [Fact]
-    public async Task WorkerV3_SettingsStateSchemaAndPayloadsUseHostAuthority()
+    public async Task WorkerV1_SettingsStateSchemaAndPayloadsUseHostAuthority()
     {
         await using var fixture = await WorkerFixture.CreateAsync(
-            "v3-package-data",
+            "v1-package-data",
             enforcePackageSessionLease: true);
 
         Assert.NotNull(fixture.Worker.SettingsSchema);
@@ -859,7 +954,7 @@ public sealed class ProcessRuntimeWorkerTests
 
         await fixture.PublishBrokerSessionAsync();
         await fixture.WaitForActivationAsync();
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-package-data.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-package-data.json");
         var root = status.RootElement;
         Assert.Equal("true", root.GetProperty("effective").GetString());
         Assert.True(root.GetProperty("storedWasNull").GetBoolean());
@@ -881,15 +976,15 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_FilesAndSecretsUseHostAuthority()
+    public async Task WorkerV1_FilesAndSecretsUseHostAuthority()
     {
         await using var fixture = await WorkerFixture.CreateAsync(
-            "v3-files-secrets",
+            "v1-files-secrets",
             enforcePackageSessionLease: true);
 
         await fixture.PublishBrokerSessionAsync();
         await fixture.WaitForActivationAsync();
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-files-secrets.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-files-secrets.json");
         Assert.True(status.RootElement.GetProperty("secretWasMissing").GetBoolean());
         Assert.True(status.RootElement.GetProperty("secretRoundTripped").GetBoolean());
         Assert.True(status.RootElement.GetProperty("fileRoundTripped").GetBoolean());
@@ -902,13 +997,13 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_LoggingUsesHostSinksAndDrainsShutdown()
+    public async Task WorkerV1_LoggingUsesHostSinksAndDrainsShutdown()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-logging");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-logging");
 
         await fixture.PublishBrokerSessionAsync();
         await fixture.WaitForActivationAsync();
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-logging.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-logging.json");
         Assert.True(status.RootElement.GetProperty("accepted").GetBoolean());
 
         var eventsPath = Assert.Single(Directory.GetFiles(
@@ -943,9 +1038,9 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_MalformedShutdownLoggingFaultsProtocol()
+    public async Task WorkerV1_MalformedShutdownLoggingFaultsProtocol()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-malformed-shutdown-logging");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-malformed-shutdown-logging");
         await fixture.StartAndActivateAsync();
         await fixture.WaitForActivationAsync();
 
@@ -956,16 +1051,16 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_InvalidSettingsSchemaFailsComposition()
+    public async Task WorkerV1_InvalidSettingsSchemaFailsComposition()
     {
         await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await WorkerFixture.CreateAsync("v3-invalid-settings-schema"));
+            await WorkerFixture.CreateAsync("v1-invalid-settings-schema"));
     }
 
     [Theory]
     [InlineData(false, "candidate-hang")]
     [InlineData(true, "commit-hang")]
-    public async Task WorkerV3_StopCompletesInterruptedLifecycleWaiter(bool duringCommit, string mode)
+    public async Task WorkerV1_StopCompletesInterruptedLifecycleWaiter(bool duringCommit, string mode)
     {
         await using var fixture = await WorkerFixture.CreateAsync(mode);
         if (duringCommit) await fixture.Worker.StartAsync();
@@ -984,7 +1079,7 @@ public sealed class ProcessRuntimeWorkerTests
     [Theory]
     [InlineData(false, "candidate-shutdown-hang")]
     [InlineData(true, "commit-shutdown-hang")]
-    public async Task WorkerV3_ForcedStopCompletesInterruptedLifecycleWaiter(bool duringCommit, string mode)
+    public async Task WorkerV1_ForcedStopCompletesInterruptedLifecycleWaiter(bool duringCommit, string mode)
     {
         var policy = new RuntimeProcessPolicyOptions
         {
@@ -1007,7 +1102,7 @@ public sealed class ProcessRuntimeWorkerTests
     [Theory]
     [InlineData(false, "migration-preparation-hang")]
     [InlineData(true, "migration-preparation-shutdown-hang")]
-    public async Task WorkerV3_StopCompletesInterruptedMigrationPreparationWaiter(
+    public async Task WorkerV1_StopCompletesInterruptedMigrationPreparationWaiter(
         bool forceShutdown,
         string mode)
     {
@@ -1027,9 +1122,9 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_RejectsOversizedInlinePackageDataValue()
+    public async Task WorkerV1_RejectsOversizedInlinePackageDataValue()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-oversized-inline");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-oversized-inline");
         try
         {
             await fixture.StartAndActivateAsync();
@@ -1044,15 +1139,15 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_StaleActivationConsumesSubmittedUploadHandle()
+    public async Task WorkerV1_StaleActivationConsumesSubmittedUploadHandle()
     {
         await using var fixture = await WorkerFixture.CreateAsync(
-            "v3-stale-package-data",
+            "v1-stale-package-data",
             enforcePackageSessionLease: true);
         await fixture.StartAndActivateAsync();
         await fixture.WaitForActivationAsync();
 
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-stale-package-data.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-stale-package-data.json");
         Assert.Equal("unavailable", status.RootElement.GetProperty("kind").GetString());
         Assert.Equal("worker.activation.unavailable", status.RootElement.GetProperty("code").GetString());
         Assert.True(status.RootElement.GetProperty("uploadConsumed").GetBoolean());
@@ -1060,10 +1155,10 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_StaleActivationStillValidatesSubmittedUploadIntegrity()
+    public async Task WorkerV1_StaleActivationStillValidatesSubmittedUploadIntegrity()
     {
         await using var fixture = await WorkerFixture.CreateAsync(
-            "v3-stale-malformed-payload",
+            "v1-stale-malformed-payload",
             enforcePackageSessionLease: true);
         try
         {
@@ -1080,17 +1175,65 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_ShutdownAcknowledgementWaitsForWorkerCallCleanup()
+    public async Task WorkerV1_ShutdownAcknowledgementWaitsForWorkerCallCleanup()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-shutdown-worker-call");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-shutdown-worker-call");
         await fixture.StartAndActivateAsync();
         await fixture.WaitForActivationAsync();
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-shutdown-worker-call.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-shutdown-worker-call.json");
         Assert.True(status.RootElement.GetProperty("started").GetBoolean());
 
         await fixture.Worker.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
         await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Theory]
+    [InlineData("v1-shutdown-buffered-get-provider")]
+    [InlineData("v1-shutdown-buffered-discover")]
+    [InlineData("v1-shutdown-buffered-scoped-discover")]
+    public async Task WorkerV1_CallFrameCrossingActiveShutdownIsCancelledWithoutFault(string mode)
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(mode);
+        _ = await fixture.PublishBrokerSessionAsync();
+        using var status = await fixture.WaitForWorkerStatusAsync($"{mode}.json");
+        Assert.True(status.RootElement.GetProperty("started").GetBoolean());
+
+        await fixture.Worker.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task WorkerV1_CallFrameCrossingShutdownStillRequiresValidEnvelope()
+    {
+        const string mode = "v1-shutdown-buffered-invalid-discover";
+        await using var fixture = await WorkerFixture.CreateAsync(mode);
+        await fixture.StartAndActivateAsync();
+        await fixture.WaitForActivationAsync();
+        using var status = await fixture.WaitForWorkerStatusAsync($"{mode}.json");
+        Assert.True(status.RootElement.GetProperty("started").GetBoolean());
+
+        await Assert.ThrowsAsync<SunderWorkerProtocolException>(async () =>
+            await fixture.Worker.StopAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+        await Assert.ThrowsAsync<SunderWorkerProtocolException>(async () =>
+            await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task WorkerV1_ShutdownFromReadyDoesNotGrantBufferedOrdinaryCallAuthority()
+    {
+        const string mode = "v1-ready-buffered-discover";
+        await using var fixture = await WorkerFixture.CreateAsync(mode);
+        using var status = await fixture.WaitForWorkerStatusAsync($"{mode}.json");
+        Assert.True(status.RootElement.GetProperty("started").GetBoolean());
+
+        var exception = await Assert.ThrowsAsync<SunderWorkerProtocolException>(async () =>
+            await fixture.Worker.StopAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Contains("before its Runtime generation was active", exception.Message, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<SunderWorkerProtocolException>(async () =>
+            await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
     [UnixFact]
@@ -1122,7 +1265,7 @@ public sealed class ProcessRuntimeWorkerTests
     [Fact]
     public async Task RuntimePackageActivator_ProjectsWorkerSettingsSchemaWithHostIdentity()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-package-data");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-package-data");
         var result = await fixture.ActivatePreparedPackageAsync();
         var loaded = Assert.IsType<ActiveLoadedPackage>(result.LoadedPackage);
         var session = new ActivePackageSession(
@@ -1165,6 +1308,28 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
+    public async Task RuntimePackageActivator_RecoveryFactoryResolvesFreshRuntimeLease()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("normal");
+        var resolver = new RecordingExecutionRuntimeLaunchResolver();
+        var result = await fixture.ActivatePreparedPackageAsync(resolver);
+        var loaded = Assert.IsType<ActiveLoadedPackage>(result.LoadedPackage);
+        var replacement = loaded.RecoveryFactory!();
+        try
+        {
+            Assert.Equal(2, resolver.LeaseIds.Count);
+            Assert.NotEqual(resolver.LeaseIds[0], resolver.LeaseIds[1]);
+            Assert.NotEqual(loaded.RuntimeActivationId, replacement.RuntimeActivationId);
+            Assert.NotSame(loaded.Worker, replacement.Worker);
+        }
+        finally
+        {
+            await loaded.Worker.DisposeAsync();
+            await replacement.Worker.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task Worker_PreActivationProviderCallIsUnavailableWithoutFaultingGeneration()
     {
         await using var fixture = await WorkerFixture.CreateAsync("normal");
@@ -1197,7 +1362,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_RejectsMismatchedEffectiveResourceProfileHash()
+    public async Task WorkerV1_RejectsMismatchedEffectiveResourceProfileHash()
     {
         var exception = await Assert.ThrowsAnyAsync<ProcessRuntimeWorkerException>(async () =>
             await WorkerFixture.CreateAsync("resource-profile-mismatch"));
@@ -1206,7 +1371,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_OversizedRequestIsNotDispatchedAndDoesNotFaultProcess()
+    public async Task WorkerV1_OversizedRequestIsNotDispatchedAndDoesNotFaultProcess()
     {
         var policy = new RuntimeProcessPolicyOptions
         {
@@ -1240,7 +1405,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_ProviderDispatchWaitsForActivationAcknowledgement()
+    public async Task WorkerV1_ProviderDispatchWaitsForActivationAcknowledgement()
     {
         await using var fixture = await WorkerFixture.CreateAsync("activation-hang");
         await fixture.Worker.StartAsync();
@@ -1268,7 +1433,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_ActivationWaitersRespectOutstandingHostCallLimit()
+    public async Task WorkerV1_ActivationWaitersRespectOutstandingHostCallLimit()
     {
         var policy = new RuntimeProcessPolicyOptions { MaxOutstandingHostCalls = 1 };
         await using var fixture = await WorkerFixture.CreateAsync(
@@ -1307,7 +1472,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_PendingProviderDispatchContinuesAfterActivationAcknowledgement()
+    public async Task WorkerV1_PendingProviderDispatchContinuesAfterActivationAcknowledgement()
     {
         var logger = new CapturingLogger();
         await using var fixture = await WorkerFixture.CreateAsync("activation-delay", logger: logger);
@@ -1326,18 +1491,27 @@ public sealed class ProcessRuntimeWorkerTests
             CancellationToken.None).AsTask();
         using var activationEntered = await fixture.WaitForWorkerStatusAsync("activation-entered.json");
 
-        Assert.False(invocation.IsCompleted);
+        try
+        {
+            Assert.False(invocation.IsCompleted);
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(fixture.Worker.WorkerTemporaryPath, "activation-delay.release"),
+                "release");
+        }
+        await activation.WaitAsync(TimeSpan.FromSeconds(5));
         var result = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
-        await activation;
         Assert.True(result.GetProperty("accepted").GetBoolean());
         Assert.Contains(logger.Messages, message => message.Contains("activation dispatched", StringComparison.Ordinal));
         Assert.Contains(logger.Messages, message => message.Contains("activation acknowledged", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task WorkerV3_ReportedGenerationFaultFaultsOnlyItsExactGenerationCompletion()
+    public async Task WorkerV1_ReportedGenerationFaultFaultsOnlyItsExactGenerationCompletion()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-generation-fault");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-generation-fault");
         ProcessRuntimeGenerationFaultException? activationFault = null;
         try
         {
@@ -1365,9 +1539,9 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_MismatchedCallbackIdentityFaultsExactGeneration()
+    public async Task WorkerV1_MismatchedCallbackIdentityFaultsExactGeneration()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-callback-mismatch");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-callback-mismatch");
         await fixture.StartAndActivateAsync();
         var callback = fixture.Worker.CallbackHandlers["fixture.callback"];
 
@@ -1380,7 +1554,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_CanCallHostWhileActivationIsInitializing()
+    public async Task WorkerV1_CanCallHostWhileActivationIsInitializing()
     {
         await using var fixture = await WorkerFixture.CreateAsync("activation-host-call");
 
@@ -1399,12 +1573,12 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_InvariantReportRoundTripsHostDecision()
+    public async Task WorkerV1_InvariantReportRoundTripsHostDecision()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-invariant-report");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-invariant-report");
 
         await fixture.PublishBrokerSessionAsync();
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-invariant-report.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-invariant-report.json");
 
         Assert.Equal("host.result", status.RootElement.GetProperty("responseType").GetString());
         Assert.False(status.RootElement.GetProperty("accepted").GetBoolean());
@@ -1413,12 +1587,12 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_CallerScopeRoundTripsRpcAndContentAuthority()
+    public async Task WorkerV1_CallerScopeRoundTripsRpcAndContentAuthority()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-scope-roundtrip");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-scope-roundtrip");
 
         await fixture.PublishBrokerSessionAsync();
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-scope-roundtrip.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-scope-roundtrip.json");
 
         Assert.Equal("caller-payload-processed", status.RootElement.GetProperty("content").GetString());
         Assert.Equal("process.test", status.RootElement.GetProperty("callerPackageId").GetString());
@@ -1429,12 +1603,12 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_ShutdownRevokesLeakedCallerScopeAndContent()
+    public async Task WorkerV1_ShutdownRevokesLeakedCallerScopeAndContent()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-scope-leak");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-scope-leak");
 
         await fixture.PublishBrokerSessionAsync();
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-scope-leak.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-scope-leak.json");
         Assert.False(string.IsNullOrWhiteSpace(status.RootElement.GetProperty("scopeId").GetString()));
         Assert.Equal(1, fixture.WorkerCallScopeCount());
         Assert.NotEmpty(fixture.TransferFiles());
@@ -1446,17 +1620,17 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_ShutdownDeadlineDoesNotWaitForBlockingScopeCallback()
+    public async Task WorkerV1_ShutdownDeadlineDoesNotWaitForBlockingScopeCallback()
     {
         var policy = new RuntimeProcessPolicyOptions
         {
             ShutdownTimeout = TimeSpan.FromMilliseconds(150),
         };
         await using var fixture = await WorkerFixture.CreateAsync(
-            "v3-scope-leak",
+            "v1-scope-leak",
             policy);
         await fixture.PublishBrokerSessionAsync();
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-scope-leak.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-scope-leak.json");
         using var releaseCallback = new ManualResetEventSlim();
         using var callbackStarted = new ManualResetEventSlim();
         using var registration = fixture.WorkerCallScopeRevocationToken().Register(() =>
@@ -1479,30 +1653,30 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_CallerScopeUsesInstalledPackagePermissions()
+    public async Task WorkerV1_CallerScopeUsesInstalledPackagePermissions()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-scope-permission-denied");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-scope-permission-denied");
 
         await fixture.PublishBrokerSessionAsync();
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-scope-permission-denied.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-scope-permission-denied.json");
 
         Assert.Equal("permission-denied", status.RootElement.GetProperty("kind").GetString());
         Assert.Equal("rpc.permission.denied", status.RootElement.GetProperty("code").GetString());
     }
 
     [Fact]
-    public async Task WorkerV3_BoundsMaterializedCallerScopeHandles()
+    public async Task WorkerV1_BoundsMaterializedCallerScopeHandles()
     {
         var policy = new RuntimeProcessPolicyOptions
         {
             MaxMaterializedWorkerContentHandles = 1,
         };
         await using var fixture = await WorkerFixture.CreateAsync(
-            "v3-scope-handle-limit",
+            "v1-scope-handle-limit",
             policy);
 
         await fixture.PublishBrokerSessionAsync();
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-scope-handle-limit.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-scope-handle-limit.json");
 
         Assert.Equal("resource-exhausted", status.RootElement.GetProperty("handleLimitKind").GetString());
         Assert.Equal(
@@ -1512,9 +1686,9 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_RejectsUnknownCallerScope()
+    public async Task WorkerV1_RejectsUnknownCallerScope()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-unknown-scope");
+        await using var fixture = await WorkerFixture.CreateAsync("v1-unknown-scope");
         try
         {
             await fixture.StartAndActivateAsync();
@@ -1575,7 +1749,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV3_ContentReleaseUsesControlLaneWhenRpcLaneIsFull()
+    public async Task WorkerV1_ContentReleaseUsesControlLaneWhenRpcLaneIsFull()
     {
         var policy = new RuntimeProcessPolicyOptions
         {
@@ -1634,24 +1808,62 @@ public sealed class ProcessRuntimeWorkerTests
         Assert.Equal(
             fixture.Context.Storage.RoleLocalWorkspace.WorkspaceRootPath,
             result.GetProperty("workspaceRoot").GetString());
+        Assert.Equal(JsonValueKind.Null, result.GetProperty("workspaceEnvironment").ValueKind);
         Assert.Equal(JsonValueKind.Null, result.GetProperty("dataPath").ValueKind);
         Assert.Equal(JsonValueKind.Null, result.GetProperty("statePath").ValueKind);
-        Assert.Equal(Environment.GetEnvironmentVariable("PATH"), result.GetProperty("path").GetString());
+        Assert.Equal(JsonValueKind.Null, result.GetProperty("path").ValueKind);
+        Assert.Equal(JsonValueKind.Null, result.GetProperty("home").ValueKind);
         Assert.Equal(
-            Environment.GetEnvironmentVariable(OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME"),
-            result.GetProperty("home").GetString());
+            ExpectedWorkerEnvironmentNames(),
+            result.GetProperty("environmentNames")
+                .EnumerateArray()
+                .Select(static item => NormalizeEnvironmentName(item.GetString()!))
+                .Order(StringComparer.Ordinal));
+        Assert.True(Directory.Exists(fixture.Context.Storage.DataRootPath));
+        Assert.Equal(fixture.Worker.WorkspaceRootPath, result.GetProperty("workspaceRoot").GetString());
         Assert.EndsWith("Z", result.GetProperty("deadlineUtc").GetString(), StringComparison.Ordinal);
         Assert.Equal(JsonValueKind.Null, result.GetProperty("extendedDeadlineCapability").ValueKind);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void WorkerEnvironmentBaseline_ContainsOnlyOsMinimumAndPackageLocalTemp(bool isWindows)
+    [Fact]
+    public async Task Worker_AcceptsMaximumLengthPackageVersionAcrossEnvironmentAndHandshake()
     {
+        var packageVersion = GetMaximumSemanticVersion();
+        Assert.Equal(256, packageVersion.Length);
+        await using var fixture = await WorkerFixture.CreateAsync("environment", packageVersion: packageVersion);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await fixture.StartAndActivateAsync().WaitAsync(timeout.Token);
+
+        var result = await fixture.Worker.InvokeUnaryAsync(
+            "example.provider",
+            fixture.InvocationContext(),
+            "messages",
+            "environment",
+            JsonSerializer.SerializeToElement(new { message = "environment" }),
+            timeout.Token);
+
+        Assert.Equal(packageVersion, result.GetProperty("packageVersion").GetString());
+    }
+
+    [Theory]
+    [InlineData("windows")]
+    [InlineData("macos")]
+    [InlineData("linux")]
+    public void WorkerEnvironmentBaseline_ContainsOnlyOsMinimumAndPackageLocalTemp(
+        string platformName)
+    {
+        var platform = platformName switch
+        {
+            "windows" => WorkerProcessPlatform.Windows,
+            "macos" => WorkerProcessPlatform.MacOS,
+            "linux" => WorkerProcessPlatform.Linux,
+            _ => throw new ArgumentOutOfRangeException(nameof(platformName)),
+        };
         var source = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
-            ["PATH"] = isWindows ? @"C:\Windows\System32" : "/usr/local/bin:/usr/bin",
+            ["PATH"] = platform == WorkerProcessPlatform.Windows
+                ? @"C:\Windows\System32"
+                : "/usr/local/bin:/usr/bin",
             ["HOME"] = "/Users/test",
             ["USERPROFILE"] = @"C:\Users\test",
             ["PATHEXT"] = ".EXE;.CMD",
@@ -1659,23 +1871,32 @@ public sealed class ProcessRuntimeWorkerTests
             ["SystemRoot"] = @"C:\Windows",
             ["LANG"] = "en_US.UTF-8",
             ["LC_CTYPE"] = "UTF-8",
+            ["__CF_USER_TEXT_ENCODING"] = "0x1F5:0x0:0x0",
             ["UNRELATED"] = "must-not-pass",
         };
 
         var environment = WorkerProcessEnvironment.CreateBaseline(
             source.GetValueOrDefault,
-            isWindows ? @"C:\Temp\sunder-worker" : "/tmp/sunder-worker",
-            isWindows,
+            platform == WorkerProcessPlatform.Windows
+                ? @"C:\Temp\sunder-worker"
+                : "/tmp/sunder-worker",
+            platform,
             allowDockerEnvironment: false);
 
-        Assert.Equal(source["PATH"], environment["PATH"]);
-        Assert.Equal(isWindows ? source["USERPROFILE"] : source["HOME"], environment[isWindows ? "USERPROFILE" : "HOME"]);
-        Assert.Equal(isWindows, environment.ContainsKey("PATHEXT"));
-        Assert.Equal(isWindows, environment.ContainsKey("ComSpec"));
-        Assert.Equal(!isWindows, environment.ContainsKey("LANG"));
+        Assert.Equal(
+            platform == WorkerProcessPlatform.Windows
+                ? ["SystemRoot", "TEMP", "TMP", "TMPDIR", "WINDIR"]
+                : platform == WorkerProcessPlatform.MacOS
+                    ? ["TEMP", "TMP", "TMPDIR", "__CF_USER_TEXT_ENCODING"]
+                    : ["TEMP", "TMP", "TMPDIR"],
+            environment.Keys.Order(StringComparer.Ordinal));
+        if (platform == WorkerProcessPlatform.Windows)
+        {
+            Assert.Equal(source["SystemRoot"], environment["SystemRoot"]);
+            Assert.Equal(source["SystemRoot"], environment["WINDIR"]);
+        }
         Assert.Equal(environment["TMPDIR"], environment["TMP"]);
         Assert.Equal(environment["TMPDIR"], environment["TEMP"]);
-        Assert.DoesNotContain("UNRELATED", environment.Keys);
     }
 
     [Fact]
@@ -1697,12 +1918,12 @@ public sealed class ProcessRuntimeWorkerTests
         var denied = WorkerProcessEnvironment.CreateBaseline(
             source.GetValueOrDefault,
             "/tmp/worker",
-            isWindows: false,
+            WorkerProcessPlatform.Linux,
             allowDockerEnvironment: false);
         var allowed = WorkerProcessEnvironment.CreateBaseline(
             source.GetValueOrDefault,
             "/tmp/worker",
-            isWindows: false,
+            WorkerProcessPlatform.Linux,
             allowDockerEnvironment: true);
 
         Assert.DoesNotContain(denied.Keys, static key => key.StartsWith("DOCKER_", StringComparison.Ordinal));
@@ -1730,6 +1951,14 @@ public sealed class ProcessRuntimeWorkerTests
     {
         var blocked = new[]
         {
+            "PATH",
+            "HOME",
+            "USERPROFILE",
+            "PATHEXT",
+            "ComSpec",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
             "SUNDER_RUNTIME_BEARER_TOKEN",
             "SUNDER_HOST_STATE_ROOT",
             "GITHUB_TOKEN",
@@ -1741,34 +1970,66 @@ public sealed class ProcessRuntimeWorkerTests
             "CORECLR_PROFILER",
             "COR_ENABLE_PROFILING",
             "DOTNET_STARTUP_HOOKS",
+            "DOTNET_ROOT",
+            "DOTNET_HOST_PATH",
+            "DOTNET_ADDITIONAL_DEPS",
+            "DOTNET_SHARED_STORE",
+            "DOTNET_MULTILEVEL_LOOKUP",
             "NODE_OPTIONS",
+            "NODE_PATH",
+            "NVM_BIN",
+            "NVM_DIR",
         };
         var source = blocked.ToDictionary(static key => key, static _ => (string?)"must-not-pass", StringComparer.Ordinal);
-        source["PATH"] = "/usr/bin";
-        source["HOME"] = "/home/test";
 
         var environment = WorkerProcessEnvironment.CreateBaseline(
             source.GetValueOrDefault,
             "/tmp/worker",
-            isWindows: false,
+            WorkerProcessPlatform.Linux,
             allowDockerEnvironment: true);
 
         Assert.All(blocked, key => Assert.DoesNotContain(key, environment.Keys));
     }
 
     [Fact]
-    public async Task WorkerV3_ReceivesDistinctCanonicalContentTemporaryAndWorkspaceRoots()
+    public async Task WorkerLaunch_UsesExplicitGenericRecipeWithShellAndAmbientRuntimeLookupDisabled()
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v3-environment");
+        await using var fixture = await WorkerFixture.CreateAsync("normal");
+
+        var startInfo = fixture.Worker.CreateStartInfo();
+
+        Assert.False(startInfo.UseShellExecute);
+        Assert.True(Path.IsPathFullyQualified(startInfo.FileName));
+        Assert.NotEqual(Path.GetFullPath(fixture.Prepared.EntryAssemblyPath!), startInfo.FileName);
+        Assert.Equal(
+            [SunderExecutionRuntimeFormat.DotNetExecArgument, Path.GetFullPath(fixture.Prepared.EntryAssemblyPath!)],
+            startInfo.ArgumentList);
+        Assert.DoesNotContain("PATH", startInfo.Environment.Keys);
+        Assert.DoesNotContain("DOTNET_ROOT", startInfo.Environment.Keys);
+        Assert.DoesNotContain("DOTNET_HOST_PATH", startInfo.Environment.Keys);
+        Assert.DoesNotContain("NVM_BIN", startInfo.Environment.Keys);
+        Assert.DoesNotContain("NVM_DIR", startInfo.Environment.Keys);
+        Assert.Equal(
+            ExpectedWorkerEnvironmentNames(),
+            startInfo.Environment.Keys
+                .Select(NormalizeEnvironmentName)
+                .Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task WorkerV1_ReceivesDistinctCanonicalContentTemporaryAndWorkspaceRoots()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("v1-environment");
         await fixture.StartAndActivateAsync();
 
-        using var status = await fixture.WaitForWorkerStatusAsync("v3-environment.json");
+        using var status = await fixture.WaitForWorkerStatusAsync("v1-environment.json");
         var root = status.RootElement;
         Assert.Equal(Path.GetFullPath(fixture.Prepared.ShadowFolder), root.GetProperty("contentRoot").GetString());
         Assert.Equal(fixture.Worker.WorkerTemporaryPath, root.GetProperty("temporaryRoot").GetString());
         Assert.Equal(
             fixture.Context.Storage.RoleLocalWorkspace.WorkspaceRootPath,
             root.GetProperty("workspaceRoot").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("workspaceEnvironment").ValueKind);
         Assert.NotEqual(root.GetProperty("contentRoot").GetString(), root.GetProperty("temporaryRoot").GetString());
         Assert.NotEqual(root.GetProperty("contentRoot").GetString(), root.GetProperty("workspaceRoot").GetString());
         Assert.NotEqual(root.GetProperty("temporaryRoot").GetString(), root.GetProperty("workspaceRoot").GetString());
@@ -1776,6 +2037,39 @@ public sealed class ProcessRuntimeWorkerTests
         Assert.Equal(JsonValueKind.Null, root.GetProperty("legacyDataPath").ValueKind);
         Assert.Equal(JsonValueKind.Null, root.GetProperty("legacyWorkingPath").ValueKind);
     }
+
+    private static string[] ExpectedWorkerEnvironmentNames()
+    {
+        var names = new List<string>
+        {
+            "SUNDER_ACTIVATION_ID",
+            "SUNDER_PACKAGE_CONTENT_ROOT",
+            "SUNDER_PACKAGE_ID",
+            "SUNDER_PACKAGE_VERSION",
+            "SUNDER_SESSION_ID",
+            "SUNDER_WORKER_PROTOCOL",
+            "SUNDER_WORKER_TEMP_ROOT",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            names.Add("SystemRoot");
+            names.Add("WINDIR");
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            names.Add("__CF_USER_TEXT_ENCODING");
+        }
+        return names
+            .Select(NormalizeEnvironmentName)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static string NormalizeEnvironmentName(string name)
+        => OperatingSystem.IsWindows() ? name.ToUpperInvariant() : name;
 
     [Theory]
     [InlineData("malformed-frame")]
@@ -2045,6 +2339,54 @@ public sealed class ProcessRuntimeWorkerTests
         await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
+    private sealed class RecordingExecutionRuntimeLaunchResolver : IExecutionRuntimeLaunchResolver
+    {
+        public List<string> LeaseIds { get; } = [];
+
+        public async Task<ResolvedExecutionRuntimeLaunch> ResolveAsync(
+            PreparedRuntimePackage package,
+            Guid activationId,
+            CancellationToken cancellationToken)
+        {
+            var launch = await TestExecutionRuntimeLaunchResolver.Instance.ResolveAsync(
+                package,
+                activationId,
+                cancellationToken);
+            LeaseIds.Add(launch.LeaseId);
+            return launch;
+        }
+    }
+
+    private sealed class FailOnceExecutionRuntimeProcessLease(TestExecutionRuntimeProcessLease inner)
+        : IExecutionRuntimeProcessLease
+    {
+        public string LeaseId => inner.LeaseId;
+
+        public string RuntimeRootPath => inner.RuntimeRootPath;
+
+        public int ReleaseAttempts { get; private set; }
+
+        public bool Released => inner.Released;
+
+        public Task<IExecutionRuntimeContainedProcess> LaunchAsync(
+            ProcessStartInfo startInfo,
+            CancellationToken cancellationToken = default,
+            Sunder.Package.Projections.PackageProjectionAcquisition? packageProjection = null)
+            => inner.LaunchAsync(startInfo, cancellationToken, packageProjection);
+
+        public Task ReleaseAfterProcessTreeTerminationAsync(CancellationToken cancellationToken = default)
+        {
+            ReleaseAttempts++;
+            if (ReleaseAttempts == 1)
+            {
+                throw new IOException("Synthetic execution-root release failure.");
+            }
+            return inner.ReleaseAfterProcessTreeTerminationAsync(cancellationToken);
+        }
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+
     private sealed class WorkerFixture : IAsyncDisposable
     {
         private readonly string _root;
@@ -2100,26 +2442,14 @@ public sealed class ProcessRuntimeWorkerTests
             CancellationToken hostStopping = default,
             bool enforcePackageSessionLease = false,
             string packageVersion = "1.0.0",
-            string? packageDataRoot = null)
+            string? packageDataRoot = null,
+            IExecutionRuntimeProcessLease? executionRuntimeLease = null)
         {
             var root = Path.Combine(Path.GetTempPath(), "sunder-worker-tests", Guid.NewGuid().ToString("N"));
             var shadow = Path.Combine(root, "projection");
-            Directory.CreateDirectory(shadow);
-            foreach (var fixtureFile in Directory.EnumerateFiles(GetTestWorkerOutput()))
-            {
-                File.Copy(fixtureFile, Path.Combine(shadow, Path.GetFileName(fixtureFile)));
-            }
+            TestWorkerFixture.CopyPayload(shadow);
             await File.WriteAllTextAsync(Path.Combine(shadow, "mode.txt"), mode);
-            var entryPoint = Path.Combine(
-                shadow,
-                OperatingSystem.IsWindows()
-                    ? "Sunder.Runtime.Host.TestWorker.exe"
-                    : "Sunder.Runtime.Host.TestWorker");
-            if (!OperatingSystem.IsWindows())
-            {
-                var modeBits = File.GetUnixFileMode(entryPoint);
-                File.SetUnixFileMode(entryPoint, modeBits | UnixFileMode.UserExecute);
-            }
+            var entryPoint = Path.Combine(shadow, "Sunder.Runtime.Host.TestWorker.dll");
             var rid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
             var extendedDeadline = mode.StartsWith("nested-call-", StringComparison.Ordinal);
             var target = new SunderPackageTargetManifest
@@ -2134,12 +2464,19 @@ public sealed class ProcessRuntimeWorkerTests
                     ?
                     [
                         "core.v1",
+                        "execution-runtime.v1",
                         "rpc.extended-deadline.v1",
-                        "rpc.v2",
+                        "rpc.v1",
                         "sdk-baseline-1-1.v1",
-                        "worker-protocol.v3",
+                        "worker-protocol.v1",
                     ]
-                    : ["core.v1", "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"],
+                    : ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"],
+                ExecutionRuntime = new SunderPackageExecutionRuntimeManifest
+                {
+                    Id = SunderExecutionRuntimeFormat.DotNetRuntimeId,
+                    VersionRange = ">=10.0.0 <11.0.0",
+                    ModuleAbi = SunderExecutionRuntimeFormat.DotNetModuleAbi,
+                },
             };
             var manifest = new SunderPackageManifest
             {
@@ -2153,6 +2490,9 @@ public sealed class ProcessRuntimeWorkerTests
                 [
                     new SunderPackageContractBundleManifest
                     {
+                        Source = "owned",
+                        AuthorityKind = "package",
+                        AuthorityId = "process.test",
                         ContractId = Contract.ContractId,
                         Version = Contract.Version,
                         DescriptorPath = "contracts/example.rpc.json",
@@ -2228,12 +2568,24 @@ public sealed class ProcessRuntimeWorkerTests
                 "process.test",
                 packageVersion,
                 packageDataRoot ?? paths.PackageDataRootPath);
+            var launch = executionRuntimeLease is null
+                ? await TestExecutionRuntimeLaunchResolver.Instance.ResolveAsync(
+                    prepared,
+                    activationId,
+                    CancellationToken.None)
+                : new ResolvedExecutionRuntimeLaunch(
+                    TestExecutionRuntimeLaunchResolver.Instance.RuntimeRootPath,
+                    TestExecutionRuntimeLaunchResolver.Instance.LauncherPath,
+                    [SunderExecutionRuntimeFormat.DotNetExecArgument, Path.GetFullPath(prepared.EntryAssemblyPath!)],
+                    executionRuntimeLease,
+                    prepared.ExecutionRuntimeBinding?.Identity);
             var worker = new ProcessRuntimeWorker(
                 logger ?? NullLogger.Instance,
                 prepared,
                 context,
                 activationId,
                 broker,
+                launch,
                 policy,
                 hostStopping,
                 enforcePackageSessionLease ? owner.State : null);
@@ -2275,7 +2627,8 @@ public sealed class ProcessRuntimeWorkerTests
             => Worker.PrepareStorageMigrationsAsync(
                 new RuntimePackageGeneration(ActivationId, 1));
 
-        public async Task<PackageActivationResult> ActivatePreparedPackageAsync()
+        public async Task<PackageActivationResult> ActivatePreparedPackageAsync(
+            IExecutionRuntimeLaunchResolver? launchResolver = null)
         {
             var warnings = new List<string>();
             var errors = new List<string>();
@@ -2283,7 +2636,9 @@ public sealed class ProcessRuntimeWorkerTests
                     NullLogger.Instance,
                     new RuntimePackagePaths(Path.Combine(_root, "runtime-data")),
                     _broker,
-                    packageSessionState: _owner.State)
+                    packageSessionState: _owner.State,
+                    executionRuntimeLaunchResolver: launchResolver
+                                                    ?? TestExecutionRuntimeLaunchResolver.Instance)
                 .ActivateAsync(
                     Prepared,
                     warnings,
@@ -2420,15 +2775,29 @@ public sealed class ProcessRuntimeWorkerTests
         public async Task<BrokerActivation> PublishBrokerSessionAsync()
         {
             await Worker.StartAsync();
-            var processManifest = Prepared.Source.Manifest!;
             var processPackage = CreateProcessLoadedPackage();
 
+            // This caller is a synthetic owned-contract fixture, not an imported authority.
             var callerManifest = new SunderPackageManifest
             {
                 Id = "caller.package",
                 Name = "Caller Package",
                 Version = "1.0.0",
-                ContractBundles = processManifest.ContractBundles,
+                ContractBundles =
+                [
+                    new SunderPackageContractBundleManifest
+                    {
+                        Source = "owned",
+                        AuthorityKind = "package",
+                        AuthorityId = "caller.package",
+                        ContractId = Contract.ContractId,
+                        Version = Contract.Version,
+                        DescriptorPath = "contracts/example.rpc.json",
+                        DescriptorSha256 = Contract.Sha256,
+                        AbiSha256 = Contract.AbiSha256,
+                        Exposure = SunderPackageFormat.PublicContractExposure,
+                    },
+                ],
                 UsesContracts =
                 [
                     new SunderPackageContractUseManifest
@@ -2501,7 +2870,7 @@ public sealed class ProcessRuntimeWorkerTests
                 [],
                 [],
                 _owner.Generation);
-            if (!string.Equals(_mode, "v3-scope-permission-denied", StringComparison.Ordinal))
+            if (!string.Equals(_mode, "v1-scope-permission-denied", StringComparison.Ordinal))
             {
                 foreach (var action in new[]
                          {
@@ -2610,7 +2979,7 @@ public sealed class ProcessRuntimeWorkerTests
                 "1.0.0",
                 new SunderRpcProviderSnapshot(
                     "process.test",
-                    "1.0.0",
+                    Prepared.Version,
                     "example.provider",
                     "example.rpc",
                     "1.0.0",
@@ -2700,18 +3069,6 @@ public sealed class ProcessRuntimeWorkerTests
             }
         }
 
-        private static string GetTestWorkerOutput()
-            => Path.Combine(
-                FindRepositoryRoot(),
-                "languages",
-                "csharp",
-                "dotnet",
-                "tests",
-                "Sunder.Runtime.Host.TestWorker",
-                "bin",
-                ResolveConfiguration(),
-                "net10.0");
-
         internal static string ResolveConfiguration()
             => new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)).Parent?.Name
                ?? "Debug";
@@ -2739,12 +3096,26 @@ public sealed class ProcessRuntimeWorkerTests
             "dotnet",
             "tests",
             "Sunder.Package.Build.TestFixtures",
-            "WorkerV3Executable",
+            "WorkerV1Executable",
             "bin",
             WorkerFixture.ResolveConfiguration(),
             "net10.0",
             rid,
             "sunder-dev");
+
+    private static string GetMaximumSemanticVersion()
+    {
+        using var corpus = JsonDocument.Parse(File.ReadAllBytes(
+            Path.Combine(AppContext.BaseDirectory, "WorkerV1Conformance", "corpus.json")));
+        var boundary = corpus.RootElement.GetProperty("semanticVersionBoundary");
+        var prefix = boundary.GetProperty("prefix").GetString()!;
+        var suffixCharacter = Assert.Single(boundary.GetProperty("suffixCharacter").GetString()!);
+        var version = prefix + new string(
+            suffixCharacter,
+            boundary.GetProperty("acceptedSuffixLength").GetInt32());
+        Assert.Equal(boundary.GetProperty("maximumLength").GetInt32(), version.Length);
+        return version;
+    }
 
     private static SunderPackageProviderManifest ProviderManifest()
         => new()
@@ -2762,7 +3133,7 @@ public sealed class ProcessRuntimeWorkerTests
         System.Text.Encoding.UTF8.GetBytes("""
         {
           "$schema":"https://json-schema.org/draft/2020-12/schema",
-          "descriptorVersion":2,
+          "descriptorVersion":1,
           "schemaProfile":"sunder.rpc.values.v1",
           "contractId":"example.rpc",
           "version":"1.0.0",

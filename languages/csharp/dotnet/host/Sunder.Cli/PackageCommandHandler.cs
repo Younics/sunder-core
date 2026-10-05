@@ -6,6 +6,7 @@ namespace Sunder.Cli;
 
 internal sealed class PackageCommandHandler(
     ICliRuntimePackageClient runtime,
+    ICliRuntimeExecutionRuntimeClient executionRuntimes,
     CliOutput output,
     ICliProgress progress,
     CliOptions options,
@@ -49,41 +50,15 @@ internal sealed class PackageCommandHandler(
             return CliExitCodes.NotFound;
         }
 
-        output.Data(new
+        IReadOnlyList<CliPackageRuntimeStatus> runtimeStatuses = [];
+        if (installed is not null && installed.ExecutionRuntimeBindings.Count > 0)
         {
-            packageId = session?.PackageId ?? installed!.PackageId,
-            installed = installed is null ? null : new
-            {
-                name = installed.Name,
-                version = installed.Version,
-                enabled = installed.IsEnabled,
-                installedAtUtc = installed.InstalledAtUtc,
-                statusMessage = installed.StatusMessage,
-                source = installed.Provenance.SourceKind.ToString().ToLowerInvariant(),
-                versionPolicy = installed.Provenance.VersionPolicy.ToString().ToLowerInvariant(),
-                registryOrigin = installed.Provenance.RegistryOrigin,
-                tag = installed.Provenance.RequestedTag,
-                requestedVersion = installed.Provenance.RequestedVersion,
-            },
-            session = session is null ? null : new
-            {
-                displayName = session.DisplayName,
-                version = session.Version,
-                enabled = session.IsEnabled,
-                active,
-                readiness = session.Readiness.ToString().ToLowerInvariant(),
-                failureOrigin = session.FailureOrigin?.ToString().ToLowerInvariant(),
-                lastError = session.LastError,
-                lastFailureAtUtc = session.LastFailureAtUtc,
-                failureCount = session.FailureCount,
-            },
-            runtime = new
-            {
-                instanceId = snapshot.RuntimeInstanceId,
-                sessionGeneration = snapshot.SessionGeneration,
-                bootstrapState = snapshot.BootstrapState.ToString().ToLowerInvariant(),
-            },
-        });
+            runtimeStatuses = CliPackageRuntimeStatus.Create(
+                installed,
+                installedPackages,
+                await executionRuntimes.GetExecutionRuntimesAsync(token).ConfigureAwait(false));
+        }
+        output.Data(CliJsonData.PackageStatus(installed, session, active, snapshot, runtimeStatuses));
         output.Line($"Package: {session?.PackageId ?? installed!.PackageId}");
         if (installed is not null)
         {
@@ -103,35 +78,44 @@ internal sealed class PackageCommandHandler(
         {
             output.Line("Session: not loaded");
         }
+        CliRenderers.PackageRuntimeStatus(output, runtimeStatuses);
         return CliExitCodes.Success;
     }
 
     public async Task<int> ExecuteAsync(InstallRegistryPackageCommand command, CancellationToken token)
     {
-        IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        if (command.ApproveSensitiveCapabilities)
+        progress.Report("Runtime is resolving package, execution-runtime, byte, and conflict preflight...");
+        var planRequest = ToBatchRequest(command);
+        var plan = await runtime.ResolveRegistryPackagePlanAsync(planRequest, token)
+            .ConfigureAwait(false);
+        if (plan.Success && !IsResolutionFingerprint(plan.ResolutionFingerprint))
         {
-            var plan = await runtime.ResolveRegistryPackagePlanAsync(
-                ToBatchRequest(command),
-                token).ConfigureAwait(false);
-            if (!plan.Success)
-            {
-                var failed = new RuntimeRegistryPackageChangeResult(
-                    false,
-                    RuntimeRegistryErrorCode.Conflict,
-                    plan.Errors.FirstOrDefault() ?? "Registry package preflight failed.",
-                    false,
-                    false,
-                    plan.Warnings,
-                    plan.Errors,
-                    [],
-                    plan.Items,
-                    plan.RequiredCapabilityConsents);
-                return CliRenderers.RegistryPackageChange(output, failed);
-            }
-            consents = plan.RequiredCapabilityConsents;
-            CliRenderers.CapabilityConsents(output, consents, approved: true);
+            plan = InvalidPreviewFingerprint(plan);
         }
+        var preflight = CliPackageChangePreflight.Create(
+            plan,
+            await executionRuntimes.GetExecutionRuntimesAsync(token).ConfigureAwait(false));
+        var preflightExit = CliRenderers.RegistryPackagePreflight(
+            output,
+            preflight,
+            command.ApproveSensitiveCapabilities,
+            command.DryRun
+                ? "No changes were applied. Rerun with '--yes' after reviewing this preflight."
+                : null);
+        output.Data(CliJsonData.RegistryPackageExecution(preflight, command.DryRun, result: null));
+        if (preflightExit != CliExitCodes.Success)
+        {
+            return preflightExit;
+        }
+        if (command.DryRun) return CliExitCodes.Success;
+        if (preflight.RequiredCapabilityConsents.Count > 0 && !command.ApproveSensitiveCapabilities)
+        {
+            output.Error(
+                "Sensitive worker capability consent is required. Review the exact fences above, then rerun with '--yes --approve-sensitive-capabilities'.",
+                "runtime.registry.consent_required");
+            return CliExitCodes.Conflict;
+        }
+
         progress.Report("Runtime is resolving and applying the package transaction...");
         var result = await runtime.InstallRegistryPackageAsync(
             new(
@@ -141,9 +125,14 @@ internal sealed class PackageCommandHandler(
                 command.Tag,
                 AllowDowngrade: command.AllowDowngrade,
                 Reinstall: command.Reinstall,
-                CapabilityConsents: consents),
+                CapabilityConsents: command.ApproveSensitiveCapabilities
+                    ? preflight.RequiredCapabilityConsents
+                    : null,
+                ExpectedResolutionFingerprint: plan.ResolutionFingerprint),
             token).ConfigureAwait(false);
-        return CliRenderers.RegistryPackageChange(output, result);
+        var exitCode = CliRenderers.RegistryPackageChange(output, result, includePlan: false, writeData: false);
+        output.Data(CliJsonData.RegistryPackageExecution(preflight, dryRun: false, result: result));
+        return exitCode;
     }
 
     public async Task<int> ExecuteAsync(InstallLocalPackageCommand command, CancellationToken token)
@@ -181,60 +170,123 @@ internal sealed class PackageCommandHandler(
 
     public async Task<int> ExecuteAsync(UpdatePackagesCommand command, CancellationToken token)
     {
-        IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        if (command.ApproveSensitiveCapabilities)
+        progress.Report("Runtime is resolving the package update preflight...");
+        var preview = await runtime.UpdateRegistryPackagesAsync(
+            new RuntimeRegistryUpdateRequest(
+                command.RegistryOrigin,
+                command.PackageId,
+                command.IncludePrerelease,
+                DryRun: true),
+            token).ConfigureAwait(false);
+        var installedRuntimes = await executionRuntimes.GetExecutionRuntimesAsync(token).ConfigureAwait(false);
+        CliPackageChangePreflight preflight;
+        IReadOnlyList<RuntimeRegistryPackagePlanExpectation> expectedPlans = [];
+        if (!preview.Success || preview.PlanItems.Count == 0)
         {
-            var preview = await runtime.UpdateRegistryPackagesAsync(
-                new RuntimeRegistryUpdateRequest(
-                    command.RegistryOrigin,
-                    command.PackageId,
-                    command.IncludePrerelease,
-                    DryRun: true),
-                token).ConfigureAwait(false);
-            if (!preview.Success)
-            {
-                return CliRenderers.RegistryPackageChange(output, preview);
-            }
-            consents = preview.RequiredCapabilityConsents;
-            CliRenderers.CapabilityConsents(output, consents, approved: true);
+            preflight = CliPackageChangePreflight.FromPreview(preview, installedRuntimes);
         }
+        else
+        {
+            expectedPlans = preview.PlanExpectations;
+            preflight = expectedPlans.Count == 0
+                        || expectedPlans.Any(static expectation =>
+                            !IsResolutionFingerprint(expectation.ExpectedResolutionFingerprint))
+                ? CliPackageChangePreflight.FromPreview(
+                    preview,
+                    installedRuntimes,
+                    "The Runtime did not return exact Registry package plan fingerprints. Refresh the preview and retry.")
+                : CliPackageChangePreflight.FromPreview(preview, installedRuntimes);
+        }
+
+        var preflightExit = CliRenderers.RegistryPackagePreflight(
+            output,
+            preflight,
+            command.ApproveSensitiveCapabilities,
+            command.DryRun
+                ? "No changes were applied. Rerun with '--yes' after reviewing this preflight."
+                : null);
+        output.Data(CliJsonData.RegistryPackageExecution(preflight, command.DryRun, result: null));
+        if (preflightExit != CliExitCodes.Success) return preflightExit;
+        if (preview.PlanItems.Count == 0 || command.DryRun) return CliExitCodes.Success;
+        if (preflight.RequiredCapabilityConsents.Count > 0 && !command.ApproveSensitiveCapabilities)
+        {
+            output.Error(
+                "Sensitive worker capability consent is required. Review the exact fences above, then rerun with '--yes --approve-sensitive-capabilities'.",
+                "runtime.registry.consent_required");
+            return CliExitCodes.Conflict;
+        }
+
         progress.Report("Runtime is resolving and applying one atomic update transaction...");
         var result = await runtime.UpdateRegistryPackagesAsync(
             new(
                 command.RegistryOrigin,
                 command.PackageId,
                 command.IncludePrerelease,
-                CapabilityConsents: consents),
+                CapabilityConsents: command.ApproveSensitiveCapabilities
+                    ? preflight.RequiredCapabilityConsents
+                    : null,
+                ExpectedPlans: expectedPlans),
             token).ConfigureAwait(false);
-        return CliRenderers.RegistryPackageChange(output, result);
+        var exitCode = CliRenderers.RegistryPackageChange(output, result, includePlan: false, writeData: false);
+        output.Data(CliJsonData.RegistryPackageExecution(preflight, dryRun: false, result: result));
+        return exitCode;
     }
 
     public async Task<int> ExecuteAsync(AdoptPackageSourceCommand command, CancellationToken token)
     {
-        IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        if (command.ApproveSensitiveCapabilities && !command.DryRun)
+        progress.Report($"Runtime is resolving source adoption for '{command.PackageId}' without applying it...");
+        var previewRequest = ToAdoptionRequest(
+            command,
+            confirm: false,
+            dryRun: true,
+            capabilityConsents: null);
+        var preview = await runtime.AdoptRegistryPackageSourceAsync(previewRequest, token)
+            .ConfigureAwait(false);
+        string? expectedResolutionFingerprint = null;
+        string? previewError = null;
+        if (preview.Success
+            && !TryGetAdoptionPreviewFingerprint(preview, command, out expectedResolutionFingerprint))
         {
-            var preview = await runtime.AdoptRegistryPackageSourceAsync(
-                ToAdoptionRequest(command, confirm: false, dryRun: true, capabilityConsents: null),
-                token).ConfigureAwait(false);
-            if (!preview.Success)
-            {
-                return CliRenderers.RegistryPackageChange(output, preview);
-            }
-            consents = preview.RequiredCapabilityConsents;
-            CliRenderers.CapabilityConsents(output, consents, approved: true);
+            previewError =
+                "The Runtime did not return one valid Registry source-adoption fingerprint for the selected source. Refresh the preview and retry.";
         }
-        progress.Report(command.DryRun
-            ? $"Runtime is resolving source adoption for '{command.PackageId}' without applying it..."
-            : $"Runtime is adopting the Registry source for '{command.PackageId}'...");
+        var preflight = CliPackageChangePreflight.FromPreview(
+            preview,
+            await executionRuntimes.GetExecutionRuntimesAsync(token).ConfigureAwait(false),
+            previewError);
+        var preflightExit = CliRenderers.RegistryPackagePreflight(
+            output,
+            preflight,
+            command.ApproveSensitiveCapabilities,
+            command.DryRun
+                ? "No changes were applied. Rerun with '--yes' after reviewing this preflight."
+                : null);
+        output.Data(CliJsonData.RegistryPackageExecution(preflight, command.DryRun, result: null));
+        if (preflightExit != CliExitCodes.Success) return preflightExit;
+        if (command.DryRun) return CliExitCodes.Success;
+        if (preflight.RequiredCapabilityConsents.Count > 0 && !command.ApproveSensitiveCapabilities)
+        {
+            output.Error(
+                "Sensitive worker capability consent is required. Review the exact fences above, then rerun with '--yes --approve-sensitive-capabilities'.",
+                "runtime.registry.consent_required");
+            return CliExitCodes.Conflict;
+        }
+
+        progress.Report($"Runtime is adopting the Registry source for '{command.PackageId}'...");
         var result = await runtime.AdoptRegistryPackageSourceAsync(
-            ToAdoptionRequest(
-                command,
-                confirm: !command.DryRun,
-                dryRun: command.DryRun,
-                capabilityConsents: consents),
+            previewRequest with
+            {
+                Confirm = true,
+                DryRun = false,
+                CapabilityConsents = command.ApproveSensitiveCapabilities
+                    ? preflight.RequiredCapabilityConsents
+                    : null,
+                ExpectedResolutionFingerprint = expectedResolutionFingerprint,
+            },
             token).ConfigureAwait(false);
-        return CliRenderers.RegistryPackageChange(output, result);
+        var exitCode = CliRenderers.RegistryPackageChange(output, result, includePlan: false, writeData: false);
+        output.Data(CliJsonData.RegistryPackageExecution(preflight, dryRun: false, result: result));
+        return exitCode;
     }
 
     private RuntimeRegistryPackageBatchRequest ToBatchRequest(InstallRegistryPackageCommand command)
@@ -264,6 +316,38 @@ internal sealed class PackageCommandHandler(
             DryRun: dryRun,
             CapabilityConsents: capabilityConsents);
 
+    private static bool TryGetAdoptionPreviewFingerprint(
+        RuntimeRegistryPackageChangeResult preview,
+        AdoptPackageSourceCommand command,
+        out string? resolutionFingerprint)
+    {
+        resolutionFingerprint = null;
+        if (preview.PlanExpectations.Count != 1)
+        {
+            return false;
+        }
+
+        var expectation = preview.PlanExpectations[0];
+        if (!IsResolutionFingerprint(expectation.ExpectedResolutionFingerprint)
+            || expectation.IncludePrerelease != command.IncludePrerelease
+            || !SameRegistryOrigin(command.RegistryOrigin, expectation.RegistryOrigin))
+        {
+            return false;
+        }
+        resolutionFingerprint = expectation.ExpectedResolutionFingerprint;
+        return true;
+    }
+
+    private static bool SameRegistryOrigin(string expected, string actual)
+        => Uri.TryCreate(expected, UriKind.Absolute, out var expectedUri)
+           && Uri.TryCreate(actual, UriKind.Absolute, out var actualUri)
+           && Uri.Compare(
+               expectedUri,
+               actualUri,
+               UriComponents.SchemeAndServer | UriComponents.Path,
+               UriFormat.SafeUnescaped,
+               StringComparison.Ordinal) == 0;
+
     private static PackageCapabilityConsent? CreateCapabilityConsent(
         SunderPackageArchiveValidationResult validation,
         InstalledPackageDescriptor? current)
@@ -292,6 +376,26 @@ internal sealed class PackageCommandHandler(
             StringComparison.Ordinal)).Sha256!;
         return new PackageCapabilityConsent(manifest.Id!, manifest.Version!, manifestSha256, capabilities);
     }
+
+    private static RuntimeRegistryResolveInstallPlanResponse InvalidPreviewFingerprint(
+        RuntimeRegistryResolveInstallPlanResponse plan)
+        => new(
+            false,
+            plan.Items,
+            plan.Warnings,
+            ["Registry package preview did not return a valid resolution fingerprint. Refresh the preview and retry."],
+            plan.Conflicts,
+            plan.TrustedArtifactOrigins,
+            plan.RequiredCapabilityConsents,
+            plan.RuntimeArtifacts,
+            plan.RuntimeConflicts,
+            plan.ResolutionFingerprint,
+            plan.RuntimePolicyRevision,
+            plan.ExpiresAtUtc);
+
+    private static bool IsResolutionFingerprint(string? value)
+        => value is { Length: 64 }
+           && value.All(static character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     public async Task<int> ExecuteAsync(SetPackageEnabledCommand command, CancellationToken token)
     {

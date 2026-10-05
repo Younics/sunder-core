@@ -1,0 +1,15 @@
+{
+  "packageId": "example.agent",
+  "versionRange": "\u003E=2.0.0 \u003C3.0.0",
+  "includePrerelease": false,
+  "presence": "required",
+  "requiredByPackageId": "example.consumer",
+  "contracts": [
+    {
+      "contractId": "example.agent.tools",
+      "contractVersion": "1.0.0",
+      "descriptorSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "abiSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ]
+}

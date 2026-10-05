@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "authorityKind": "package",
+  "authorityId": "sunder.node.runtimebacked",
+  "packageId": "sunder.node.runtimebacked",
+  "contracts": {
+    "messages": {
+      "contractId": "example.messages",
+      "current": {
+        "state": "release-frozen",
+        "exposure": "public",
+        "contractVersion": "2.0.0",
+        "descriptorBytes": 1418,
+        "canonicalDescriptor": "{\"$defs\":{\"ErrorDetails\":{\"additionalProperties\":false,\"properties\":{\"reason\":{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"},\"retryable\":{\"type\":\"boolean\"}},\"required\":[\"reason\",\"retryable\"],\"type\":\"object\"},\"Request\":{\"additionalProperties\":false,\"properties\":{\"message\":{\"maxLength\":256,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"message\"],\"type\":\"object\"},\"Response\":{\"additionalProperties\":false,\"properties\":{\"message\":{\"maxLength\":1024,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"message\"],\"type\":\"object\"}},\"contractId\":\"example.messages\",\"descriptorVersion\":1,\"errors\":{\"example.rejected\":{\"description\":\"The conformance request was rejected.\",\"detailsSchema\":{\"$ref\":\"#/$defs/ErrorDetails\"}}},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"messages\":{\"methods\":{\"data\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Request\"},\"responseSchema\":{\"$ref\":\"#/$defs/Response\"}},\"fault\":{\"errors\":[\"example.rejected\"],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Request\"},\"responseSchema\":{\"$ref\":\"#/$defs/Response\"}},\"send\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Request\"},\"responseSchema\":{\"$ref\":\"#/$defs/Response\"}},\"watch\":{\"errors\":[],\"eventSchema\":{\"$ref\":\"#/$defs/Response\"},\"idempotency\":\"none\",\"kind\":\"server-stream\",\"requestSchema\":{\"$ref\":\"#/$defs/Request\"}}}}},\"version\":\"2.0.0\"}",
+        "descriptorSha256": "dfa821a6e62cc7b7b7a7a2a2fbfb4f93ae7c8400d8d2dbf8f045ba4fdc0836c4",
+        "abiProjectionBytes": 1346,
+        "canonicalAbiProjection": "{\"$defs\":{\"ErrorDetails\":{\"additionalProperties\":false,\"properties\":{\"reason\":{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"},\"retryable\":{\"type\":\"boolean\"}},\"required\":[\"reason\",\"retryable\"],\"type\":\"object\"},\"Request\":{\"additionalProperties\":false,\"properties\":{\"message\":{\"maxLength\":256,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"message\"],\"type\":\"object\"},\"Response\":{\"additionalProperties\":false,\"properties\":{\"message\":{\"maxLength\":1024,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"message\"],\"type\":\"object\"}},\"contractId\":\"example.messages\",\"descriptorVersion\":1,\"errors\":{\"example.rejected\":{\"detailsSchema\":{\"$ref\":\"#/$defs/ErrorDetails\"}}},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"messages\":{\"methods\":{\"data\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Request\"},\"responseSchema\":{\"$ref\":\"#/$defs/Response\"}},\"fault\":{\"errors\":[\"example.rejected\"],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Request\"},\"responseSchema\":{\"$ref\":\"#/$defs/Response\"}},\"send\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Request\"},\"responseSchema\":{\"$ref\":\"#/$defs/Response\"}},\"watch\":{\"errors\":[],\"eventSchema\":{\"$ref\":\"#/$defs/Response\"},\"idempotency\":\"none\",\"kind\":\"server-stream\",\"requestSchema\":{\"$ref\":\"#/$defs/Request\"}}}}}}",
+        "abiSha256": "ea78829fc86bf2ef756edc851ea1cb6935f370468c626524c5e3b539365a1560",
+        "packageRelease": {
+          "packageId": "sunder.node.runtimebacked",
+          "packageVersion": "1.0.0"
+        }
+      },
+      "history": []
+    }
+  }
+}

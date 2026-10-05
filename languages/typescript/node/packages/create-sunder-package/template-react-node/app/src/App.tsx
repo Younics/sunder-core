@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getSunder, isSunderRpcFailure } from "@sunder/sdk/browser";
-import { ExampleMessagesRpcClient } from "../../.sunder/generated/rpc/example-messages.g";
+import { createPackageApi } from "../../.sunder/generated/rpc/browser.js";
 
 type Status =
   | { readonly kind: "loading" }
@@ -9,7 +9,6 @@ type Status =
 
 const packageId = "__SUNDER_PACKAGE_ID_JSON__";
 const packageName = "__SUNDER_PACKAGE_NAME_JSON__";
-const providerId = "__SUNDER_PROVIDER_ID_JSON__";
 
 export function App() {
   const [status, setStatus] = useState<Status>({ kind: "loading" });
@@ -53,11 +52,8 @@ export function App() {
 }
 
 async function greet(signal: AbortSignal): Promise<string> {
-  const rpc = getSunder().rpc;
-  const catalog = await rpc.discover("example.messages", { signal });
-  const provider = catalog.providers.find((candidate) => candidate.providerId === providerId);
-  if (provider === undefined) throw new Error("The exact package provider is not active.");
-  const client = new ExampleMessagesRpcClient(rpc, provider.providerHandle);
+  const api = createPackageApi(getSunder().rpc);
+  const client = await api.messages.resolve({ signal });
   const response = await client.Messages.Send(
     { message: "Sunder App bridge" },
     { signal },

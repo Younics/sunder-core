@@ -1,12 +1,143 @@
+using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+
+if (args is ["--sunder-test-policy-peer", var peerAddress])
+{
+    if (OperatingSystem.IsWindows())
+    {
+        using var pipe = new System.IO.Pipes.NamedPipeClientStream(".", peerAddress, System.IO.Pipes.PipeDirection.InOut, System.IO.Pipes.PipeOptions.Asynchronous);
+        await pipe.ConnectAsync(10000);
+        await pipe.WriteAsync(new byte[] { 1 });
+        await Task.Delay(Timeout.InfiniteTimeSpan);
+    }
+    else
+    {
+        using var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
+        await socket.ConnectAsync(new System.Net.Sockets.UnixDomainSocketEndPoint(peerAddress));
+        await socket.SendAsync(new byte[] { 1 });
+        await Task.Delay(Timeout.InfiniteTimeSpan);
+    }
+    return 0;
+}
+
+if (args is ["--sunder-test-hold-file-lock", var lockMode, var lockPath])
+{
+    var share = lockMode switch
+    {
+        "exclusive" => FileShare.None,
+        "shared" => FileShare.ReadWrite,
+        _ => throw new ArgumentException("Unknown test file-lock mode.", nameof(args)),
+    };
+    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(lockPath))!);
+    using var fileLock = new FileStream(
+        lockPath,
+        FileMode.OpenOrCreate,
+        FileAccess.ReadWrite,
+        share,
+        bufferSize: 1,
+        FileOptions.None);
+    await Console.Out.WriteLineAsync("ready");
+    await Console.Out.FlushAsync();
+    await Console.In.ReadLineAsync();
+    return 0;
+}
 
 var modePath = Path.Combine(Environment.CurrentDirectory, "mode.txt");
 var mode = File.Exists(modePath) ? File.ReadAllText(modePath).Trim() : "normal";
 var input = Console.OpenStandardInput();
 var output = Console.OpenStandardOutput();
 var error = Console.Error;
+if (mode == "containment-hang")
+{
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+    return 0;
+}
+if (mode == "containment-echo")
+{
+    await input.CopyToAsync(output);
+    await output.FlushAsync();
+    return 0;
+}
+if (mode == "containment-detach" && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()))
+{
+    await Task.Delay(TimeSpan.FromMilliseconds(250));
+    if (setsid() < 0)
+    {
+        throw new InvalidOperationException(
+            $"The containment detach fixture could not create a session: {Marshal.GetLastPInvokeError()}.");
+    }
+    await File.WriteAllTextAsync(
+        Path.Combine(Environment.CurrentDirectory, "containment-detach.ready"),
+        "ready");
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+    return 0;
+}
+if (mode is "containment-child" or "containment-child-ignore-term" or "containment-child-exit")
+{
+    var isChild = string.Equals(
+        Environment.GetEnvironmentVariable("SUNDER_TEST_CONTAINMENT_CHILD"),
+        "1",
+        StringComparison.Ordinal);
+    using var ignoredTermination = isChild
+                                   && mode == "containment-child-ignore-term"
+                                   && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        ? PosixSignalRegistration.Create(
+            PosixSignal.SIGTERM,
+            context =>
+            {
+                context.Cancel = true;
+                File.WriteAllText(
+                    Path.Combine(Environment.CurrentDirectory, "containment-child.sigterm"),
+                    "ignored");
+            })
+        : null;
+    if (isChild)
+    {
+        await File.WriteAllTextAsync(
+            Path.Combine(Environment.CurrentDirectory, "containment-child.ready"),
+            "ready");
+    }
+    else
+    {
+        var childStartInfo = new ProcessStartInfo
+        {
+            FileName = Environment.ProcessPath
+                       ?? throw new InvalidOperationException("The containment child executable is unavailable."),
+            WorkingDirectory = Environment.CurrentDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        var entryAssemblyPath = Assembly.GetEntryAssembly()?.Location;
+        if (!string.IsNullOrWhiteSpace(entryAssemblyPath)
+            && !string.Equals(
+                Path.GetFileNameWithoutExtension(childStartInfo.FileName),
+                Path.GetFileNameWithoutExtension(entryAssemblyPath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            childStartInfo.ArgumentList.Add(entryAssemblyPath);
+        }
+        childStartInfo.Environment["SUNDER_TEST_CONTAINMENT_CHILD"] = "1";
+        var child = Process.Start(childStartInfo)
+                    ?? throw new InvalidOperationException("The containment child did not start.");
+        await File.WriteAllTextAsync(
+            Path.Combine(Environment.CurrentDirectory, "containment-child.pid"),
+            child.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (mode == "containment-child-exit")
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            return 0;
+        }
+    }
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+    return 0;
+}
+
+[DllImport("libc", SetLastError = true)]
+static extern int setsid();
 
 var hello = await ReadFrameAsync(input);
 if (hello.RootElement.GetProperty("type").GetString() != "host.hello") return 64;
@@ -27,23 +158,30 @@ var packageId = hello.RootElement.GetProperty("packageId").GetString()!;
 var packageVersion = hello.RootElement.GetProperty("packageVersion").GetString()!;
 var resourceProfileHash = hello.RootElement.GetProperty("resourceProfileHash").GetString()!;
 if (mode == "resource-profile-mismatch") resourceProfileHash = new string('0', 64);
-RecordActivationStage(packageId, packageVersion, "configure");
-RecordActivationStage(packageId, packageVersion, "register");
+var activationStages = packageId == "startup.counted.package"
+    ? new List<string> { $"{packageVersion}:configure", $"{packageVersion}:register" }
+    : [];
+string? workspaceRoot = null;
 if (mode == "protocol-mismatch")
 {
-    protocol = "sunder.worker.v1";
-    protocolVersion = 1;
+    protocol = "sunder.worker.unknown";
+    protocolVersion = 99;
+}
+else if (mode == "protocol-v3-mismatch")
+{
+    protocol = "sunder.worker.v3";
+    protocolVersion = 3;
 }
 var settingsSchema = mode switch
 {
-    "v3-package-data" => CreateSettingsSchema(invalid: false),
-    "v3-invalid-settings-schema" => CreateSettingsSchema(invalid: true),
+    "v1-package-data" => CreateSettingsSchema(invalid: false),
+    "v1-invalid-settings-schema" => CreateSettingsSchema(invalid: true),
     _ => null,
 };
 object[] storageMigrations = mode is
-    "v3-skip-declared-migration"
-    or "v3-transaction-migration"
-    or "v3-transaction-migration-fail"
+    "v1-skip-declared-migration"
+    or "v1-transaction-migration"
+    or "v1-transaction-migration-fail"
     ?
     [
         new
@@ -89,7 +227,7 @@ await WriteFrameAsync(output, new
     {
         settingsSchema,
         storageMigrations,
-        callbackHandlers = mode == "v3-callback-mismatch"
+        callbackHandlers = mode == "v1-callback-mismatch"
             ? ["fixture.callback"]
             : Array.Empty<string>(),
         authHandler = false,
@@ -100,7 +238,16 @@ await WriteFrameAsync(output, new
     },
 });
 
-if (mode == "v3-ready-logging")
+(string Id, byte[] Body)? shutdownBufferedWorkerCall = null;
+string? shutdownBufferedWorkerCallScopeId = null;
+if (mode == "v1-ready-buffered-discover")
+{
+    shutdownBufferedWorkerCall = CreateShutdownBufferedWorkerCall(mode);
+    await WriteFrameHeaderAsync(output, shutdownBufferedWorkerCall.Value.Body);
+    await WriteStatusAsync($"{mode}.json", new { started = true });
+}
+
+if (mode == "v1-ready-logging")
 {
     await WriteFrameAsync(output, new
     {
@@ -118,7 +265,7 @@ if (mode == "v3-ready-logging")
     using (await ReadExpectedHostResultAsync(input, "readyLog"))
     {
     }
-    await WriteStatusAsync("v3-ready-logging.json", new { accepted = true });
+    await WriteStatusAsync("v1-ready-logging.json", new { accepted = true });
 }
 
 while (true)
@@ -129,7 +276,10 @@ while (true)
     if (type == "host.start-candidate")
     {
         if (mode is "candidate-hang" or "candidate-shutdown-hang") continue;
-        RecordActivationStage(packageId, packageVersion, "start");
+        if (packageId == "startup.counted.package")
+        {
+            activationStages.Add($"{packageVersion}:start");
+        }
         await WriteFrameAsync(output, new { type = "worker.candidate-started" });
         continue;
     }
@@ -137,10 +287,10 @@ while (true)
     {
         if (mode is "commit-hang" or "commit-shutdown-hang") continue;
         if (packageId == "generation.failing.package") return 42;
-        if (ShouldCancelGenerationCommit(packageId, packageVersion))
+        if (TryGetGenerationCommitStartedPath(packageId, packageVersion, out var commitStartedPath))
         {
             File.WriteAllText(
-                Path.Combine(GetWorkspaceRoot(), "generation-commit-started"),
+                commitStartedPath,
                 root.GetProperty("sessionGeneration").GetInt64().ToString(
                     System.Globalization.CultureInfo.InvariantCulture));
             continue;
@@ -156,11 +306,11 @@ while (true)
     if (type == "host.prepare-storage-migrations")
     {
         if (mode is "migration-preparation-hang" or "migration-preparation-shutdown-hang") continue;
-        if (mode is "v3-migration-preparation-state" or "v3-recovery-candidate-package-data")
+        if (mode is "v1-migration-preparation-state" or "v1-recovery-candidate-package-data")
         {
             await RunMigrationPreparationStateReadAsync(input, output);
         }
-        else if (mode == "v3-migration-preparation-mutation")
+        else if (mode == "v1-migration-preparation-mutation")
         {
             await WriteFrameAsync(output, new
             {
@@ -179,7 +329,7 @@ while (true)
         });
         continue;
     }
-    if (type == "host.callback-start" && mode == "v3-callback-mismatch")
+    if (type == "host.callback-start" && mode == "v1-callback-mismatch")
     {
         var value = root.GetProperty("value");
         await WriteFrameAsync(output, new
@@ -201,6 +351,18 @@ while (true)
     }
     if (type == "host.activate")
     {
+        workspaceRoot = root.GetProperty("workspaceRootPath").GetString();
+        if (string.IsNullOrWhiteSpace(workspaceRoot)
+            || !Path.IsPathFullyQualified(workspaceRoot)
+            || !Directory.Exists(workspaceRoot))
+        {
+            return 65;
+        }
+        if (activationStages.Count > 0)
+        {
+            File.AppendAllLines(Path.Combine(workspaceRoot, "activation-counters.txt"), activationStages);
+            activationStages.Clear();
+        }
         if (mode == "crash") return 42;
         if (mode is "activation-hang" or "activation-delay")
         {
@@ -210,9 +372,13 @@ while (true)
                 sessionGeneration = root.GetProperty("sessionGeneration").GetInt64(),
             });
             if (mode == "activation-hang") continue;
-            await Task.Delay(250);
+            var releasePath = Path.Combine(WorkerTemporaryPath(), "activation-delay.release");
+            while (!File.Exists(releasePath))
+            {
+                await Task.Delay(25);
+            }
         }
-        if (mode is "v3-transaction-migration" or "v3-transaction-migration-fail")
+        if (mode is "v1-transaction-migration" or "v1-transaction-migration-fail")
         {
             await ApplyExactMigrationAsync(
                 input,
@@ -228,7 +394,7 @@ while (true)
                 "legacy.secret.v1",
                 "secret.current.v1",
                 "transactionSecretMigration");
-            if (mode == "v3-transaction-migration-fail") return 42;
+            if (mode == "v1-transaction-migration-fail") return 42;
         }
         if (mode == "malformed-frame")
         {
@@ -268,12 +434,38 @@ while (true)
                     : null,
             });
         }
+        if (mode == "v1-shutdown-buffered-scoped-discover")
+        {
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.scope-open",
+                id = "shutdownScopeOpen",
+            });
+            using var scopeResponse = await ReadFrameAsync(input);
+            if (scopeResponse.RootElement.GetProperty("type").GetString() != "host.result") return 68;
+            shutdownBufferedWorkerCallScopeId = scopeResponse.RootElement
+                .GetProperty("value")
+                .GetProperty("scopeId")
+                .GetString();
+        }
         await WriteFrameAsync(output, new
         {
             type = "worker.activated",
             sessionGeneration = root.GetProperty("sessionGeneration").GetInt64(),
         });
-        if (mode == "v3-generation-fault")
+        if (mode is "v1-shutdown-buffered-get-provider"
+            or "v1-shutdown-buffered-discover"
+            or "v1-shutdown-buffered-scoped-discover"
+            or "v1-shutdown-buffered-invalid-discover")
+        {
+            shutdownBufferedWorkerCall = CreateShutdownBufferedWorkerCall(
+                mode,
+                shutdownBufferedWorkerCallScopeId);
+            await WriteFrameHeaderAsync(output, shutdownBufferedWorkerCall.Value.Body);
+            await WriteStatusAsync($"{mode}.json", new { started = true });
+            continue;
+        }
+        if (mode == "v1-generation-fault")
         {
             await Task.Delay(100);
             await WriteFrameAsync(output, new
@@ -286,38 +478,40 @@ while (true)
             });
             continue;
         }
-        if (mode == "v3-environment")
+        if (mode == "v1-environment")
         {
-            await WriteStatusAsync("v3-environment.json", new
+            await WriteStatusAsync("v1-environment.json", new
             {
                 contentRoot = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_CONTENT_ROOT"),
                 temporaryRoot = Environment.GetEnvironmentVariable("SUNDER_WORKER_TEMP_ROOT"),
-                workspaceRoot = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_WORKSPACE_ROOT"),
+                workspaceRoot,
+                workspaceEnvironment = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_WORKSPACE_ROOT"),
                 legacyContentPath = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_CONTENT_PATH"),
                 legacyDataPath = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_DATA_PATH"),
                 legacyWorkingPath = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_WORKING_PATH"),
+                environmentNames = GetEnvironmentVariableNames(),
             });
             continue;
         }
-        if (mode is "v3-scope-roundtrip" or "v3-scope-handle-limit")
+        if (mode is "v1-scope-roundtrip" or "v1-scope-handle-limit")
         {
-            await RunV3ScopeRoundTripAsync(
+            await RunV1ScopeRoundTripAsync(
                 input,
                 output,
-                testHandleLimit: mode == "v3-scope-handle-limit");
+                testHandleLimit: mode == "v1-scope-handle-limit");
             continue;
         }
-        if (mode == "v3-scope-leak")
+        if (mode == "v1-scope-leak")
         {
-            await RunV3LeakedScopeAsync(input, output);
+            await RunV1LeakedScopeAsync(input, output);
             continue;
         }
-        if (mode == "v3-scope-permission-denied")
+        if (mode == "v1-scope-permission-denied")
         {
-            await RunV3DeniedScopeAsync(input, output);
+            await RunV1DeniedScopeAsync(input, output);
             continue;
         }
-        if (mode == "v3-invariant-report")
+        if (mode == "v1-invariant-report")
         {
             await WriteFrameAsync(output, new
             {
@@ -327,37 +521,37 @@ while (true)
                 exceptionMessage = "sanitized invariant failure",
             });
             using var response = await ReadFrameAsync(input);
-            await WriteStatusAsync("v3-invariant-report.json", new
+            await WriteStatusAsync("v1-invariant-report.json", new
             {
                 responseType = response.RootElement.GetProperty("type").GetString(),
                 accepted = response.RootElement.TryGetProperty("value", out var value) && value.GetBoolean(),
             });
             continue;
         }
-        if (mode == "v3-package-data")
+        if (mode == "v1-package-data")
         {
-            await RunV3PackageDataAsync(input, output);
+            await RunV1PackageDataAsync(input, output);
             continue;
         }
-        if (mode == "v3-files-secrets")
+        if (mode == "v1-files-secrets")
         {
-            await RunV3FilesAndSecretsAsync(input, output);
+            await RunV1FilesAndSecretsAsync(input, output);
             continue;
         }
-        if (mode == "v3-logging")
+        if (mode == "v1-logging")
         {
-            await RunV3LoggingAsync(input, output);
+            await RunV1LoggingAsync(input, output);
             continue;
         }
-        if (mode is "v3-stale-package-data" or "v3-stale-malformed-payload" or "v3-recovery-candidate-package-data")
+        if (mode is "v1-stale-package-data" or "v1-stale-malformed-payload" or "v1-recovery-candidate-package-data")
         {
-            await RunV3StalePackageDataAsync(
+            await RunV1StalePackageDataAsync(
                 input,
                 output,
-                malformedPayload: mode == "v3-stale-malformed-payload");
+                malformedPayload: mode == "v1-stale-malformed-payload");
             continue;
         }
-        if (mode == "v3-oversized-inline")
+        if (mode == "v1-oversized-inline")
         {
             await WriteFrameAsync(output, new
             {
@@ -368,7 +562,7 @@ while (true)
             });
             continue;
         }
-        if (mode == "v3-shutdown-worker-call")
+        if (mode == "v1-shutdown-worker-call")
         {
             await WriteFrameAsync(output, new
             {
@@ -377,10 +571,10 @@ while (true)
                 afterRevision = 0,
                 afterSequence = 0,
             });
-            await WriteStatusAsync("v3-shutdown-worker-call.json", new { started = true });
+            await WriteStatusAsync("v1-shutdown-worker-call.json", new { started = true });
             continue;
         }
-        if (mode == "v3-unknown-scope")
+        if (mode == "v1-unknown-scope")
         {
             await WriteFrameAsync(output, new
             {
@@ -693,7 +887,7 @@ while (true)
         }
         else
         {
-            if (mode == "v3-provider-fault")
+            if (mode == "v1-provider-fault")
             {
                 const string secret = "provider-secret=must-never-persist";
                 var exception = new SecretBearingProviderException(secret);
@@ -794,11 +988,13 @@ while (true)
                     sessionId = Environment.GetEnvironmentVariable("SUNDER_SESSION_ID"),
                     contentRoot = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_CONTENT_ROOT"),
                     temporaryRoot = Environment.GetEnvironmentVariable("SUNDER_WORKER_TEMP_ROOT"),
-                    workspaceRoot = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_WORKSPACE_ROOT"),
+                    workspaceRoot,
+                    workspaceEnvironment = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_WORKSPACE_ROOT"),
                     dataPath = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_DATA_PATH"),
                     statePath = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_STATE_PATH"),
                     path = Environment.GetEnvironmentVariable("PATH"),
                     home = Environment.GetEnvironmentVariable(OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME"),
+                    environmentNames = GetEnvironmentVariableNames(),
                     workingPath = Environment.CurrentDirectory,
                     deadlineUtc = root.GetProperty("context").GetProperty("deadlineUtc").GetString(),
                     extendedDeadlineCapability = Environment.GetEnvironmentVariable("SUNDER_RPC_EXTENDED_DEADLINE_V1"),
@@ -837,7 +1033,21 @@ while (true)
             await Task.Delay(Timeout.InfiniteTimeSpan);
             return 0;
         }
-        if (mode == "v3-malformed-shutdown-logging")
+        if (shutdownBufferedWorkerCall is { } bufferedCall)
+        {
+            await output.WriteAsync(bufferedCall.Body);
+            await output.FlushAsync();
+            using var response = await ReadFrameAsync(input);
+            if (response.RootElement.GetProperty("type").GetString() != "host.error"
+                || response.RootElement.GetProperty("id").GetString() != bufferedCall.Id
+                || response.RootElement.GetProperty("error").GetProperty("code").GetString() != "rpc.call.cancelled"
+                || response.RootElement.GetProperty("error").GetProperty("dispatchState").GetString() != "not-dispatched"
+                || response.RootElement.GetProperty("error").GetProperty("retrySafety").GetString() != "safe")
+            {
+                return 67;
+            }
+        }
+        if (mode == "v1-malformed-shutdown-logging")
         {
             await WriteFrameAsync(output, new
             {
@@ -860,7 +1070,7 @@ while (true)
             await Task.Delay(Timeout.InfiniteTimeSpan);
             return 0;
         }
-        if (mode == "v3-logging")
+        if (mode == "v1-logging")
         {
             await WriteFrameAsync(output, new
             {
@@ -888,27 +1098,27 @@ while (true)
     }
 }
 
-static void RecordActivationStage(string packageId, string packageVersion, string stage)
+static bool TryGetGenerationCommitStartedPath(
+    string packageId,
+    string packageVersion,
+    out string startedPath)
 {
-    if (packageId != "startup.counted.package") return;
-    File.AppendAllLines(
-        Path.Combine(GetWorkspaceRoot(), "activation-counters.txt"),
-        [$"{packageVersion}:{stage}"]);
-}
-
-static bool ShouldCancelGenerationCommit(string packageId, string packageVersion)
-{
+    startedPath = string.Empty;
     if (packageId != "generation.cancelling.package") return false;
-    var triggerPath = Path.Combine(GetWorkspaceRoot(), "cancel-generation-version.txt");
-    return File.Exists(triggerPath)
+    var contentRoot = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_CONTENT_ROOT");
+    if (string.IsNullOrWhiteSpace(contentRoot)) return false;
+    var controlPath = Path.Combine(contentRoot, "generation-commit-control.json");
+    if (!File.Exists(controlPath)) return false;
+    using var control = JsonDocument.Parse(File.ReadAllBytes(controlPath));
+    var triggerPath = control.RootElement.GetProperty("triggerPath").GetString();
+    startedPath = control.RootElement.GetProperty("startedPath").GetString() ?? string.Empty;
+    return !string.IsNullOrWhiteSpace(triggerPath)
+           && !string.IsNullOrWhiteSpace(startedPath)
+           && File.Exists(triggerPath)
            && string.Equals(File.ReadAllText(triggerPath).Trim(), packageVersion, StringComparison.Ordinal);
 }
 
-static string GetWorkspaceRoot()
-    => Environment.GetEnvironmentVariable("SUNDER_PACKAGE_WORKSPACE_ROOT")
-       ?? throw new InvalidOperationException("The worker workspace root is unavailable.");
-
-static async Task RunV3StalePackageDataAsync(
+static async Task RunV1StalePackageDataAsync(
     Stream input,
     Stream output,
     bool malformedPayload)
@@ -943,7 +1153,7 @@ static async Task RunV3StalePackageDataAsync(
     });
     if (malformedPayload) return;
     using var response = await ReadFrameAsync(input);
-    await WriteStatusAsync("v3-stale-package-data.json", new
+    await WriteStatusAsync("v1-stale-package-data.json", new
     {
         kind = response.RootElement.GetProperty("error").GetProperty("kind").GetString(),
         code = response.RootElement.GetProperty("error").GetProperty("code").GetString(),
@@ -951,7 +1161,7 @@ static async Task RunV3StalePackageDataAsync(
     });
 }
 
-static async Task RunV3FilesAndSecretsAsync(Stream input, Stream output)
+static async Task RunV1FilesAndSecretsAsync(Stream input, Stream output)
 {
     await WriteFrameAsync(output, new
     {
@@ -1068,7 +1278,7 @@ static async Task RunV3FilesAndSecretsAsync(Stream input, Stream output)
     {
     }
 
-    await WriteStatusAsync("v3-files-secrets.json", new
+    await WriteStatusAsync("v1-files-secrets.json", new
     {
         secretWasMissing,
         secretRoundTripped,
@@ -1077,7 +1287,7 @@ static async Task RunV3FilesAndSecretsAsync(Stream input, Stream output)
     });
 }
 
-static async Task RunV3LoggingAsync(Stream input, Stream output)
+static async Task RunV1LoggingAsync(Stream input, Stream output)
 {
     await WriteFrameAsync(output, new
     {
@@ -1132,7 +1342,7 @@ static async Task RunV3LoggingAsync(Stream input, Stream output)
         throw new InvalidDataException("Expected Host logging results.");
     }
 
-    await WriteStatusAsync("v3-logging.json", new { accepted = true });
+    await WriteStatusAsync("v1-logging.json", new { accepted = true });
 }
 
 static async Task<bool> ReleaseWithSaturatedRpcLaneAsync(
@@ -1180,7 +1390,7 @@ static async Task<bool> ReleaseWithSaturatedRpcLaneAsync(
     return !File.Exists(openedPath);
 }
 
-static async Task RunV3ScopeRoundTripAsync(
+static async Task RunV1ScopeRoundTripAsync(
     Stream input,
     Stream output,
     bool testHandleLimit)
@@ -1215,7 +1425,7 @@ static async Task RunV3ScopeRoundTripAsync(
     var dataPath = WorkerTemporaryPath();
     var temporaryPath = Path.Combine(dataPath, "tmp");
     Directory.CreateDirectory(temporaryPath);
-    var requestPath = Path.Combine(temporaryPath, "v3-scope-request.txt");
+    var requestPath = Path.Combine(temporaryPath, "v1-scope-request.txt");
     await File.WriteAllTextAsync(requestPath, callerContent);
     await WriteFrameAsync(output, new
     {
@@ -1281,7 +1491,7 @@ static async Task RunV3ScopeRoundTripAsync(
     }
     var providerInput = await File.ReadAllTextAsync(invocationFilePath);
     var providerOutput = providerInput + "-processed";
-    var responsePath = Path.Combine(temporaryPath, "v3-scope-response.txt");
+    var responsePath = Path.Combine(temporaryPath, "v1-scope-response.txt");
     await File.WriteAllTextAsync(responsePath, providerOutput);
     await WriteFrameAsync(output, new
     {
@@ -1428,7 +1638,7 @@ static async Task RunV3ScopeRoundTripAsync(
 
     var statusPath = Path.Combine(
         dataPath,
-        testHandleLimit ? "v3-scope-handle-limit.json" : "v3-scope-roundtrip.json");
+        testHandleLimit ? "v1-scope-handle-limit.json" : "v1-scope-roundtrip.json");
     var pendingStatusPath = statusPath + ".pending";
     await File.WriteAllBytesAsync(
         pendingStatusPath,
@@ -1445,7 +1655,7 @@ static async Task RunV3ScopeRoundTripAsync(
     File.Move(pendingStatusPath, statusPath);
 }
 
-static async Task RunV3LeakedScopeAsync(Stream input, Stream output)
+static async Task RunV1LeakedScopeAsync(Stream input, Stream output)
 {
     await WriteFrameAsync(output, new
     {
@@ -1476,7 +1686,7 @@ static async Task RunV3LeakedScopeAsync(Stream input, Stream output)
     var dataPath = WorkerTemporaryPath();
     var temporaryPath = Path.Combine(dataPath, "tmp");
     Directory.CreateDirectory(temporaryPath);
-    var contentPath = Path.Combine(temporaryPath, "v3-leaked-scope.txt");
+    var contentPath = Path.Combine(temporaryPath, "v1-leaked-scope.txt");
     await File.WriteAllTextAsync(contentPath, "leaked-content");
     await WriteFrameAsync(output, new
     {
@@ -1500,7 +1710,7 @@ static async Task RunV3LeakedScopeAsync(Stream input, Stream output)
     }
     File.Delete(contentPath);
 
-    var statusPath = Path.Combine(dataPath, "v3-scope-leak.json");
+    var statusPath = Path.Combine(dataPath, "v1-scope-leak.json");
     var pendingStatusPath = statusPath + ".pending";
     await File.WriteAllBytesAsync(
         pendingStatusPath,
@@ -1508,7 +1718,7 @@ static async Task RunV3LeakedScopeAsync(Stream input, Stream output)
     File.Move(pendingStatusPath, statusPath);
 }
 
-static async Task RunV3DeniedScopeAsync(Stream input, Stream output)
+static async Task RunV1DeniedScopeAsync(Stream input, Stream output)
 {
     await WriteFrameAsync(output, new
     {
@@ -1544,7 +1754,7 @@ static async Task RunV3DeniedScopeAsync(Stream input, Stream output)
     }
 
     var dataPath = WorkerTemporaryPath();
-    var statusPath = Path.Combine(dataPath, "v3-scope-permission-denied.json");
+    var statusPath = Path.Combine(dataPath, "v1-scope-permission-denied.json");
     var pendingStatusPath = statusPath + ".pending";
     await File.WriteAllBytesAsync(
         pendingStatusPath,
@@ -1596,7 +1806,7 @@ static object CreateSettingsSchema(bool invalid)
         },
     };
 
-static async Task RunV3PackageDataAsync(Stream input, Stream output)
+static async Task RunV1PackageDataAsync(Stream input, Stream output)
 {
     await WriteFrameAsync(output, new
     {
@@ -1772,7 +1982,7 @@ static async Task RunV3PackageDataAsync(Stream input, Stream output)
     var downloadReleased = !File.Exists(downloadPath);
 
     var dataPath = WorkerTemporaryPath();
-    var statusPath = Path.Combine(dataPath, "v3-package-data.json");
+    var statusPath = Path.Combine(dataPath, "v1-package-data.json");
     var pendingStatusPath = statusPath + ".pending";
     await File.WriteAllBytesAsync(
         pendingStatusPath,
@@ -1836,7 +2046,7 @@ static async Task RunMigrationPreparationStateReadAsync(Stream input, Stream out
             .ToArray();
     }
 
-    await WriteStatusAsync("v3-migration-preparation-state.json", new { stateValue, keys });
+    await WriteStatusAsync("v1-migration-preparation-state.json", new { stateValue, keys });
 }
 
 static async Task ApplyExactMigrationAsync(
@@ -1916,16 +2126,69 @@ static string WorkerTemporaryPath()
     => Environment.GetEnvironmentVariable("SUNDER_WORKER_TEMP_ROOT")
        ?? throw new InvalidOperationException("The Host did not provide a worker temporary root.");
 
+static string[] GetEnvironmentVariableNames()
+    => Environment.GetEnvironmentVariables()
+        .Keys
+        .Cast<object>()
+        .Select(static key => key.ToString()!)
+        .Order(StringComparer.Ordinal)
+        .ToArray();
+
 static string CreateExceptionFingerprint(string exceptionType)
     => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(exceptionType)))
         .ToLowerInvariant();
 
-static async Task WriteFrameAsync(Stream output, object value)
+static (string Id, byte[] Body) CreateShutdownBufferedWorkerCall(string mode, string? scopeId = null)
 {
-    var body = JsonSerializer.SerializeToUtf8Bytes(value, new JsonSerializerOptions
+    const string id = "shutdownBufferedCall";
+    object envelope = mode switch
+    {
+        "v1-shutdown-buffered-get-provider" => new
+        {
+            type = "worker.get-provider",
+            id,
+            endpointReference = "rpc1_exact_provider",
+        },
+        "v1-shutdown-buffered-invalid-discover" => new
+        {
+            type = "worker.discover",
+            id,
+            contractId = "example.rpc",
+            unexpected = true,
+        },
+        "v1-shutdown-buffered-scoped-discover" => new
+        {
+            type = "worker.discover",
+            id,
+            scopeId = scopeId ?? throw new InvalidOperationException("The shutdown call scope was not created."),
+            contractId = "example.rpc",
+        },
+        _ => new
+        {
+            type = "worker.discover",
+            id,
+            contractId = "example.rpc",
+        },
+    };
+    return (id, SerializeFrameBody(envelope));
+}
+
+static async Task WriteFrameHeaderAsync(Stream output, byte[] body)
+{
+    var header = Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
+    await output.WriteAsync(header);
+    await output.FlushAsync();
+}
+
+static byte[] SerializeFrameBody(object value)
+    => JsonSerializer.SerializeToUtf8Bytes(value, new JsonSerializerOptions
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     });
+
+static async Task WriteFrameAsync(Stream output, object value)
+{
+    var body = SerializeFrameBody(value);
     var header = Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
     await output.WriteAsync(header);
     await output.WriteAsync(body);

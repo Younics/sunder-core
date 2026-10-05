@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "authorityKind": "package",
+  "authorityId": "docs.sunder.quickstart",
+  "packageId": "docs.sunder.quickstart",
+  "contracts": {
+    "greeting": {
+      "contractId": "docs.sunder.quickstart.greeting",
+      "current": {
+        "state": "release-frozen",
+        "exposure": "package",
+        "contractVersion": "2.0.0",
+        "descriptorBytes": 870,
+        "canonicalDescriptor": "{\"$defs\":{\"GreetRequest\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"$ref\":\"#/$defs/Name\"}},\"required\":[\"name\"],\"type\":\"object\"},\"GreetResponse\":{\"additionalProperties\":false,\"properties\":{\"invocationCount\":{\"$ref\":\"#/$defs/InvocationCount\"},\"message\":{\"$ref\":\"#/$defs/Message\"}},\"required\":[\"message\",\"invocationCount\"],\"type\":\"object\"},\"InvocationCount\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"Message\":{\"maxLength\":256,\"minLength\":1,\"type\":\"string\"},\"Name\":{\"maxLength\":120,\"minLength\":1,\"type\":\"string\"}},\"contractId\":\"docs.sunder.quickstart.greeting\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"greeting\":{\"methods\":{\"create\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/GreetRequest\"},\"responseSchema\":{\"$ref\":\"#/$defs/GreetResponse\"}}}}},\"version\":\"2.0.0\"}",
+        "descriptorSha256": "2602add43d14b62154cac6f53a5aa6f834b27ab2c845c0265b2bad6190f5a2a8",
+        "abiProjectionBytes": 852,
+        "canonicalAbiProjection": "{\"$defs\":{\"GreetRequest\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"$ref\":\"#/$defs/Name\"}},\"required\":[\"name\"],\"type\":\"object\"},\"GreetResponse\":{\"additionalProperties\":false,\"properties\":{\"invocationCount\":{\"$ref\":\"#/$defs/InvocationCount\"},\"message\":{\"$ref\":\"#/$defs/Message\"}},\"required\":[\"invocationCount\",\"message\"],\"type\":\"object\"},\"InvocationCount\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"Message\":{\"maxLength\":256,\"minLength\":1,\"type\":\"string\"},\"Name\":{\"maxLength\":120,\"minLength\":1,\"type\":\"string\"}},\"contractId\":\"docs.sunder.quickstart.greeting\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"greeting\":{\"methods\":{\"create\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/GreetRequest\"},\"responseSchema\":{\"$ref\":\"#/$defs/GreetResponse\"}}}}}}",
+        "abiSha256": "b096c2f059cfbf3434c4cf48cf9c108d191e90282d1e8104918890979886efb9",
+        "packageRelease": {
+          "packageId": "docs.sunder.quickstart",
+          "packageVersion": "1.0.0"
+        }
+      },
+      "history": []
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "descriptorVersion": 1,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "contractId": "example.rpc.v1.requiredrecursion",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {"example":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Node"},"responseSchema":{"$ref":"#/$defs/Node"}}}}},
+  "$defs": {
+    "Node":{"type":"object","properties":{"next":{"$ref":"#/$defs/Node"}},"required":["next"],"additionalProperties":false}
+  }
+}

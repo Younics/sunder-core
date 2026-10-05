@@ -18,10 +18,15 @@ env:
   NUGET_FLAT_CONTAINER: https://api.nuget.org/v3-flatcontainer
   NPM_REGISTRY: https://registry.npmjs.org
   NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+  SUNDER_CORE_RELEASE_APPROVED: ${{ vars.SUNDER_CORE_RELEASE_APPROVED }}
+  SUNDER_CORE_RELEASE_APPROVAL_REFERENCE: ${{ vars.SUNDER_CORE_RELEASE_APPROVAL_REFERENCE }}
+  SUNDER_CORE_ARTIFACT_SOURCE_COMMIT: ${{ vars.SUNDER_CORE_ARTIFACT_SOURCE_COMMIT }}
+  SUNDER_CORE_REGISTRY_ORIGIN: ${{ vars.SUNDER_CORE_REGISTRY_ORIGIN }}
 
 jobs:
   prepare:
     name: Prepare release metadata
+    environment: sunder-core-release
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
@@ -78,6 +83,11 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Verify the exact approved artifactSourceCommit and SDK tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/release/release_coordinates.py sdk
 
       - name: Verify pinned NuGet.org service identity
         run: bash scripts/release/verify-nuget-source.sh
@@ -217,9 +227,10 @@ jobs:
               <Nullable>enable</Nullable>
               <Version>1.0.0</Version>
               <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
-              <SelfContained>true</SelfContained>
-              <UseAppHost>true</UseAppHost>
+              <SelfContained>false</SelfContained>
+              <UseAppHost>false</UseAppHost>
               <PublishSingleFile>false</PublishSingleFile>
+              <PublishTrimmed>false</PublishTrimmed>
               <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/$(RuntimeIdentifier)/sunder-package.json'))</SunderGeneratedPackageManifest>
             </PropertyGroup>
             <ItemGroup>
@@ -288,31 +299,31 @@ jobs:
       - name: Restore worker Host interoperability test
         run: dotnet restore languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --locked-mode
 
-      - name: Package exact current-RID worker apphost
+      - name: Package exact current-RID Worker V1 module
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $PSNativeCommandUseErrorActionPreference = $true
-          $archive = Join-Path $env:RUNNER_TEMP "test.worker.v3.executable.1.0.0.sunderpkg"
-          dotnet msbuild languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/WorkerV3Executable/WorkerV3Executable.csproj `
+          $archive = Join-Path $env:RUNNER_TEMP "test.worker.v1.executable.1.0.0.sunderpkg"
+          dotnet msbuild languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/WorkerV1Executable/WorkerV1Executable.csproj `
             -t:PackSunderPackage `
             -p:Configuration=Release `
             -p:RuntimeIdentifier=${{ matrix.rid }} `
             -p:ContinuousIntegrationBuild=true `
             -p:SunderPackageOutputPath=$archive
 
-      - name: Build, launch, activate, and stop exact worker apphost
+      - name: Build, launch, activate, and stop exact Worker V1 package
         env:
-          SUNDER_DOTNET_WORKER_ARCHIVE_PATH: ${{ runner.temp }}/test.worker.v3.executable.1.0.0.sunderpkg
+          SUNDER_DOTNET_WORKER_ARCHIVE_PATH: ${{ runner.temp }}/test.worker.v1.executable.1.0.0.sunderpkg
           SUNDER_REQUIRE_DOTNET_WORKER_ARTIFACT: "1"
-          SUNDER_WORKER_RELEASE_METRICS_PATH: ${{ github.workspace }}/artifacts/worker-v3/dotnet-worker-${{ matrix.rid }}.json
+          SUNDER_WORKER_RELEASE_METRICS_PATH: ${{ github.workspace }}/artifacts/worker-v1/dotnet-worker-${{ matrix.rid }}.json
         run: dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj -c Release --no-restore -p:GeneratePackageOnBuild=false --filter FullyQualifiedName~WorkerSdkPackagedExecutable
 
       - name: Upload native worker release evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sunder-worker-v3-dotnet-evidence-${{ matrix.rid }}
-          path: artifacts/worker-v3/dotnet-worker-${{ matrix.rid }}.json
+          name: sunder-worker-v1-dotnet-evidence-${{ matrix.rid }}
+          path: artifacts/worker-v1/dotnet-worker-${{ matrix.rid }}.json
           if-no-files-found: error
           retention-days: 90
 
@@ -437,6 +448,28 @@ jobs:
 
       - name: Verify V1 public API baselines
         run: dotnet test languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj -c Release --no-restore -p:GeneratePackageOnBuild=false
+
+      - name: Export canonical catalog from the same approved artifactSourceCommit
+        if: needs.prepare.outputs.is_prerelease == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dotnet build languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/Sunder.ExecutionRuntime.Build.csproj \
+            -c Release --no-restore -p:ContinuousIntegrationBuild=true -p:GeneratePackageOnBuild=false
+          python3 scripts/release/core_catalog_release.py export \
+            --tool languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/bin/Release/net10.0/Sunder.ExecutionRuntime.Build.dll \
+            --directory "$RUNNER_TEMP/core-catalog-export"
+
+      - name: Upload exact-attempt canonical catalog export
+        if: needs.prepare.outputs.is_prerelease == 'false'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-core-catalog-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-catalog-export/*
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Pack NuGet packages
         shell: bash
@@ -641,7 +674,7 @@ jobs:
           npm test
           npm run build
 
-          output_dir="$PWD/../artifacts/release/sdk"
+          output_dir="$PWD/../../../artifacts/release/sdk"
           npm pack --json \
             --pack-destination "$output_dir" \
             --workspace @sunder/sdk \
@@ -883,6 +916,13 @@ jobs:
           name: sunder-sdk-release-packages
           path: release-assets
 
+      - name: Download the exact-attempt source-derived catalog
+        if: needs.prepare.outputs.is_prerelease == 'false'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sunder-core-catalog-${{ github.run_id }}-${{ github.run_attempt }}
+          path: catalog-input
+
       - name: Create or reuse and verify immutable draft
         id: publication
         shell: bash
@@ -927,6 +967,9 @@ jobs:
             "${expected_notice_names[@]}"
             "${evidence_names[@]}"
           )
+          if [[ "$IS_PRERELEASE" == false ]]; then
+            expected_remote_names+=(sunder-platform-contracts.v1.json sunder-platform-contracts.receipt.v1.json)
+          fi
           collect_release_assets() {
             mapfile -t assets < <(find release-assets -maxdepth 1 -type f | sort)
             if [[ ${#assets[@]} -ne ${#expected_remote_names[@]} ]]; then
@@ -955,6 +998,7 @@ jobs:
               --notes "Automated coordinated Sunder SDK, package build tooling, and package template release for $VERSION: six NuGet packages and three npm packages."
               --latest=false
               --verify-tag
+              --target "$GITHUB_SHA"
             )
             [[ "$IS_PRERELEASE" != "true" ]] || create_args+=(--prerelease)
             gh "${create_args[@]}" --draft
@@ -976,13 +1020,21 @@ jobs:
           cleanup_failed_draft() {
             exit_code=$?
             if [[ $exit_code -ne 0 && "$created_release" == true && "$verified_release" != true ]]; then
-              gh api --method DELETE "repos/$GH_REPO/releases/$release_id" >/dev/null 2>&1 || true
+              # A partially retained immutable handoff must remain recoverable by numeric ID.
+              count="$(gh api "repos/$GH_REPO/releases/$release_id" --jq '.assets | length')"
+              if [[ "$count" == 0 ]]; then
+                gh api --method DELETE "repos/$GH_REPO/releases/$release_id" >/dev/null 2>&1 || true
+              fi
             fi
             exit "$exit_code"
           }
           trap cleanup_failed_draft EXIT
 
-          remote_asset_count="$(jq '.assets | length' <<< "$release_json")"
+          if [[ "$IS_PRERELEASE" == false ]]; then
+            python3 scripts/release/core_catalog_release.py retain --directory catalog-input --release-id "$release_id"
+            cp catalog-input/sunder-platform-contracts.v1.json catalog-input/sunder-platform-contracts.receipt.v1.json release-assets/
+          fi
+          remote_asset_count="$(jq '[.assets[] | select(.name != "sunder-platform-contracts.v1.json" and .name != "sunder-platform-contracts.receipt.v1.json")] | length' <<< "$release_json")"
           if [[ "$remote_asset_count" == 0 ]]; then
             GITHUB_RELEASE_ID="$release_id" \
               bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"

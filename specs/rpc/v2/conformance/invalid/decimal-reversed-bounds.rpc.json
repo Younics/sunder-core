@@ -1,9 +1,0 @@
-{
-  "descriptorVersion": 2,
-  "schemaProfile": "sunder.rpc.values.v1",
-  "contractId": "example.rpc.v2.decimalreversedbounds",
-  "version": "2.0.0",
-  "errors": {},
-  "services": {"example":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Value"},"responseSchema":{"$ref":"#/$defs/Value"}}}}},
-  "$defs": {"Value":{"type":"string","format":"decimal","maxPrecision":8,"maxScale":4,"valueMinimum":"2.5","valueMaximum":"2.49"}}
-}

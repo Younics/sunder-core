@@ -11,8 +11,7 @@ internal static partial class SunderRpcSchemaProfile
         HashSet<string> referenceStack,
         HashSet<string> validatedDefinitions,
         ref int nodes,
-        int depth,
-        bool isV2)
+        int depth)
     {
         if (oneOf.ValueKind != JsonValueKind.Array
             || oneOf.GetArrayLength() is < 2 or > MaximumUnionVariants)
@@ -31,8 +30,7 @@ internal static partial class SunderRpcSchemaProfile
                 referenceStack,
                 validatedDefinitions,
                 ref nodes,
-                depth + 1,
-                isV2);
+                depth + 1);
             variants.Add(ResolveSchema(variant, definitions));
         }
 
@@ -103,6 +101,11 @@ internal static partial class SunderRpcSchemaProfile
         {
             return true;
         }
+        if (schema.EnumerateObject().All(static property =>
+                property.Name is "title" or "description"))
+        {
+            return true;
+        }
         if (!schema.TryGetProperty("oneOf", out var oneOf)
             || oneOf.ValueKind != JsonValueKind.Array)
         {
@@ -119,8 +122,7 @@ internal static partial class SunderRpcSchemaProfile
         HashSet<string> referenceStack,
         HashSet<string> validatedDefinitions,
         ref int nodes,
-        int depth,
-        bool isV2)
+        int depth)
     {
         var index = 0;
         foreach (var variant in oneOf.EnumerateArray())
@@ -132,8 +134,7 @@ internal static partial class SunderRpcSchemaProfile
                 referenceStack,
                 validatedDefinitions,
                 ref nodes,
-                depth + 1,
-                isV2);
+                depth + 1);
         }
     }
 
@@ -277,9 +278,7 @@ internal static partial class SunderRpcSchemaProfile
         return 1 + maximumChildHeight;
     }
 
-    private static void ValidateReferenceCycles(
-        IReadOnlyDictionary<string, JsonElement> definitions,
-        bool allowProductiveBoundaries)
+    private static void ValidateReferenceCycles(IReadOnlyDictionary<string, JsonElement> definitions)
     {
         var requiredEdges = definitions.Keys.ToDictionary(
             static name => name,
@@ -292,8 +291,7 @@ internal static partial class SunderRpcSchemaProfile
                 definition.Key,
                 definitions,
                 requiredEdges,
-                hasProductiveBoundary: false,
-                allowProductiveBoundaries);
+                hasProductiveBoundary: false);
         }
 
         var visited = new HashSet<string>(StringComparer.Ordinal);
@@ -314,8 +312,7 @@ internal static partial class SunderRpcSchemaProfile
         string sourceDefinition,
         IReadOnlyDictionary<string, JsonElement> definitions,
         IReadOnlyDictionary<string, HashSet<string>> requiredEdges,
-        bool hasProductiveBoundary,
-        bool allowProductiveBoundaries)
+        bool hasProductiveBoundary)
     {
         if (schema.TryGetProperty("$ref", out var reference))
         {
@@ -336,8 +333,7 @@ internal static partial class SunderRpcSchemaProfile
                     sourceDefinition,
                     definitions,
                     requiredEdges,
-                    hasProductiveBoundary,
-                    allowProductiveBoundaries);
+                    hasProductiveBoundary);
             }
         }
         if (schema.TryGetProperty("properties", out var properties)
@@ -353,9 +349,7 @@ internal static partial class SunderRpcSchemaProfile
                     sourceDefinition,
                     definitions,
                     requiredEdges,
-                    hasProductiveBoundary
-                    || allowProductiveBoundaries && !requiredNames.Contains(property.Name),
-                    allowProductiveBoundaries);
+                    hasProductiveBoundary || !requiredNames.Contains(property.Name));
             }
         }
         if (schema.TryGetProperty("items", out var items))
@@ -367,8 +361,7 @@ internal static partial class SunderRpcSchemaProfile
                 sourceDefinition,
                 definitions,
                 requiredEdges,
-                hasProductiveBoundary || allowProductiveBoundaries && mayBeEmpty,
-                allowProductiveBoundaries);
+                hasProductiveBoundary || mayBeEmpty);
         }
         if (schema.TryGetProperty("additionalProperties", out var additional)
             && additional.ValueKind == JsonValueKind.Object)
@@ -380,8 +373,7 @@ internal static partial class SunderRpcSchemaProfile
                 sourceDefinition,
                 definitions,
                 requiredEdges,
-                hasProductiveBoundary || allowProductiveBoundaries && mayBeEmpty,
-                allowProductiveBoundaries);
+                hasProductiveBoundary || mayBeEmpty);
         }
     }
 

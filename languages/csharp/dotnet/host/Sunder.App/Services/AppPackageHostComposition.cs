@@ -40,7 +40,8 @@ internal sealed class AppPackageHostComposition : IDisposable
         IUiDispatcher uiDispatcher,
         IAppWebViewFactory? webViewFactory = null,
         IAppWebRpcClientFactory? webRpcClientFactory = null,
-        ExternalBrowserService? externalBrowser = null)
+        ExternalBrowserService? externalBrowser = null,
+        IAppPackagePolicy? packagePolicy = null)
     {
         _eventSender = eventSender;
         _generationId = generationId;
@@ -94,7 +95,8 @@ internal sealed class AppPackageHostComposition : IDisposable
             getRuntimeConnectionInfo: getRuntimeConnectionInfo,
             webViewFactory: webViewFactory,
             webRpcClientFactory: webRpcClientFactory,
-            externalBrowser: externalBrowser);
+            externalBrowser: externalBrowser,
+            packagePolicy: packagePolicy);
         _unloadCoordinator = new AppPackageUnloadCoordinator(
             viewRegistry,
             runtimeWorkStopper,
@@ -155,6 +157,7 @@ internal sealed class AppPackageHostComposition : IDisposable
     {
         var activation = new AppPackageActivationState();
         var activated = false;
+        var projectionLease = preparedSource.ProjectionLease?.Take();
         try
         {
             await _packageActivator.ActivateAsync(
@@ -186,7 +189,9 @@ internal sealed class AppPackageHostComposition : IDisposable
                     activation.PackageInfo.Folder,
                     activation.ServiceProvider,
                     activation.LoadContext,
-                    activation.TargetLifetime));
+                    activation.TargetLifetime,
+                    projectionLease));
+            projectionLease = null;
             activated = true;
         }
         finally
@@ -198,7 +203,8 @@ internal sealed class AppPackageHostComposition : IDisposable
                     activation.PackageInfo,
                     activation.ServiceProvider,
                     activation.LoadContext,
-                    activation.TargetLifetime).ConfigureAwait(false);
+                    activation.TargetLifetime,
+                    projectionLease).ConfigureAwait(false);
                 RecordCleanupOutcome(cleanupOutcome);
             }
         }

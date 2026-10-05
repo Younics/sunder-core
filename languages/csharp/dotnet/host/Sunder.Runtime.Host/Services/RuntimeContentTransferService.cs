@@ -28,5 +28,10 @@ internal sealed class RuntimeContentTransferService(
         => store.AcquireDownload(downloadId, sessions.Generation)
             ?? throw new RuntimeNotFoundException("The download was not found or belongs to a stale Runtime generation.");
 
+    public RuntimeUploadLease AcquireExecutionRuntimeUpload(string uploadId)
+        => store.AcquireUpload(uploadId, RuntimeUploadKind.ExecutionRuntime, sessions.Generation, consume: true)
+            ?? throw new RuntimeNotFoundException(
+                "The execution-runtime upload was not found or belongs to a stale Runtime generation.");
+
     public void Release(RuntimeUploadLease lease) => store.ReleaseUpload(lease);
 }

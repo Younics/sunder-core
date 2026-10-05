@@ -6,7 +6,7 @@ using Sunder.Package.Format;
 
 namespace Sunder.Package.Build.Tasks;
 
-/// <summary>Generates an archive-format V1, Manifest V3 Sunder package manifest.</summary>
+/// <summary>Generates an archive-format V1, Manifest V1 Sunder package manifest.</summary>
 public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilities.Task
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -37,11 +37,14 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
     public ITaskItem[] BindingSnapshots { get; set; } = [];
     public ITaskItem[] UsesContracts { get; set; } = [];
     public ITaskItem[] RpcProviders { get; set; } = [];
+    public ITaskItem[] AuthoringReceipts { get; set; } = [];
+    public string? RpcOutputLockLeaseId { get; set; }
     public string? RuntimeIdentifier { get; set; }
     public string? OutputType { get; set; }
     public bool SelfContained { get; set; }
     public bool UseAppHost { get; set; }
     public bool PublishSingleFile { get; set; }
+    public bool PublishTrimmed { get; set; }
 
     [Output]
     public ITaskItem[] ResolvedTargets { get; private set; } = [];
@@ -57,6 +60,10 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
 
     public override bool Execute()
     {
+        ResolvedTargets = [];
+        ResolvedContractFiles = [];
+        HasWorkerTarget = false;
+        WorkerEntryPointRelativePath = null;
         if (!File.Exists(TargetAssemblyPath))
         {
             Log.LogError($"Sunder package entry assembly was not found at '{TargetAssemblyPath}'.");
@@ -120,6 +127,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             SelfContained,
             UseAppHost,
             PublishSingleFile,
+            PublishTrimmed,
             Log);
         if (targets is null)
         {
@@ -128,14 +136,20 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         var contracts = PackageContractBuilder.Build(
             ManifestOutputPath,
             ProjectDirectory,
+            metadata.Id,
+            PackageVersion,
+            metadata.Dependencies,
             targets,
             ContractBundles,
             BindingSnapshots,
             UsesContracts,
             RpcProviders,
+            AuthoringReceipts,
+            BuildEngine,
+            RpcOutputLockLeaseId,
             Log);
         if (contracts is null) return false;
-        var manifestTargets = PackageTargetBuilder.StampRpcV2Capabilities(
+        var manifestTargets = PackageTargetBuilder.StampRpcCapabilities(
             targets,
             contracts.RpcRoles,
             Log);
@@ -150,11 +164,15 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             Summary = string.IsNullOrWhiteSpace(metadata.Summary) ? null : metadata.Summary,
             Version = PackageVersion,
             Icon = string.IsNullOrWhiteSpace(metadata.Icon) ? null : PackageAssetDiscovery.NormalizePath(metadata.Icon),
-            DependsOn = metadata.Dependencies,
+            DependsOn = contracts.Manifest.DependsOn,
             Targets = manifestTargets,
-            ContractBundles = contracts.Bundles,
-            UsesContracts = contracts.Uses,
-            Provides = contracts.Providers,
+            ContractBundles = contracts.Manifest.ContractBundles,
+            UsesContracts = contracts.Manifest.UsesContracts,
+            Provides = contracts.Manifest.Provides,
+            PackageArtifactImports = contracts.Manifest.PackageArtifactImports,
+            PackageApiImports = contracts.Manifest.PackageApiImports,
+            ProviderImports = contracts.Manifest.ProviderImports,
+            PlatformImports = contracts.Manifest.PlatformImports,
         };
 
         var manifestDirectory = Path.GetDirectoryName(ManifestOutputPath);

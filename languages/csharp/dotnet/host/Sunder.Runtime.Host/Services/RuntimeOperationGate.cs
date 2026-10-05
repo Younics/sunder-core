@@ -1,5 +1,8 @@
 namespace Sunder.Runtime.Host.Services;
 
+internal sealed class RuntimeOperationRejectedException()
+    : InvalidOperationException("The Runtime is shutting down and is not accepting new operations.");
+
 internal sealed class RuntimeOperationGate : IAsyncDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -27,7 +30,7 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         {
             if (_stopping || _integrityFenced)
             {
-                throw new InvalidOperationException("The Runtime is shutting down and is not accepting new operations.");
+                throw new RuntimeOperationRejectedException();
             }
         }
 
@@ -54,7 +57,7 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         {
             _gate.Release();
             linkedCancellation.Dispose();
-            throw new InvalidOperationException("The Runtime is shutting down and is not accepting new operations.");
+            throw new RuntimeOperationRejectedException();
         }
 
         _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.PackageOperation);

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Runtime.Contracts;
@@ -118,7 +119,7 @@ public sealed class DevPackageOwnerLeaseTests
                 "Waited {ElapsedMilliseconds} ms for the dev package owner gate for mutation {MutationId}",
                 "Validated {PackageSourceKind} package {PackageId} in {ElapsedMilliseconds} ms",
                 "Materialized canonical shadow for package {PackageId} in {ElapsedMilliseconds} ms",
-                "Materialized Runtime target projection for package {PackageId} in {ElapsedMilliseconds} ms",
+                "Materialized development Runtime target projection for package {PackageId} in {ElapsedMilliseconds} ms",
                 "Loaded {ContractCount} RPC contract(s) for package {PackageId} in {ElapsedMilliseconds} ms",
                 "Prepared merged package session from {InstalledPackageCount} installed package(s) and {DevPackageCount} dev overlay(s) with {SessionPackageCount} session package(s), {WarningCount} warning(s), and {ErrorCount} error(s) in {ElapsedMilliseconds} ms",
                 "Started package worker {PackageId} in {ElapsedMilliseconds} ms",
@@ -318,19 +319,18 @@ public sealed class DevPackageOwnerLeaseTests
             "installed",
             "installed.package",
             "1.0.0");
+        var controlPath = Path.Combine(fixture.Paths.RootPath, "generation-commit-control");
+        Directory.CreateDirectory(controlPath);
+        var commitStartedPath = Path.Combine(controlPath, "generation-commit-started");
+        var triggerPath = Path.Combine(controlPath, "cancel-generation-version.txt");
         var cancellingDev = CreatePackageLayout(
             fixture.Paths.RootPath,
             "dev",
             "generation.cancelling.package",
-            "1.0.0").InstallPath;
-        var workspacePath = Path.Combine(
-            fixture.Paths.PackageDataRootPath,
-            "generation.cancelling.package",
-            "workspace");
-        var commitStartedPath = Path.Combine(workspacePath, "generation-commit-started");
-        var triggerPath = Path.Combine(workspacePath, "cancel-generation-version.txt");
+            "1.0.0",
+            triggerPath,
+            commitStartedPath).InstallPath;
         using var cancellation = new CancellationTokenSource();
-        Directory.CreateDirectory(workspacePath);
         File.WriteAllText(triggerPath, "1.0.0");
         try
         {
@@ -373,22 +373,22 @@ public sealed class DevPackageOwnerLeaseTests
         {
             PackageRuntimeGenerationActivationAttempts = 1,
         });
+        var controlPath = Path.Combine(fixture.Paths.RootPath, "generation-commit-control");
+        Directory.CreateDirectory(controlPath);
+        var commitStartedPath = Path.Combine(controlPath, "generation-commit-started");
+        var triggerPath = Path.Combine(controlPath, "cancel-generation-version.txt");
         var installed = CreatePackageLayout(
             fixture.Paths.RootPath,
             "installed",
             "generation.cancelling.package",
-            "1.0.0");
+            "1.0.0",
+            triggerPath,
+            commitStartedPath);
         var dev = CreatePackageLayout(
             fixture.Paths.RootPath,
             "dev",
             "generation.cancelling.package",
             "2.0.0").InstallPath;
-        var workspacePath = Path.Combine(
-            fixture.Paths.PackageDataRootPath,
-            "generation.cancelling.package",
-            "workspace");
-        var commitStartedPath = Path.Combine(workspacePath, "generation-commit-started");
-        var triggerPath = Path.Combine(workspacePath, "cancel-generation-version.txt");
         const string token = "owner-token-release-cancel-release";
         using var cancellation = new CancellationTokenSource();
         try
@@ -527,7 +527,9 @@ public sealed class DevPackageOwnerLeaseTests
         string rootPath,
         string folderName,
         string packageId,
-        string version)
+        string version,
+        string? generationCommitTriggerPath = null,
+        string? generationCommitStartedPath = null)
     {
         var packageFolder = Path.Combine(rootPath, folderName, packageId, version);
         var assemblyPath = typeof(PackageSessionOverlayTestPackageModule).Assembly.Location;
@@ -536,6 +538,17 @@ public sealed class DevPackageOwnerLeaseTests
             packageId,
             version,
             assemblyPath);
+        if (generationCommitTriggerPath is not null && generationCommitStartedPath is not null)
+        {
+            File.WriteAllText(
+                Path.Combine(packageFolder, "payload", "shared", "generation-commit-control.json"),
+                JsonSerializer.Serialize(new
+                {
+                    triggerPath = generationCommitTriggerPath,
+                    startedPath = generationCommitStartedPath,
+                }));
+            CanonicalPackageTestBuilder.WriteContentIndex(packageFolder);
+        }
         return CanonicalPackageTestBuilder.CreateInstalledRecord(packageFolder, packageId, version);
     }
 

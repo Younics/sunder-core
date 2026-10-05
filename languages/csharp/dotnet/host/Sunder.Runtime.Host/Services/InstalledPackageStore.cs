@@ -9,7 +9,7 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
 {
-    private const int CurrentSchemaVersion = 5;
+    private const int CurrentSchemaVersion = 1;
 
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -17,6 +17,8 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         PropertyNameCaseInsensitive = false,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         RespectRequiredConstructorParameters = true,
+        AllowDuplicateProperties = false,
+        RespectNullableAnnotations = true,
         WriteIndented = true,
     };
 
@@ -27,21 +29,37 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             return [];
         }
 
+        var json = await File.ReadAllTextAsync(paths.StateFilePath, cancellationToken);
+        int schemaVersion;
+        try
+        {
+            schemaVersion = ReadSchemaVersion(json);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' is invalid. Run 'sunder runtime reset --yes' to reset derived state while preserving package data.", ex);
+        }
+
+        if (schemaVersion != CurrentSchemaVersion)
+        {
+            throw UnsupportedSchema(schemaVersion);
+        }
+
         InstalledPackageStateFile? state;
         try
         {
             state = JsonSerializer.Deserialize<InstalledPackageStateFile>(
-                await File.ReadAllTextAsync(paths.StateFilePath, cancellationToken),
+                json,
                 JsonOptions);
         }
         catch (JsonException ex)
         {
-            throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' is invalid.", ex);
+            throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' is invalid. Run 'sunder runtime reset --yes' to reset derived state while preserving package data.", ex);
         }
 
         if (state?.SchemaVersion != CurrentSchemaVersion)
         {
-            throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' has an unsupported schema version.");
+            throw UnsupportedSchema(state?.SchemaVersion ?? schemaVersion);
         }
 
         if (state.Packages is null)
@@ -60,6 +78,11 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         IReadOnlyList<InstalledPackageRecord> packages,
         CancellationToken cancellationToken = default)
     {
+        if (File.Exists(paths.StateFilePath))
+        {
+            _ = await ListAsync(cancellationToken);
+        }
+
         ValidateCatalog(packages);
         Directory.CreateDirectory(paths.CatalogRootPath);
         var state = new InstalledPackageStateFile(
@@ -90,6 +113,14 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
 
             ValidateProvenance(package);
             ValidateCapabilityGrants(package);
+            ValidateExecutionRuntimeBindings(package);
+            if (InstalledPackageProjection.Keys(package) is { } acquired
+                && package.ExecutionRuntimeBindings.Any(binding => !InstalledPackageProjection.Includes(acquired, binding.Role, binding.Rid)))
+                throw new InvalidDataException("Installed package acquisition scope is invalid or disagrees with its runtime bindings.");
+            if (package.SourcePackageContentIdentity is not null && !IsCanonicalHash(package.SourcePackageContentIdentity))
+                throw new InvalidDataException("Installed source package content identity is invalid.");
+            package.Policy?.Validate(package);
+            package.Compatibility?.Validate(package);
 
             if (!paths.IsCanonicalInstalledPath(package.PackageId, package.Version, package.InstallPath))
             {
@@ -157,7 +188,7 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
 
     public InstalledPackageDescriptor ToDescriptor(InstalledPackageRecord package)
     {
-        var validation = SunderPackageArchiveInspector.ValidateExtractedPackageAsync(package.InstallPath)
+        var validation = InstalledPackageProjection.ValidateAsync(package)
             .GetAwaiter()
             .GetResult();
         if (!validation.Success || validation.Manifest is null)
@@ -166,6 +197,7 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
                 $"Installed package '{package.PackageId}' is invalid: {string.Join(" | ", validation.Errors)}");
         }
         var manifest = validation.Manifest;
+        PackageManifestAdmissionPolicy.EnsureSupported(manifest);
         if (!string.Equals(manifest.Id, package.PackageId, StringComparison.Ordinal)
             || !string.Equals(manifest.Version, package.Version, StringComparison.Ordinal)
             || !string.Equals(manifest.Name, package.Name, StringComparison.Ordinal)
@@ -194,15 +226,15 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             package.PackageId,
             package.Name,
             package.Version,
-            PackageTargetSelection.GetHostRoles(manifest),
+            PackageTargetSelection.GetHostRoles(manifest, InstalledPackageProjection.Keys(package)),
             package.Summary,
             icon,
             package.IsEnabled,
             dependencies,
             package.InstalledAtUtc,
-            package.IsEnabled ? null : "Disabled",
+            !package.IsEnabled ? "Disabled" : package.Policy is { IsBlocked: true } ? "PolicyBlocked" : null,
             (manifest.UsesContracts ?? [])
-                .Where(static use => use is not null)
+                .Where(use => use is not null && (package.AcquiredTargets is null || package.AcquiredTargets.Any(target => target.Role == use.Role)))
                 .Select(static use => new PackageRpcContractUseDescriptor(
                     use!.Role!,
                     use.ContractId!,
@@ -214,7 +246,11 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             package.Provenance.ToDescriptor(),
             PackageSensitiveCapabilityPolicy.GetEffectiveCapabilities(package)
                 .Order(StringComparer.Ordinal)
-                .ToArray());
+                .ToArray(),
+            ProjectExecutionRuntimeBindings(package, manifest))
+        {
+            PolicyErrorCode = package.Policy?.ErrorCode,
+        };
     }
 
     public async Task<string?> TryResolvePackageAssetPathAsync(
@@ -236,6 +272,34 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
     private static bool IsCanonicalHash(string? value)
         => value is { Length: 64 }
            && value.All(static character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static int ReadSchemaVersion(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("Installed package catalog root must be an object.");
+        }
+
+        var schemaProperties = document.RootElement
+            .EnumerateObject()
+            .Where(static property => property.NameEquals("schemaVersion"))
+            .ToArray();
+        if (schemaProperties.Length != 1
+            || schemaProperties[0].Value.ValueKind != JsonValueKind.Number
+            || !schemaProperties[0].Value.TryGetInt32(out var schemaVersion))
+        {
+            throw new JsonException("Installed package catalog must contain one integer schemaVersion.");
+        }
+
+        return schemaVersion;
+    }
+
+    private InvalidDataException UnsupportedSchema(int schemaVersion)
+        => new(
+            $"Installed package catalog '{paths.StateFilePath}' uses unsupported pre-release schema version {schemaVersion}. "
+            + "No migration or reinterpretation is supported. Stop the Runtime and run 'sunder runtime reset --yes'; "
+            + "the data-safe reset preserves package data, settings, secrets, credentials, workspaces, and user files.");
 
     private static void ValidateProvenance(InstalledPackageRecord package)
     {
@@ -322,6 +386,147 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             }
         }
     }
+
+    private static void ValidateExecutionRuntimeBindings(InstalledPackageRecord package)
+    {
+        var bindings = package.ExecutionRuntimeBindings
+                       ?? throw new InvalidDataException(
+                           $"Installed package '{package.PackageId}' is missing execution-runtime bindings.");
+        if (bindings.Count > SunderPackageFormat.MaxTargets)
+        {
+            throw new InvalidDataException(
+                $"Installed package '{package.PackageId}' contains too many execution-runtime bindings.");
+        }
+
+        var targetKeys = new HashSet<(string Role, string Rid)>();
+        foreach (var binding in bindings)
+        {
+            if (binding is null
+                || !string.Equals(binding.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
+                || !SunderPackageFormat.IsRuntimeIdentifier(binding.Rid)
+                || !IsExecutionRuntimePair(binding.RuntimeId, binding.ModuleAbi)
+                || !SemanticVersion.TryParse(binding.RuntimeVersion, out var runtimeVersion)
+                || runtimeVersion.Prerelease is not null
+                || binding.RuntimePackagingRevision is <= 0 or > SunderExecutionRuntimeFormat.MaxPackagingRevision
+                || !IsCanonicalHash(binding.RuntimeManifestSha256)
+                || !IsCanonicalHash(binding.RuntimeArtifactSha256)
+                || binding.RuntimeArtifactSize is <= 0 or > SunderExecutionRuntimeFormat.MaxArchiveBytes
+                || !IsCanonicalRegistryOrigin(binding.RegistryOrigin)
+                || binding.AcquisitionSource is not (RuntimeExecutionRuntimeAcquisitionSources.Registry
+                    or RuntimeExecutionRuntimeAcquisitionSources.LocalImport
+                    or RuntimeExecutionRuntimeAcquisitionSources.Development)
+                || !IsLowerIdentifier(binding.SigningKeyId, SunderExecutionRuntimeFormat.MaxKeyIdLength)
+                || binding.TrustStoreGeneration <= 0
+                || binding.RuntimePolicyRevision <= 0
+                || binding.RuntimeLifecycleState is not ("supported" or "deprecated" or "retired" or "revoked")
+                || !IsCanonicalUtc(binding.PolicyObservedAtUtc)
+                || !IsCanonicalUtc(binding.ResolvedAtUtc)
+                || !targetKeys.Add((binding.Role, binding.Rid)))
+            {
+                throw new InvalidDataException(
+                    $"Installed package '{package.PackageId}' contains an invalid execution-runtime binding.");
+            }
+        }
+    }
+
+    private static IReadOnlyList<PackageTargetExecutionRuntimeBinding> ProjectExecutionRuntimeBindings(
+        InstalledPackageRecord package,
+        SunderPackageManifest manifest)
+        => package.ExecutionRuntimeBindings.Select(binding =>
+        {
+            var target = InstalledPackageProjection.Targets(package, manifest)
+                .Where(static target => target is not null)
+                .Select(static target => target!)
+                .SingleOrDefault(target =>
+                    string.Equals(target.Role, binding.Role, StringComparison.Ordinal)
+                    && string.Equals(target.Rid, binding.Rid, StringComparison.Ordinal));
+            var requirement = target?.ExecutionRuntime;
+            if (requirement is null
+                || !string.Equals(requirement.Id, binding.RuntimeId, StringComparison.Ordinal)
+                || !string.Equals(requirement.ModuleAbi, binding.ModuleAbi, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Installed package '{package.PackageId}' execution-runtime binding for target "
+                    + $"'{binding.Role}/{binding.Rid}' does not match its strict manifest requirement.");
+            }
+
+            return new PackageTargetExecutionRuntimeBinding(
+                binding.Role,
+                binding.Rid,
+                new RuntimeExecutionRuntimeRequirement(
+                    binding.RuntimeId,
+                    requirement.VersionRange!,
+                    binding.ModuleAbi),
+                new RuntimeExecutionRuntimeIdentity(
+                    binding.RuntimeId,
+                    binding.RuntimeVersion,
+                    binding.RuntimePackagingRevision,
+                    binding.Rid,
+                    binding.ModuleAbi,
+                    binding.RuntimeManifestSha256,
+                    binding.RuntimeArtifactSha256),
+                binding.RuntimeArtifactSize,
+                binding.RegistryOrigin,
+                binding.AcquisitionSource,
+                binding.SigningKeyId,
+                binding.TrustStoreGeneration,
+                new RuntimeExecutionRuntimeLifecycle(
+                    binding.RuntimeLifecycleState,
+                    SupportedFromUtc: null,
+                    DeprecatedAtUtc: null,
+                    InstallBlockedAtUtc: null,
+                    ActivationBlockedAtUtc: null,
+                    RevokedAtUtc: null,
+                    PolicyMessage: null,
+                    binding.RuntimePolicyRevision,
+                    binding.PolicyObservedAtUtc),
+                binding.ResolvedAtUtc);
+        }).ToArray();
+
+    private static bool IsExecutionRuntimePair(string? runtimeId, string? moduleAbi)
+        => runtimeId switch
+        {
+            SunderExecutionRuntimeFormat.DotNetRuntimeId => string.Equals(
+                moduleAbi,
+                SunderExecutionRuntimeFormat.DotNetModuleAbi,
+                StringComparison.Ordinal),
+            SunderExecutionRuntimeFormat.NodeRuntimeId => string.Equals(
+                moduleAbi,
+                SunderExecutionRuntimeFormat.NodeModuleAbi,
+                StringComparison.Ordinal),
+            _ => false,
+        };
+
+    private static bool IsCanonicalRegistryOrigin(string? value)
+    {
+        try
+        {
+            return value is not null
+                   && value.Length <= SunderExecutionRuntimeFormat.MaxSourceUriLength
+                   && string.Equals(RegistryOrigin.Normalize(value).AbsoluteUri, value, StringComparison.Ordinal);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsLowerIdentifier(string? value, int maxLength)
+        => !string.IsNullOrEmpty(value)
+           && value.Length <= maxLength
+           && value[0] is >= 'a' and <= 'z' or >= '0' and <= '9'
+           && value[^1] is >= 'a' and <= 'z' or >= '0' and <= '9'
+           && !value.Contains("..", StringComparison.Ordinal)
+           && value.Split('.').All(static segment => segment.Length > 0
+                                                       && segment[0] != '-'
+                                                       && segment[^1] != '-')
+           && value.All(static character => character is >= 'a' and <= 'z'
+                                                   or >= '0' and <= '9'
+                                                   or '.'
+                                                   or '-');
+
+    private static bool IsCanonicalUtc(DateTimeOffset value)
+        => value != default && value.Offset == TimeSpan.Zero;
 
     private static bool PathsEqual(string left, string right)
         => string.Equals(

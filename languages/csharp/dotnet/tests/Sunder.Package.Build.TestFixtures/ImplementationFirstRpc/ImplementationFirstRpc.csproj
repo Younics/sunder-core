@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>7.6.5</Version>
+    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>false</UseAppHost>
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <SunderPackageProject>true</SunderPackageProject>
+    <SunderPackageAppProject>App\ImplementationFirstRpc.App.csproj</SunderPackageAppProject>
+    <SunderPackageAppTargetFramework>net10.0-windows</SunderPackageAppTargetFramework>
+    <SunderSdkPackageVersion>1.1.0</SunderSdkPackageVersion>
+    <SunderSdkWorkerProject Condition="'$(SunderSdkWorkerProject)' == ''">$(MSBuildThisFileDirectory)..\..\..\packages\Sunder.Sdk.Worker\Sunder.Sdk.Worker.csproj</SunderSdkWorkerProject>
+    <SunderPackageBuildProject Condition="'$(SunderPackageBuildProject)' == ''">$(MSBuildThisFileDirectory)..\..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj</SunderPackageBuildProject>
+    <SunderPackageBuildTargetsPath Condition="'$(SunderPackageBuildTargetsPath)' == ''">$(MSBuildThisFileDirectory)..\..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets</SunderPackageBuildTargetsPath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(SunderReferenceDirectory)' == ''">
+    <ProjectReference Include="$(SunderSdkWorkerProject)" />
+    <ProjectReference Include="$(SunderPackageBuildProject)"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(SunderReferenceDirectory)' != ''">
+    <Reference Include="Sunder.Sdk" HintPath="$(SunderReferenceDirectory)Sunder.Sdk.dll" Private="true" />
+    <Reference Include="Sunder.Sdk.Worker" HintPath="$(SunderReferenceDirectory)Sunder.Sdk.Worker.dll" Private="true" />
+    <Reference Include="Microsoft.Extensions.DependencyInjection.Abstractions" HintPath="$(SunderReferenceDirectory)Microsoft.Extensions.DependencyInjection.Abstractions.dll" Private="true" />
+    <Reference Include="Microsoft.Extensions.Logging.Abstractions" HintPath="$(SunderReferenceDirectory)Microsoft.Extensions.Logging.Abstractions.dll" Private="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="App\**\*.cs" />
+    <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)"
+                         Role="runtime"
+                         Rid="$(RuntimeIdentifier)"
+                         Kind="worker" />
+  </ItemGroup>
+
+  <Import Project="$(SunderPackageBuildTargetsPath)" />
+</Project>

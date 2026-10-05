@@ -1,17 +1,31 @@
 # SUNDER_PACKAGE_NAME
 
-TypeScript worker Runtime package `SUNDER_PACKAGE_ID`.
+Runtime-backed TypeScript Worker package `SUNDER_PACKAGE_ID`.
 
-The package uses authoring schema V2, emits Package Manifest V3, and exposes the `example.messages` RPC V2 contract only to its package. Its owner-only Runtime provider is locked to contract version `2.0.0`; this Node-only preset declares no caller uses.
+The package uses implementation-first authoring schema V3 and emits Package Manifest V1. Its Worker is a bundled CommonJS module at `bin/worker.cjs`, launched by the managed `sunder.runtime.node` 24.x execution runtime through Worker Protocol V1. The package does not embed Node or an executable.
 
-`workerCapabilities` starts empty. Add the exact optional capability before using Worker context settings, storage, storage migrations, workspace, secrets, logging, callback, or auth APIs; package tooling rejects unsupported declarations and stamps the canonical set on every worker target. `storage.key-migration.v1` automatically adds `storage.v1`.
+`src/rpc.ts` owns the schema-bearing implementation and exports one `rpc.router`. The tool derives the package-qualified `messages` contract, exact identities, dispatch and typed clients under `.sunder/generated/rpc/`. `RpcHandlers<typeof messages>` checks the ordinary implementation in the editor and in standalone TypeScript builds. This Node-only preset has one owner-only Runtime provider and no caller uses.
 
-The `rpcBindings` configuration generates typed provider APIs and client code at `.sunder/generated/rpc/example-messages.g.ts`. Run `sunder-package generate` to refresh it directly; `npm run typecheck`, development, and production builds generate it automatically. Keep `.sunder/` untracked.
+Start a new package in this order:
 
-- `npm run sunder:dev` bundles with the explicitly recorded current developer Node and watches for clean process drain/restart.
-- `npm test` runs strict TypeScript checking and Node's built-in test runner.
-- `npm run build` downloads and verifies pinned Node 24.18.1, then emits the current exact-RID SEA target leaf.
-- `npm run smoke` performs a native `sunder.worker.v3` handshake against that SEA.
-- `npm run package` aggregates available exact-RID leaves into a deterministic `.sunderpkg`.
+```sh
+npm install
+npm run contracts:accept
+npm run contracts:check
+npm test
+```
 
-Production package payloads contain SEA executables, not source JavaScript or external-Node launch metadata. Windows unsigned output requires the explicit `--allow-unsigned-windows` tool option; release signing uses `SUNDER_WINDOWS_SIGN_SCRIPT`. macOS uses ad-hoc local signing unless `SUNDER_MACOS_SIGN_IDENTITY` is configured.
+First Accept precedes generation. Select any local package/catalog imports and bind imported providers before Accept if needed; no Registry is required. Review and commit `sunder-contracts.owned.json` and `sunder-contracts.lock.json`; keep `.sunder/` untracked. The new package-qualified contract starts at `1.0.0`, independently of the package version. Later implementation changes require explicit Accept; normal generate/dev/build never edit either tracked file.
+
+- `npm run sunder:dev` watches sources and publishes `dist/sunder-dev` in the canonical runtime-backed shape.
+- `npm test` runs strict TypeScript checking and Node's test runner.
+- `npm run build` emits the current exact-RID thin Worker target leaf.
+- `npm run smoke` loads and releases `sunder-dev` through the managed Sunder Runtime.
+- `npm run contracts:freeze` freezes the reviewed current contracts before release packing.
+- `npm run package` builds all six exact-RID leaves and emits a deterministic universal `.sunderpkg` plus adjacent ownership evidence.
+
+Smoke requires a trusted Node runtime for the current RID. If absent, run `sunder runtime ensure sunder.runtime.node ">=24.18.1 <25.0.0" sunder.node-worker-module.v1` or import an approved runtime artifact before retrying.
+
+`workerCapabilities` starts empty. Add an exact optional capability before using settings, storage, storage migrations, workspace, secrets, logging, callbacks, or auth. Package tooling rejects unsupported declarations and stamps the canonical capability set on every Worker target.
+
+Declare package-owned native addons with the exact-RID `nativeAssets` map in `sunder.package.json`. Native assets remain in their RID layer; Node/.NET runtime and toolchain files are rejected.

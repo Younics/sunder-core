@@ -1,0 +1,10 @@
+{
+  "package": {
+    "packageId": "example.agent",
+    "version": "2.0.0",
+    "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "ownerPrincipalId": "0123456789abcdef0123456789abcdef",
+  "publicInventorySha256": "9999999999999999999999999999999999999999999999999999999999999999",
+  "initialAvailability": "Yanked"
+}

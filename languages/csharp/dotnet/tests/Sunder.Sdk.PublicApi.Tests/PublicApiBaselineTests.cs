@@ -61,9 +61,15 @@ public sealed class PublicApiBaselineTests
         var updateRoot = Environment.GetEnvironmentVariable("SUNDER_UPDATE_PUBLIC_API_ROOT");
         if (!string.IsNullOrWhiteSpace(updateRoot))
         {
-            var outputPath = Path.Combine(updateRoot, fileName);
-            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-            File.WriteAllText(outputPath, actual);
+            var selectedAssemblies = (Environment.GetEnvironmentVariable("SUNDER_UPDATE_PUBLIC_API_ASSEMBLIES") ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (selectedAssemblies.Length == 0
+                || selectedAssemblies.Contains(assembly.GetName().Name, StringComparer.Ordinal))
+            {
+                var outputPath = Path.Combine(updateRoot, fileName);
+                Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+                File.WriteAllText(outputPath, actual);
+            }
             return;
         }
 

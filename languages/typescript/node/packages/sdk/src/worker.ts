@@ -5,11 +5,18 @@ import { lstatSync } from "node:fs";
 import { mkdir, open, realpath, stat, unlink, type FileHandle } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
-import { FrameDecoder, ProtocolError, TransportResourceError, encodeFrame, encodedJsonByteLength } from "./framing";
+import {
+  FrameDecoder,
+  ProtocolError,
+  TransportResourceError,
+  encodeFrame,
+  encodedJsonByteLength,
+  hasCanonicalNonNegativeIntegerToken,
+} from "./framing";
 import { computeWorkerResourceProfileHash } from "./resource-profile";
 import { createPackageStorageKey, type PackageStorageKeyMigration, type PackageStorageKeyMigrationAction } from "./storage";
 import { formatUtcTimestamp, parseUtcTimestamp } from "./timestamp";
-import { isPackageId, isSemanticVersion } from "./validation";
+import { SEMANTIC_VERSION_MAXIMUM_LENGTH, isPackageId, isSemanticVersion } from "./validation";
 import {
   SUNDER_WORKER_LIMITS,
   SUNDER_WORKER_PROTOCOL,
@@ -261,7 +268,7 @@ class WorkerRuntime {
     const version = integerValue(root, "protocolVersion");
     const challenge = stringValue(root, "challenge", 128);
     const packageId = stringValue(root, "packageId", 256);
-    const packageVersion = stringValue(root, "packageVersion", 128);
+    const packageVersion = stringValue(root, "packageVersion", SEMANTIC_VERSION_MAXIMUM_LENGTH);
     const activationId = canonicalActivationId(root, "activationId");
     const sessionId = idValue(root, "sessionId", 256);
     if (protocol !== SUNDER_WORKER_PROTOCOL || version !== SUNDER_WORKER_PROTOCOL_VERSION) {
@@ -434,11 +441,16 @@ class WorkerRuntime {
   }
 
   #beginActivate(root: Readonly<Record<string, JsonValue>>): void {
-    only(root, "type", "sessionGeneration");
+    only(root, "type", "sessionGeneration", "workspaceRootPath");
     const sessionGeneration = integerValue(root, "sessionGeneration");
+    const workspaceRootPath = stringValue(root, "workspaceRootPath", 4096);
     if (this.#phase !== "storage-migrations-prepared" || sessionGeneration !== this.#sessionGeneration) {
       throw new ProtocolError("host.activate is duplicate or out of order.");
     }
+    this.#environment.workspace.bind(workspaceRootPath, [
+      this.#environment.content.rootPath,
+      this.#environment.temporary.rootPath,
+    ]);
     this.#phase = "activating";
     this.#activationOperation = this.#completeActivation(sessionGeneration);
   }
@@ -539,7 +551,7 @@ class WorkerRuntime {
     this.#hostInvocations.set(id, invocation);
     const context: RpcInvocationContext = Object.freeze({
       callerPackageId: stringValue(contextValue, "callerPackageId", 256),
-      callerPackageVersion: stringValue(contextValue, "callerPackageVersion", 128),
+      callerPackageVersion: stringValue(contextValue, "callerPackageVersion", SEMANTIC_VERSION_MAXIMUM_LENGTH),
       deadlineUtc,
       callDepth,
       provider: snapshot,
@@ -1424,7 +1436,7 @@ class WorkerRuntime {
     signal: AbortSignal,
   ): Promise<RpcContentFile> {
     this.#ensureContentAuthority(authority);
-    const reference = contentReference(referenceValue);
+    const reference = contentReference(referenceValue, false);
     if (reference.length > LIMITS.maxContentBytes) throw new RangeError("RPC content reference exceeds the worker byte limit.");
     if (this.#openContentHandles >= LIMITS.maxContentHandles) {
       throw infrastructureError("resource-exhausted", "rpc.worker.content-handle-limit", "The worker RPC content-handle limit was reached.");
@@ -2480,7 +2492,7 @@ function captureEnvironment(): WorkerEnvironment {
   if (protocol !== SUNDER_WORKER_PROTOCOL) throw new Error(`SUNDER_WORKER_PROTOCOL must select ${SUNDER_WORKER_PROTOCOL}.`);
   const packageId = requiredEnvironment("SUNDER_PACKAGE_ID", 256);
   if (!isPackageId(packageId)) throw new Error("SUNDER_PACKAGE_ID is not a canonical package identifier.");
-  const packageVersion = requiredEnvironment("SUNDER_PACKAGE_VERSION", 128);
+  const packageVersion = requiredEnvironment("SUNDER_PACKAGE_VERSION", SEMANTIC_VERSION_MAXIMUM_LENGTH);
   if (!isSemanticVersion(packageVersion)) throw new Error("SUNDER_PACKAGE_VERSION is not strict semantic versioning.");
   const activationId = requiredEnvironment("SUNDER_ACTIVATION_ID", 64);
   if (!/^[0-9a-f]{32}$/u.test(activationId)) throw new Error("SUNDER_ACTIVATION_ID is not a canonical activation identifier.");
@@ -2488,12 +2500,12 @@ function captureEnvironment(): WorkerEnvironment {
   if (!SAFE_ID.test(sessionId)) throw new Error("SUNDER_SESSION_ID contains unsupported characters.");
   const content = localPath(requiredPathEnvironment("SUNDER_PACKAGE_CONTENT_ROOT"));
   const temporary = localPath(requiredPathEnvironment("SUNDER_WORKER_TEMP_ROOT"));
-  const workspace = localPath(requiredPathEnvironment("SUNDER_PACKAGE_WORKSPACE_ROOT"));
+  const workspace = bindableLocalPath();
   const rpcExtendedDeadlineV1 = optionalEnvironmentFlag(RPC_EXTENDED_DEADLINE_ENVIRONMENT);
-  const identities = [content.rootPath, temporary.rootPath, workspace.rootPath]
+  const identities = [content.rootPath, temporary.rootPath]
     .map((path) => process.platform === "win32" ? path.toLowerCase() : path);
   if (new Set(identities).size !== identities.length) {
-    throw new Error("Worker V3 content, temporary, and persistent workspace roots must be distinct.");
+    throw new Error("Worker V1 content and temporary roots must be distinct.");
   }
   return Object.freeze({
     protocol,
@@ -2544,6 +2556,47 @@ function localPath(rootPath: string): WorkerLocalPath {
       if (!isWithin(rootPath, result) || result === rootPath) throw new RangeError("Package local path escaped its root.");
       ensureNoObservedLinks(rootPath, portable);
       return result;
+    },
+  });
+}
+
+function bindableLocalPath(): BindableWorkerLocalPath {
+  let boundRoot: string | undefined;
+  const requireRoot = (): string => {
+    if (boundRoot === undefined) {
+      throw new Error("The persistent workspace is unavailable until the Host activates this worker generation.");
+    }
+    return boundRoot;
+  };
+  return Object.freeze({
+    get rootPath(): string {
+      return requireRoot();
+    },
+    resolve: (relativePath: string): string => {
+      const rootPath = requireRoot();
+      const portable = validateRelativePath(relativePath);
+      const result = resolve(rootPath, ...portable.split("/"));
+      if (!isWithin(rootPath, result) || result === rootPath) throw new RangeError("Package local path escaped its root.");
+      ensureNoObservedLinks(rootPath, portable);
+      return result;
+    },
+    bind: (rootPath: string, excludedRoots: readonly string[]): void => {
+      if (boundRoot !== undefined) throw new ProtocolError("The persistent workspace is already bound.");
+      if (rootPath.includes("\0") || !isAbsolute(rootPath)) {
+        throw new ProtocolError("host.activate workspaceRootPath must identify an existing absolute directory.");
+      }
+      const canonicalPath = resolve(rootPath);
+      try {
+        const information = lstatSync(canonicalPath);
+        if (!information.isDirectory() || information.isSymbolicLink()) throw new Error();
+      } catch {
+        throw new ProtocolError("host.activate workspaceRootPath must identify an existing non-link directory.");
+      }
+      const identity = process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
+      if (excludedRoots.some((path) => (process.platform === "win32" ? path.toLowerCase() : path) === identity)) {
+        throw new ProtocolError("Worker V1 content, temporary, and persistent workspace roots must be distinct.");
+      }
+      boundRoot = canonicalPath;
     },
   });
 }
@@ -3099,8 +3152,18 @@ function canonicalActivationId(root: Readonly<Record<string, JsonValue>>, name: 
 }
 
 function integerValue(root: Readonly<Record<string, JsonValue>>, name: string): number {
+  const value = nonNegativeIntegerValue(root, name);
+  if (!hasCanonicalNonNegativeIntegerToken(root, name)) {
+    throw new ProtocolError(`Envelope property '${name}' must be a non-negative safe integer.`);
+  }
+  return value;
+}
+
+function nonNegativeIntegerValue(root: Readonly<Record<string, JsonValue>>, name: string): number {
   const value = root[name];
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+  if (typeof value !== "number"
+    || !Number.isSafeInteger(value)
+    || value < 0) {
     throw new ProtocolError(`Envelope property '${name}' must be a non-negative safe integer.`);
   }
   return value;
@@ -3261,7 +3324,7 @@ function contentRegistrationOptions(options: RpcContentRegistrationOptions): Rea
   });
 }
 
-function contentReference(value: unknown): RpcContentReference {
+function contentReference(value: unknown, requireWireToken = true): RpcContentReference {
   const root = objectValue(value as JsonValue, "RPC content reference");
   only(root, "id", "length", "sha256", "mediaType", "fileName", "expiresAtUtc", "repeatability");
   const hash = stringValue(root, "sha256", 64);
@@ -3272,7 +3335,9 @@ function contentReference(value: unknown): RpcContentReference {
   if (repeatability !== "single-use" && repeatability !== "repeatable") throw new ProtocolError("RPC content repeatability is invalid.");
   return Object.freeze({
     id: idValue(root, "id"),
-    length: integerValue(root, "length"),
+    length: requireWireToken
+      ? integerValue(root, "length")
+      : nonNegativeIntegerValue(root, "length"),
     sha256: hash,
     mediaType: stringValue(root, "mediaType", 128),
     fileName: stringValue(root, "fileName", 255),
@@ -3304,7 +3369,7 @@ function providerArray(value: JsonValue | undefined): readonly ProviderWireIdent
     return Object.freeze({
       providerId: stringValue(provider, "providerId", 256),
       contractId: stringValue(provider, "contractId", 256),
-      contractVersion: stringValue(provider, "contractVersion", 128),
+      contractVersion: stringValue(provider, "contractVersion", SEMANTIC_VERSION_MAXIMUM_LENGTH),
       descriptorSha256: sha256Value(provider, "descriptorSha256"),
       abiSha256: sha256Value(provider, "abiSha256"),
     });
@@ -3322,10 +3387,10 @@ function providerSnapshot(value: JsonValue | undefined): RpcProviderSnapshot {
   }
   return Object.freeze({
     packageId: stringValue(provider, "packageId", 256),
-    packageVersion: stringValue(provider, "packageVersion", 128),
+    packageVersion: stringValue(provider, "packageVersion", SEMANTIC_VERSION_MAXIMUM_LENGTH),
     providerId: stringValue(provider, "providerId", 256),
     contractId: stringValue(provider, "contractId", 256),
-    contractVersion: stringValue(provider, "contractVersion", 128),
+    contractVersion: stringValue(provider, "contractVersion", SEMANTIC_VERSION_MAXIMUM_LENGTH),
     descriptorSha256: sha256Value(provider, "descriptorSha256"),
     abiSha256: sha256Value(provider, "abiSha256"),
     activationId: canonicalActivationId(provider, "activationId"),
@@ -3413,7 +3478,7 @@ function rpcError(value: JsonValue | undefined): RpcError {
 function validateProviderIdentity(provider: RpcProviderRegistration): void {
   if (!isPackageId(provider.providerId)) throw new TypeError("Provider providerId is invalid.");
   if (!isPackageId(provider.contractId)) throw new TypeError("Provider contractId is invalid.");
-  if (!isSemanticVersion(provider.contractVersion) || provider.contractVersion.length > 128) throw new TypeError("Provider contractVersion is invalid.");
+  if (!isSemanticVersion(provider.contractVersion)) throw new TypeError("Provider contractVersion is invalid.");
   if (!SHA256.test(provider.descriptorSha256)) throw new TypeError("Provider descriptorSha256 is invalid.");
   if (!SHA256.test(provider.abiSha256)) throw new TypeError("Provider abiSha256 is invalid.");
 }
@@ -3717,7 +3782,7 @@ function resourceProfile(value: JsonValue | undefined, expectedHash: string): Wo
     || profile.objectMembers <= 0 || profile.objectMembers > 65_536
     || profile.inlineDecodedBytes <= 0 || profile.inlineDecodedBytes > 4 * 1024 * 1024
     || profile.contentReferenceBytes <= 0 || profile.contentReferenceBytes > 256 * 1024 * 1024) {
-    throw new ProtocolError("Host resourceProfile exceeds Worker V3 protocol ceilings.");
+    throw new ProtocolError("Host resourceProfile exceeds Worker V1 protocol ceilings.");
   }
   const normalized: WorkerResourceProfile = Object.freeze({ ...profile, version: 1 });
   const actualHash = computeWorkerResourceProfileHash(normalized);
@@ -3730,6 +3795,8 @@ function resourceProfile(value: JsonValue | undefined, expectedHash: string): Wo
 function applyResourceProfile(profile: WorkerResourceProfile): void {
   LIMITS.maxRpcValueBytes = profile.rpcValueBytes;
   LIMITS.maxValueDepth = profile.valueDepth;
+  LIMITS.maxValueNodes = profile.valueNodes;
+  LIMITS.maxObjectMembers = profile.objectMembers;
   LIMITS.maxFrameBytes = profile.rpcValueBytes + LIMITS.maxEnvelopeReserveBytes;
   LIMITS.maxMessageDepth = profile.valueDepth + 8;
   LIMITS.maxContentBytes = profile.contentReferenceBytes;
@@ -3743,8 +3810,10 @@ function safeNonNegativeInteger(value: number, label: string): void {
 
 function assertJsonValue(value: unknown): asserts value is JsonValue {
   const seen = new Set<object>();
+  let nodes = 0;
   const visit = (item: unknown, depth: number): void => {
     if (depth > LIMITS.maxValueDepth) throw new TypeError("JSON value exceeds the negotiated RPC value depth limit.");
+    if (++nodes > LIMITS.maxValueNodes) throw new TypeError("JSON value exceeds the negotiated RPC value node-count limit.");
     if (item === null || typeof item === "boolean") return;
     if (typeof item === "string") {
       if (!isWellFormed(item)) throw new TypeError("JSON value contains invalid Unicode.");
@@ -3762,7 +3831,11 @@ function assertJsonValue(value: unknown): asserts value is JsonValue {
     } else {
       const prototype = Object.getPrototypeOf(item) as object | null;
       if (prototype !== Object.prototype && prototype !== null) throw new TypeError("JSON object has a non-plain prototype.");
-      for (const child of Object.values(item)) visit(child, depth + 1);
+      const children = Object.values(item);
+      if (children.length > LIMITS.maxObjectMembers) {
+        throw new TypeError("JSON object exceeds the negotiated RPC object-member limit.");
+      }
+      for (const child of children) visit(child, depth + 1);
     }
     seen.delete(item);
   };
@@ -3830,8 +3903,12 @@ interface WorkerEnvironment {
   readonly sessionId: string;
   readonly content: WorkerLocalPath;
   readonly temporary: WorkerLocalPath;
-  readonly workspace: WorkerLocalPath;
+  readonly workspace: BindableWorkerLocalPath;
   readonly rpcExtendedDeadlineV1: boolean;
+}
+
+interface BindableWorkerLocalPath extends WorkerLocalPath {
+  bind(rootPath: string, excludedRoots: readonly string[]): void;
 }
 
 interface NormalizedWorkerOptions {

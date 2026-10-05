@@ -71,7 +71,7 @@ internal sealed class AppWebPackageAdapter(
                 cancellationToken).ConfigureAwait(false);
             var lifetime = new AppWebPackageLifetime(
                 package.PackageId,
-                preparedSource.Folder,
+                appGenerationId,
                 contentServer,
                 rpcClient,
                 contracts,
@@ -124,7 +124,7 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
 
     public AppWebPackageLifetime(
         string packageId,
-        string packageFolder,
+        Guid appGenerationId,
         AppWebContentServer contentServer,
         IAppWebRpcClient rpcClient,
         AppWebRpcContractCatalog contracts,
@@ -133,7 +133,10 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
         ExternalBrowserService externalBrowser)
     {
         _packageId = packageId;
-        _userDataRoot = Path.Combine(packageFolder, ".sunder-webview-data");
+        _userDataRoot = AppLocalState.GetPath(
+            "webview-data",
+            SanitizePathSegment(packageId),
+            appGenerationId.ToString("N"));
         _contentServer = contentServer;
         _rpcClient = rpcClient;
         _contracts = contracts;
@@ -184,6 +187,12 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
             "rightBottom" => PackageViewPlacement.RightBottom,
             _ => throw new InvalidDataException($"Unknown package web view placement '{value}'."),
         };
+
+    private static string SanitizePathSegment(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        return new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
+    }
 
     private static void DeleteOrQuarantineUserData(string path)
     {

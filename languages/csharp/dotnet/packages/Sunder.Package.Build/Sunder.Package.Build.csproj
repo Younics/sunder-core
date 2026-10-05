@@ -1,4 +1,5 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -21,12 +22,32 @@
     <RepositoryUrl>https://github.com/Younics/sunder-core</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <SunderPackageBuildTaskSourceLockOwner>true</SunderPackageBuildTaskSourceLockOwner>
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Editor/*.cs" />
+    <None Include="build\Sunder.Package.Build.props"
+          Pack="true"
+          PackagePath="buildTransitive\Sunder.Package.Build.props" />
     <None Include="build\Sunder.Package.Build.targets"
           Pack="true"
           PackagePath="buildTransitive\Sunder.Package.Build.targets" />
+    <None Include="build\Sunder.Package.Build.SourceLock.targets"
+          Pack="true"
+          PackagePath="buildTransitive\Sunder.Package.Build.SourceLock.targets" />
+    <None Include="build\Sunder.Package.Build.Authoring.targets" Pack="true"
+          PackagePath="buildTransitive\Sunder.Package.Build.Authoring.targets" />
+    <None Include="build\Sunder.Package.Build.Authoring.Outer.targets" Pack="true"
+          PackagePath="buildTransitive\Sunder.Package.Build.Authoring.Outer.targets" />
+    <None Include="build\Sunder.Package.Build.Authoring.Dispatch.targets" Pack="true"
+          PackagePath="buildTransitive\Sunder.Package.Build.Authoring.Dispatch.targets" />
+    <None Include="build\Sunder.Package.Build.Authoring.References.targets" Pack="true"
+          PackagePath="buildTransitive\Sunder.Package.Build.Authoring.References.targets" />
+    <None Include="build\Sunder.Package.Build.Authoring.RoleInputs.targets" Pack="true"
+          PackagePath="buildTransitive\Sunder.Package.Build.Authoring.RoleInputs.targets" />
+    <None Include="build\Sunder.Package.Build.Authoring.CrossTargeting.targets" Pack="true"
+          PackagePath="buildTransitive\Sunder.Package.Build.Authoring.CrossTargeting.targets" />
     
     <None Include="icon.png" Pack="true" PackagePath="" />
     <None Include="README.md" Pack="true" PackagePath="" />
@@ -36,18 +57,54 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Build.Framework" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Common" PrivateAssets="all" GeneratePathProperty="true" />
+    <PackageReference Include="NETStandard.Library" PrivateAssets="all" ExcludeAssets="all" GeneratePathProperty="true" />
+    <!-- The portable editor compilation needs the netstandard reference; this is
+         not a runtime dependency of the net10 task assembly. -->
+    <PackageReference Include="System.Collections.Immutable" PrivateAssets="all" ExcludeAssets="all" GeneratePathProperty="true" NoWarn="NU1510" />
     <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" PrivateAssets="all" />
     <ProjectReference Include="..\Sunder.Sdk\Sunder.Sdk.csproj" PrivateAssets="all" />
   </ItemGroup>
 
   <Target Name="_AddSunderPackageBuildTaskFiles">
     <ItemGroup>
+      <TfmSpecificPackageFile Include="$(TargetDir)Sunder.Package.Build.Editor.dll" PackagePath="analyzers/dotnet/cs" />
       <TfmSpecificPackageFile Include="$(TargetPath)" PackagePath="tasks\$(TargetFramework)" />
       <TfmSpecificPackageFile Include="$(TargetDir)Sunder.Package.Format.dll" PackagePath="tasks\$(TargetFramework)" />
       <TfmSpecificPackageFile Include="$(TargetDir)Sunder.Sdk.dll" PackagePath="tasks\$(TargetFramework)" />
       <TfmSpecificPackageFile Include="$(TargetDir)Microsoft.Extensions.DependencyInjection.Abstractions.dll" PackagePath="tasks\$(TargetFramework)" />
       <TfmSpecificPackageFile Include="$(TargetDir)Microsoft.Extensions.Logging.Abstractions.dll" PackagePath="tasks\$(TargetFramework)" />
+      <TfmSpecificPackageFile Include="$(TargetDir)Microsoft.CodeAnalysis.dll" PackagePath="tasks\$(TargetFramework)" />
+      <TfmSpecificPackageFile Include="$(TargetDir)Microsoft.CodeAnalysis.CSharp.dll" PackagePath="tasks\$(TargetFramework)" />
     </ItemGroup>
+  </Target>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+  <Import Project="build\Sunder.Package.Build.SourceLock.targets" />
+
+  <ItemGroup>
+    <_SunderEditorSource Include="Editor/*.cs;Editor/Shared/*.cs" />
+    <_SunderEditorReference Include="$(PkgNETStandard_Library)/build/netstandard2.0/ref/*.dll;$(PkgMicrosoft_CodeAnalysis_Common)/lib/netstandard2.0/Microsoft.CodeAnalysis.dll;$(PkgMicrosoft_CodeAnalysis_CSharp)/lib/netstandard2.0/Microsoft.CodeAnalysis.CSharp.dll;$(PkgSystem_Collections_Immutable)/lib/netstandard2.0/System.Collections.Immutable.dll" />
+  </ItemGroup>
+  <Target Name="_BuildSunderEditorGenerator" BeforeTargets="CoreCompile"
+          DependsOnTargets="_AcquireSunderPackageBuildTaskSourceLockForOwner"
+          Inputs="@(_SunderEditorSource);@(_SunderEditorReference);$(MSBuildProjectFullPath)"
+          Outputs="$(IntermediateOutputPath)sunder-editor-generator/Sunder.Package.Build.Editor.dll">
+    <MakeDir Directories="$(IntermediateOutputPath)sunder-editor-generator" />
+    <Csc Sources="@(_SunderEditorSource)" References="@(_SunderEditorReference)" NoStandardLib="true" NoConfig="true"
+         TargetType="Library" LangVersion="14.0" Nullable="enable" Deterministic="true" Optimize="true"
+         OutputAssembly="$(IntermediateOutputPath)sunder-editor-generator/Sunder.Package.Build.Editor.dll"
+         PathMap="$(MSBuildProjectDirectory)=/sunder-package-build" />
+    <ItemGroup><FileWrites Include="$(IntermediateOutputPath)sunder-editor-generator/Sunder.Package.Build.Editor.dll" /></ItemGroup>
+  </Target>
+  <!-- This is a tooling companion, not transitive content of package consumers.
+       In particular, build-only source references may never build this project's
+       normal configuration (they use its independent bootstrap snapshot). -->
+  <Target Name="_CopySunderEditorGenerator" AfterTargets="CopyFilesToOutputDirectory">
+    <Copy SourceFiles="$(IntermediateOutputPath)sunder-editor-generator/Sunder.Package.Build.Editor.dll"
+          DestinationFiles="$(TargetDir)Sunder.Package.Build.Editor.dll" SkipUnchangedFiles="true" />
+    <ItemGroup><FileWrites Include="$(TargetDir)Sunder.Package.Build.Editor.dll" /></ItemGroup>
   </Target>
 
 </Project>

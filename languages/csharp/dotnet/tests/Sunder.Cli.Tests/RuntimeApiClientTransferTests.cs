@@ -16,6 +16,110 @@ namespace Sunder.Cli.Tests;
 public sealed class RuntimeApiClientTransferTests
 {
     [Fact]
+    public async Task Execution_runtime_import_uploads_bytes_then_submits_only_the_opaque_upload_id()
+    {
+        var paths = new List<string>();
+        RuntimeExecutionRuntimeImportRequest? import = null;
+        byte[]? uploaded = null;
+        var handler = new DelegateHandler(async request =>
+        {
+            paths.Add(request.RequestUri!.AbsolutePath);
+            switch (request.RequestUri.AbsolutePath)
+            {
+                case "/api/handshake":
+                    return Json(CreateHandshake());
+                case "/api/v1/uploads/execution-runtimes":
+                    uploaded = await request.Content!.ReadAsByteArrayAsync();
+                    Assert.Equal("application/vnd.sunder.execution-runtime", request.Content.Headers.ContentType?.MediaType);
+                    return Json(new ContentUploadDescriptor(
+                        "0123456789abcdef0123456789abcdef",
+                        new string('a', 64),
+                        uploaded.Length,
+                        "runtime.sunderruntime",
+                        "application/vnd.sunder.execution-runtime"));
+                case "/api/v1/execution-runtimes/import":
+                    import = await request.Content!.ReadFromJsonAsync<RuntimeExecutionRuntimeImportRequest>();
+                    return Json(OperationSuccess(RuntimeExecutionRuntimeOperationActions.Import));
+                default:
+                    return new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+        });
+        var path = Path.Combine(Path.GetTempPath(), $"runtime-{Guid.NewGuid():N}.sunderruntime");
+        await File.WriteAllTextAsync(path, "trusted runtime archive");
+        try
+        {
+            using var client = new RuntimeManagementClient(
+                () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "runtime-secret"),
+                handler);
+
+            var result = await client.ImportExecutionRuntimeAsync(path);
+
+            Assert.True(result.Success);
+            Assert.Equal(
+                ["/api/handshake", "/api/v1/uploads/execution-runtimes", "/api/v1/execution-runtimes/import"],
+                paths);
+            Assert.Equal("trusted runtime archive", Encoding.UTF8.GetString(uploaded!));
+            Assert.Equal("0123456789abcdef0123456789abcdef", import?.UploadId);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Execution_runtime_client_escapes_exact_identity_routes()
+    {
+        var paths = new List<string>();
+        RuntimeExecutionRuntimeActionRequest? repairRequest = null;
+        var impact = new RuntimeExecutionRuntimeImpact(
+            2,
+            ["agent", "tools"],
+            new string('f', 64));
+        var handler = new DelegateHandler(async request =>
+        {
+            paths.Add(request.RequestUri!.AbsolutePath);
+            if (request.RequestUri.AbsolutePath.EndsWith("/repair", StringComparison.Ordinal))
+            {
+                repairRequest = await request.Content!
+                    .ReadFromJsonAsync<RuntimeExecutionRuntimeActionRequest>();
+                return Json(OperationSuccess(RuntimeExecutionRuntimeOperationActions.Repair));
+            }
+            return request.RequestUri.AbsolutePath switch
+            {
+                "/api/handshake" => Json(CreateHandshake()),
+                var path when path.EndsWith("/references", StringComparison.Ordinal) =>
+                    Json(Array.Empty<RuntimeExecutionRuntimePackageReference>()),
+                var path when path.EndsWith("/impact", StringComparison.Ordinal) => Json(impact),
+                var path when path.EndsWith("/verify", StringComparison.Ordinal) =>
+                    Json(OperationSuccess(RuntimeExecutionRuntimeOperationActions.Verify)),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            };
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "runtime-secret"),
+            handler);
+        var identity = new RuntimeExecutionRuntimeIdentity(
+            "runtime id",
+            "1.2.3",
+            4,
+            "linux x64",
+            "module/abi",
+            new string('a', 64),
+            new string('b', 64));
+
+        await client.GetExecutionRuntimeReferencesAsync(identity);
+        await client.VerifyExecutionRuntimeAsync(identity);
+        await client.RepairExecutionRuntimeAsync(identity);
+
+        var root = "/api/v1/execution-runtimes/runtime%20id/versions/1.2.3/revisions/4/linux%20x64/abis/module%2Fabi";
+        Assert.Equal(
+            ["/api/handshake", root + "/references", root + "/verify", root + "/impact", root + "/repair"],
+            paths);
+        Assert.Equal(impact.Fingerprint, repairRequest?.ExpectedImpactFingerprint);
+    }
+
+    [Fact]
     public async Task Local_package_upload_and_mutation_are_owned_by_runtime_client()
     {
         var requests = new List<(HttpMethod Method, string Path, string? Authorization, byte[] Body)>();
@@ -586,8 +690,12 @@ public sealed class RuntimeApiClientTransferTests
                 RuntimeProtocolFeatures.VersionedApiV1,
                 RuntimeProtocolFeatures.AtomicPackageSnapshotV1,
                 RuntimeProtocolFeatures.PackageStageStatusV1,
+                RuntimeProtocolFeatures.ExecutionRuntimeManagementV1,
             ],
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"));
+
+    private static RuntimeExecutionRuntimeOperationResult OperationSuccess(string action)
+        => new(true, null, "Completed.", action, Runtime: null, AlreadyPresent: false);
 
     private sealed class DelegateHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {

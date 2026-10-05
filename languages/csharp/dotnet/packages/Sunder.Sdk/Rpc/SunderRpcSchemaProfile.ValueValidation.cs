@@ -151,7 +151,7 @@ internal static partial class SunderRpcSchemaProfile
         return true;
     }
 
-    private static bool IsAbsoluteUri(string value)
+    internal static bool IsAbsoluteUri(string value)
     {
         if (value.Length == 0
             || value.Any(static character => character >= 0x7f || character <= 0x20 || character == '\\'))
@@ -166,14 +166,34 @@ internal static partial class SunderRpcSchemaProfile
         {
             return false;
         }
+        var fragment = false;
         for (var index = 0; index < value.Length; index++)
         {
-            if (value[index] != '%') continue;
-            if (index + 2 >= value.Length || !IsHex(value[index + 1]) || !IsHex(value[index + 2])) return false;
-            index += 2;
+            var character = value[index];
+            if (character == '%')
+            {
+                if (index + 2 >= value.Length || !IsHex(value[index + 1]) || !IsHex(value[index + 2])) return false;
+                index += 2;
+                continue;
+            }
+            if (character == '#')
+            {
+                if (fragment) return false;
+                fragment = true;
+                continue;
+            }
+            if (!IsUriCharacter(character)) return false;
         }
-        return Uri.TryCreate(value, UriKind.Absolute, out _);
+        return true;
     }
+
+    private static bool IsUriCharacter(char value)
+        => value is >= 'A' and <= 'Z'
+            or >= 'a' and <= 'z'
+            or >= '0' and <= '9'
+            or '-' or '.' or '_' or '~'
+            or ':' or '/' or '?' or '[' or ']' or '@'
+            or '!' or '$' or '&' or '\'' or '(' or ')' or '*' or '+' or ',' or ';' or '=';
 
     private static bool IsHex(char value)
         => value is >= '0' and <= '9' or >= 'A' and <= 'F' or >= 'a' and <= 'f';
@@ -286,25 +306,51 @@ internal static partial class SunderRpcSchemaProfile
         out string? error)
     {
         var exact = new HashSet<string>(StringComparer.Ordinal);
-        var caseInsensitive = state.IsV2
-            ? null
-            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var folded = new HashSet<string>(StringComparer.Ordinal);
         foreach (var property in properties)
         {
-            if (!HasOnlyUnicodeScalars(property.Name)
-                || !exact.Add(property.Name)
-                || caseInsensitive is not null && !caseInsensitive.Add(property.Name))
+            string name;
+            try
+            {
+                name = property.Name;
+            }
+            catch (Exception exception) when (exception is JsonException or InvalidOperationException)
             {
                 return state.Reject(
                     "property-name-invalid",
                     path,
-                    $"{path} contains an invalid, duplicate, or case-colliding property '{property.Name}'.",
+                    $"{path} contains a property name that is not a Unicode scalar string.",
+                    out error);
+            }
+            if (!HasOnlyUnicodeScalars(name)
+                || !exact.Add(name)
+                || !folded.Add(AsciiCaseFold(name)))
+            {
+                return state.Reject(
+                    "property-name-invalid",
+                    path,
+                    $"{path} contains an invalid, duplicate, or case-colliding property '{name}'.",
                     out error);
             }
         }
         error = null;
         return true;
     }
+
+    private static string AsciiCaseFold(string value)
+        => string.Create(
+            value.Length,
+            value,
+            static (target, source) =>
+            {
+                for (var index = 0; index < source.Length; index++)
+                {
+                    var character = source[index];
+                    target[index] = character is >= 'A' and <= 'Z'
+                        ? (char)(character + ('a' - 'A'))
+                        : character;
+                }
+            });
 
     private static bool TryGetScalarString(JsonElement value, out string text)
     {
@@ -505,97 +551,64 @@ internal static partial class SunderRpcSchemaProfile
         InstanceValidationState state,
         out string? error)
     {
-        if (state.IsV2)
+        var type = schema.GetProperty("type").GetString();
+        if (type == "integer")
         {
-            var type = schema.GetProperty("type").GetString();
-            if (type == "integer")
+            if (!TryGetSafeInteger(value, out var integer))
             {
-                if (!TryGetSafeInteger(value, out var integer))
-                {
-                    return state.Reject(
-                        "integer-invalid",
-                        path,
-                        $"{path} must be a safe mathematical integer.",
-                        out error);
-                }
-                if (schema.TryGetProperty("minimum", out var integerMinimum) && integer < ReadSafeInteger(integerMinimum, path)
-                    || schema.TryGetProperty("exclusiveMinimum", out var integerExclusiveMinimum) && integer <= ReadSafeInteger(integerExclusiveMinimum, path)
-                    || schema.TryGetProperty("maximum", out var integerMaximum) && integer > ReadSafeInteger(integerMaximum, path)
-                    || schema.TryGetProperty("exclusiveMaximum", out var integerExclusiveMaximum) && integer >= ReadSafeInteger(integerExclusiveMaximum, path))
-                {
-                    return state.Reject(
-                        "integer-invalid",
-                        path,
-                        $"{path} is outside its integer bounds.",
-                        out error);
-                }
+                return state.Reject(
+                    "integer-invalid",
+                    path,
+                    $"{path} must be a safe mathematical integer.",
+                    out error);
             }
-            else
+            if (schema.TryGetProperty("minimum", out var integerMinimum) && integer < ReadSafeInteger(integerMinimum, path)
+                || schema.TryGetProperty("exclusiveMinimum", out var integerExclusiveMinimum) && integer <= ReadSafeInteger(integerExclusiveMinimum, path)
+                || schema.TryGetProperty("maximum", out var integerMaximum) && integer > ReadSafeInteger(integerMaximum, path)
+                || schema.TryGetProperty("exclusiveMaximum", out var integerExclusiveMaximum) && integer >= ReadSafeInteger(integerExclusiveMaximum, path))
             {
-                if (!TryGetFormattedFloat(schema, value, out var formattedNumber))
-                {
-                    return state.Reject(
-                        "number-invalid",
-                        path,
-                        $"{path} is not a finite {schema.GetProperty("format").GetString()} value.",
-                        out error);
-                }
-                if (schema.TryGetProperty("minimum", out var floatMinimum) && formattedNumber < ReadFormattedFloat(schema, floatMinimum, path)
-                    || schema.TryGetProperty("exclusiveMinimum", out var floatExclusiveMinimum) && formattedNumber <= ReadFormattedFloat(schema, floatExclusiveMinimum, path)
-                    || schema.TryGetProperty("maximum", out var floatMaximum) && formattedNumber > ReadFormattedFloat(schema, floatMaximum, path)
-                    || schema.TryGetProperty("exclusiveMaximum", out var floatExclusiveMaximum) && formattedNumber >= ReadFormattedFloat(schema, floatExclusiveMaximum, path))
-                {
-                    return state.Reject(
-                        "number-invalid",
-                        path,
-                        $"{path} is outside its floating-point bounds.",
-                        out error);
-                }
+                return state.Reject(
+                    "integer-invalid",
+                    path,
+                    $"{path} is outside its integer bounds.",
+                    out error);
             }
-            error = null;
-            return true;
         }
-
-        if (!decimal.TryParse(value.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+        else
         {
-            return state.Reject(
-                "number-invalid",
-                path,
-                $"{path} is outside the supported RPC numeric range.",
-                out error);
-        }
-        if (schema.GetProperty("type").GetString() == "integer" && decimal.Truncate(number) != number)
-        {
-            return state.Reject("integer-invalid", path, $"{path} must be an integer.", out error);
-        }
-        if (schema.TryGetProperty("minimum", out var minimum) && number < minimum.GetDecimal()
-            || schema.TryGetProperty("exclusiveMinimum", out var exclusiveMinimum) && number <= exclusiveMinimum.GetDecimal()
-            || schema.TryGetProperty("maximum", out var maximum) && number > maximum.GetDecimal()
-            || schema.TryGetProperty("exclusiveMaximum", out var exclusiveMaximum) && number >= exclusiveMaximum.GetDecimal())
-        {
-            return state.Reject(
-                "number-invalid",
-                path,
-                $"{path} is outside its numeric bounds.",
-                out error);
+            if (!TryGetFormattedFloat(schema, value, out var formattedNumber))
+            {
+                return state.Reject(
+                    "number-invalid",
+                    path,
+                    $"{path} is not a finite {schema.GetProperty("format").GetString()} value.",
+                    out error);
+            }
+            if (schema.TryGetProperty("minimum", out var floatMinimum) && formattedNumber < ReadFormattedFloat(schema, floatMinimum, path)
+                || schema.TryGetProperty("exclusiveMinimum", out var floatExclusiveMinimum) && formattedNumber <= ReadFormattedFloat(schema, floatExclusiveMinimum, path)
+                || schema.TryGetProperty("maximum", out var floatMaximum) && formattedNumber > ReadFormattedFloat(schema, floatMaximum, path)
+                || schema.TryGetProperty("exclusiveMaximum", out var floatExclusiveMaximum) && formattedNumber >= ReadFormattedFloat(schema, floatExclusiveMaximum, path))
+            {
+                return state.Reject(
+                    "number-invalid",
+                    path,
+                    $"{path} is outside its floating-point bounds.",
+                    out error);
+            }
         }
         error = null;
         return true;
     }
 
-    private static bool MatchesType(JsonElement value, string type, bool isV2)
+    private static bool MatchesType(JsonElement value, string type)
         => type switch
         {
             "object" => value.ValueKind == JsonValueKind.Object,
             "array" => value.ValueKind == JsonValueKind.Array,
             "string" => value.ValueKind == JsonValueKind.String,
-            "integer" => value.ValueKind == JsonValueKind.Number
-                         && (isV2
-                             ? TryGetSafeInteger(value, out _)
-                             : decimal.TryParse(value.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out var integer)
-                               && decimal.Truncate(integer) == integer),
+            "integer" => value.ValueKind == JsonValueKind.Number && TryGetSafeInteger(value, out _),
             "number" => value.ValueKind == JsonValueKind.Number
-                        && (!isV2 || TryGetFiniteDouble(value, out _)),
+                        && TryGetFiniteDouble(value, out _),
             "boolean" => value.ValueKind is JsonValueKind.True or JsonValueKind.False,
             "null" => value.ValueKind == JsonValueKind.Null,
             _ => false,
@@ -604,11 +617,9 @@ internal static partial class SunderRpcSchemaProfile
     private static bool LiteralEquals(
         JsonElement left,
         JsonElement right,
-        bool isV2,
         JsonElement schema)
     {
-        if (isV2
-            && left.ValueKind == JsonValueKind.Number
+        if (left.ValueKind == JsonValueKind.Number
             && right.ValueKind == JsonValueKind.Number)
         {
             if (schema.GetProperty("type").GetString() == "integer")
@@ -621,19 +632,12 @@ internal static partial class SunderRpcSchemaProfile
                    && TryGetFormattedFloat(schema, right, out var rightFormattedNumber)
                    && leftFormattedNumber == rightFormattedNumber;
         }
-        if (left.ValueKind == JsonValueKind.Number && right.ValueKind == JsonValueKind.Number
-            && decimal.TryParse(left.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out var leftNumber)
-            && decimal.TryParse(right.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out var rightNumber))
-        {
-            return leftNumber == rightNumber;
-        }
         return JsonElement.DeepEquals(left, right);
     }
 
     private sealed class InstanceValidationState(SunderRpcContractDescriptor descriptor)
     {
         public SunderRpcContractDescriptor Descriptor { get; } = descriptor;
-        public bool IsV2 { get; } = descriptor.DescriptorVersion == SunderRpcProtocol.DescriptorVersionV2;
 
         public SunderRpcValidationFailure? Failure { get; private set; }
 

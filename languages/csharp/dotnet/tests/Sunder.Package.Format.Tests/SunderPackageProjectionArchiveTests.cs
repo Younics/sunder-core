@@ -2,13 +2,14 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Sunder.Package.Format;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
 namespace Sunder.Package.Format.Tests;
 
-public sealed class SunderPackageProjectionArchiveTests
+public sealed partial class SunderPackageProjectionArchiveTests
 {
     [Fact]
     public async Task Writer_ProducesByteIdenticalArchivesAndPreservesManifestBytes()
@@ -57,7 +58,7 @@ public sealed class SunderPackageProjectionArchiveTests
         {
             "shared" => new[] { "payload/shared/global.txt" },
             "app" => ["payload/app/shared/common.txt", "payload/app/win-x64/bin/app.dll"],
-            _ => ["payload/runtime/linux-x64/bin/runtime", "payload/runtime/shared/common.txt"],
+            _ => ["payload/runtime/linux-x64/bin/runtime.module", "payload/runtime/shared/common.txt"],
         };
         Assert.Equal(expected, result.ContentIndex!.Files!.Select(static entry => entry.Path));
         Assert.Equal(expected, result.ExtractedProjection.PayloadPaths.Select(static path => path.ToString()));
@@ -144,6 +145,9 @@ public sealed class SunderPackageProjectionArchiveTests
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = "test.projection",
                     ContractId = "example.contract",
                     Version = "1.0.0",
                     DescriptorPath = "contracts/example.json",
@@ -279,7 +283,7 @@ public sealed class SunderPackageProjectionArchiveTests
     }
 
     [Fact]
-    public async Task Inspector_SharedProjectionRejectsV1DescriptorPayload()
+    public async Task Inspector_SharedProjectionRejectsRemovedLegacyDescriptorPayload()
     {
         var fixture = await CreateRpcPackageAsync();
         var original = await WriteProjectionAsync(fixture, SunderPackageProjectionKey.Shared, "rpc-v1-descriptor");
@@ -290,21 +294,21 @@ public sealed class SunderPackageProjectionArchiveTests
             staging => WriteFile(
                 staging,
                 "payload/shared/contracts/rpc.json",
-                CreateV1ContractDescriptor("example.projection.rpc", "1.0.0+source")));
+                CreateRemovedLegacyContractDescriptor("example.projection.rpc", "1.0.0+source")));
 
         var result = await InspectAsync(fixture.Root, tampered, "rpc-v1-descriptor-result");
 
         Assert.False(result.Success);
         Assert.Contains(result.Errors, error =>
-            error.Contains("descriptorVersion 1", StringComparison.Ordinal)
-            && error.Contains("supports only descriptorVersion 2", StringComparison.Ordinal));
+            error.Contains("is invalid", StringComparison.Ordinal)
+            && error.Contains("schemaProfile", StringComparison.Ordinal));
     }
 
     [Theory]
     [InlineData("sha256")]
     [InlineData("versionRange")]
     [InlineData("contractSha256")]
-    public async Task Inspector_RejectsV1RpcFieldsInProjectionManifest(string oldField)
+    public async Task Inspector_RejectsLegacyRpcFieldsInProjectionManifest(string oldField)
     {
         var fixture = await CreateRpcPackageAsync();
         var original = await WriteProjectionAsync(
@@ -442,7 +446,7 @@ public sealed class SunderPackageProjectionArchiveTests
     }
 
     [Fact]
-    public async Task Inspector_RejectsRuntimeTargetMissingWorkerV3Capability()
+    public async Task Inspector_RejectsRuntimeTargetMissingWorkerV1Capability()
     {
         var fixture = await CreateDefaultPackageAsync();
         var original = await WriteProjectionAsync(fixture, SunderPackageProjectionKey.Runtime("linux-x64"), "runtime-capability");
@@ -456,7 +460,7 @@ public sealed class SunderPackageProjectionArchiveTests
                                       && target["rid"]!.GetValue<string>() == "linux-x64");
                 runtimeTarget["requiredHostCapabilities"] = new JsonArray(
                     runtimeTarget["requiredHostCapabilities"]!.AsArray()
-                        .Where(static node => node!.GetValue<string>() != "worker-protocol.v3")
+                        .Where(static node => node!.GetValue<string>() != "worker-protocol.v1")
                         .Select(static node => JsonValue.Create(node!.GetValue<string>()))
                         .ToArray());
             });
@@ -467,7 +471,76 @@ public sealed class SunderPackageProjectionArchiveTests
         Assert.False(result.Success);
         Assert.Contains(
             result.Errors,
-            error => error.Contains("must require Host capability 'worker-protocol.v3'", StringComparison.Ordinal));
+            error => error.Contains("must require Host capability 'worker-protocol.v1'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Inspector_RejectsRuntimeTargetMissingExecutionRuntime()
+    {
+        var fixture = await CreateDefaultPackageAsync();
+        var original = await WriteProjectionAsync(fixture, SunderPackageProjectionKey.Runtime("linux-x64"), "runtime-requirement");
+        var tampered = await MutateProjectionAsync(fixture.Root, original, "runtime-requirement-tampered", staging =>
+        {
+            MutateJson(staging, SunderPackageProjectionFormat.ManifestPath, json =>
+            {
+                var runtimeTarget = json["targets"]!.AsArray()
+                    .Select(static node => node!.AsObject())
+                    .Single(target => target["role"]!.GetValue<string>() == "runtime"
+                                      && target["rid"]!.GetValue<string>() == "linux-x64");
+                runtimeTarget["executionRuntime"] = null;
+            });
+        });
+
+        var result = await InspectAsync(fixture.Root, tampered, "runtime-requirement-result");
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains("is missing executionRuntime", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Inspector_RejectsExecutionRuntimeOnAppTarget()
+    {
+        var fixture = await CreateDefaultPackageAsync();
+        var original = await WriteProjectionAsync(fixture, SunderPackageProjectionKey.App("win-x64"), "app-requirement");
+        var tampered = await MutateProjectionAsync(fixture.Root, original, "app-requirement-tampered", staging =>
+        {
+            MutateJson(staging, SunderPackageProjectionFormat.ManifestPath, json =>
+            {
+                var targets = json["targets"]!.AsArray().Select(static node => node!.AsObject()).ToArray();
+                var appTarget = targets.Single(target => target["role"]!.GetValue<string>() == "app"
+                                                         && target["rid"]!.GetValue<string>() == "win-x64");
+                var runtimeTarget = targets.First(target => target["role"]!.GetValue<string>() == "runtime");
+                appTarget["executionRuntime"] = runtimeTarget["executionRuntime"]!.DeepClone();
+            });
+        });
+
+        var result = await InspectAsync(fixture.Root, tampered, "app-requirement-result");
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains("cannot declare executionRuntime", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Inspector_RejectsWorkerRequirementDisagreement()
+    {
+        var fixture = await CreateDefaultPackageAsync();
+        var original = await WriteProjectionAsync(fixture, SunderPackageProjectionKey.Runtime("linux-x64"), "runtime-agreement");
+        var tampered = await MutateProjectionAsync(fixture.Root, original, "runtime-agreement-tampered", staging =>
+        {
+            MutateJson(staging, SunderPackageProjectionFormat.ManifestPath, json =>
+            {
+                var runtimeTarget = json["targets"]!.AsArray()
+                    .Select(static node => node!.AsObject())
+                    .Single(target => target["role"]!.GetValue<string>() == "runtime"
+                                      && target["rid"]!.GetValue<string>() == "win-x64");
+                runtimeTarget["executionRuntime"]!["versionRange"] = ">=1.1.0 <2.0.0";
+            });
+        });
+
+        var result = await InspectAsync(fixture.Root, tampered, "runtime-agreement-result");
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains("Worker targets must agree", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -740,8 +813,8 @@ public sealed class SunderPackageProjectionArchiveTests
             [
                 CreateTarget("app", "win-x64", "avalonia", "bin/app.dll"),
                 CreateTarget("app", "linux-x64", "avalonia", "bin/app.dll"),
-                CreateTarget("runtime", "linux-x64", "worker", "bin/runtime"),
-                CreateTarget("runtime", "win-x64", "worker", "bin/runtime.exe"),
+                CreateTarget("runtime", "linux-x64", "worker", "bin/runtime.module"),
+                CreateTarget("runtime", "win-x64", "worker", "bin/runtime.module"),
             ]);
         return await CreatePackageAsync(
             manifest,
@@ -752,8 +825,8 @@ public sealed class SunderPackageProjectionArchiveTests
                 ["payload/app/win-x64/bin/app.dll"] = [1, 2, 3],
                 ["payload/app/linux-x64/bin/app.dll"] = [4, 5, 6],
                 ["payload/runtime/shared/common.txt"] = "runtime-common"u8.ToArray(),
-                ["payload/runtime/linux-x64/bin/runtime"] = [7, 8, 9],
-                ["payload/runtime/win-x64/bin/runtime.exe"] = [10, 11, 12],
+                ["payload/runtime/linux-x64/bin/runtime.module"] = [7, 8, 9],
+                ["payload/runtime/win-x64/bin/runtime.module"] = [10, 11, 12],
             });
     }
 
@@ -812,7 +885,11 @@ public sealed class SunderPackageProjectionArchiveTests
             WriteFile(source, file.Key, file.Value);
         }
 
-        var manifestOptions = new JsonSerializerOptions { WriteIndented = true };
+        var manifestOptions = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        };
         WriteFile(
             source,
             SunderPackageFormat.ManifestPath,
@@ -912,7 +989,7 @@ public sealed class SunderPackageProjectionArchiveTests
         => new()
         {
             ArchiveFormatVersion = 1,
-            ManifestVersion = 3,
+            ManifestVersion = SunderPackageFormat.CurrentManifestVersion,
             Id = "test.projection",
             Name = "Projection Test Package",
             Summary = "Canonical projection archive test package.",
@@ -921,6 +998,10 @@ public sealed class SunderPackageProjectionArchiveTests
             ContractBundles = contractBundles,
             UsesContracts = usesContracts,
             Provides = provides,
+            PackageArtifactImports = [],
+            PackageApiImports = [],
+            ProviderImports = [],
+            PlatformImports = [],
         };
 
     private static SunderPackageTargetManifest CreateTarget(
@@ -937,8 +1018,16 @@ public sealed class SunderPackageProjectionArchiveTests
             TargetFramework = kind == SunderPackageFormat.WorkerTargetKind ? "node24" : "net10.0",
             SdkVersion = role == SunderPackageFormat.RuntimeHostRole ? "1.1.0" : "1.0.0",
             RequiredHostCapabilities = role == SunderPackageFormat.RuntimeHostRole
-                ? ["core.v1", "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"]
+                ? ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"]
                 : ["core.v1"],
+            ExecutionRuntime = role == SunderPackageFormat.RuntimeHostRole
+                ? new SunderPackageExecutionRuntimeManifest
+                {
+                    Id = "example.runtime",
+                    VersionRange = ">=1.0.0 <2.0.0",
+                    ModuleAbi = "example.worker-module.v1",
+                }
+                : null,
         };
 
     private static SunderPackageContentIndexEntry CreateIndexEntry(string root, string path)
@@ -970,6 +1059,9 @@ public sealed class SunderPackageProjectionArchiveTests
         var parsed = SunderRpcContractDescriptor.Parse(descriptor);
         return new SunderPackageContractBundleManifest
         {
+            Source = "owned",
+            AuthorityKind = "package",
+            AuthorityId = "test.projection",
             ContractId = parsed.ContractId,
             Version = parsed.Version,
             DescriptorPath = descriptorPath,
@@ -979,7 +1071,7 @@ public sealed class SunderPackageProjectionArchiveTests
         };
     }
 
-    private static byte[] CreateV1ContractDescriptor(string contractId, string version)
+    private static byte[] CreateRemovedLegacyContractDescriptor(string contractId, string version)
         => System.Text.Encoding.UTF8.GetBytes($$"""
             {
               "descriptorVersion": 1,
@@ -1014,7 +1106,7 @@ public sealed class SunderPackageProjectionArchiveTests
     private static byte[] CreateContractDescriptor(string contractId, string version)
         => System.Text.Encoding.UTF8.GetBytes($$"""
             {
-              "descriptorVersion": 2,
+              "descriptorVersion": 1,
               "schemaProfile": "sunder.rpc.values.v1",
               "contractId": "{{contractId}}",
               "version": "{{version}}",

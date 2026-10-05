@@ -9,6 +9,12 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const workflowPath = resolve(repositoryRoot, ".github/workflows/sunder-sdk-release.yml");
 const verifierPath = resolve(repositoryRoot, "scripts/release/verify-npm-release.mjs");
 
+test("npm release packs into the repository-level coordinated artifact directory", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+  assert.match(workflow, /working-directory: languages\/typescript\/node[\s\S]+output_dir="\$PWD\/\.\.\/\.\.\/\.\.\/artifacts\/release\/sdk"/u);
+  assert.doesNotMatch(workflow, /output_dir="\$PWD\/\.\.\/artifacts\/release\/sdk"/u);
+});
+
 test("npm publication verifies each exact package before advancing and retains aggregate verification", async () => {
   const workflow = await readFile(workflowPath, "utf8");
   const publishJobStart = workflow.indexOf("\n  publish-npm:");

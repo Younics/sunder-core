@@ -17,7 +17,7 @@ public sealed class SunderRpcGeneratedValueBindingsTests
     {
         var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(Path.Combine(
             AppContext.BaseDirectory,
-            "RpcV2Conformance",
+            "RpcV1Conformance",
             "valid",
             "value-profile.rpc.json")));
 
@@ -50,7 +50,7 @@ public sealed class SunderRpcGeneratedValueBindingsTests
 
         Assert.Contains("public enum Status", source, StringComparison.Ordinal);
         Assert.Contains("JsonStringEnumMemberName(\"in-progress\")", source, StringComparison.Ordinal);
-        Assert.Contains("JsonStringEnumMemberName(\"in_progress\")", source, StringComparison.Ordinal);
+        Assert.Contains("JsonStringEnumMemberName(\"queued\")", source, StringComparison.Ordinal);
         Assert.Contains("public abstract record Event", source, StringComparison.Ordinal);
         Assert.Contains("public sealed record Added : Event", source, StringComparison.Ordinal);
         Assert.Contains("public sealed record Removed : Event", source, StringComparison.Ordinal);
@@ -76,7 +76,7 @@ public sealed class SunderRpcGeneratedValueBindingsTests
         var statusType = assembly.GetType("Example.Generated.Structured.Status", throwOnError: true)!;
         var nodeType = assembly.GetType("Example.Generated.Structured.NodeRecord", throwOnError: true)!;
         var jsonEnvelopeType = assembly.GetType("Example.Generated.Structured.JsonEnvelope", throwOnError: true)!;
-        var options = V2Options();
+        var options = RpcOptions();
 
         var added = Activator.CreateInstance(addedType)!;
         addedType.GetProperty("Status")!.SetValue(added, Enum.Parse(statusType, "Ready"));
@@ -115,7 +115,7 @@ public sealed class SunderRpcGeneratedValueBindingsTests
     {
         var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(Path.Combine(
             AppContext.BaseDirectory,
-            "RpcV2Conformance",
+            "RpcV1Conformance",
             "valid",
             "productive-recursion.rpc.json")));
 
@@ -131,7 +131,7 @@ public sealed class SunderRpcGeneratedValueBindingsTests
     [Fact]
     public void ValueConverters_PreserveExactWireValuesAndRejectNonCanonicalForms()
     {
-        var options = V2Options();
+        var options = RpcOptions();
         var dateTime = new SunderRpcOffsetDateTime("2000-02-29T23:59:59.123456789-04:30");
 
         Assert.Equal("\"2000-02-29T23:59:59.123456789-04:30\"", JsonSerializer.Serialize(dateTime, options));
@@ -141,26 +141,58 @@ public sealed class SunderRpcGeneratedValueBindingsTests
         Assert.Equal("\"2024-02-29\"", JsonSerializer.Serialize(new DateOnly(2024, 2, 29), options));
         Assert.Equal("\"P1Y2M3DT4H5M6.25S\"", JsonSerializer.Serialize(new SunderRpcDuration("P1Y2M3DT4H5M6.25S"), options));
         Assert.Equal("\"https://example.test/a%20b?x=1\"", JsonSerializer.Serialize(new SunderRpcUri("https://example.test/a%20b?x=1"), options));
+        Assert.Equal("x:", new SunderRpcUri("x:").Value);
+        Assert.Equal("https:example.com", new SunderRpcUri("https:example.com").Value);
+        Assert.Equal("https:/example.com", new SunderRpcUri("https:/example.com").Value);
+        Assert.Equal(
+            "https://example.test/path",
+            JsonSerializer.Deserialize<SunderRpcUri>("\"https://example.test/path\"").Value);
         Assert.Equal("\"123456789012345678901234567890\"", JsonSerializer.Serialize(BigInteger.Parse("123456789012345678901234567890"), options));
         Assert.Equal("\"-1000000000000000000000.125\"", JsonSerializer.Serialize(new SunderRpcDecimal("-1000000000000000000000.125"), options));
         Assert.Equal("\"AAECAw==\"", JsonSerializer.Serialize(new byte[] { 0, 1, 2, 3 }, options));
         Assert.Equal("0", JsonSerializer.Serialize(BitConverter.Int32BitsToSingle(unchecked((int)0x80000000)), options));
         Assert.Equal("0", JsonSerializer.Serialize(BitConverter.Int64BitsToDouble(unchecked((long)0x8000000000000000)), options));
         Assert.Equal(1L, JsonSerializer.Deserialize<long>("1e0", options));
+        Assert.Equal(
+            BitConverter.Int32BitsToSingle(unchecked((int)0x3f800000)),
+            JsonSerializer.Deserialize<float>("1.000000059604644775390626", options));
+        var content = Assert.IsType<SunderRpcContentReference>(JsonSerializer.Deserialize<SunderRpcContentReference>(
+            """
+            {"id":"opaque","length":9007199254740991.0,"sha256":"0000000000000000000000000000000000000000000000000000000000000000","mediaType":"application/octet-stream","fileName":"display-name.bin","expiresAtUtc":"2030-01-02T03:04:05Z","repeatability":"single-use"}
+            """,
+            options));
+        Assert.Equal(9_007_199_254_740_991, content.Length);
+        Assert.Equal(
+            content,
+            JsonSerializer.Deserialize<SunderRpcContentReference>(JsonSerializer.Serialize(content, options), options));
+        Assert.Contains("\"length\":9007199254740991", JsonSerializer.Serialize(content, options), StringComparison.Ordinal);
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<SunderRpcContentReference>(
+            """
+            {"id":"opaque","length":1.5,"sha256":"0000000000000000000000000000000000000000000000000000000000000000","mediaType":"application/octet-stream","fileName":"display-name.bin","expiresAtUtc":"2030-01-02T03:04:05Z","repeatability":"single-use"}
+            """,
+            options));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<SunderRpcContentReference>(
+            """
+            {"id":"opaque","length":9007199254740992,"sha256":"0000000000000000000000000000000000000000000000000000000000000000","mediaType":"application/octet-stream","fileName":"display-name.bin","expiresAtUtc":"2030-01-02T03:04:05Z","repeatability":"single-use"}
+            """,
+            options));
 
         Assert.Throws<FormatException>(() => new SunderRpcDuration("P01D"));
         Assert.Throws<FormatException>(() => new SunderRpcUri("relative/path"));
+        Assert.Throws<FormatException>(() => new SunderRpcUri("x://host|name/path"));
         Assert.Throws<FormatException>(() => new SunderRpcDecimal("1.230"));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<BigInteger>("\"01\"", options));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<byte[]>("\"AB==\"", options));
         Assert.Throws<JsonException>(() => JsonSerializer.Serialize(float.PositiveInfinity, options));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<float>("1e39", options));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<float>("1e400", options));
         Assert.Throws<JsonException>(() => JsonSerializer.Serialize(9_007_199_254_740_992L, options));
     }
 
-    private static JsonSerializerOptions V2Options()
+    private static JsonSerializerOptions RpcOptions()
         => new(JsonSerializerDefaults.Web)
         {
-            Converters = { new SunderRpcV2JsonConverterFactory() },
+            Converters = { new SunderRpcJsonConverterFactory() },
         };
 
     private static void AssertCompiles(string source) => _ = CompileAndLoad(source);
@@ -190,16 +222,16 @@ public sealed class SunderRpcGeneratedValueBindingsTests
 
     private const string StructuredDescriptor = """
         {
-          "descriptorVersion":2,
+          "descriptorVersion":1,
           "schemaProfile":"sunder.rpc.values.v1",
-          "contractId":"example.rpc.v2.generatedvalues",
+          "contractId":"example.rpc.v1.generatedvalues",
           "version":"2.0.0",
           "errors":{},
           "services":{"values":{"methods":{"echo":{"kind":"unary","idempotency":"idempotent","errors":[],"requestSchema":{"$ref":"#/$defs/Envelope"},"responseSchema":{"$ref":"#/$defs/Envelope"}}}}},
           "$defs":{
             "Any":{},
             "JsonEnvelope":{"type":"object","properties":{"value":{"$ref":"#/$defs/Any"}},"required":[],"additionalProperties":false},
-            "Status":{"type":"string","minLength":5,"maxLength":11,"enum":["ready","in-progress","in_progress"]},
+            "Status":{"type":"string","minLength":5,"maxLength":11,"enum":["ready","in-progress","queued"]},
             "Text":{"type":"string","minLength":0,"maxLength":64},
             "Node":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/NodeRecord"}]},
             "NodeRecord":{"type":"object","properties":{"value":{"type":"integer"},"next":{"$ref":"#/$defs/Node"}},"required":["value"],"additionalProperties":false},

@@ -568,6 +568,58 @@ internal sealed class RuntimeSessionOwner
         }
     }
 
+    internal bool EnforceExecutionRuntimePolicy(
+        string packageId,
+        string message,
+        out Task cleanupCompletion)
+    {
+        cleanupCompletion = Task.CompletedTask;
+        PackageSessionLease sessionLease;
+        try
+        {
+            sessionLease = State.AcquireLease();
+        }
+        catch (RuntimeUnavailableException)
+        {
+            return false;
+        }
+
+        using (sessionLease)
+        {
+            if (!sessionLease.Session.TryGetRuntimeGeneration(
+                    packageId,
+                    out var runtimeGeneration))
+            {
+                return false;
+            }
+            var exception = new InvalidDataException(message);
+            var packageCleanup = Task.CompletedTask;
+            var applied = CommitPackageFault(
+                packageId,
+                message,
+                (expectedGeneration, committed) => State.HandleExecutionRuntimePolicyFault(
+                    packageId,
+                    runtimeGeneration,
+                    expectedGeneration,
+                    exception,
+                    committedGeneration =>
+                    {
+                        committed(committedGeneration);
+                        return _rpcCatalog?.DeactivatePackageWithRetirement(
+                                   packageId,
+                                   runtimeGeneration.ActivationId,
+                                   faulted: true)
+                               ?? Task.CompletedTask;
+                    },
+                    out packageCleanup),
+                committedGeneration => AlignRpcCatalogAfterPackageFault(
+                    sessionLease.Session,
+                    committedGeneration));
+            cleanupCompletion = packageCleanup;
+            return applied;
+        }
+    }
+
     private void AlignRpcCatalogAfterPackageFault(ActivePackageSession session, long generation)
     {
         if (_rpcCatalog is null)
@@ -758,8 +810,39 @@ internal sealed class RuntimeSessionOwner
                 throw new InvalidOperationException("The applied package fault did not commit a Runtime generation.");
             }
             committed?.Invoke(committedGeneration);
+            EnforceRequiredConsumers();
             return true;
         }
+    }
+
+    private int _enforcingRequiredConsumers;
+    private void EnforceRequiredConsumers()
+    {
+        if (_rpcReadiness is null || Interlocked.Exchange(ref _enforcingRequiredConsumers, 1) != 0) return;
+        try
+        {
+            while (true)
+            {
+                var missing = _rpcReadiness.UnsatisfiedConsumers(State.ActiveSession, Sunder.Package.Format.SunderPackageFormat.RuntimeHostRole);
+                var changed = false;
+                foreach (var packageId in missing)
+                {
+                    if (EnforceExecutionRuntimePolicy(packageId, Sunder.Registry.Contracts.RpcReadinessErrorCodes.RequiredProviderUnsatisfied, out var cleanup))
+                    {
+                        changed = true;
+                        _ = ObserveRequiredCleanupAsync(cleanup);
+                    }
+                }
+                if (!changed) break;
+            }
+        }
+        finally { Volatile.Write(ref _enforcingRequiredConsumers, 0); }
+    }
+
+    private async Task ObserveRequiredCleanupAsync(Task cleanup)
+    {
+        try { await cleanup; }
+        catch (Exception exception) { _logger.LogError(exception, "Required-provider consumer cleanup failed"); }
     }
 
     internal bool RefreshRpcReadiness()
@@ -769,6 +852,7 @@ internal sealed class RuntimeSessionOwner
             return false;
         }
         var refresh = State.RefreshRpcReadiness(_rpcReadiness);
+        EnforceRequiredConsumers();
         if (refresh is null)
         {
             return false;

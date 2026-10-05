@@ -4,6 +4,184 @@ namespace Sunder.Cli;
 
 internal sealed partial class CliCommandParser
 {
+    private void BuildRuntimeCommands()
+    {
+        var runtime = Group(Root, "runtime", "Inspect and manage the local Sunder Runtime.");
+        Bind(Leaf(runtime, "status", "Show authenticated Runtime status."), "runtime status", _ => new RuntimeStatusCommand());
+        AddRuntimeLifecycleCommand(runtime, "start", RuntimeLifecycleAction.Start);
+        AddRuntimeLifecycleCommand(runtime, "stop", RuntimeLifecycleAction.Stop);
+        AddRuntimeLifecycleCommand(runtime, "restart", RuntimeLifecycleAction.Restart);
+
+        var reset = Leaf(runtime, "reset", "Drain the Runtime and delete validated local Runtime V1 state.");
+        var yes = Flag("--yes", "Confirm the destructive reset.");
+        var resetScope = ValueOption(
+            "--scope",
+            "Limit the reset to one reviewed state scope. Supported: startup-cache.",
+            "SCOPE");
+        reset.Options.Add(yes);
+        reset.Options.Add(resetScope);
+        resetScope.Validators.Add(result =>
+        {
+            if (result.Tokens.Count == 1
+                && !string.Equals(result.Tokens[0].Value, "startup-cache", StringComparison.Ordinal))
+            {
+                result.AddError("Option '--scope' supports only 'startup-cache'.");
+            }
+        });
+        reset.Validators.Add(result =>
+        {
+            if (!result.GetValue(yes)) result.AddError("Runtime reset is destructive. Specify '--yes' to continue.");
+        });
+        Bind(reset, "runtime reset", result => new RuntimeResetCommand(
+            result.GetValue(yes),
+            result.GetValue(resetScope) is null ? RuntimeResetScope.All : RuntimeResetScope.StartupCache));
+        BuildExecutionRuntimeCommands(runtime);
+    }
+
+    private void AddDevPackageRuntimeCommands(Command package)
+    {
+        var prepare = Leaf(package, "prepare-imports", "Validate exact local or Registry-backed imports for an unpublished development package.");
+        var prepareFolder = RequiredTextArgument("folder", "Canonical exploded development package folder.");
+        var registry = ValueOption("--registry", "Explicit HTTPS Registry origin for published imports; omit for local evidence.", "origin");
+        var candidates = new Option<string[]>("--candidate")
+        {
+            Description = "Exact local .sunderpkg candidate; repeat for each selected package.",
+            HelpName = "archive",
+            Arity = ArgumentArity.OneOrMore,
+            AllowMultipleArgumentsPerToken = false,
+        };
+        var catalog = ValueOption("--platform-catalog", "Exact local Core platform catalog.", "path");
+        prepare.Arguments.Add(prepareFolder); prepare.Options.Add(registry); prepare.Options.Add(candidates); prepare.Options.Add(catalog);
+        prepare.Validators.Add(result =>
+        {
+            var paths = result.GetValue(candidates) ?? [];
+            if (paths.Length > 128 || paths.Any(string.IsNullOrWhiteSpace)) result.AddError("Supply at most 128 nonempty candidate paths.");
+            if (result.GetValue(registry) is not null && (paths.Length > 0 || result.GetValue(catalog) is not null))
+                result.AddError("Select local --candidate/--platform-catalog inputs or --registry, not both.");
+        });
+        Bind(prepare, "dev package prepare-imports", result => new PrepareDevPackageImportsCommand(
+            result.GetRequiredValue(prepareFolder), result.GetValue(registry),
+            result.GetValue(candidates) is { Length: > 0 } paths ? paths : null, result.GetValue(catalog)));
+        var run = Leaf(package, "run", "Run a canonical development package folder through the managed Runtime.");
+        var runFolder = RequiredTextArgument("folder", "Canonical exploded development package folder.");
+        var watch = Flag("--watch", "Watch the folder and reload the package after stable changes.");
+        run.Arguments.Add(runFolder);
+        run.Options.Add(watch);
+        Bind(run, "dev package run", result => new RunDevPackageCommand(
+            result.GetRequiredValue(runFolder),
+            result.GetValue(watch)));
+
+        var smoke = Leaf(package, "smoke", "Load and release a development package through the managed Runtime.");
+        var smokeFolder = RequiredTextArgument("folder", "Canonical exploded development package folder.");
+        smoke.Arguments.Add(smokeFolder);
+        Bind(smoke, "dev package smoke", result => new SmokeDevPackageCommand(result.GetRequiredValue(smokeFolder)));
+    }
+
+    private void BuildExecutionRuntimeCommands(Command runtime)
+    {
+        Bind(
+            Leaf(runtime, "list", "List installed execution runtimes and health/lifecycle state."),
+            "runtime list",
+            _ => new ListExecutionRuntimesCommand());
+
+        AddExecutionRuntimeIdentityCommand(
+            runtime,
+            "info",
+            "Show one execution runtime and its dependent package references.",
+            static identity => new ShowExecutionRuntimeCommand(identity));
+
+        var ensure = Leaf(runtime, "ensure", "Resolve and install a trusted execution runtime for the current RID.");
+        var ensureRuntimeId = RequiredTextArgument(
+            "runtime-id",
+            "Execution runtime id, such as sunder.runtime.dotnet or sunder.runtime.node.");
+        var versionRange = RequiredTextArgument("version-range", "Strict bounded runtime version range.");
+        var moduleAbi = RequiredTextArgument("module-abi", "Required module ABI.");
+        var registryOrigin = ValueOption(
+            "--registry-origin",
+            "Registry origin. Defaults to the configured Registry API URL.",
+            "url");
+        ensure.Arguments.Add(ensureRuntimeId);
+        ensure.Arguments.Add(versionRange);
+        ensure.Arguments.Add(moduleAbi);
+        ensure.Options.Add(registryOrigin);
+        Bind(ensure, "runtime ensure", result => new EnsureExecutionRuntimeCommand(
+            result.GetRequiredValue(ensureRuntimeId),
+            result.GetRequiredValue(versionRange),
+            result.GetRequiredValue(moduleAbi),
+            result.GetValue(registryOrigin)));
+
+        var import = Leaf(runtime, "import", "Import a trusted local .sunderruntime archive.");
+        var file = RequiredValueOption("--file", "Local .sunderruntime archive.", "path");
+        import.Options.Add(file);
+        Bind(import, "runtime import", result => new ImportExecutionRuntimeCommand(result.GetRequiredValue(file)!));
+
+        AddExecutionRuntimeIdentityCommand(
+            runtime,
+            "verify",
+            "Deeply verify one installed execution runtime.",
+            static identity => new VerifyExecutionRuntimeCommand(identity));
+
+        var yes = Flag("--yes", "Confirm that dependent Workers may be stopped during repair.");
+        AddExecutionRuntimeIdentityCommand(
+            runtime,
+            "repair",
+            "Repair one unhealthy execution runtime from its immutable cached archive.",
+            static identity => new RepairExecutionRuntimeCommand(identity),
+            command =>
+            {
+                command.Options.Add(yes);
+                command.Validators.Add(result =>
+                {
+                    if (!result.GetValue(yes))
+                        result.AddError("Execution runtime repair may stop dependent Workers. Specify '--yes' to continue.");
+                });
+            });
+
+        Bind(
+            Leaf(runtime, "gc", "Request lease-safe execution runtime garbage collection."),
+            "runtime gc",
+            _ => new GarbageCollectExecutionRuntimesCommand());
+    }
+
+    private void AddExecutionRuntimeIdentityCommand(
+        Command parent,
+        string name,
+        string description,
+        Func<CliExecutionRuntimeIdentity, CliCommand> factory,
+        Action<Command>? configure = null)
+    {
+        var command = Leaf(parent, name, description);
+        var runtimeId = RequiredTextArgument("runtime-id", "Execution runtime id.");
+        var version = SemanticVersionArgument();
+        var packagingRevision = new Argument<int>("packaging-revision")
+        {
+            Description = "Positive execution runtime packaging revision.",
+        };
+        packagingRevision.Validators.Add(result =>
+        {
+            if (result.Tokens.Count == 1
+                && int.TryParse(result.Tokens[0].Value, out var value)
+                && value <= 0)
+            {
+                result.AddError("Argument '<packaging-revision>' must be a positive integer.");
+            }
+        });
+        var rid = RequiredTextArgument("rid", "Exact runtime identifier (RID).");
+        var moduleAbi = RequiredTextArgument("module-abi", "Exact module ABI.");
+        command.Arguments.Add(runtimeId);
+        command.Arguments.Add(version);
+        command.Arguments.Add(packagingRevision);
+        command.Arguments.Add(rid);
+        command.Arguments.Add(moduleAbi);
+        configure?.Invoke(command);
+        Bind(command, $"runtime {name}", result => factory(new CliExecutionRuntimeIdentity(
+            result.GetRequiredValue(runtimeId),
+            result.GetRequiredValue(version),
+            result.GetRequiredValue(packagingRevision),
+            result.GetRequiredValue(rid),
+            result.GetRequiredValue(moduleAbi))));
+    }
+
     private void AddRuntimeLifecycleCommand(Command runtime, string name, RuntimeLifecycleAction action)
         => Bind(
             Leaf(runtime, name, $"{char.ToUpperInvariant(name[0])}{name[1..]} the local Runtime and wait for completion."),
@@ -28,22 +206,31 @@ internal sealed partial class CliCommandParser
         var approveSensitiveCapabilities = Flag(
             "--approve-sensitive-capabilities",
             "Explicitly approve exact capability escalations shown by Runtime preflight.");
+        var yes = Flag("--yes", "Apply the exact Runtime-generated update preflight.");
+        var dryRun = Flag("--dry-run", "Show package/runtime bytes and conflicts without applying changes.");
         update.Arguments.Add(packageId);
         update.Options.Add(all);
         update.Options.Add(prerelease);
         update.Options.Add(registryOrigin);
         update.Options.Add(approveSensitiveCapabilities);
+        update.Options.Add(yes);
+        update.Options.Add(dryRun);
         update.Validators.Add(result =>
         {
             var hasPackageId = result.GetResult(packageId)?.Tokens.Count > 0;
             if (result.GetValue(all) == hasPackageId)
                 result.AddError("Specify exactly one package id or '--all'.");
+            if (result.GetValue(yes) == result.GetValue(dryRun))
+                result.AddError("Package update requires exactly one of '--yes' or '--dry-run'.");
+            if (result.GetValue(dryRun) && result.GetValue(approveSensitiveCapabilities))
+                result.AddError("Option '--approve-sensitive-capabilities' is only valid when applying updates with '--yes'.");
         });
         Bind(update, "package update", result => new UpdatePackagesCommand(
             result.GetValue(packageId),
             result.GetValue(prerelease),
             result.GetValue(registryOrigin),
-            result.GetValue(approveSensitiveCapabilities)));
+            result.GetValue(approveSensitiveCapabilities),
+            result.GetValue(dryRun)));
     }
 
     private void BuildPackageSourceCommands(Command package)

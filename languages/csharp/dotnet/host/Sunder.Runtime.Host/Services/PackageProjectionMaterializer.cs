@@ -1,13 +1,18 @@
 using System.Buffers;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Sunder.Package.Format;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal static class PackageProjectionMaterializer
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     public static async Task MaterializeProjectionAsync(
         string sourceRoot,
@@ -15,7 +20,8 @@ internal static class PackageProjectionMaterializer
         SunderPackageManifest manifest,
         SunderPackageContentIndex contentIndex,
         SunderPackageTargetKey targetKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PackageSessionStartupTracePackage? startupTrace = null)
     {
         var entries = GetEntries(contentIndex);
         var plan = SunderPackageTargetResolver.CreateProjectionPlan(manifest, contentIndex, targetKey);
@@ -33,7 +39,8 @@ internal static class PackageProjectionMaterializer
                 projection.PhysicalPath.ToPlatformPath(sourceRoot),
                 projection.LogicalPath.ToPlatformPath(destinationRoot),
                 entry,
-                cancellationToken);
+                cancellationToken,
+                startupTrace);
         }
     }
 
@@ -41,7 +48,8 @@ internal static class PackageProjectionMaterializer
         string sourceRoot,
         string destinationRoot,
         SunderPackageContentIndex contentIndex,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PackageSessionStartupTracePackage? startupTrace = null)
     {
         Directory.CreateDirectory(destinationRoot);
         foreach (var entry in GetEntries(contentIndex).Values.OrderBy(static item => item.Path, StringComparer.Ordinal))
@@ -55,7 +63,8 @@ internal static class PackageProjectionMaterializer
                 path.ToPlatformPath(sourceRoot),
                 path.ToPlatformPath(destinationRoot),
                 entry,
-                cancellationToken);
+                cancellationToken,
+                startupTrace);
         }
 
         var contentIndexPath = ArchiveRelativePath.Parse(SunderPackageFormat.ContentIndexPath);
@@ -63,10 +72,16 @@ internal static class PackageProjectionMaterializer
         var destinationIndexPath = contentIndexPath.ToPlatformPath(destinationRoot);
         Directory.CreateDirectory(Path.GetDirectoryName(destinationIndexPath)!);
         File.Copy(sourceIndexPath, destinationIndexPath, overwrite: false);
+        startupTrace?.AddFileIo(sourceIndexPath, read: true, copied: true);
 
-        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(
-            destinationRoot,
-            cancellationToken);
+        var validation = startupTrace is null
+            ? await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(
+                destinationRoot,
+                cancellationToken)
+            : await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(
+                destinationRoot,
+                cancellationToken,
+                startupTrace);
         if (!validation.Success)
         {
             throw new InvalidDataException(
@@ -80,44 +95,29 @@ internal static class PackageProjectionMaterializer
         SunderPackageManifest sourceManifest,
         SunderPackageContentIndex sourceContentIndex,
         string runtimeIdentifier,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<SunderPackageTargetKey>? acquiredTargets = null)
     {
         if (!SunderPackageFormat.IsRuntimeIdentifier(runtimeIdentifier))
         {
             throw new ArgumentException("Install projection requires a supported exact RID.", nameof(runtimeIdentifier));
         }
 
+        // The source manifest is immutable package-level authority, not a role-local
+        // artifact. Acquisition limits payload and activation, never its import graph.
+        PackageManifestAdmissionPolicy.EnsureSupported(sourceManifest);
+        InstalledPackageProjection.ValidateScope(acquiredTargets, sourceManifest);
+        if (acquiredTargets?.Any(key => key.Rid != runtimeIdentifier) == true)
+            throw new InvalidDataException("Install projection acquisition requires the exact current RID.");
         var selectedTargets = (sourceManifest.Targets ?? [])
             .Where(target => target is not null
-                             && string.Equals(target.Rid, runtimeIdentifier, StringComparison.Ordinal))
+                             && string.Equals(target.Rid, runtimeIdentifier, StringComparison.Ordinal)
+                             && InstalledPackageProjection.Includes(acquiredTargets, target.Role, target.Rid))
             .Select(static target => target!)
             .ToArray();
         var selectedKeys = selectedTargets
             .Select(static target => new SunderPackageTargetKey(target.Role!, target.Rid!))
             .ToArray();
-        var selectedRoles = selectedKeys
-            .Select(static key => key.Role)
-            .ToHashSet(StringComparer.Ordinal);
-        var projectedManifest = new SunderPackageManifest
-        {
-            ArchiveFormatVersion = sourceManifest.ArchiveFormatVersion,
-            ManifestVersion = sourceManifest.ManifestVersion,
-            Id = sourceManifest.Id,
-            Name = sourceManifest.Name,
-            Summary = sourceManifest.Summary,
-            Version = sourceManifest.Version,
-            Icon = sourceManifest.Icon,
-            DependsOn = sourceManifest.DependsOn,
-            Targets = selectedTargets,
-            ContractBundles = sourceManifest.ContractBundles,
-            UsesContracts = (sourceManifest.UsesContracts ?? [])
-                .Where(use => use is not null && selectedRoles.Contains(use.Role!))
-                .ToArray(),
-            Provides = (sourceManifest.Provides ?? [])
-                .Where(provider => provider is not null && selectedRoles.Contains(provider.Role!))
-                .ToArray(),
-        };
-
         var entries = GetEntries(sourceContentIndex);
         var selectedPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in entries.Values)
@@ -155,11 +155,8 @@ internal static class PackageProjectionMaterializer
 
         var manifestPath = ArchiveRelativePath.Parse(SunderPackageFormat.ManifestPath)
             .ToPlatformPath(destinationRoot);
-        Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
-        await File.WriteAllTextAsync(
-            manifestPath,
-            JsonSerializer.Serialize(projectedManifest, JsonOptions) + "\n",
-            cancellationToken);
+        await CopyAndValidateAsync(ArchiveRelativePath.Parse(SunderPackageFormat.ManifestPath).ToPlatformPath(sourceRoot),
+            manifestPath, entries[SunderPackageFormat.ManifestPath], cancellationToken);
 
         var projectedEntries = new List<SunderPackageContentIndexEntry>();
         foreach (var path in Directory.EnumerateFiles(destinationRoot, "*", SearchOption.AllDirectories)
@@ -183,9 +180,8 @@ internal static class PackageProjectionMaterializer
                 JsonOptions) + "\n",
             cancellationToken);
 
-        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(
-            destinationRoot,
-            cancellationToken);
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedProjectionSetAsync(
+            destinationRoot, selectedKeys, cancellationToken);
         if (!validation.Success)
         {
             throw new InvalidDataException(
@@ -212,7 +208,8 @@ internal static class PackageProjectionMaterializer
         string sourcePath,
         string destinationPath,
         SunderPackageContentIndexEntry entry,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PackageSessionStartupTracePackage? startupTrace = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
         await using var source = new FileStream(
@@ -236,6 +233,7 @@ internal static class PackageProjectionMaterializer
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer = ArrayPool<byte>.Shared.Rent(128 * 1024);
         long copied = 0;
+        long written = 0;
         try
         {
             int read;
@@ -244,12 +242,28 @@ internal static class PackageProjectionMaterializer
                 copied = checked(copied + read);
                 hash.AppendData(buffer, 0, read);
                 await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                written = checked(written + read);
             }
             await destination.FlushAsync(cancellationToken);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+            if (startupTrace is not null)
+            {
+                try
+                {
+                    written = destination.Position;
+                }
+                catch
+                {
+                    // Instrumentation never changes projection materialization outcomes.
+                }
+                startupTrace.AddIo(
+                    bytesRead: copied,
+                    bytesHashed: copied,
+                    bytesCopied: written);
+            }
         }
 
         var actualHash = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
@@ -265,4 +279,5 @@ internal static class PackageProjectionMaterializer
             File.SetUnixFileMode(destinationPath, mode);
         }
     }
+
 }

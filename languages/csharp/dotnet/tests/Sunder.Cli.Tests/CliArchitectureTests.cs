@@ -65,6 +65,7 @@ public sealed class CliArchitectureTests
             Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Packages.cs"),
             Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.PackageCommit.cs"),
             Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Snapshots.cs"),
+            Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.ExecutionRuntimes.cs"),
         };
         var transportAndCompositionFiles = new[]
         {
@@ -125,6 +126,8 @@ public sealed class CliArchitectureTests
             ["RegistryAuthCommandHandler.cs"] = "ICliRuntimeAuthClient",
             ["RegistryManagementCommandHandler.cs"] = "ICliRuntimeManagementClient",
             ["DeveloperPublishCommandHandler.cs"] = "ICliRuntimePublishClient",
+            ["ExecutionRuntimeCommandHandler.cs"] = "ICliRuntimeExecutionRuntimeClient",
+            ["DevPackageCommandHandler.cs"] = "ICliRuntimeDevPackageClient",
         };
         Assert.All(expectedRoles, pair =>
         {

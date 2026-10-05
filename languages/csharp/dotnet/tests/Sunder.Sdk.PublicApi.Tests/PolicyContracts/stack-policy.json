@@ -1,0 +1,21 @@
+{
+  "stackId": "example.stack",
+  "ownerPrincipalId": "0123456789abcdef0123456789abcdef",
+  "currentRevision": {
+    "stackId": "example.stack",
+    "revision": 7,
+    "artifactSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "visibility": "Listed",
+  "publicReason": null,
+  "publicationAuthorityPolicy": {
+    "revision": 42,
+    "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "checkpoint": {
+    "sequence": 99,
+    "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "topologyGeneration": 1,
+    "topologyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  }
+}

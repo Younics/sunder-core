@@ -1,0 +1,18 @@
+{
+  "subject": {
+    "runtime": {
+      "runtimeId": "sunder.runtime.dotnet",
+      "version": "10.0.0",
+      "packagingRevision": 1,
+      "rid": "osx-arm64",
+      "moduleAbi": "sunder.dotnet-worker-module.v1"
+    },
+    "manifestSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "artifactSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "lifecycleState": "revoked",
+  "disposition": "Denied",
+  "errorCode": "execution-runtime.revoked",
+  "activationBlockedAtUtc": "2026-09-14T10:00:00+00:00",
+  "revokedAtUtc": "2026-09-14T10:00:00+00:00"
+}

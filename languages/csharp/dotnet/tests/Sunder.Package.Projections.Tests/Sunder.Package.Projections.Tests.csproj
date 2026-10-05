@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\host\Sunder.Package.Projections\Sunder.Package.Projections.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,41 +1,46 @@
+using Sunder.Runtime.LocalState;
+
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed class RuntimeRootLease : IDisposable
 {
-    private readonly FileStream _stream;
+    private readonly RuntimeFileLock _lock;
     private bool _disposed;
 
-    private RuntimeRootLease(FileStream stream)
+    private RuntimeRootLease(RuntimeFileLock fileLock)
     {
-        _stream = stream;
+        _lock = fileLock;
     }
 
     public static RuntimeRootLease Acquire(RuntimePackagePaths paths)
     {
-        Directory.CreateDirectory(paths.RootPath);
-        FileStream? stream = null;
+        RuntimeOwnedFileSystem.ValidateNoReparsePointAncestors(paths.RootPath);
+        DurableJsonDocument.CreateDirectory(paths.RootPath);
+        RuntimeOwnedFileSystem.ValidateMutableDirectory(paths.RootPath, paths.RootPath);
+        RuntimeFileLock? fileLock = null;
         try
         {
-            stream = new FileStream(
-                paths.LeaseFilePath,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.None,
-                bufferSize: 1,
-                FileOptions.WriteThrough);
+            fileLock = RuntimeFileLock.TryAcquireExclusive(paths.LeaseFilePath)
+                       ?? throw new IOException("The Runtime root lease is already held.");
+            RuntimeOwnedFileSystem.ValidateMutableRegularFile(paths.RootPath, paths.LeaseFilePath);
+            var stream = fileLock.Stream;
             stream.SetLength(0);
             using var writer = new StreamWriter(stream, leaveOpen: true);
             writer.Write($"pid={Environment.ProcessId}{Environment.NewLine}started={DateTimeOffset.UtcNow:O}{Environment.NewLine}");
             writer.Flush();
             stream.Flush(flushToDisk: true);
-            return new RuntimeRootLease(stream);
+            return new RuntimeRootLease(fileLock);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
-            stream?.Dispose();
-            throw new InvalidOperationException(
-                $"Another Sunder Runtime instance owns package root '{paths.RootPath}'. Stop that Runtime or select a different profile/package root.",
-                ex);
+            fileLock?.Dispose();
+            if (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new InvalidOperationException(
+                    $"Another Sunder Runtime instance owns package root '{paths.RootPath}'. Stop that Runtime or select a different profile/package root.",
+                    ex);
+            }
+            throw;
         }
     }
 
@@ -47,6 +52,6 @@ internal sealed class RuntimeRootLease : IDisposable
         }
 
         _disposed = true;
-        _stream.Dispose();
+        _lock.Dispose();
     }
 }

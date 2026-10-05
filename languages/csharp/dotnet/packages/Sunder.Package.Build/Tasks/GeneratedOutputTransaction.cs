@@ -12,7 +12,7 @@ internal static class GeneratedOutputTransaction
 
     public static void RecoverAndCleanup(params string[] finalPaths)
     {
-        var normalized = finalPaths.Select(Path.GetFullPath).ToHashSet(PathComparer);
+        var normalized = finalPaths.Select(NormalizePath).ToHashSet(PathComparer);
         foreach (var coordinatorPath in normalized)
         {
             var journalPath = TransactionPath(coordinatorPath);
@@ -36,13 +36,13 @@ internal static class GeneratedOutputTransaction
     {
         if (outputs.Length == 0) return;
         var token = Guid.NewGuid().ToString("D");
-        var coordinatorPath = Path.GetFullPath(outputs[0].FinalPath);
+        var coordinatorPath = NormalizePath(outputs[0].FinalPath);
         var journalPath = TransactionPath(coordinatorPath);
         var installedPath = journalPath + InstalledSuffix;
         var entries = outputs.Select(output =>
         {
-            var finalPath = Path.GetFullPath(output.FinalPath);
-            var stagedPath = Path.GetFullPath(output.StagedPath);
+            var finalPath = NormalizePath(output.FinalPath);
+            var stagedPath = NormalizePath(output.StagedPath);
             if (!PathExists(stagedPath)) throw new IOException($"Staged generated output '{stagedPath}' is missing.");
             if (IsMarkerSidecar(finalPath))
             {
@@ -108,6 +108,15 @@ internal static class GeneratedOutputTransaction
                 $"Generated output transaction journal '{journalPath}' is unreadable; refusing unsafe recovery.",
                 exception);
         }
+        transaction = transaction with
+        {
+            CoordinatorPath = NormalizePath(transaction.CoordinatorPath),
+            Outputs = transaction.Outputs.Select(static output => new TransactionEntry(
+                NormalizePath(output.FinalPath),
+                NormalizePath(output.StagedPath),
+                NormalizePath(output.BackupPath),
+                output.Existed)).ToArray(),
+        };
         if (transaction.SchemaVersion != 1
             || !Guid.TryParseExact(transaction.Token, "D", out _)
             || !PathsEqual(TransactionPath(transaction.CoordinatorPath), journalPath)
@@ -319,7 +328,10 @@ internal static class GeneratedOutputTransaction
         => (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
 
     private static string TransactionPath(string coordinatorPath)
-        => Path.GetFullPath(coordinatorPath) + TransactionSuffix;
+        => NormalizePath(coordinatorPath) + TransactionSuffix;
+
+    private static string NormalizePath(string path)
+        => GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(path);
 
     private static bool PathsEqual(string left, string right)
         => string.Equals(left, right, PathComparison);

@@ -1,0 +1,6 @@
+{
+  "idempotencyKey": "block-version",
+  "expectedPackagePolicyRevision": 41,
+  "expectedPackageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "publicReason": "Security policy blocks this immutable version."
+}

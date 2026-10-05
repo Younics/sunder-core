@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Sunder.Package.Format;
+using Sunder.Package.Projections;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
@@ -25,14 +26,32 @@ internal sealed record AppPreparedPackageSource(
     string PackageId,
     string Folder,
     SunderPackageManifest Manifest,
-    SunderPackageContentIndex ContentIndex);
+    SunderPackageContentIndex ContentIndex,
+    AppPackageProjectionLease? ProjectionLease = null);
+
+internal sealed class AppPackageProjectionLease(PackageProjectionAcquisition acquisition) : IAsyncDisposable
+{
+    private PackageProjectionAcquisition? _acquisition = acquisition;
+
+    public PackageProjectionAcquisition? Take()
+        => Interlocked.Exchange(ref _acquisition, null);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _acquisition, null) is { } owned)
+        {
+            await owned.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+}
 
 internal sealed record AppPackageFileMetadata(string Path, long Length, string Sha256);
 
 internal sealed record AppPreparedPackageActivation(
     ActivePackageDescriptor Package,
     PackageUiSnapshotDescriptor Source,
-    AppPreparedPackageSource PreparedSource)
+    AppPreparedPackageSource PreparedSource,
+    long ReadyTimestamp)
 {
     public string LibraryFolder => Path.Combine(PreparedSource.Folder, "lib");
 }
@@ -43,7 +62,8 @@ internal sealed record AppLoadedPackageHandle(
     string Folder,
     IServiceProvider? ServiceProvider,
     AppPackageLoadContext? LoadContext,
-    IAsyncDisposable? TargetLifetime = null)
+    IAsyncDisposable? TargetLifetime = null,
+    PackageProjectionAcquisition? ProjectionLease = null)
 {
     public string PackageId => Package.PackageId;
 }
@@ -61,13 +81,28 @@ internal static class AppPackageManifestReader
         var path = Path.Combine(contentRoot, "manifest", "sunder-package.json");
         try
         {
-            return JsonSerializer.Deserialize<SunderPackageManifest>(File.ReadAllText(path), JsonOptions)
+            var manifest = StrictJsonSerializer.Deserialize<SunderPackageManifest>(File.ReadAllText(path), JsonOptions)
                 ?? throw new InvalidDataException("App package projection manifest is empty.");
+            EnsureSupported(manifest);
+            return manifest;
         }
         catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
         {
             throw new InvalidDataException("App package projection manifest is invalid.", exception);
         }
+    }
+
+    internal static void EnsureSupported(SunderPackageManifest manifest)
+    {
+        // This is structural validation. Host graph authority and the authenticated
+        // process load permit are still required before executing package App code.
+        var errors = new List<string>();
+        PackageRpcImportValidator.Validate(manifest, errors);
+        foreach (var dependency in manifest.DependsOn ?? [])
+        {
+            if (dependency is null || dependency.Presence is not ("required" or "optional")) errors.Add("App dependencies must explicitly declare required or optional presence.");
+        }
+        if (errors.Count > 0) throw new InvalidDataException(string.Join(" | ", errors));
     }
 }
 

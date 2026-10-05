@@ -157,7 +157,7 @@ public sealed class RuntimeRpcValueMeasurementTests
         => SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "$schema":"https://json-schema.org/draft/2020-12/schema",
-              "descriptorVersion":2,
+              "descriptorVersion":1,
               "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"measurement.rpc",
               "version":"1.0.0",

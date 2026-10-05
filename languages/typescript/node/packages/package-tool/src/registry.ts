@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import {
-  SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR,
+  SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
   generateTypeScriptBindings,
   isPackageId,
   isSemanticVersion,
   parseRpcContractDescriptor,
-  type RpcContractDescriptorV2,
+  type RpcContractDescriptor,
   type TypeScriptGeneratorOptions,
 } from "@sunder/sdk";
 
@@ -37,7 +37,7 @@ export interface RegistryContractDescriptorMetadata {
 
 export interface FetchedRegistryContract {
   readonly metadata: RegistryContractDescriptorMetadata;
-  readonly descriptor: RpcContractDescriptorV2;
+  readonly descriptor: RpcContractDescriptor;
   readonly canonicalBytes: Uint8Array;
 }
 
@@ -102,14 +102,13 @@ export async function fetchRegistryContract(
   }
 
   const descriptor = parseRpcContractDescriptor(canonicalBytes);
-  if (descriptor.descriptorVersion !== 2) throw new TypeError("Registry contract descriptor must use descriptorVersion 2.");
   if (descriptor.contractId !== metadata.contractId || descriptor.version !== metadata.version) {
     throw new TypeError("Registry contract descriptor identity does not match metadata.");
   }
   const reparsedCanonical = canonicalRpcDescriptorBytes(descriptor);
   if (!bytesEqual(canonicalBytes, reparsedCanonical)) throw new TypeError("Registry contract descriptor response is not canonical.");
   const actualAbiSha256 = createHash("sha256")
-    .update(SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR, "utf8")
+    .update(SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, "utf8")
     .update(canonicalRpcAbiProjectionBytes(descriptor))
     .digest("hex");
   if (actualAbiSha256 !== metadata.abiSha256) {

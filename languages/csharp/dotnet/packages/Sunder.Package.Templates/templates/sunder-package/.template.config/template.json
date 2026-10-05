@@ -4,7 +4,7 @@
   "classifications": ["Sunder", "Package", "Avalonia"],
   "identity": "Sunder.Package",
   "name": "Sunder Package",
-  "description": "Creates a canonical Worker/package project with optional App and package-local Protocol projects.",
+  "description": "Creates one Sunder package project with typed services and optional Avalonia UI; Sunder generates isolated Worker/App outputs.",
   "shortName": "sunder-package",
   "sourceName": "Sunder.Package.Template",
   "preferNameDirectory": true,
@@ -61,15 +61,13 @@
       "type": "parameter",
       "datatype": "bool",
       "defaultValue": false,
-      "description": "Add the Avalonia SDK and a default App package view.",
-      "replaces": "SUNDER_WITH_AVALONIA"
+      "description": "Add Avalonia UI support and a default package view."
     },
     "withStacks": {
       "type": "parameter",
       "datatype": "bool",
       "defaultValue": false,
-      "description": "Add the Stack SDK and a Worker V3 Stack contributor example.",
-      "replaces": "SUNDER_WITH_STACKS"
+      "description": "Add the Stack contributor example; building requires explicit signed platform-contract selection."
     },
     "withHostDependency": {
       "type": "parameter",
@@ -108,6 +106,7 @@
       "type": "parameter",
       "datatype": "bool",
       "defaultValue": false,
+      "isEnabled": "withAvalonia == true",
       "description": "With --withAvalonia, omit the default shell-visible view while retaining Avalonia SDK references."
     }
   },
@@ -172,18 +171,25 @@
     {
       "source": "Sunder.Package.Template/",
       "target": "./",
+      "exclude": [
+        "**/[Bb]in/**",
+        "**/[Oo]bj/**",
+        ".template.config/**/*",
+        "**/*.filelist",
+        "**/*.user",
+        "**/packages.lock.json"
+      ],
       "modifiers": [
         {
           "condition": "(!withAvalonia)",
           "exclude": [
-            "Sunder.Package.Template.App/**/*"
+            "Views/**/*"
           ]
         },
         {
           "condition": "(!withStacks)",
           "exclude": [
-            "Sunder.Package.Template.Worker/StackSupport.cs",
-            "Sunder.Package.Template.Worker/Stacks.PackageReferences.props"
+            "Stacks/**/*"
           ]
         },
         {
@@ -207,21 +213,8 @@
         {
           "condition": "(withAvalonia && noDefaultView)",
           "exclude": [
-            "Sunder.Package.Template.App/PackageViews/**/*",
-            "Sunder.Package.Template.App/PackageModule.with-view.cs"
-          ],
-          "rename": {
-            "Sunder.Package.Template.App/PackageModule.no-view.cs": "Sunder.Package.Template.App/PackageModule.cs"
-          }
-        },
-        {
-          "condition": "(withAvalonia && !noDefaultView)",
-          "exclude": [
-            "Sunder.Package.Template.App/PackageModule.no-view.cs"
-          ],
-          "rename": {
-            "Sunder.Package.Template.App/PackageModule.with-view.cs": "Sunder.Package.Template.App/PackageModule.cs"
-          }
+            "Views/DefaultPackageView*"
+          ]
         }
       ]
     }

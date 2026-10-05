@@ -24,6 +24,7 @@ public sealed partial class UseStackWizardViewModel(
     private bool _manifestLoaded;
     private bool _installPlanReady;
     private bool _installPlanHasErrors;
+    private string? _installPlanResolutionFingerprint;
     private readonly LatestAsyncRequest _previewRequest = new();
     private readonly OwnedTaskObserver _tasks = new(nameof(UseStackWizardViewModel));
     private string? _importPlanId;
@@ -207,7 +208,8 @@ public sealed partial class UseStackWizardViewModel(
                     registryClient,
                     runtimeApiClient,
                     progress => StatusText = progress.StatusText,
-                    cancellationToken);
+                    cancellationToken,
+                    _installPlanResolutionFingerprint);
                 cancellationToken.ThrowIfCancellationRequested();
                 ApplyInstallResult(installResult);
                 if (!installResult.Success)

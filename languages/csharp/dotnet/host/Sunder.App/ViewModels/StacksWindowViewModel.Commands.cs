@@ -383,8 +383,8 @@ public sealed partial class StacksWindowViewModel
         }
     }
 
-    [RelayCommand(CanExecute = nameof(CanDeleteSelectedRegistryStack))]
-    private async Task DeleteSelectedRegistryStackAsync()
+    [RelayCommand(CanExecute = nameof(CanUnlistSelectedRegistryStack))]
+    private async Task UnlistSelectedRegistryStackAsync()
     {
         if (_disposed || Registry.SelectedStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
@@ -396,20 +396,20 @@ public sealed partial class StacksWindowViewModel
         IsBusy = true;
         try
         {
-            var result = await _runtimeApiClient.DeleteRegistryStackAsync(
-                new RuntimeRegistryDeleteStackRequest(registryUrl.AbsoluteUri, selectedStack.StackId),
+            var result = await _runtimeApiClient.SetRegistryStackVisibilityAsync(
+                new RuntimeRegistryStackVisibilityRequest(registryUrl.AbsoluteUri, selectedStack.StackId),
                 cancellationToken);
             if (!result.Success)
             {
                 StatusText = result.Forbidden
-                    ? "Registry Stack deletion requires sign-in as the Stack owner."
-                    : result.Errors.FirstOrDefault() ?? "Registry Stack deletion failed.";
+                    ? "Unlisting requires sign-in as the Stack owner."
+                    : result.Errors.FirstOrDefault() ?? "Registry Stack visibility update failed.";
                 return;
             }
 
             Registry.Stacks.Remove(selectedStack);
             Registry.SelectedStack = Registry.Stacks.FirstOrDefault();
-            StatusText = result.Message ?? $"Deleted Registry Stack '{selectedStack.StackId}'.";
+            StatusText = result.Message ?? $"Unlisted Registry Stack '{selectedStack.StackId}'.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

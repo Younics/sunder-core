@@ -10,7 +10,7 @@ The public roots are deliberately capability-oriented:
 
 ```text
 sunder
-  runtime status|start|stop|restart|reset
+  runtime status|start|stop|restart|reset|list|info|ensure|import|verify|repair|gc
   package search|info|list|status|install|update|enable|disable|uninstall
   package source adopt
   package config schema|list|get|set|unset
@@ -20,7 +20,7 @@ sunder
   registry auth login|status|logout
   registry package publish|yank|unyank|deprecate|undeprecate|tag
   registry stack publish|delete
-  dev package validate
+  dev package validate|prepare-imports|run|smoke
   dev stack inspect
   dev registry package publish-local
   dev registry stack publish-local
@@ -100,7 +100,23 @@ Deliberately drain the Runtime and delete validated Runtime V1 state:
 sunder runtime reset --yes
 ```
 
-Reset is rejected without `--yes`. It acquires a one-time authenticated reset challenge and exclusive state lease, validates the V1 schema identity, and operates only on fixed V1 categories. It never scans legacy roots. Partial reset results retain schema/key metadata and are safe to retry.
+Reset is rejected without `--yes`. It acquires a one-time authenticated challenge from the default local Host. The Host durably stops Runtime, retains lifecycle ownership while it holds the exclusive state lease, validates the exact V1 root identity, and operates only on fixed V1 categories. It never scans legacy roots. The response contains bounded category summaries; the durable receipt contains detailed paths. Partial reset results retain schema/key metadata and are safe to retry.
+
+Manage the immutable execution runtimes used to launch package Workers:
+
+```powershell
+sunder runtime list
+sunder runtime info sunder.runtime.dotnet 10.0.1 1 win-x64 sunder.dotnet-worker-module.v1
+sunder runtime ensure sunder.runtime.dotnet ">=10.0.0 <11.0.0" sunder.dotnet-worker-module.v1
+sunder runtime import --file .\dotnet-10.0.1-win-x64.sunderruntime
+sunder runtime verify sunder.runtime.dotnet 10.0.1 1 win-x64 sunder.dotnet-worker-module.v1
+sunder runtime repair sunder.runtime.dotnet 10.0.1 1 win-x64 sunder.dotnet-worker-module.v1 --yes
+sunder runtime gc
+```
+
+An exact execution-runtime identity consists of runtime id, semantic version, positive packaging revision, RID, and module ABI. `info` includes dependent installed-package references. `ensure` sends a bounded version requirement to the configured Registry, which must be HTTPS, and installs only the signed current-RID result. `import` streams a trusted `.sunderruntime` archive into Runtime-owned temporary storage; the local path never appears in an API DTO.
+
+`verify` performs complete content validation. `repair` is accepted only with `--yes` because Runtime first blocks dependent package launches, stops and drains their Workers, then rebuilds the unhealthy root from its immutable cached archive and reloads installed packages. `gc` is lease- and reference-safe and observes the runtime-store grace interval. Startup and package activation do not implicitly download, repair, garbage-collect, or deeply hash execution runtimes.
 
 ## Packages
 
@@ -128,7 +144,7 @@ sunder package install sunder.package.agent --tag beta
 sunder package install sunder.package.agent --version 1.0.0
 ```
 
-The CLI sends the user's exact/tag selection to Runtime rather than resolving installable artifacts itself. Runtime adds its bounded Manifest V3 and Worker V3 compatibility profile, including the complete supported Worker capability set and current exact RID, to every Registry plan request. Anonymous CLI search and version-detail commands remain historical browse operations and do not advertise Host compatibility.
+The CLI sends the user's exact/tag selection to Runtime rather than resolving installable artifacts itself. Runtime adds its bounded Manifest V1 and Worker V1 compatibility profile, including the complete supported Worker capability set and current exact RID, to every Registry plan request. Anonymous CLI search and version-detail commands remain historical browse operations and do not advertise Host compatibility.
 
 Install a local archive, with explicit downgrade/reinstall consent when needed:
 
@@ -252,6 +268,20 @@ sunder dev stack inspect .\MyStack.sunderstack
 
 These commands validate canonical format and integrity. They do not execute package code, prove publisher identity, establish source trust, or make an archive safe to install.
 
+Package tooling can request a bounded public API inspection export:
+
+```powershell
+sunder dev package validate .\MyPackage.1.0.0.sunderpkg --api-output .\inspection --json
+```
+
+The output directory must not exist and its parent must already exist. Format
+validates a private archive snapshot, then publishes a versioned inspection receipt
+and canonical public descriptor files together. The receipt binds raw archive,
+manifest/content-index and public-inventory identities. Private descriptor bodies
+are omitted. This is temporary inspection data for tooling, not an authored
+contract inventory or a publication receipt. The Node tool uses it for offline
+candidate restore through the existing `SUNDER_CLI` executable setting.
+
 ## Human Registry Authentication
 
 ```powershell
@@ -321,6 +351,33 @@ printf '%s' "$PUBLISH_TOKEN" | \
 ```
 
 `--credential-source` accepts only `runtime`, `environment`, or `stdin` and defaults to `runtime`. Environment mode reads `SUNDER_REGISTRY_PUBLISH_TOKEN` and clears it from the CLI process after capture. Stdin mode requires redirected input and accepts one bounded credential with an optional trailing newline. Automation credentials apply only to package/Stack publication; other management commands remain Runtime-owned human operations.
+
+## Development Package Imports And Loading
+
+Prepare import evidence for an unpublished canonical development folder, then smoke
+or run it through the managed Runtime:
+
+```powershell
+sunder dev package prepare-imports ./dist/sunder-dev --candidate ./owner.sunderpkg --platform-catalog ./catalog.json
+sunder dev package smoke ./dist/sunder-dev
+sunder dev package run ./dist/sunder-dev --watch
+```
+
+`prepare-imports` requires the Runtime feature `dev-package-imports.v1`. Supply repeated
+`--candidate` paths for local package imports and `--platform-catalog` for local Core
+contracts, as needed by the manifest. This local path makes no Registry calls. To
+prepare published dependencies, use `--registry https://registry.example/` instead.
+Runtime verifies complete selected inventories, ultimate authority and original catalog
+bytes, then retains manifest-bound evidence explicitly marked local or Registry-backed.
+Local code remains unpublished. The operation installs nothing and changes no source
+lock. Required dependencies must already be available to the session.
+
+Loading and hot reload read retained evidence offline. Payload-only rebuilds can reuse
+it; a changed manifest requires preparation again. Optional omission grants no uses,
+and required-provider readiness is checked independently. Registry-backed platform
+activation requires current retained policy leases; local development evidence has
+no Registry lease or publication identity. See the complete
+[unpublished-development workflow](package-development/DEVELOPMENT-IMPORTS.md).
 
 ## Development Registry Publication
 

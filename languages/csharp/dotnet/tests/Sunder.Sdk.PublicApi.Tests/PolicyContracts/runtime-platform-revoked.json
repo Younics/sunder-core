@@ -1,0 +1,38 @@
+{
+  "catalog": {
+    "authorityId": "sunder.core",
+    "releaseVersion": "1.1.0",
+    "catalogSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "lifecycleState": "Revoked",
+  "disposition": "Denied",
+  "errorCode": "contract-authority.revoked",
+  "revokedAtUtc": "2026-09-14T10:00:00+00:00",
+  "lease": {
+    "state": "valid",
+    "errorCode": null,
+    "watermark": {
+      "registryOrigin": "https://registry.example",
+      "packagePolicyRevision": 42,
+      "packagePolicyFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "runtimePolicyRevision": 3,
+      "checkpointSequence": 99,
+      "checkpointDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "topologyGeneration": 1,
+      "topologyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "responseNonce": "0123456789abcdef0123456789abcdef",
+    "responseSha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "observedAtUtc": "2026-09-14T10:00:00+00:00",
+    "validUntilUtc": "2026-09-15T10:00:00+00:00",
+    "clock": {
+      "bootSessionId": "boot-session",
+      "clockSource": "continuous-test-clock",
+      "ticksPerSecond": 1000,
+      "requestStartedTicks": 10000,
+      "deadlineTicks": 86410000,
+      "highWaterTicks": 10001,
+      "virtualMachineGeneration": null
+    }
+  }
+}

@@ -7,6 +7,8 @@ export interface FrameLimits {
   readonly maxMessageDepth: number;
   readonly maxRpcValueBytes: number;
   readonly maxValueDepth: number;
+  readonly maxValueNodes: number;
+  readonly maxObjectMembers: number;
   readonly maxEnvelopeReserveBytes: number;
 }
 
@@ -16,10 +18,34 @@ const DEFAULT_LIMITS: FrameLimits = Object.freeze({
   maxMessageDepth: 72,
   maxRpcValueBytes: 8 * 1024 * 1024,
   maxValueDepth: 64,
+  maxValueNodes: 524_288,
+  maxObjectMembers: 4_096,
   maxEnvelopeReserveBytes: 64 * 1024,
 });
 
 const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const trackedIntegerNames = Object.freeze([
+  "activationEpoch",
+  "callDepth",
+  "catalogRevision",
+  "contentReferenceBytes",
+  "inlineDecodedBytes",
+  "length",
+  "objectMembers",
+  "protocolVersion",
+  "revision",
+  "rpcValueBytes",
+  "sequence",
+  "sessionGeneration",
+  "value",
+  "valueDepth",
+  "valueNodes",
+  "version",
+]);
+const trackedIntegerNameIndexes = new Map(trackedIntegerNames.map((name, index) => [name, index]));
+const decodedIntegerTokens = new Map<string, WeakMap<object, number>>(
+  trackedIntegerNames.map((name) => [name, new WeakMap<object, number>()]),
+);
 
 export class ProtocolError extends Error {
   public constructor(message: string) {
@@ -35,6 +61,21 @@ export class TransportResourceError extends ProtocolError {
   }
 }
 
+export function hasCanonicalNonNegativeIntegerToken(
+  root: object,
+  name: string,
+): boolean {
+  const tokens = decodedIntegerTokens.get(name);
+  if (tokens === undefined || !tokens.has(root)) return false;
+  const property = Object.getOwnPropertyDescriptor(root, name);
+  return property !== undefined
+    && "value" in property
+    && property.enumerable === true
+    && property.configurable === true
+    && property.writable === true
+    && Object.is(property.value, tokens.get(root));
+}
+
 export function encodeFrame(value: JsonValue | Readonly<Record<string, unknown>>, limits: FrameLimits = DEFAULT_LIMITS): Buffer {
   let text: string;
   try {
@@ -47,7 +88,7 @@ export function encodeFrame(value: JsonValue | Readonly<Record<string, unknown>>
   if (body.length === 0 || body.length > limits.maxFrameBytes) {
     throw new TransportResourceError("Protocol frame exceeds the configured body limit.");
   }
-  validateEnvelopeResourceBounds(text, value, body.length, limits);
+  validateEnvelopeResourceBounds(text, body.length, limits);
   const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "ascii");
   if (header.length > limits.maxHeaderBytes) {
     throw new ProtocolError("Protocol frame header exceeds the configured limit.");
@@ -138,15 +179,15 @@ export class FrameDecoder {
       } catch {
         throw new ProtocolError("Protocol body is not strict UTF-8.");
       }
-      validateJson(text, this.#limits.maxMessageDepth);
+      const validation = validateJson(text, this.#limits.maxMessageDepth, true);
+      validateEnvelopeResourceBounds(text, body.length, this.#limits, validation);
       let value: unknown;
       try {
         value = JSON.parse(text) as unknown;
       } catch {
         throw new ProtocolError("Protocol body is not valid JSON.");
       }
-      rejectNonFiniteNumbers(value);
-      validateEnvelopeResourceBounds(text, value as JsonValue, body.length, this.#limits);
+      attachDecodedIntegerTokens(value, validation.integerTokens);
       output.push(value as JsonValue);
     }
     return output;
@@ -169,25 +210,19 @@ function normalizeLimits(limits: Partial<FrameLimits>): FrameLimits {
 
 function validateEnvelopeResourceBounds(
   text: string,
-  value: JsonValue | Readonly<Record<string, unknown>>,
   bodyBytes: number,
   limits: FrameLimits,
+  validatedJson?: JsonValidation,
 ): void {
-  const ranges = validateJson(text, limits.maxMessageDepth);
-  const root = value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Readonly<Record<string, unknown>>
-    : undefined;
-  const error = root?.error !== null && typeof root?.error === "object" && !Array.isArray(root.error)
-    ? root.error as Readonly<Record<string, unknown>>
-    : undefined;
-  const property = root !== undefined && Object.hasOwn(root, "request")
+  const validation = validatedJson ?? validateJson(text, limits.maxMessageDepth);
+  const property = validation.ranges.has("request")
     ? "request"
-    : root !== undefined && Object.hasOwn(root, "value")
+    : validation.ranges.has("value")
       ? "value"
-      : error !== undefined && Object.hasOwn(error, "details")
+      : validation.ranges.has("error.details")
         ? "error.details"
         : undefined;
-  const range = property === undefined ? undefined : ranges.get(property);
+  const range = property === undefined ? undefined : validation.ranges.get(property);
   const valueText = range === undefined ? undefined : text.slice(range.start, range.end);
   const valueBytes = valueText === undefined ? 0 : Buffer.byteLength(valueText, "utf8");
   if (valueBytes > limits.maxRpcValueBytes) {
@@ -196,83 +231,177 @@ function validateEnvelopeResourceBounds(
   if (bodyBytes - valueBytes > limits.maxEnvelopeReserveBytes) {
     throw new TransportResourceError("Protocol envelope metadata exceeds its reserved byte limit.");
   }
-  if (valueText !== undefined) validateJson(valueText, limits.maxValueDepth);
-}
-
-function rejectNonFiniteNumbers(value: unknown): void {
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new ProtocolError("Protocol JSON contains a non-finite number.");
-    return;
+  if (range !== undefined && range.maximumDepth > limits.maxValueDepth) {
+    throw new TransportResourceError("RPC value exceeds the negotiated depth limit.");
   }
-  if (value === null || typeof value !== "object") return;
-  for (const child of Array.isArray(value) ? value : Object.values(value)) rejectNonFiniteNumbers(child);
+  if (range !== undefined && range.nodes > limits.maxValueNodes) {
+    throw new TransportResourceError("RPC value exceeds the negotiated node-count limit.");
+  }
+  if (range !== undefined && range.maximumObjectMembers > limits.maxObjectMembers) {
+    throw new TransportResourceError("RPC value exceeds the negotiated object-member limit.");
+  }
 }
 
 interface JsonRange {
   readonly start: number;
   readonly end: number;
+  readonly nodes: number;
+  readonly maximumDepth: number;
+  readonly maximumObjectMembers: number;
 }
 
-function validateJson(text: string, maximumDepth: number): ReadonlyMap<string, JsonRange> {
+interface JsonValidation {
+  readonly ranges: ReadonlyMap<string, JsonRange>;
+  readonly integerTokens: DecodedIntegerTokens;
+}
+
+interface DecodedIntegerTokens {
+  readonly containerParents: readonly number[];
+  readonly containerKeys: readonly (string | number)[];
+  readonly holderOrdinals: readonly number[];
+  readonly nameIndexes: readonly number[];
+  readonly values: readonly number[];
+}
+
+function validateJson(text: string, maximumDepth: number, collectIntegerTokens = false): JsonValidation {
   let offset = 0;
   const topLevelProperties = new Map<string, JsonRange>();
+  const containerParents: number[] = [];
+  const containerKeys: (string | number)[] = [];
+  const integerTokenHolderOrdinals: number[] = [];
+  const integerTokenNameIndexes: number[] = [];
+  const integerTokenValues: number[] = [];
+  let activeStats: { rootDepth: number; nodes: number; maximumDepth: number; maximumObjectMembers: number } | undefined;
+  let lastNumberToken: string | undefined;
+  let lastNumberValue: number | undefined;
+  const numberPattern = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/uy;
   const whitespace = (): void => {
     while (offset < text.length && /[\u0009\u000a\u000d\u0020]/u.test(text[offset] ?? "")) offset += 1;
   };
   const fail = (message: string): never => {
     throw new ProtocolError(message);
   };
-  const stringToken = (): string => {
+  const stringToken = (decode: boolean): string => {
     if (text[offset] !== '"') fail("Expected a JSON string.");
     const start = offset;
+    let requiresScalarValidation = false;
     offset += 1;
     while (offset < text.length) {
       const value = text[offset];
       if (value === '"') {
         offset += 1;
+        if (!decode && !requiresScalarValidation) return "";
         try {
-          return JSON.parse(text.slice(start, offset)) as string;
+          const parsed = JSON.parse(text.slice(start, offset)) as string;
+          if (!hasUnicodeScalars(parsed)) return fail("JSON strings must contain only Unicode scalar values.");
+          return parsed;
         } catch {
           return fail("JSON contains an invalid string escape.");
         }
       }
       if (value === "\\") {
+        if (text[offset + 1] === "u") requiresScalarValidation = true;
         offset += 2;
       } else {
         if (value !== undefined && value.charCodeAt(0) < 0x20) fail("JSON string contains an unescaped control character.");
+        if (value !== undefined && value.charCodeAt(0) >= 0xd800 && value.charCodeAt(0) <= 0xdfff) {
+          requiresScalarValidation = true;
+        }
         offset += 1;
       }
     }
     return fail("JSON string is unterminated.");
   };
-  const value = (depth: number, path: string): void => {
+  const value = (
+    depth: number,
+    context: "root" | "error" | undefined,
+    parentContainerOrdinal = -1,
+    containerKey: string | number = 0,
+  ): void => {
     if (depth > maximumDepth) fail("JSON exceeds the configured depth limit.");
     whitespace();
+    lastNumberToken = undefined;
+    lastNumberValue = undefined;
+    if (activeStats !== undefined) {
+      activeStats.nodes += 1;
+      activeStats.maximumDepth = Math.max(activeStats.maximumDepth, depth - activeStats.rootDepth + 1);
+    }
     const current = text[offset];
     if (current === "{") {
+      const currentContainerOrdinal = collectIntegerTokens ? containerParents.length : -1;
+      if (collectIntegerTokens) {
+        containerParents.push(parentContainerOrdinal);
+        containerKeys.push(containerKey);
+      }
       offset += 1;
       whitespace();
-      const exact = new Set<string>();
-      const folded = new Set<string>();
+      let firstFolded: string | undefined;
+      let folded: Set<string> | undefined;
+      let memberCount = 0;
       if (text[offset] === "}") {
         offset += 1;
         return;
       }
       while (true) {
-        const key = stringToken();
+        const key = stringToken(true);
         const lower = asciiCaseFold(key);
-        if (exact.has(key) || folded.has(lower)) fail(`JSON contains duplicate or case-colliding property '${key}'.`);
-        exact.add(key);
-        folded.add(lower);
+        if (firstFolded === undefined) {
+          firstFolded = lower;
+        } else {
+          folded ??= new Set([firstFolded]);
+          if (folded.has(lower)) fail(`JSON contains duplicate or case-colliding property '${key}'.`);
+          folded.add(lower);
+        }
+        memberCount += 1;
+        if (activeStats !== undefined) {
+          activeStats.maximumObjectMembers = Math.max(activeStats.maximumObjectMembers, memberCount);
+        }
         whitespace();
         if (text[offset] !== ":") fail("JSON object property is missing ':'.");
         offset += 1;
         whitespace();
         const valueStart = offset;
-        const childPath = path.length === 0 ? key : `${path}.${key}`;
-        value(depth + 1, childPath);
-        if (depth === 1 || path === "error" && key === "details") {
-          topLevelProperties.set(childPath, { start: valueStart, end: offset });
+        const rangeName = context === "root" && (key === "request" || key === "value")
+          ? key
+          : context === "error" && key === "details"
+            ? "error.details"
+            : undefined;
+        const previousStats = activeStats;
+        if (rangeName !== undefined) {
+          activeStats = { rootDepth: depth + 1, nodes: 0, maximumDepth: 0, maximumObjectMembers: 0 };
+        }
+        value(
+          depth + 1,
+          context === "root" && key === "error" ? "error" : undefined,
+          currentContainerOrdinal,
+          key,
+        );
+        const numberToken = lastNumberToken;
+        const numberValue = lastNumberValue;
+        lastNumberToken = undefined;
+        lastNumberValue = undefined;
+        if (numberToken !== undefined
+          && numberValue !== undefined
+          && Number.isSafeInteger(numberValue)
+          && numberValue >= 0
+          && /^(?:0|[1-9][0-9]*)$/u.test(numberToken)) {
+          const nameIndex = trackedIntegerNameIndexes.get(key);
+          if (collectIntegerTokens && nameIndex !== undefined) {
+            integerTokenHolderOrdinals.push(currentContainerOrdinal);
+            integerTokenNameIndexes.push(nameIndex);
+            integerTokenValues.push(numberValue);
+          }
+        }
+        if (rangeName !== undefined) {
+          const stats = activeStats!;
+          topLevelProperties.set(rangeName, {
+            start: valueStart,
+            end: offset,
+            nodes: stats.nodes,
+            maximumDepth: stats.maximumDepth,
+            maximumObjectMembers: stats.maximumObjectMembers,
+          });
+          activeStats = previousStats;
         }
         whitespace();
         if (text[offset] === "}") {
@@ -285,14 +414,23 @@ function validateJson(text: string, maximumDepth: number): ReadonlyMap<string, J
       }
     }
     if (current === "[") {
+      const currentContainerOrdinal = collectIntegerTokens ? containerParents.length : -1;
+      if (collectIntegerTokens) {
+        containerParents.push(parentContainerOrdinal);
+        containerKeys.push(containerKey);
+      }
       offset += 1;
       whitespace();
       if (text[offset] === "]") {
         offset += 1;
         return;
       }
+      let index = 0;
       while (true) {
-        value(depth + 1, path);
+        value(depth + 1, undefined, currentContainerOrdinal, index);
+        index += 1;
+        lastNumberToken = undefined;
+        lastNumberValue = undefined;
         whitespace();
         if (text[offset] === "]") {
           offset += 1;
@@ -303,29 +441,83 @@ function validateJson(text: string, maximumDepth: number): ReadonlyMap<string, J
       }
     }
     if (current === '"') {
-      stringToken();
+      stringToken(false);
       return;
     }
-    const remainder = text.slice(offset);
-    const literal = /^(?:true|false|null)/u.exec(remainder)?.[0];
+    const literal = text.startsWith("true", offset)
+      ? "true"
+      : text.startsWith("false", offset)
+        ? "false"
+        : text.startsWith("null", offset)
+          ? "null"
+          : undefined;
     if (literal !== undefined) {
       offset += literal.length;
       return;
     }
-    const number = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/u.exec(remainder)?.[0];
+    numberPattern.lastIndex = offset;
+    const number = numberPattern.exec(text)?.[0];
     if (number !== undefined) {
       offset += number.length;
+      const parsed = Number(number);
+      if (!Number.isFinite(parsed)) fail("Protocol JSON contains a non-finite number.");
+      lastNumberToken = number;
+      lastNumberValue = parsed;
       return;
     }
     fail("JSON contains an invalid value.");
   };
   whitespace();
-  value(1, "");
+  value(1, "root");
   whitespace();
   if (offset !== text.length) fail("JSON contains trailing data.");
-  return topLevelProperties;
+  return {
+    ranges: topLevelProperties,
+    integerTokens: {
+      containerParents,
+      containerKeys,
+      holderOrdinals: integerTokenHolderOrdinals,
+      nameIndexes: integerTokenNameIndexes,
+      values: integerTokenValues,
+    },
+  };
+}
+
+function attachDecodedIntegerTokens(value: unknown, entries: DecodedIntegerTokens): void {
+  if (entries.holderOrdinals.length === 0) return;
+  if (value === null || typeof value !== "object" || entries.containerParents[0] !== -1) {
+    throw new ProtocolError("Protocol integer-token provenance did not match the decoded JSON structure.");
+  }
+  let maximumOrdinal = 0;
+  for (const ordinal of entries.holderOrdinals) maximumOrdinal = Math.max(maximumOrdinal, ordinal);
+  const containers: object[] = [value];
+  for (let ordinal = 1; ordinal <= maximumOrdinal; ordinal++) {
+    const parent = containers[entries.containerParents[ordinal]!] as object | undefined;
+    const key = entries.containerKeys[ordinal]!;
+    const child = parent === undefined ? undefined : Object.getOwnPropertyDescriptor(parent, key)?.value;
+    if (child === null || typeof child !== "object") {
+      throw new ProtocolError("Protocol integer-token provenance did not match the decoded JSON structure.");
+    }
+    containers.push(child);
+  }
+  for (let index = 0; index < entries.holderOrdinals.length; index++) {
+    const holder = containers[entries.holderOrdinals[index]!]!;
+    const name = trackedIntegerNames[entries.nameIndexes[index]!]!;
+    decodedIntegerTokens.get(name)!.set(holder, entries.values[index]!);
+  }
 }
 
 function asciiCaseFold(value: string): string {
   return value.replace(/[A-Z]/gu, (character) => String.fromCharCode(character.charCodeAt(0) + 0x20));
+}
+
+function hasUnicodeScalars(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const current = value.charCodeAt(index);
+    if (current < 0xd800 || current > 0xdfff) continue;
+    if (current > 0xdbff || index + 1 >= value.length) return false;
+    const next = value.charCodeAt(++index);
+    if (next < 0xdc00 || next > 0xdfff) return false;
+  }
+  return true;
 }

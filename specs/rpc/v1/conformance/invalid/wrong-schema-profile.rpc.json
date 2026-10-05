@@ -1,0 +1,9 @@
+{
+  "descriptorVersion": 1,
+  "schemaProfile": "sunder.rpc.values.unknown",
+  "contractId": "example.rpc.v1.wrongprofile",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {"example":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Value"},"responseSchema":{"$ref":"#/$defs/Value"}}}}},
+  "$defs": {"Value":{"type":"boolean"}}
+}

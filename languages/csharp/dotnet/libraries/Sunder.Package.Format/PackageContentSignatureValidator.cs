@@ -14,7 +14,8 @@ internal static class PackageContentSignatureValidator
         string normalizedPath,
         ICollection<string> errors,
         bool validateHash,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ISunderPackageValidationIoObserver? ioObserver = null)
     {
         if (filePath is null)
         {
@@ -32,7 +33,24 @@ internal static class PackageContentSignatureValidator
             return;
         }
         await using var stream = File.OpenRead(filePath);
-        var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
+        var startPosition = stream.Position;
+        string hash;
+        try
+        {
+            hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
+        }
+        finally
+        {
+            try
+            {
+                var processed = stream.Position - startPosition;
+                ioObserver.TryRecord(processed, processed);
+            }
+            catch
+            {
+                // Diagnostics must not affect content signature validation.
+            }
+        }
         if (!string.Equals(hash, entry.Sha256, StringComparison.Ordinal))
         {
             errors.Add($"Package file '{normalizedPath}' SHA-256 mismatch.");

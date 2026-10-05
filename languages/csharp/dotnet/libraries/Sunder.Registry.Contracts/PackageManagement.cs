@@ -1,8 +1,25 @@
 namespace Sunder.Registry.Contracts;
 
+/// <summary>Required preconditions for checkpoint-backed management and authority mutations.</summary>
+public static class RegistryPolicyMutationHeaders
+{
+    public const string IdempotencyKey = "X-Sunder-Idempotency-Key";
+    public const string PackagePolicyRevision = "X-Sunder-Package-Policy-Revision";
+    public const string PublicationAuthorityRevision = "X-Sunder-Publication-Authority-Revision";
+}
+
 public sealed record RegistryPublishLocalPackageRequest(
     string PackagePath,
-    bool SetLatest = true);
+    bool SetLatest = true,
+    string InitialAvailability = RegistryPackageVersionAvailability.Listed);
+
+/// <summary>Immutable accepted publication evidence for exact readback after an ambiguous upload result.</summary>
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+public sealed record RegistryPackagePublicationEvidence(
+    [property: System.Text.Json.Serialization.JsonRequired] RegistryPackageVersionIdentity Package,
+    [property: System.Text.Json.Serialization.JsonRequired] string OwnerPrincipalId,
+    [property: System.Text.Json.Serialization.JsonRequired] string PublicInventorySha256,
+    [property: System.Text.Json.Serialization.JsonRequired] string InitialAvailability);
 
 public sealed record RegistryPublishPackageResponse(
     bool Success,
@@ -16,6 +33,7 @@ public sealed record RegistryPublishPackageResponse(
     public string? ErrorCode { get; init; } = Success ? null : RegistryV1ErrorCodes.InvalidRequest;
 }
 
+/// <summary>A package maintainer identified by an opaque Registry principal ID, never a provider subject or handle.</summary>
 public sealed record RegistryPackageMaintainer(
     string UserId,
     bool IsOwner,
@@ -27,8 +45,13 @@ public sealed record RegistryPackageMaintainer(
 
 public sealed record RegistryPackageMaintainersResponse(
     string PackageId,
-    IReadOnlyList<RegistryPackageMaintainer> Maintainers);
+    IReadOnlyList<RegistryPackageMaintainer> Maintainers)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPolicyIdentity? PublicationAuthorityPolicy { get; init; }
+}
 
+/// <summary>Selects an existing Registry principal by its exact opaque ID.</summary>
 public sealed record RegistryAddPackageMaintainerRequest(string UserId);
 
 public sealed record RegistryPackageMaintainerOperationResponse(
@@ -50,7 +73,7 @@ public sealed record RegistryPackageStarResponse(
     public bool NotFound { get; init; }
 }
 
-public sealed record RegistrySetPackageVersionYankRequest(bool IsYanked = true);
+public sealed record RegistrySetPackageVersionYankRequest([property: System.Text.Json.Serialization.JsonRequired] bool IsYanked = true);
 
 public sealed record RegistryDeprecatePackageVersionRequest(string? Message);
 
@@ -63,7 +86,11 @@ public sealed record RegistryPackageDistTag(
 
 public sealed record RegistryPackageDistTagsResponse(
     string PackageId,
-    IReadOnlyList<RegistryPackageDistTag> DistTags);
+    IReadOnlyList<RegistryPackageDistTag> DistTags)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPolicyIdentity? PackagePolicy { get; init; }
+}
 
 public sealed record RegistryPackageManagementOperationResponse(
     bool Success,

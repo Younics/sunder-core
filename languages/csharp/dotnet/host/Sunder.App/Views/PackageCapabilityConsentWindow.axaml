@@ -7,13 +7,13 @@
         x:Class="Sunder.App.Views.PackageCapabilityConsentWindow"
         x:DataType="vm:PackageCapabilityConsentViewModel"
         mc:Ignorable="d"
-        Width="660"
-        Height="560"
+        Width="680"
+        Height="700"
         MinWidth="600"
-        MinHeight="500"
+        MinHeight="620"
         CanResize="False"
         WindowStartupLocation="CenterOwner"
-        Title="Approve Package Capability"
+        Title="Confirm Package Changes"
         Icon="avares://Sunder.App/Assets/Images/app.ico"
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True"
@@ -25,7 +25,7 @@
       <controls:WindowTitleBar.LeadingContent>
         <TextBlock Classes="section-title"
                    VerticalAlignment="Center"
-                   Text="Sensitive Worker Capability" />
+                    Text="Confirm Package Changes" />
       </controls:WindowTitleBar.LeadingContent>
     </controls:WindowTitleBar>
 
@@ -35,33 +35,126 @@
       <StackPanel Spacing="14">
         <Border Classes="settings-note-card">
           <StackPanel Spacing="6">
-            <TextBlock FontWeight="SemiBold" Text="Review required access" />
+            <TextBlock FontWeight="SemiBold" Text="Review downloads and changes" />
             <TextBlock Classes="muted"
-                       Text="These exact package manifests request access to your allowlisted Docker CLI connection environment. Package code runs with your user account; approve only packages and sources you trust."
+                       Text="Execution runtimes are shared by compatible packages. Exact healthy runtimes already on this device are reused instead of downloaded again."
                        TextWrapping="Wrap" />
           </StackPanel>
         </Border>
 
-        <ItemsControl ItemsSource="{Binding Items}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:PackageCapabilityConsentItemViewModel">
-              <Border Classes="card-surface" Margin="0,0,0,10">
-                <StackPanel Spacing="6">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                    <TextBlock FontWeight="SemiBold" Text="{Binding PackageId}" TextWrapping="Wrap" />
-                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding PackageVersion}" />
+        <StackPanel Spacing="8" IsVisible="{Binding HasRegistryPlans}">
+          <TextBlock Classes="section-title" Text="Registry plan fence" />
+          <ItemsControl ItemsSource="{Binding RegistryPlans}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:RegistryPlanConfirmationItemViewModel">
+                <Border Classes="card-surface" Margin="0,0,0,8">
+                  <StackPanel Spacing="4">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding RegistryOrigin}" TextWrapping="Wrap" />
+                    <TextBlock Classes="caption" Text="{Binding PrereleasePolicyText}" />
+                    <TextBlock Classes="muted"
+                               FontFamily="monospace"
+                               FontSize="11"
+                               Text="{Binding ResolutionFingerprint}"
+                               TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+
+        <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+          <Border Classes="card-surface">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="caption" Text="Package downloads" />
+              <TextBlock Classes="section-title" Text="{Binding PackageDownloadText}" />
+            </StackPanel>
+          </Border>
+          <Border Grid.Column="1" Classes="card-surface">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="caption" Text="Shared runtime downloads" />
+              <TextBlock Classes="section-title" Text="{Binding SharedRuntimeDownloadText}" />
+              <TextBlock Classes="muted" FontSize="11" Text="{Binding SharedRuntimeReuseText}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <StackPanel Spacing="8" IsVisible="{Binding HasChanges}">
+          <TextBlock Classes="section-title" Text="Package changes" />
+          <ItemsControl ItemsSource="{Binding Changes}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:PackageChangeConfirmationItemViewModel">
+                <Border Classes="card-surface" Margin="0,0,0,8">
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                    <TextBlock Classes="caption" Text="{Binding ActionText}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{Binding PackageId}" TextWrapping="Wrap" />
+                    <TextBlock Grid.Column="2" Classes="caption" Text="{Binding PackageVersion}" />
                   </Grid>
-                  <TextBlock Classes="caption" Text="{Binding CapabilitiesText}" TextWrapping="Wrap" />
-                  <TextBlock Classes="muted"
-                             FontFamily="monospace"
-                             FontSize="11"
-                             Text="{Binding ManifestSha256}"
-                             TextWrapping="Wrap" />
-                </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+
+        <StackPanel Spacing="8" IsVisible="{Binding HasExecutionRuntimes}">
+          <TextBlock Classes="section-title" Text="Shared execution runtimes" />
+          <ItemsControl ItemsSource="{Binding ExecutionRuntimes}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:ExecutionRuntimeDownloadItemViewModel">
+                <Border Classes="card-surface" Margin="0,0,0,8">
+                  <StackPanel Spacing="4">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding IdentityText}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding DownloadText}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                      <TextBlock Classes="caption" Text="{Binding TargetText}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding LifecycleText}" />
+                    </Grid>
+                    <TextBlock Classes="muted" Text="{Binding LifecycleMessage}" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+
+        <ItemsControl ItemsSource="{Binding Warnings}" IsVisible="{Binding HasWarnings}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Classes="settings-note-card" Margin="0,0,0,8">
+                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
               </Border>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
+
+        <StackPanel Spacing="8" IsVisible="{Binding HasCapabilityConsents}">
+          <TextBlock Classes="section-title" Text="Sensitive Worker Capability" />
+          <TextBlock Classes="muted"
+                     Text="These exact package manifests request access to your allowlisted Docker CLI connection environment. Package code runs with your user account; approve only packages and sources you trust."
+                     TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding Items}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:PackageCapabilityConsentItemViewModel">
+                <Border Classes="card-surface" Margin="0,0,0,10">
+                  <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding PackageId}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding PackageVersion}" />
+                    </Grid>
+                    <TextBlock Classes="caption" Text="{Binding CapabilitiesText}" TextWrapping="Wrap" />
+                    <TextBlock Classes="muted"
+                               FontFamily="monospace"
+                               FontSize="11"
+                               Text="{Binding ManifestSha256}"
+                               TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
       </StackPanel>
     </ScrollViewer>
 
@@ -72,7 +165,7 @@
       <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
         <TextBlock Classes="caption"
                    VerticalAlignment="Center"
-                   Text="Approval is fenced to the package IDs, versions, and manifest hashes shown above."
+                    Text="{Binding ApprovalScopeText}"
                    TextWrapping="Wrap" />
         <Button Grid.Column="1"
                 Classes="secondary-action"

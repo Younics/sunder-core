@@ -20,32 +20,46 @@ internal sealed class GeneratedOutputLock : IDisposable
     private static readonly Lazy<HostIdentity> CurrentHostIdentity = new(ReadCurrentHostIdentity);
     private static readonly Lazy<ProcessMarkerRegistration> CurrentProcessMarker = new(CreateProcessMarker);
 
-    private readonly IReadOnlyList<OwnedDirectory> _locks;
+    private readonly List<OwnedDirectory> _locks;
     private bool _disposed;
 
     private GeneratedOutputLock(IReadOnlyList<OwnedDirectory> locks)
-        => _locks = locks;
+        => _locks = [.. locks];
 
-    public static GeneratedOutputLock Acquire(IEnumerable<string> paths, TimeSpan? waitTimeout = null)
-        => Acquire([], paths, waitTimeout);
+    public static GeneratedOutputLock Acquire(
+        IEnumerable<string> paths, TimeSpan? waitTimeout = null, CancellationToken cancellationToken = default)
+        => Acquire([], paths, waitTimeout, cancellationToken);
 
     public static GeneratedOutputLock Acquire(
         IEnumerable<string> containerPaths,
         IEnumerable<string> outputPaths,
-        TimeSpan? waitTimeout = null)
+        TimeSpan? waitTimeout = null,
+        CancellationToken cancellationToken = default,
+        Action? waitBeforeRetry = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var containers = NormalizePaths(containerPaths);
         var containerSet = containers.ToHashSet(PathComparer);
         var outputs = NormalizePaths(outputPaths)
-            .Where(path => !containerSet.Contains(path));
+            .Where(path => !containerSet.Contains(path))
+            .ToArray();
+        EnsureNoMacOsCaseAliases(containers.Concat(outputs));
         var ordered = containers.Concat(outputs).ToArray();
+        foreach (var path in ordered)
+        {
+            GeneratedOutputPathSafety.EnsureSafeAncestors(
+                path,
+                includeLeaf: true,
+                "generated output lock path");
+        }
         var timeout = waitTimeout ?? DefaultWaitTimeout;
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(waitTimeout));
         var deadline = DateTime.UtcNow + timeout;
         var locks = new List<OwnedDirectory>(ordered.Length);
         try
         {
-            foreach (var path in ordered) locks.Add(AcquireOne(path, deadline, timeout));
+            foreach (var path in ordered) locks.Add(AcquireOne(path, deadline, timeout, cancellationToken, waitBeforeRetry));
+            cancellationToken.ThrowIfCancellationRequested();
             return new GeneratedOutputLock(locks);
         }
         catch (Exception acquisitionException)
@@ -108,15 +122,63 @@ internal sealed class GeneratedOutputLock : IDisposable
         if (errors is not null) throw new AggregateException("One or more generated output locks could not be released safely.", errors);
     }
 
+    public void Retain(IEnumerable<string> paths)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var retained = NormalizePaths(paths)
+            .Select(static path => path + LockSuffix)
+            .ToHashSet(PathComparer);
+        if (!retained.IsSubsetOf(_locks.Select(static owned => owned.Path)))
+        {
+            throw new InvalidOperationException("Cannot retain a generated output lock path that is not held by this lease.");
+        }
+
+        var timeout = DefaultWaitTimeout;
+        for (var index = _locks.Count - 1; index >= 0; index--)
+        {
+            if (retained.Contains(_locks[index].Path)) continue;
+            Release(_locks[index], DateTime.UtcNow + timeout, timeout);
+            _locks.RemoveAt(index);
+        }
+    }
+
     private static IReadOnlyList<string> NormalizePaths(IEnumerable<string> paths)
-        => paths
-            .Select(static path => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)))
+    {
+        var normalized = paths
+            .Select(GeneratedOutputPathSafety.NormalizeTrustedSystemAliases)
             .Distinct(PathComparer)
             .Order(PathComparer)
             .ToArray();
+        if (OperatingSystem.IsMacOS())
+        {
+            var aliases = normalized
+                .GroupBy(static path => path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(static group => group.Count() > 1);
+            if (aliases is not null)
+            {
+                throw new InvalidDataException(
+                    $"Generated output lock paths differ only by case: {string.Join(", ", aliases)}.");
+            }
+        }
+        return normalized;
+    }
 
-    private static OwnedDirectory AcquireOne(string outputPath, DateTime deadline, TimeSpan timeout)
+    private static void EnsureNoMacOsCaseAliases(IEnumerable<string> paths)
     {
+        if (!OperatingSystem.IsMacOS()) return;
+        var aliases = paths
+            .GroupBy(static path => path, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(static group => group.Distinct(StringComparer.Ordinal).Count() > 1);
+        if (aliases is not null)
+        {
+            throw new InvalidDataException(
+                $"Generated output lock paths differ only by case: {string.Join(", ", aliases)}.");
+        }
+    }
+
+    private static OwnedDirectory AcquireOne(string outputPath, DateTime deadline, TimeSpan timeout, CancellationToken cancellationToken, Action? waitBeforeRetry)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         var lockPath = outputPath + LockSuffix;
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)
                                   ?? throw new InvalidOperationException($"Output lock '{lockPath}' has no parent directory."));
@@ -124,9 +186,10 @@ internal sealed class GeneratedOutputLock : IDisposable
         {
             OwnedDirectory? acquired = null;
             string? quarantinePath = null;
-            var transition = AcquireTransitionGuard(lockPath, deadline, timeout);
+            var transition = AcquireTransitionGuard(lockPath, deadline, timeout, cancellationToken);
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!PathExists(lockPath))
                 {
                     acquired = TryPublishOwnedDirectory(lockPath)
@@ -155,16 +218,22 @@ internal sealed class GeneratedOutputLock : IDisposable
 
             if (quarantinePath is not null) TryDeleteDirectory(quarantinePath);
             if (acquired is not null) return acquired;
+            cancellationToken.ThrowIfCancellationRequested();
             ThrowIfTimedOut(deadline, timeout, lockPath);
-            Thread.Sleep(Random.Shared.Next(25, 101));
+            // The transition guard has been released. MSBuild callers can wait
+            // as a dependency, freeing their node for the holder's nested work.
+            if (waitBeforeRetry is null) WaitBeforeRetry(cancellationToken);
+            else waitBeforeRetry();
         }
     }
 
-    private static OwnedDirectory AcquireTransitionGuard(string lockPath, DateTime deadline, TimeSpan timeout)
+    private static OwnedDirectory AcquireTransitionGuard(
+        string lockPath, DateTime deadline, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         var guardPath = lockPath + TransitionSuffix;
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var owned = TryPublishOwnedDirectory(guardPath);
             if (owned is not null) return owned;
             if (!TryEnsureDirectory(guardPath, "generated output transition guard"))
@@ -185,9 +254,17 @@ internal sealed class GeneratedOutputLock : IDisposable
                     if (!PathExists(tombstonePath)) TryMoveDirectory(guardPath, tombstonePath);
                 }
             }
+            cancellationToken.ThrowIfCancellationRequested();
             ThrowIfTimedOut(deadline, timeout, guardPath);
-            Thread.Sleep(Random.Shared.Next(25, 101));
+            WaitBeforeRetry(cancellationToken);
         }
+    }
+
+    private static void WaitBeforeRetry(CancellationToken cancellationToken)
+    {
+        var delay = Random.Shared.Next(25, 101);
+        if (!cancellationToken.CanBeCanceled) Thread.Sleep(delay);
+        else if (cancellationToken.WaitHandle.WaitOne(delay)) cancellationToken.ThrowIfCancellationRequested();
     }
 
     private static void Release(OwnedDirectory owned, DateTime deadline, TimeSpan timeout)
@@ -678,7 +755,7 @@ internal sealed class GeneratedOutputLock : IDisposable
         => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     private static string NormalizePath(string path)
-        => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        => GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(path);
 
     private static bool PathsEqual(string left, string right)
         => string.Equals(NormalizePath(left), NormalizePath(right), PathComparison);

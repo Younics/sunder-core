@@ -1,0 +1,154 @@
+name: Sunder Execution Runtime Publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime_tag:
+        description: Exact retained runtime/v<version> tag
+        required: true
+        type: string
+      release_id:
+        description: Exact positive numeric runtime draft release ID
+        required: true
+        type: string
+      native_run_id:
+        description: Successful tag-native workflow run ID
+        required: true
+        type: string
+      native_run_attempt:
+        description: Exact successful native run attempt
+        required: true
+        type: string
+      artifact_source_commit:
+        description: Approved tagged Core SDK and runtime artifactSourceCommit
+        required: true
+        type: string
+      publication_evidence_commit:
+        description: Approved direct evidence-only descendant of artifactSourceCommit
+        required: true
+        type: string
+      runtime_lock_sha256:
+        description: Approved exact production.lock.json SHA-256
+        required: true
+        type: string
+      confirmation:
+        description: Enter publish-approved-retained-runtimes
+        required: true
+        type: string
+
+permissions: {}
+concurrency:
+  group: sunder-execution-runtime-publication-${{ inputs.release_id }}
+  cancel-in-progress: false
+env:
+  SUNDER_CORE_RELEASE_APPROVED: ${{ vars.SUNDER_CORE_RELEASE_APPROVED }}
+  SUNDER_CORE_RELEASE_APPROVAL_REFERENCE: ${{ vars.SUNDER_CORE_RELEASE_APPROVAL_REFERENCE }}
+  SUNDER_CORE_ARTIFACT_SOURCE_COMMIT: ${{ vars.SUNDER_CORE_ARTIFACT_SOURCE_COMMIT }}
+  SUNDER_CORE_PUBLICATION_EVIDENCE_COMMIT: ${{ vars.SUNDER_CORE_PUBLICATION_EVIDENCE_COMMIT }}
+  SUNDER_CORE_REGISTRY_ORIGIN: ${{ vars.SUNDER_CORE_REGISTRY_ORIGIN }}
+  SUNDER_CORE_SDK_TAG: ${{ vars.SUNDER_CORE_SDK_TAG }}
+  SUNDER_EXECUTION_RUNTIME_LOCK_SHA256: ${{ vars.SUNDER_EXECUTION_RUNTIME_LOCK_SHA256 }}
+  SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVED: ${{ vars.SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVED }}
+  SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVAL_REFERENCE: ${{ vars.SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVAL_REFERENCE }}
+
+jobs:
+  publish:
+    name: Reverify and publish the retained native attempt
+    if: github.ref == 'refs/heads/main'
+    environment: sunder-execution-runtime-publication
+    runs-on: ${{ vars.SUNDER_EXECUTION_RUNTIME_COORDINATOR_RUNNER }}
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: "10.0.100"
+      - name: Verify approvals and download exact numbered native assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.runtime_tag }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          SOURCE: ${{ inputs.artifact_source_commit }}
+          EVIDENCE: ${{ inputs.publication_evidence_commit }}
+          NATIVE_RUN: ${{ inputs.native_run_id }}
+          NATIVE_ATTEMPT: ${{ inputs.native_run_attempt }}
+          LOCK_SHA: ${{ inputs.runtime_lock_sha256 }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$CONFIRMATION" = publish-approved-retained-runtimes
+          python3 scripts/execution-runtimes/retained_native.py download \
+            --release-id "$RELEASE_ID" --tag "$TAG" --source "$SOURCE" --sdk-tag "$SUNDER_CORE_SDK_TAG" \
+            --run-id "$NATIVE_RUN" --run-attempt "$NATIVE_ATTEMPT" --lock-sha256 "$LOCK_SHA" \
+            --publication-evidence-commit "$EVIDENCE" --directory "$RUNNER_TEMP/retained-native"
+      - name: Reverify signatures and attestations, reconcile, promote, download and resolve
+        shell: bash
+        env:
+          SUNDER_REGISTRY_ADMIN_TOKEN: ${{ secrets.SUNDER_EXECUTION_RUNTIME_REGISTRY_ADMIN_TOKEN }}
+          SUNDER_EXECUTION_RUNTIME_RELEASE_PUBLIC_KEYS: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_PUBLIC_KEYS }}
+          SUNDER_EXECUTION_RUNTIME_ATTESTATION_PUBLIC_KEYS: ${{ vars.SUNDER_EXECUTION_RUNTIME_ATTESTATION_PUBLIC_KEYS }}
+          SOURCE: ${{ inputs.artifact_source_commit }}
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/retained-native"
+          export SUNDER_EXECUTION_RUNTIME_VERIFIER_DLL="$input/verifier/Sunder.ExecutionRuntime.Build.dll"
+          bash scripts/execution-runtimes/publish-release-set.sh \
+            --lock "$input/production.lock.json" --artifacts "$input/execution-runtimes" \
+            --native-receipts "$input/execution-runtime-receipts" --release-drivers "$input/release-drivers.v1.json" \
+            --release-set "$input/release-set.v1.json" --source-binding "$input/publication-source.v1.json" \
+            --registry "${SUNDER_CORE_REGISTRY_ORIGIN%/}" --repository "$GITHUB_REPOSITORY" --source-sha "$SOURCE" \
+            --workflow-path .github/workflows/sunder-execution-runtime-publication.yml --workflow-ref "$GITHUB_REF" \
+            --workflow-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/registry-publication.v1.json"
+          python3 scripts/execution-runtimes/publication_evidence.py "$input" \
+            "$RUNNER_TEMP/registry-publication.v1.json" "$RUNNER_TEMP/runtime-publication-evidence"
+      - name: Retain recovery journal even if publication was interrupted
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-publication-journal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/registry-publication.v1.json
+          if-no-files-found: ignore
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-publication-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-publication-evidence/*
+          if-no-files-found: error
+          retention-days: 1
+
+  archive-publication:
+    needs: publish
+    environment: sunder-execution-runtime-publication
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: runtime-publication-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication-evidence
+      - name: Archive final Registry evidence on the same numeric draft
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          TAG: ${{ inputs.runtime_tag }}
+        run: |
+          bash scripts/release/upload-execution-runtime-release-evidence.sh \
+            "$RELEASE_ID" "$TAG" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" publication-evidence

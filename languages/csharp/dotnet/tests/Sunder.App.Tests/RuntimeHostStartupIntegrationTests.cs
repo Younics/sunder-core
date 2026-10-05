@@ -59,6 +59,13 @@ public sealed class RuntimeHostStartupIntegrationTests
             var handshake = await client.GetHandshakeAsync(timeout.Token);
 
             Assert.Equal(expectedIdentity, handshake.DeploymentIdentity);
+            using var gateway = new RuntimeClientTransport(() => connection);
+            using var direct = new AppRuntimeProcessTransport(gateway);
+            var directHandshake = await direct.HandshakeAsync(timeout.Token);
+            Assert.Equal((await gateway.ProbeHandshakeAsync(timeout.Token)).RuntimeInstanceId, directHandshake.RuntimeInstanceId);
+            var privateConnection = HostConnectionInfoStore.LoadLocalRuntimeWorkerFor(connection);
+            Assert.NotNull(privateConnection?.IpcEndpoint);
+            Assert.NotEqual(connection.BearerToken, privateConnection.BearerToken);
             await client.ShutdownHostAsync(timeout.Token);
             await WaitForFileDeletionAsync(connectionPath, timeout.Token);
         }

@@ -84,7 +84,7 @@ test("rpcBindings config validates bounded exact entries and portable collision-
         name: "duplicate output",
         value: [
           { path: "contracts/v1.rpc.json", outputFile: "same.ts" },
-          { path: "contracts/v2.rpc.json", outputFile: "same.ts" },
+          { path: "contracts/alternate.rpc.json", outputFile: "same.ts" },
         ],
         expected: /output paths.*collide on portable filesystems/u,
       },
@@ -92,7 +92,7 @@ test("rpcBindings config validates bounded exact entries and portable collision-
         name: "ASCII-case-colliding output",
         value: [
           { path: "contracts/v1.rpc.json", outputFile: "Bindings/Example.ts" },
-          { path: "contracts/v2.rpc.json", outputFile: "bindings/example.ts" },
+          { path: "contracts/alternate.rpc.json", outputFile: "bindings/example.ts" },
         ],
         expected: /output paths.*collide on portable filesystems/u,
       },
@@ -100,7 +100,7 @@ test("rpcBindings config validates bounded exact entries and portable collision-
         name: "file and directory output collision",
         value: [
           { path: "contracts/v1.rpc.json", outputFile: "nested.ts" },
-          { path: "contracts/v2.rpc.json", outputFile: "nested.ts/child.ts" },
+          { path: "contracts/alternate.rpc.json", outputFile: "nested.ts/child.ts" },
         ],
         expected: /output paths.*collide on portable filesystems/u,
       },
@@ -147,34 +147,35 @@ test("outputDirectory cannot overlap the owned RPC binding tree on portable file
   }
 });
 
-test("generateRpcBindings emits V1 and V2 bindings and preserves every unchanged mtime", async () => {
+test("generateRpcBindings emits strict V1 bindings and preserves every unchanged mtime", async () => {
   const root = await createProject();
   try {
     await configureBindings(root, [
       { path: "contracts/v1.rpc.json", outputFile: "v1/example.ts" },
-      { path: "contracts/v2.rpc.json", outputFile: "v2/example.ts" },
+      { path: "contracts/alternate.rpc.json", outputFile: "alternate/example.ts" },
     ]);
     await generateRpcBindings(root);
 
     const outputRoot = generatedRoot(root);
     const v1Path = resolve(outputRoot, "v1", "example.ts");
-    const v2Path = resolve(outputRoot, "v2", "example.ts");
+    const alternatePath = resolve(outputRoot, "alternate", "example.ts");
     const v1Source = await readFile(v1Path, "utf8");
-    const v2Source = await readFile(v2Path, "utf8");
+    const alternateSource = await readFile(alternatePath, "utf8");
     assert.match(v1Source, /export const CONTRACT_ID = "example\.rpc"/u);
     assert.match(v1Source, /export const CONTRACT_DESCRIPTOR_SHA256 = "[0-9a-f]{64}"/u);
+    assert.match(v1Source, /export const CONTRACT_ABI_SHA256 = "[0-9a-f]{64}"/u);
     assert.match(v1Source, /export const CONTRACT_IDENTITY =/u);
-    assert.doesNotMatch(v1Source, /RpcProviderRegistration/u);
+    assert.match(v1Source, /export function createExampleRpcProviderRegistration/u);
     assert.match(v1Source, /export class ExampleClient/u);
-    assert.match(v2Source, /export const CONTRACT_ID = "example\.rpc\.v2"/u);
-    assert.match(v2Source, /export const CONTRACT_DESCRIPTOR_SHA256 = "[0-9a-f]{64}"/u);
-    assert.match(v2Source, /export const CONTRACT_ABI_SHA256 = "[0-9a-f]{64}"/u);
-    assert.match(v2Source, /export function createExampleRpcV2RpcProviderRegistration/u);
-    assert.match(v2Source, /descriptorSha256: CONTRACT_DESCRIPTOR_SHA256/u);
-    assert.match(v2Source, /abiSha256: CONTRACT_ABI_SHA256/u);
-    assert.match(v2Source, /export class ExampleClient/u);
+    assert.match(alternateSource, /export const CONTRACT_ID = "example\.rpc\.alternate"/u);
+    assert.match(alternateSource, /export const CONTRACT_DESCRIPTOR_SHA256 = "[0-9a-f]{64}"/u);
+    assert.match(alternateSource, /export const CONTRACT_ABI_SHA256 = "[0-9a-f]{64}"/u);
+    assert.match(alternateSource, /export function createExampleRpcAlternateRpcProviderRegistration/u);
+    assert.match(alternateSource, /descriptorSha256: CONTRACT_DESCRIPTOR_SHA256/u);
+    assert.match(alternateSource, /abiSha256: CONTRACT_ABI_SHA256/u);
+    assert.match(alternateSource, /export class ExampleClient/u);
 
-    const tracked = [outputRoot, v1Path, v2Path, markerPath(outputRoot)];
+    const tracked = [outputRoot, v1Path, alternatePath, markerPath(outputRoot)];
     const fixed = new Date("2020-01-02T03:04:05.000Z");
     for (const path of tracked.slice(1)) await utimes(path, fixed, fixed);
     await utimes(outputRoot, fixed, fixed);
@@ -193,10 +194,10 @@ test("binding generation replaces the complete set, removes stale paths, and mat
   try {
     await configureBindings(root, [
       { path: "contracts/v1.rpc.json", outputFile: "old/first.ts" },
-      { path: "contracts/v2.rpc.json", outputFile: "old/second.ts" },
+      { path: "contracts/alternate.rpc.json", outputFile: "old/second.ts" },
     ]);
     await generateRpcBindings(root);
-    await configureBindings(root, [{ path: "contracts/v2.rpc.json", outputFile: "current/generated.ts" }]);
+    await configureBindings(root, [{ path: "contracts/alternate.rpc.json", outputFile: "current/generated.ts" }]);
     await generateRpcBindings(root);
     assert.equal(await exists(resolve(generatedRoot(root), "old", "first.ts")), false);
     assert.equal(await exists(resolve(generatedRoot(root), "old", "second.ts")), false);
@@ -223,7 +224,7 @@ test("planning failure preserves the previous valid binding set without partial 
   try {
     await configureBindings(root, [
       { path: "contracts/v1.rpc.json", outputFile: "stable/one.ts" },
-      { path: "contracts/v2.rpc.json", outputFile: "stable/two.ts" },
+      { path: "contracts/alternate.rpc.json", outputFile: "stable/two.ts" },
     ]);
     await generateRpcBindings(root);
     const outputRoot = generatedRoot(root);
@@ -231,10 +232,10 @@ test("planning failure preserves the previous valid binding set without partial 
     const beforeMarker = await readFile(markerPath(outputRoot));
     const beforeMtime = (await stat(outputRoot)).mtimeMs;
 
-    await writeFile(resolve(root, "contracts", "v2.rpc.json"), "{ invalid descriptor", "utf8");
+    await writeFile(resolve(root, "contracts", "alternate.rpc.json"), "{ invalid descriptor", "utf8");
     await configureBindings(root, [
       { path: "contracts/v1.rpc.json", outputFile: "future/one.ts" },
-      { path: "contracts/v2.rpc.json", outputFile: "future/two.ts" },
+      { path: "contracts/alternate.rpc.json", outputFile: "future/two.ts" },
     ]);
     await assert.rejects(() => generateRpcBindings(root), /could not be generated/u);
     assert.deepEqual(await snapshotFiles(outputRoot), before);
@@ -270,7 +271,7 @@ test("generation refuses descriptor paths that pass through symbolic links or re
   try {
     const realDirectory = resolve(root, "linked-source");
     await mkdir(realDirectory);
-    await writeFile(resolve(realDirectory, "descriptor.rpc.json"), descriptorText(v1Descriptor()), "utf8");
+    await writeFile(resolve(realDirectory, "descriptor.rpc.json"), descriptorText(primaryDescriptor()), "utf8");
     try {
       await symlink(realDirectory, resolve(root, "contracts-link"), process.platform === "win32" ? "junction" : "dir");
     } catch (error) {
@@ -290,39 +291,43 @@ test("generation refuses descriptor paths that pass through symbolic links or re
 
 test("descriptor reads fail if the opened regular file mutates during the immutable snapshot read", async () => {
   const root = await createProject();
-  const descriptorPath = resolve(root, "contracts", "v2.rpc.json");
-  let prototype: { readFile: FileHandle["readFile"] } | undefined;
-  let originalReadFile: FileHandle["readFile"] | undefined;
+  const descriptorPath = resolve(root, "contracts", "alternate.rpc.json");
+  let prototype: { read: FileHandle["read"] } | undefined;
+  let originalRead: FileHandle["read"] | undefined;
   try {
     try {
-      await configureBindings(root, [{ path: "contracts/v2.rpc.json", outputFile: "example.ts" }]);
+      await configureBindings(root, [{ path: "contracts/alternate.rpc.json", outputFile: "example.ts" }]);
       const probe = await open(descriptorPath, "r");
-      prototype = Object.getPrototypeOf(probe) as { readFile: FileHandle["readFile"] };
-      originalReadFile = prototype.readFile;
+      const descriptorIdentity = await probe.stat();
+      prototype = Object.getPrototypeOf(probe) as { read: FileHandle["read"] };
+      originalRead = prototype.read;
       await probe.close();
 
       let mutated = false;
-      const original = originalReadFile;
-      prototype.readFile = (async function(this: FileHandle): Promise<Buffer> {
-        const bytes = await (original as (this: FileHandle) => Promise<Buffer>).call(this);
-        if (!mutated) {
+      const original = originalRead;
+      // Mutate after the actual bounded chunk read, before the stable-handle
+      // fence. Descriptor reads intentionally no longer call unbounded readFile.
+      prototype.read = (async function(this: FileHandle, ...args: unknown[]) {
+        const result = await Reflect.apply(original, this, args);
+        const identity = await this.stat();
+        if (!mutated && identity.dev === descriptorIdentity.dev && identity.ino === descriptorIdentity.ino) {
           mutated = true;
-          await writeFile(descriptorPath, descriptorText(v2Descriptor("mutated.during.snapshot.read", "2.0.1")), "utf8");
+          await writeFile(descriptorPath, descriptorText(alternateDescriptor("mutated.during.snapshot.read", "2.0.1")), "utf8");
         }
-        return bytes;
-      }) as FileHandle["readFile"];
+        return result;
+      }) as FileHandle["read"];
 
       await assert.rejects(() => generateRpcBindings(root), /changed while it was being read.*mixed descriptor snapshot/u);
       assert.equal(mutated, true);
       assert.equal(await exists(generatedRoot(root)), false);
     } finally {
-      if (prototype !== undefined && originalReadFile !== undefined) prototype.readFile = originalReadFile;
+      if (prototype !== undefined && originalRead !== undefined) prototype.read = originalRead;
     }
 
     await generateRpcBindings(root);
     assert.match(await readFile(resolve(generatedRoot(root), "example.ts"), "utf8"), /mutated\.during\.snapshot\.read/u);
   } finally {
-    if (prototype !== undefined && originalReadFile !== undefined) prototype.readFile = originalReadFile;
+    if (prototype !== undefined && originalRead !== undefined) prototype.read = originalRead;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -332,7 +337,7 @@ test("concurrent API calls serialize one complete binding set and leave unchange
   try {
     await configureBindings(root, [
       { path: "contracts/v1.rpc.json", outputFile: "one.ts" },
-      { path: "contracts/v2.rpc.json", outputFile: "nested/two.ts" },
+      { path: "contracts/alternate.rpc.json", outputFile: "nested/two.ts" },
     ]);
     await Promise.all(Array.from({ length: 8 }, async () => generateRpcBindings(root)));
     assert.deepEqual((await readdir(generatedRoot(root))).sort(), ["nested", "one.ts"]);
@@ -363,7 +368,7 @@ test("a stale generator cannot overwrite a newer plan after waiting for the publ
   let releaseLock: (() => void) | undefined;
   let lockTask: Promise<void> | undefined;
   try {
-    await writeFile(resolve(root, "contracts", "race.rpc.json"), descriptorText(v2Descriptor("race.old", "1.0.0")), "utf8");
+    await writeFile(resolve(root, "contracts", "race.rpc.json"), descriptorText(alternateDescriptor("race.old", "1.0.0")), "utf8");
     await configureBindings(root, [{ path: "contracts/race.rpc.json", outputFile: "old.ts" }]);
     let signalLocked!: () => void;
     const locked = new Promise<void>((resolvePromise) => { signalLocked = resolvePromise; });
@@ -380,7 +385,7 @@ test("a stale generator cannot overwrite a newer plan after waiting for the publ
     assert.equal(staleProcess.exitCode, null);
     await suspendOutsideTransitionGuard(staleProcess, generatedRoot(root));
 
-    await writeFile(resolve(root, "contracts", "race.rpc.json"), descriptorText(v2Descriptor("race.new", "2.0.0")), "utf8");
+    await writeFile(resolve(root, "contracts", "race.rpc.json"), descriptorText(alternateDescriptor("race.new", "2.0.0")), "utf8");
     await configureBindings(root, [{ path: "contracts/race.rpc.json", outputFile: "new.ts" }]);
     if (releaseLock === undefined) throw new Error("Publish lock release was not initialized.");
     releaseLock();
@@ -409,19 +414,20 @@ test("a stale generator cannot overwrite a newer plan after waiting for the publ
   }
 });
 
-test("generate CLI supports standalone V1 bindings without admitting V1 descriptors to Manifest V3 packages", async () => {
+test("generate CLI emits package V1 bindings with both contract identities", async () => {
   const root = await createProject();
   try {
     const config = await readConfig(root);
     config.contracts = [{ path: "contracts/v1.rpc.json", exposure: "package" }];
     config.rpcBindings = [{ path: "contracts/v1.rpc.json", outputFile: "v1.ts" }];
     await writeConfig(root, config);
-    await assert.rejects(() => prepareProject(root), /Package Manifest V3 requires RPC descriptorVersion 2/u);
+    assert.equal((await prepareProject(root)).contracts[0]?.descriptor.descriptorVersion, 1);
 
     const cli = resolve(__dirname, "..", "..", "dist", "cli.js");
     const result = await runProcess(process.execPath, [cli, "generate", "--project", root]);
     assert.equal(result.code, 0, result.output);
     assert.match(await readFile(resolve(generatedRoot(root), "v1.ts"), "utf8"), /example\.rpc/u);
+    assert.match(await readFile(resolve(generatedRoot(root), "v1.ts"), "utf8"), /CONTRACT_ABI_SHA256/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -430,13 +436,14 @@ test("generate CLI supports standalone V1 bindings without admitting V1 descript
 test("dev, production worker, and Vite builds consume bindings generated before bundling", async () => {
   const root = await createProject();
   try {
+    await installBrowserSdk(root);
     const generatedId = "generated.binding.only";
-    await writeFile(resolve(root, "contracts", "binding.rpc.json"), descriptorText(v2Descriptor(generatedId, "7.8.9")), "utf8");
+    await writeFile(resolve(root, "contracts", "binding.rpc.json"), descriptorText(alternateDescriptor(generatedId, "7.8.9")), "utf8");
     const config = await readConfig(root);
-    config.contracts = [{ path: "contracts/v2.rpc.json", exposure: "package" }];
-    config.providers = [{ providerId: "example.provider", role: "runtime", contractId: "example.rpc.v2", contractVersion: "2.0.0", audience: "owner" }];
+    config.contracts = [{ path: "contracts/alternate.rpc.json", exposure: "package" }];
+    config.providers = [{ providerId: "example.provider", role: "runtime", contractId: "example.rpc.alternate", contractVersion: "2.0.0", audience: "owner" }];
     config.rpcBindings = [
-      { path: "contracts/v2.rpc.json", outputFile: "package.ts" },
+      { path: "contracts/alternate.rpc.json", outputFile: "package.ts" },
       { path: "contracts/binding.rpc.json", outputFile: "binding.ts" },
     ];
     config.app = {
@@ -461,7 +468,7 @@ test("dev, production worker, and Vite builds consume bindings generated before 
 
     await buildDevPackage({ projectPath: root, watch: false });
     const devRoot = resolve(root, "dist", "sunder-dev", "payload");
-    assert.match(await readFile(resolve(devRoot, "runtime", currentRid(), "worker.cjs"), "utf8"), new RegExp(generatedId, "u"));
+    assert.match(await readFile(resolve(devRoot, "runtime", "shared", "bin", "worker.cjs"), "utf8"), new RegExp(generatedId, "u"));
     assert.match((await readJavaScriptFiles(resolve(devRoot, "app", currentRid()))).join("\n"), new RegExp(generatedId, "u"));
 
     await removeGeneratedOutput(root);
@@ -485,9 +492,10 @@ test("generated identity, Vite build, and web leaf emission share one immutable 
   let buildTask: Promise<string | null> | undefined;
   let generationTask: Promise<void> | undefined;
   try {
+    await installBrowserSdk(root);
     const config = await readConfig(root);
-    config.contracts = [{ path: "contracts/v2.rpc.json", exposure: "package" }];
-    config.rpcBindings = [{ path: "contracts/v2.rpc.json", outputFile: "shared.ts" }];
+    config.contracts = [{ path: "contracts/alternate.rpc.json", exposure: "package" }];
+    config.rpcBindings = [{ path: "contracts/alternate.rpc.json", outputFile: "shared.ts" }];
     config.app = {
       root: "app",
       entryPoint: "index.html",
@@ -529,8 +537,8 @@ test("generated identity, Vite build, and web leaf emission share one immutable 
     assert.match(generatedDuringBuild, /export const CONTRACT_ABI_SHA256 = "[0-9a-f]{64}"/u);
     assert.match(generatedDuringBuild, /export const CONTRACT_IDENTITY = \{/u);
 
-    await writeFile(resolve(root, "contracts", "v2.rpc.json"), descriptorText({
-      ...(v2Descriptor() as Record<string, unknown>),
+    await writeFile(resolve(root, "contracts", "alternate.rpc.json"), descriptorText({
+      ...(alternateDescriptor() as Record<string, unknown>),
       version: "2.0.1",
     }), "utf8");
     const generationContender = startOutputLockContender(
@@ -560,7 +568,7 @@ test("generated identity, Vite build, and web leaf emission share one immutable 
         readonly abiSha256: string;
       }>;
     };
-    const packagedBytes = await readFile(resolve(leaf!, "payload", "shared", "contracts", "v2.rpc.json"));
+    const packagedBytes = await readFile(resolve(leaf!, "payload", "shared", "contracts", "alternate.rpc.json"));
     assert.equal(manifest.contractBundles[0]?.version, "2.0.0");
     assert.equal(manifest.contractBundles[0]?.descriptorSha256, sha256(packagedBytes));
     assert.ok(generatedDuringBuild.includes(manifest.contractBundles[0]!.descriptorSha256));
@@ -581,12 +589,12 @@ test("watch treats RPC binding descriptors as structural inputs before recreatin
   let output = "";
   try {
     const descriptorPath = resolve(root, "contracts", "watch.rpc.json");
-    await writeFile(descriptorPath, descriptorText(v2Descriptor("watch.binding", "7.0.0")), "utf8");
+    await writeFile(descriptorPath, descriptorText(alternateDescriptor("watch.binding", "7.0.0")), "utf8");
     const config = await readConfig(root);
-    config.contracts = [{ path: "contracts/v2.rpc.json", exposure: "package" }];
-    config.providers = [{ providerId: "example.provider", role: "runtime", contractId: "example.rpc.v2", contractVersion: "2.0.0", audience: "owner" }];
+    config.contracts = [{ path: "contracts/alternate.rpc.json", exposure: "package" }];
+    config.providers = [{ providerId: "example.provider", role: "runtime", contractId: "example.rpc.alternate", contractVersion: "2.0.0", audience: "owner" }];
     config.rpcBindings = [
-      { path: "contracts/v2.rpc.json", outputFile: "package.ts" },
+      { path: "contracts/alternate.rpc.json", outputFile: "package.ts" },
       { path: "contracts/watch.rpc.json", outputFile: "watch.ts" },
     ];
     await writeConfig(root, config);
@@ -597,13 +605,13 @@ test("watch treats RPC binding descriptors as structural inputs before recreatin
     const watchProcess = child;
     watchProcess.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
     watchProcess.stderr.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
-    const bundlePath = resolve(root, "dist", "sunder-dev", "payload", "runtime", currentRid(), "worker.cjs");
+    const bundlePath = resolve(root, "dist", "sunder-dev", "payload", "runtime", "shared", "bin", "worker.cjs");
     await waitUntil(async () => (await readTextIfPresent(bundlePath)).includes("7.0.0"), "initial generated watch binding", () => output);
 
     await withOutputLocks([generatedRoot(root)], async () => {
       await observeOutputLockAttempt(
         generatedRoot(root),
-        () => writeFile(descriptorPath, descriptorText(v2Descriptor("watch.binding", "7.0.1")), "utf8"),
+        () => writeFile(descriptorPath, descriptorText(alternateDescriptor("watch.binding", "7.0.1")), "utf8"),
         () => output,
       );
       assert.match(await readFile(bundlePath, "utf8"), /7\.0\.0/u);
@@ -621,13 +629,18 @@ test("watch treats RPC binding descriptors as structural inputs before recreatin
   }
 });
 
+async function installBrowserSdk(root: string): Promise<void> {
+  await mkdir(resolve(root, "node_modules/@sunder"), { recursive: true });
+  await symlink(resolve(dirname(require.resolve("@sunder/sdk")), ".."), resolve(root, "node_modules/@sunder/sdk"), process.platform === "win32" ? "junction" : "dir");
+}
+
 async function createProject(): Promise<string> {
   const root = resolve(tmpdir(), "sunder-node-rpc-binding-tests", randomUUID());
   await mkdir(resolve(root, "src"), { recursive: true });
   await mkdir(resolve(root, "contracts"), { recursive: true });
   await writeFile(resolve(root, "src", "worker.ts"), "export {};\n", "utf8");
-  await writeFile(resolve(root, "contracts", "v1.rpc.json"), descriptorText(v1Descriptor()), "utf8");
-  await writeFile(resolve(root, "contracts", "v2.rpc.json"), descriptorText(v2Descriptor()), "utf8");
+  await writeFile(resolve(root, "contracts", "v1.rpc.json"), descriptorText(primaryDescriptor()), "utf8");
+  await writeFile(resolve(root, "contracts", "alternate.rpc.json"), descriptorText(alternateDescriptor()), "utf8");
   await writeConfig(root, {
     schemaVersion: 2,
     id: "test.rpc.bindings",
@@ -700,27 +713,17 @@ function workerSource(bindingImport: string, useVersion = false): string {
   `;
 }
 
-function v1Descriptor(): unknown {
-  return {
-    descriptorVersion: 1,
-    contractId: "example.rpc",
-    version: "1.0.0",
-    services: [{
-      serviceId: "example",
-      methods: [{
-        methodId: "invoke",
-        kind: "unary",
-        requestSchema: "#/$defs/Empty",
-        responseSchema: "#/$defs/Result",
-      }],
-    }],
-    $defs: definitions(),
-  };
+function primaryDescriptor(): unknown {
+  return rpcDescriptor("example.rpc", "1.0.0");
 }
 
-function v2Descriptor(contractId = "example.rpc.v2", version = "2.0.0"): unknown {
+function alternateDescriptor(contractId = "example.rpc.alternate", version = "2.0.0"): unknown {
+  return rpcDescriptor(contractId, version);
+}
+
+function rpcDescriptor(contractId: string, version: string): unknown {
   return {
-    descriptorVersion: 2,
+    descriptorVersion: 1,
     schemaProfile: "sunder.rpc.values.v1",
     contractId,
     version,

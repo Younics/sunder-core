@@ -1,0 +1,758 @@
+{
+  "formatVersion": 1,
+  "schemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "documentEncoding": {
+    "encoding": "utf-8",
+    "bom": false,
+    "indentSpaces": 2,
+    "lineEnding": "lf",
+    "terminalLf": true
+  },
+  "canonicalSources": {
+    "minimalDescriptor": {
+      "descriptorPath": "../../conformance/valid/minimal.rpc.json",
+      "expectationsPath": "../../conformance/expectations.json",
+      "contractId": "example.rpc.v1.minimal",
+      "contractVersion": "2.0.0",
+      "descriptorBytes": 487,
+      "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+      "abiProjectionBytes": 390,
+      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42"
+    },
+    "unboundedBase64Descriptor": {
+      "descriptorPath": "../../conformance/valid/unbounded-base64.rpc.json",
+      "expectationsPath": "../../conformance/expectations.json",
+      "contractId": "example.rpc.v1.unboundedbase64",
+      "contractVersion": "2.0.0",
+      "descriptorBytes": 378,
+      "descriptorSha256": "1cab33cde30b1f2989ee3a141f7ae9edddefb48c11bb122613563e2c5e5ef472",
+      "abiProjectionBytes": 360,
+      "abiSha256": "1dfd88034f2078d9b0ee886153c46a3e60aebd821c77d8683f613fa696a66d16"
+    },
+    "syntheticStackContributorDescriptor": {
+      "derivedFrom": "minimalDescriptor",
+      "derivation": "Replace only contractId with sunder.stack.contributor, then recompute canonical descriptor and ABI identities.",
+      "contractId": "sunder.stack.contributor",
+      "contractVersion": "2.0.0",
+      "descriptorBytes": 489,
+      "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+      "abiProjectionBytes": 392,
+      "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56"
+    }
+  },
+  "immutableArtifactEvidence": [
+    {
+      "inventoryFixturePath": "valid/package-public-inventory-empty.json",
+      "packageId": "example.empty",
+      "packageVersion": "1.0.0",
+      "packageContentIdentity": "2222222222222222222222222222222222222222222222222222222222222222",
+      "publicContractCount": 0,
+      "publicInventorySha256": "d974cc19869d591bda825aaaaa74a5a4a7aa295003e8f42b42a25ce9aeb4fa30"
+    },
+    {
+      "inventoryFixturePath": "valid/package-public-inventory-mixed-authority.json",
+      "packageId": "example.dependency",
+      "packageVersion": "1.2.3",
+      "packageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+      "publicContractCount": 2,
+      "publicInventorySha256": "6f69988fd727caa6b6eeab5a8f0635264a3c663b7a03cfd865784fa4ef022329"
+    },
+    {
+      "inventoryFixturePath": "valid/package-public-inventory-nonempty.json",
+      "packageId": "example.dependency",
+      "packageVersion": "1.2.3",
+      "packageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+      "publicContractCount": 1,
+      "publicInventorySha256": "1d1c5dbcae220e7052df3f87f9b4fe9e5feb3fd2a23c70f2b41453039ccb9fbe"
+    },
+    {
+      "inventoryFixturePath": "valid/package-public-inventory-platform-only.json",
+      "packageId": "example.dependency",
+      "packageVersion": "1.2.3",
+      "packageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+      "publicContractCount": 1,
+      "publicInventorySha256": "aad59a4a18b4d2e4052698580bc863fc2de8c2aabe2a8343216fae3ba82b64a7"
+    }
+  ],
+  "fixtures": [
+    {
+      "schemaPath": "../authoring-receipt.schema.json",
+      "fixturePath": "valid/authoring-receipt-mixed.json",
+      "semanticContextFixturePaths": [
+        "valid/mixed-contract-lock.json",
+        "valid/package-public-inventory-mixed-authority.json",
+        "valid/platform-catalog.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../cache-entry-receipt.schema.json",
+      "fixturePath": "valid/cache-entry-receipt.json",
+      "semanticDescriptorContexts": [
+        {
+          "fixturePath": "../../conformance/valid/minimal.rpc.json",
+          "contextPath": "~/.sunder/contracts/v1/sha256/709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371.json"
+        }
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../authoring-receipt.schema.json",
+      "fixturePath": "valid/minimal-authoring-receipt.json",
+      "semanticContextFixturePaths": [
+        "valid/minimal-contract-lock.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "valid/minimal-contract-lock.json",
+      "expectedFileSha256": "48300c172fe8e323956ee95aa7cde02e30ca9ebd330179e328e3209fe31ead5a",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "valid/minimal-package-project-export.json",
+      "semanticContextFixturePaths": [
+        "valid/minimal-package-owned-baseline.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "valid/minimal-package-owned-baseline.json",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "valid/mixed-contract-lock.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-mixed-authority.json",
+        "valid/platform-catalog.json"
+      ],
+      "expectedFileSha256": "4d2c20ba9591c04449ee4fe1e48fbbd1664642807e039a6984245317a9735c1d",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "valid/package-api-contract-lock.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "expectedFileSha256": "0cf9e01de041b7430792a2813793a64a223b780800fc90bdbce0b39014784d6f",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "valid/package-api-mixed-authority-contract-lock.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-mixed-authority.json",
+        "valid/platform-catalog.json"
+      ],
+      "expectedFileSha256": "0e6ae942272b88e8ffb91cc34aa3790652d65357b7f2dc3051ea14a8d15bfa47",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "valid/package-owned-baseline.json",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "valid/package-project-export-owned.json",
+      "semanticContextFixturePaths": [
+        "valid/package-owned-baseline.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-public-inventory.schema.json",
+      "fixturePath": "valid/package-public-inventory-empty.json",
+      "expectedDerivedSha256": "d974cc19869d591bda825aaaaa74a5a4a7aa295003e8f42b42a25ce9aeb4fa30",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-public-inventory.schema.json",
+      "fixturePath": "valid/package-public-inventory-mixed-authority.json",
+      "semanticContextFixturePaths": [
+        "valid/platform-catalog.json"
+      ],
+      "expectedDerivedSha256": "6f69988fd727caa6b6eeab5a8f0635264a3c663b7a03cfd865784fa4ef022329",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-public-inventory.schema.json",
+      "fixturePath": "valid/package-public-inventory-nonempty.json",
+      "expectedDerivedSha256": "1d1c5dbcae220e7052df3f87f9b4fe9e5feb3fd2a23c70f2b41453039ccb9fbe",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-public-inventory.schema.json",
+      "fixturePath": "valid/package-public-inventory-platform-only.json",
+      "semanticContextFixturePaths": [
+        "valid/platform-catalog.json"
+      ],
+      "expectedDerivedSha256": "aad59a4a18b4d2e4052698580bc863fc2de8c2aabe2a8343216fae3ba82b64a7",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../platform-catalog.schema.json",
+      "fixturePath": "valid/platform-catalog.json",
+      "expectedCanonicalContentSha256": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "valid/platform-owned-baseline.json",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../authoring-receipt.schema.json#/$defs/packageApiImport",
+      "fixturePath": "invalid/authoring-receipt-invalid-package-presence.json",
+      "expectedSchemaKeyword": "enum",
+      "expectedSchemaErrors": [
+        "enum|/presence|#/properties/presence/enum|{\"allowedValues\":[\"required\",\"optional\"]}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../authoring-receipt.schema.json",
+      "fixturePath": "invalid/authoring-receipt-empty-actions.json",
+      "expectedSchemaKeyword": "minItems",
+      "expectedSchemaErrors": [
+        "minItems|/uses/0/actions|#/properties/actions/minItems|{\"limit\":1}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../authoring-receipt.schema.json",
+      "fixturePath": "invalid/authoring-receipt-missing-required.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required||#/required|{\"missingProperty\":\"generatedBindings\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../cache-entry-receipt.schema.json",
+      "fixturePath": "invalid/cache-receipt-missing-required.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required||#/required|{\"missingProperty\":\"abiSha256\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../cache-entry-receipt.schema.json",
+      "fixturePath": "invalid/cache-receipt-unknown-member.json",
+      "expectedSchemaKeyword": "additionalProperties",
+      "expectedSchemaErrors": [
+        "maxProperties||#/maxProperties|{\"limit\":6}",
+        "additionalProperties||#/additionalProperties|{\"additionalProperty\":\"path\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "invalid/contract-lock-invalid-key-grammar.json",
+      "expectedSchemaKeyword": "pattern",
+      "expectedSchemaErrors": [
+        "pattern|/packageImports|#/$defs/packageId/pattern|{\"pattern\":\"^[a-z0-9]+(?:\\\\.[a-z0-9]+)*$\"}",
+        "propertyNames|/packageImports|#/propertyNames|{\"propertyName\":\"Example.Dependency\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "invalid/contract-lock-missing-required.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required||#/required|{\"missingProperty\":\"platformImports\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "invalid/contract-lock-missing-package-presence.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required|/packageImports/example.dependency|#/required|{\"missingProperty\":\"presence\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "invalid/owned-baseline-missing-required.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required||#/required|{\"missingProperty\":\"contracts\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "invalid/package-baseline-removed-empty-history.json",
+      "expectedSchemaKeyword": "minItems",
+      "expectedSchemaErrors": [
+        "minItems|/contracts/minimal/history|#/allOf/0/then/properties/history/minItems|{\"limit\":1}",
+        "if|/contracts/minimal|#/allOf/0/if|{\"failingKeyword\":\"then\"}",
+        "if||#/allOf/0/if|{\"failingKeyword\":\"then\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-public-inventory.schema.json",
+      "fixturePath": "invalid/package-inventory-missing-required.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required||#/required|{\"missingProperty\":\"contracts\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "invalid/platform-baseline-invalid-exposure-history.json",
+      "expectedSchemaKeyword": "const",
+      "expectedSchemaErrors": [
+        "const|/contracts/stackContributor/history/0/exposure|#/properties/exposure/const|{\"allowedValue\":\"public\"}",
+        "if||#/allOf/0/if|{\"failingKeyword\":\"else\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../platform-catalog.schema.json",
+      "fixturePath": "invalid/platform-catalog-missing-mandatory-contract.json",
+      "expectedSchemaKeyword": "contains",
+      "expectedSchemaErrors": [
+        "const|/contracts/0/contractId|#/properties/contracts/contains/properties/contractId/const|{\"allowedValue\":\"sunder.stack.contributor\"}",
+        "contains|/contracts|#/properties/contracts/contains|{\"minContains\":1,\"maxContains\":1}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../platform-catalog.schema.json",
+      "fixturePath": "invalid/platform-catalog-missing-required.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required||#/required|{\"missingProperty\":\"contracts\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "invalid/project-export-invalid-lock-sha256.json",
+      "expectedSchemaKeyword": "pattern",
+      "expectedSchemaErrors": [
+        "pattern|/lockSha256|#/$defs/sha256/pattern|{\"pattern\":\"^[0-9a-f]{64}$\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "invalid/project-export-missing-lock-sha256.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required||#/required|{\"missingProperty\":\"lockSha256\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "invalid/project-export-missing-required.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required||#/required|{\"missingProperty\":\"packageId\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "recipe": {
+        "id": "project-export-contracts-max-plus-one",
+        "baseFixturePath": "valid/minimal-package-project-export.json",
+        "operation": "replace-array",
+        "jsonPointer": "/contracts",
+        "count": 129,
+        "indexStart": 0,
+        "contractKeyFormat": "contract{index:000}",
+        "contractSource": "minimalDescriptor",
+        "fixedMembers": {
+          "exposure": "public",
+          "source": "owned",
+          "authorityKind": "package",
+          "authorityId": "example.owner"
+        }
+      },
+      "expectedSchemaKeyword": "maxItems",
+      "expectedSchemaErrors": [
+        "maxItems|/contracts|#/properties/contracts/maxItems|{\"limit\":128}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "semantic-invalid/baseline-authority-mismatch.json",
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.authority-mismatch"
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "semantic-invalid/baseline-evidence-mismatch.json",
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.evidence-mismatch"
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "semantic-invalid/baseline-hash-mismatch.json",
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.hash-mismatch"
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "semantic-invalid/baseline-order-mismatch.json",
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.order-mismatch"
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "semantic-invalid/baseline-root-mismatch.json",
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.root-mismatch"
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "semantic-invalid/lock-count-mismatch.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.count-mismatch"
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "semantic-invalid/lock-package-api-no-package-authority.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-platform-only.json",
+        "valid/platform-catalog.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "package-api.consumer-api-empty"
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "semantic-invalid/lock-unreferenced-artifact.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.unreferenced-artifact"
+    },
+    {
+      "schemaPath": "../package-public-inventory.schema.json",
+      "fixturePath": "semantic-invalid/package-inventory-count-mismatch.json",
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.count-mismatch"
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "semantic-invalid/platform-baseline-missing-mandatory-contract.json",
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.mandatory-platform-contract-missing"
+    },
+    {
+      "schemaPath": "../authoring-receipt.schema.json",
+      "fixturePath": "semantic-invalid/receipt-authority-projection-extra.json",
+      "semanticContextFixturePaths": [
+        "valid/package-api-contract-lock.json",
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.authority-projection-extra"
+    },
+    {
+      "schemaPath": "../authoring-receipt.schema.json",
+      "fixturePath": "semantic-invalid/receipt-authority-projection-omission.json",
+      "semanticContextFixturePaths": [
+        "valid/package-api-mixed-authority-contract-lock.json",
+        "valid/package-public-inventory-mixed-authority.json",
+        "valid/platform-catalog.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.authority-projection-omission"
+    },
+    {
+      "schemaPath": "../authoring-receipt.schema.json",
+      "fixturePath": "semantic-invalid/receipt-descriptor-action-mismatch.json",
+      "semanticContextFixturePaths": [
+        "valid/minimal-contract-lock.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.descriptor-action-mismatch"
+    },
+    {
+      "schemaPath": "../authoring-receipt.schema.json",
+      "fixturePath": "semantic-invalid/receipt-duplicate-projected-key.json",
+      "semanticContextFixturePaths": [
+        "valid/minimal-contract-lock.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.duplicate-projected-key"
+    },
+    {
+      "schemaPath": "../authoring-receipt.schema.json",
+      "fixturePath": "semantic-invalid/receipt-orphan-import.json",
+      "semanticContextFixturePaths": [
+        "valid/minimal-contract-lock.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.orphan-import"
+    },
+    {
+      "schemaPath": "../authoring-receipt.schema.json",
+      "fixturePath": "semantic-invalid/receipt-visibility-audience-mismatch.json",
+      "semanticContextFixturePaths": [
+        "valid/minimal-contract-lock.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.visibility-audience-mismatch"
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "recipe": {
+        "id": "materialization-bundles-at-limit",
+        "baseFixturePath": "valid/minimal-contract-lock.json",
+        "operation": "materialization-boundary",
+        "target": "bundles",
+        "count": 128,
+        "expectedAggregateCounts": {
+          "contractBundles": 128,
+          "roleScopedUses": 0,
+          "providers": 0,
+          "packageDependencies": 0
+        }
+      },
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "recipe": {
+        "id": "materialization-bundles-max-plus-one",
+        "baseFixturePath": "valid/minimal-contract-lock.json",
+        "operation": "materialization-boundary",
+        "target": "bundles",
+        "count": 129,
+        "expectedAggregateCounts": {
+          "contractBundles": 129,
+          "roleScopedUses": 0,
+          "providers": 0,
+          "packageDependencies": 0
+        }
+      },
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.aggregate-materializability-overflow"
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "recipe": {
+        "id": "materialization-uses-at-limit",
+        "baseFixturePath": "valid/minimal-contract-lock.json",
+        "operation": "materialization-boundary",
+        "target": "uses",
+        "count": 128,
+        "expectedAggregateCounts": {
+          "contractBundles": 0,
+          "roleScopedUses": 128,
+          "providers": 0,
+          "packageDependencies": 0
+        }
+      },
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "recipe": {
+        "id": "materialization-uses-max-plus-one",
+        "baseFixturePath": "valid/minimal-contract-lock.json",
+        "operation": "materialization-boundary",
+        "target": "uses",
+        "count": 129,
+        "expectedAggregateCounts": {
+          "contractBundles": 0,
+          "roleScopedUses": 129,
+          "providers": 0,
+          "packageDependencies": 0
+        }
+      },
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.aggregate-materializability-overflow"
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "recipe": {
+        "id": "materialization-providers-at-limit",
+        "baseFixturePath": "valid/minimal-contract-lock.json",
+        "operation": "materialization-boundary",
+        "target": "providers",
+        "count": 128,
+        "expectedAggregateCounts": {
+          "contractBundles": 0,
+          "roleScopedUses": 0,
+          "providers": 128,
+          "packageDependencies": 0
+        }
+      },
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "recipe": {
+        "id": "materialization-providers-max-plus-one",
+        "baseFixturePath": "valid/minimal-contract-lock.json",
+        "operation": "materialization-boundary",
+        "target": "providers",
+        "count": 129,
+        "expectedAggregateCounts": {
+          "contractBundles": 0,
+          "roleScopedUses": 0,
+          "providers": 129,
+          "packageDependencies": 0
+        }
+      },
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.aggregate-materializability-overflow"
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "recipe": {
+        "id": "materialization-package-dependencies-at-limit",
+        "baseFixturePath": "valid/minimal-contract-lock.json",
+        "operation": "materialization-boundary",
+        "target": "packageDependencies",
+        "count": 128,
+        "expectedAggregateCounts": {
+          "contractBundles": 0,
+          "roleScopedUses": 0,
+          "providers": 0,
+          "packageDependencies": 128
+        }
+      },
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "recipe": {
+        "id": "materialization-package-dependencies-max-plus-one",
+        "baseFixturePath": "valid/minimal-contract-lock.json",
+        "operation": "materialization-boundary",
+        "target": "packageDependencies",
+        "count": 129,
+        "expectedAggregateCounts": {
+          "contractBundles": 0,
+          "roleScopedUses": 0,
+          "providers": 0,
+          "packageDependencies": 129
+        }
+      },
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.aggregate-materializability-overflow"
+    }
+  ]
+}

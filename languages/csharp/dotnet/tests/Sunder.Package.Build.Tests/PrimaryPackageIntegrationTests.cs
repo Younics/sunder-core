@@ -18,6 +18,8 @@ public sealed class PrimaryPackageIntegrationTests
     ];
 
     [Fact]
+    [Trait("Category", "Artifact")]
+    [Trait("Capability", "Process")]
     public async Task PrimaryProject_ComposesBuildPacksPrebuiltLeavesAndCleansSafely()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -28,8 +30,8 @@ public sealed class PrimaryPackageIntegrationTests
             "dotnet",
             "tests",
             "Sunder.Package.Build.TestFixtures",
-            "WorkerV3Executable");
-        var project = Path.Combine(fixtureDirectory, "WorkerV3Executable.csproj");
+            "WorkerV1Executable");
+        var project = Path.Combine(fixtureDirectory, "WorkerV1Executable.csproj");
         var configuration = ResolveConfiguration();
         var outputRoot = Path.Combine(fixtureDirectory, "bin", configuration, "net10.0");
         var composed = Path.Combine(outputRoot, "sunder-dev");
@@ -92,9 +94,29 @@ public sealed class PrimaryPackageIntegrationTests
             Assert.DoesNotContain(universalPaths, path =>
                 path.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
                 && universalPaths.Contains(Path.ChangeExtension(path, ".dll").Replace('\\', '/')));
-            Assert.Contains(universalPaths, static path => path.EndsWith("/Sunder.Sdk.pdb", StringComparison.Ordinal));
-            Assert.Contains(universalPaths, static path => path.EndsWith("/Sunder.Sdk.Worker.pdb", StringComparison.Ordinal));
-            Assert.Contains(universalPaths, static path => path.EndsWith("/WorkerV3Executable.pdb", StringComparison.Ordinal));
+            Assert.DoesNotContain(universalPaths, static path =>
+                path.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".mdb", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(universalPaths, static path =>
+                path.EndsWith("/WorkerV1Executable", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith("/WorkerV1Executable.exe", StringComparison.OrdinalIgnoreCase));
+            foreach (var target in universalValidation.Manifest.Targets!)
+            {
+                var key = new SunderPackageTargetKey(target!.Role!, target.Rid!);
+                var projection = SunderPackageTargetResolver.CreateProjectionPlan(
+                    universalValidation.Manifest,
+                    universalValidation.ContentIndex,
+                    key);
+                var logicalPaths = projection.Files
+                    .Select(static file => file.LogicalPath.ToString())
+                    .ToHashSet(StringComparer.Ordinal);
+                Assert.Contains("lib/WorkerV1Executable.dll", logicalPaths);
+                Assert.Contains("lib/WorkerV1Executable.runtimeconfig.json", logicalPaths);
+                Assert.Contains("lib/WorkerV1Executable.deps.json", logicalPaths);
+                Assert.Contains("lib/Sunder.Sdk.Worker.dll", logicalPaths);
+                Assert.Contains("lib/Microsoft.Extensions.DependencyInjection.Abstractions.dll", logicalPaths);
+                Assert.Contains("lib/Microsoft.Extensions.Logging.Abstractions.dll", logicalPaths);
+            }
             var universalBytes = await File.ReadAllBytesAsync(archivePath);
 
             var prebuiltTrace = Path.Combine(root, "prebuilt.trace");

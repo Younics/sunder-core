@@ -11,11 +11,29 @@ type sealed class Sunder.Package.Build.Tasks.AggregateSunderPackageTask : Micros
   method virtual System.Boolean Execute()
 type sealed class Sunder.Package.Build.Tasks.CleanSunderPackageOutputTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method .ctor()
+  property System.Boolean IsTargetLeaf { get; set; }
   property System.String OutputDiscoveryRoot { get; set; }
   property System.String OutputPath { get; set; }
   property System.String ProjectDirectory { get; set; }
   property System.String TargetDirectory { get; set; }
   method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.CleanSunderRpcGeneratedOutputTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property Microsoft.Build.Framework.ITaskItem[] GeneratedDirectories { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.CollectSunderContractCacheTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ICancelableTask, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.String ContractCacheRoot { get; set; }
+  property System.String GraceDays { get; set; }
+  property System.Boolean MoreCandidates { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.Int32 RemovedArtifacts { get; set; }
+  property System.Int32 RemovedEntries { get; set; }
+  property System.Int32 RetainedUnprovenArtifacts { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ReviewedLocks { get; set; }
+  method virtual System.Boolean Execute()
+  method virtual System.Void Cancel()
 type sealed class Sunder.Package.Build.Tasks.EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method .ctor()
   property Microsoft.Build.Framework.ITaskItem[] AssetFiles { get; set; }
@@ -26,6 +44,7 @@ type sealed class Sunder.Package.Build.Tasks.EmitSunderDevOutputTask : Microsoft
   property Microsoft.Build.Framework.ITaskItem[] ManagedFiles { get; set; }
   property System.String ManifestPath { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] NativeRuntimeFiles { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RoleContentFiles { get; set; }
   property System.String TargetDirectory { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] WorkerFiles { get; set; }
   method virtual System.Boolean Execute()
@@ -33,6 +52,7 @@ type sealed class Sunder.Package.Build.Tasks.GenerateSunderPackageManifestTask :
   method .ctor()
   property System.String? AssetsDirectory { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] AuthoredAssemblyPaths { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] AuthoringReceipts { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] BindingSnapshots { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ContractBundles { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] DynamicAccessAcknowledgements { get; set; }
@@ -45,9 +65,11 @@ type sealed class Sunder.Package.Build.Tasks.GenerateSunderPackageManifestTask :
   property Microsoft.Build.Framework.ITaskItem[] PackageViews { get; set; }
   property System.String ProjectDirectory { get; set; }
   property System.Boolean PublishSingleFile { get; set; }
+  property System.Boolean PublishTrimmed { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ResolvedContractFiles { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ResolvedTargets { get; set; }
+  property System.String? RpcOutputLockLeaseId { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] RpcProviders { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] RuntimeCopyLocalPaths { get; set; }
   property System.String? RuntimeIdentifier { get; set; }
@@ -63,18 +85,224 @@ type sealed class Sunder.Package.Build.Tasks.GenerateSunderPackageManifestTask :
   method virtual System.Boolean Execute()
 type sealed class Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method .ctor()
+  property System.Boolean AcknowledgeBreakingChange { get; set; }
+  property System.Boolean AllowDevelopmentRegistryOrigin { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] AppCompileItems { get; set; }
+  property System.String AssemblyName { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] AuthoringReceipts { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] BindingSnapshots { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] Bindings { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] CompileItems { get; set; }
+  property System.String Configuration { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ContractBundles { get; set; }
+  property System.String ContractCacheRoot { get; set; }
+  property System.String ContractCurrentVersion { get; set; }
+  property System.String ContractKey { get; set; }
+  property System.String ContractLockPath { get; set; }
+  property System.String ContractNextVersion { get; set; }
+  property System.String ContractOperation { get; set; }
+  property System.String DefineConstants { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ExpectedPackageProjectExports { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] FileWrites { get; set; }
+  property System.Boolean GeneratePackageRoles { get; set; }
+  property System.String GenerationMode { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] GeneratorAnalyzers { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] GeneratorProperties { get; set; }
   property System.String IntermediateOutputPath { get; set; }
+  property System.Boolean NullableEnabled { get; set; }
+  property System.String OutputLockLeaseId { get; set; }
+  property System.String OutputType { get; set; }
+  property System.String OwnedContractsPath { get; set; }
+  property System.String PackageId { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] PackageProjectExports { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] PackageReferences { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] PackageRolePlans { get; set; }
+  property System.String PackageVersion { get; set; }
+  property System.String ProjectAssetsFile { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.String ProjectExtensionsPath { get; set; }
+  property System.String ProjectFile { get; set; }
+  property System.String ProjectIdentity { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ProjectImports { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ProjectReferences { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ResourceItems { get; set; }
+  property System.String RootNamespace { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RpcProviders { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RpcUses { get; set; }
+  property System.String RuntimeIdentifier { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RuntimeReferencePaths { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] SourceFiles { get; set; }
+  property System.String TargetFramework { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] WorkerCompileItems { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.ImportSunderContractPublicationTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ICancelableTask, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.Boolean AllowDevelopmentRegistryOrigin { get; set; }
+  property System.String OwnedContractsPath { get; set; }
+  property System.String PackagePath { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.String RegistryOrigin { get; set; }
+  method virtual System.Boolean Execute()
+  method virtual System.Void Cancel()
+type sealed class Sunder.Package.Build.Tasks.ManageSunderPackageApiTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ICancelableTask, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.Boolean AllowDevelopmentRegistryOrigin { get; set; }
+  property System.String AssemblyName { get; set; }
+  property System.String Candidate { get; set; }
+  property System.String Configuration { get; set; }
+  property System.String ContractCacheRoot { get; set; }
+  property System.String ContractId { get; set; }
+  property System.String ContractLockPath { get; set; }
+  property System.String DefineConstants { get; set; }
+  property System.Boolean GeneratePackageRoles { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] GeneratorAnalyzers { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] GeneratorProperties { get; set; }
+  property System.String IncludePrerelease { get; set; }
+  property System.String IntermediateOutputPath { get; set; }
+  property System.String LocalName { get; set; }
+  property System.Boolean NullableEnabled { get; set; }
+  property System.String Operation { get; set; }
+  property System.String OutputType { get; set; }
+  property System.String OwnedContractsPath { get; set; }
+  property System.String PackageId { get; set; }
+  property System.String PackageVersion { get; set; }
+  property System.String PlatformCatalogPath { get; set; }
+  property System.String Presence { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.String ProjectIdentity { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { get; set; }
+  property System.String RegistryOrigin { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ResourceItems { get; set; }
+  property System.String RootNamespace { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] SourceFiles { get; set; }
+  property System.String TargetFramework { get; set; }
+  property System.String VersionRange { get; set; }
+  method virtual System.Boolean Execute()
+  method virtual System.Void Cancel()
+type sealed class Sunder.Package.Build.Tasks.ManageSunderPackageOperationLockTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.String Action { get; set; }
+  property System.String LeaseId { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] OutputDirectories { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.String WaitProject { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.ManageSunderPackageRoleInputsTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ICancelableTask, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.String Action { get; set; }
+  property System.Boolean AllowDevelopmentRegistryOrigin { get; set; }
+  property System.String AssemblyName { get; set; }
+  property System.String AssetsDirectory { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] CapturedInputs { get; set; }
+  property System.String Configuration { get; set; }
+  property System.String ContractLockPath { get; set; }
+  property System.String DevPackagePath { get; set; }
+  property System.String[] ExpectedRuntimeIdentifiers { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] GeneratorAnalyzers { get; set; }
+  property System.String OwnedContractsPath { get; set; }
+  property System.String PackageOutputPath { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] PackageReferences { get; set; }
+  property System.String PackageVersion { get; set; }
+  property System.String ProjectAssetsFile { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.String ProjectFile { get; set; }
+  property System.String ProjectIdentity { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ProjectImports { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ProjectReferences { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] Properties { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] References { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ResourceItems { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] Result { get; set; }
+  property System.String RolePlanPath { get; set; }
+  property System.String RolePlanSha256 { get; set; }
+  property System.String RuntimeIdentifier { get; set; }
+  property System.String SelectionFile { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] SourceFiles { get; set; }
+  property System.String SourceRoot { get; set; }
+  property System.String TargetFramework { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] Usings { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ValidatedInputs { get; set; }
+  method virtual System.Boolean Execute()
+  method virtual System.Void Cancel()
+type sealed class Sunder.Package.Build.Tasks.ManageSunderRpcGeneratedOutputLockTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.String Action { get; set; }
+  property System.String LeaseId { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] OutputDirectories { get; set; }
   property System.String ProjectDirectory { get; set; }
   method virtual System.Boolean Execute()
 type sealed class Sunder.Package.Build.Tasks.PackSunderPackageTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method .ctor()
+  property System.Boolean AllowDevelopmentRegistryOrigin { get; set; }
+  property System.String AssemblyName { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] AuthoringReceipts { get; set; }
+  property System.String Configuration { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ContractBundles { get; set; }
+  property System.String ContractCacheRoot { get; set; }
+  property System.String ContractLockPath { get; set; }
+  property System.String DefineConstants { get; set; }
   property System.String DevPackageDiscoveryRoot { get; set; }
   property System.String DevPackagePath { get; set; }
+  property System.Boolean GeneratePackageRoles { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] GeneratorAnalyzers { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] GeneratorProperties { get; set; }
+  property System.String IntermediateOutputPath { get; set; }
+  property System.Boolean NullableEnabled { get; set; }
+  property System.String OutputType { get; set; }
+  property System.String OwnedContractsPath { get; set; }
   property System.String PackageOutputPath { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.String ProjectIdentity { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ResourceItems { get; set; }
+  property System.String RootNamespace { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RpcProviders { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] SourceFiles { get; set; }
+  property System.String TargetFramework { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] UsesContracts { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.String AssemblyName { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] AuthoringReceipts { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] BindingSnapshots { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] CompileAssetPaths { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] CompileItems { get; set; }
+  property System.String Configuration { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ContractBundles { get; set; }
+  property System.String DefineConstants { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] EvaluatedGeneratorProperties { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] EvaluatedResources { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ExcludedGenerators { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ExcludedProjectReferences { get; set; }
+  property System.String ExpectedSha256 { get; set; }
+  property System.String OutputLockLeaseId { get; set; }
+  property System.String PackageVersion { get; set; }
+  property System.String PlanPath { get; set; }
+  property System.String ProjectAssetsFile { get; set; }
+  property System.String ProjectDirectory { get; set; }
+  property System.String ProjectExtensionsPath { get; set; }
+  property System.String ProjectIdentity { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ResourceItems { get; set; }
+  property System.String Role { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RpcProviders { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RpcUses { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RuntimeAssetPaths { get; set; }
+  property System.String RuntimeIdentifier { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] RuntimeReferencePaths { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] SourceFiles { get; set; }
+  property System.String TargetFramework { get; set; }
+  property System.Boolean ValidateResourceEvaluation { get; set; }
+  method virtual System.Boolean Execute()
+type sealed class Sunder.Package.Build.Tasks.RestoreSunderContractsTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+  method .ctor()
+  property System.Boolean AllowDevelopmentRegistryOrigin { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] CandidateArchives { get; set; }
+  property System.String ContractCacheRoot { get; set; }
+  property System.String ContractLockPath { get; set; }
+  property System.String PlatformCatalogPath { get; set; }
   property System.String ProjectDirectory { get; set; }
   method virtual System.Boolean Execute()
 type sealed class Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask

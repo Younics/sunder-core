@@ -1,8 +1,8 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "id": "sunderpackageidscaffoldtoken",
   "name": "__SUNDER_PACKAGE_NAME_JSON__",
-  "summary": "A React App and TypeScript Worker V3 Runtime package for Sunder.",
+  "summary": "A React App and runtime-backed TypeScript Worker V1 package for Sunder.",
   "version": "1.0.0",
   "entry": "src/worker.ts",
   "workerCapabilities": [],
@@ -19,36 +19,6 @@
       }
     ]
   },
-  "contracts": [
-    {
-      "path": "contracts/example.rpc.json",
-      "exposure": "package"
-    }
-  ],
-  "rpcBindings": [
-    {
-      "path": "contracts/example.rpc.json",
-      "outputFile": "example-messages.g.ts"
-    }
-  ],
-  "providers": [
-    {
-      "providerId": "sunderpackageidscaffoldtoken.provider",
-      "role": "runtime",
-      "contractId": "example.messages",
-      "contractVersion": "2.0.0",
-      "audience": "owner"
-    }
-  ],
-  "usesContracts": [
-    {
-      "role": "app",
-      "contractId": "example.messages",
-      "contractVersion": "2.0.0",
-      "required": true,
-      "actions": ["discover", "invoke"]
-    }
-  ],
-  "maximumExecutableBytes": 167772160,
+  "rpc": { "module": "src/rpc.ts", "export": "packageRpc" },
   "maximumPackageBytes": 536870912
 }

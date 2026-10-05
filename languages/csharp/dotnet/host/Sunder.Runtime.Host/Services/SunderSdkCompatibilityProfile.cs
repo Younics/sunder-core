@@ -31,16 +31,16 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.ShellViewV1,
         SunderSdkCapabilities.ViewNavigationPreparationV1,
         SunderSdkCapabilities.RpcV1,
-        SunderSdkCapabilities.RpcV2,
         SunderSdkCapabilities.RpcExtendedDeadlineV1,
         SunderSdkCapabilities.StacksV1,
         SunderSdkCapabilities.StacksRpcV1,
         SunderSdkCapabilities.CallbacksV1,
         SunderSdkCapabilities.AuthV1,
         SunderSdkCapabilities.ThemingV1,
-        SunderWorkerProtocol.V3Capability,
+        SunderPackageFormat.ExecutionRuntimeV1Capability,
+        SunderWorkerProtocol.V1Capability,
     };
-    private static readonly IReadOnlyDictionary<string, bool> WorkerV3Capabilities =
+    private static readonly IReadOnlyDictionary<string, bool> WorkerV1Capabilities =
         new Dictionary<string, bool>(StringComparer.Ordinal)
         {
             [SunderSdkCapabilities.Baseline11V1] = true,
@@ -64,19 +64,19 @@ internal static class SunderSdkCompatibilityProfile
             [SunderSdkCapabilities.NotificationsV1] = false,
             [SunderSdkCapabilities.ShellViewV1] = false,
             [SunderSdkCapabilities.ViewNavigationPreparationV1] = false,
-            [SunderSdkCapabilities.RpcV1] = false,
-            [SunderSdkCapabilities.RpcV2] = true,
+            [SunderSdkCapabilities.RpcV1] = true,
             [SunderSdkCapabilities.RpcExtendedDeadlineV1] = true,
             [SunderSdkCapabilities.StacksV1] = true,
             [SunderSdkCapabilities.StacksRpcV1] = true,
             [SunderSdkCapabilities.CallbacksV1] = true,
             [SunderSdkCapabilities.AuthV1] = true,
             [SunderSdkCapabilities.ThemingV1] = false,
-            [SunderWorkerProtocol.V3Capability] = true,
+            [SunderPackageFormat.ExecutionRuntimeV1Capability] = true,
+            [SunderWorkerProtocol.V1Capability] = true,
         };
 
-    internal static IReadOnlyDictionary<string, bool> WorkerV3CapabilityClassification
-        => WorkerV3Capabilities;
+    internal static IReadOnlyDictionary<string, bool> WorkerV1CapabilityClassification
+        => WorkerV1Capabilities;
 
     public static IReadOnlyList<string> Validate(
         string? packageId,
@@ -123,31 +123,31 @@ internal static class SunderSdkCompatibilityProfile
             }
         }
 
-        var usesWorkerV3 = requiredHostCapabilities?.Contains(
-            SunderWorkerProtocol.V3Capability,
+        var usesWorkerV1 = requiredHostCapabilities?.Contains(
+            SunderWorkerProtocol.V1Capability,
             StringComparer.Ordinal) == true;
         var isRuntimeWorker = string.Equals(
                                   targetKey.Role,
                                   SunderPackageFormat.RuntimeHostRole,
                                   StringComparison.Ordinal)
                               && targetKind is SunderPackageFormat.WorkerTargetKind;
-        if (usesWorkerV3 && !isRuntimeWorker)
+        if (usesWorkerV1 && !isRuntimeWorker)
         {
             errors.Add(
-                $"Package '{packageLabel}' target '{targetKey}' requires Host capability '{SunderWorkerProtocol.V3Capability}', but that capability is valid only for Runtime worker targets.");
+                $"Package '{packageLabel}' target '{targetKey}' requires Host capability '{SunderWorkerProtocol.V1Capability}', but that capability is valid only for Runtime worker targets.");
         }
-        else if (usesWorkerV3)
+        else if (usesWorkerV1)
         {
             foreach (var capability in (requiredHostCapabilities ?? [])
                          .Where(static capability => !string.IsNullOrWhiteSpace(capability))
                          .Select(static capability => capability!)
                          .Where(SupportedCapabilities.Contains))
             {
-                if (!WorkerV3Capabilities.TryGetValue(capability, out var supported)
+                if (!WorkerV1Capabilities.TryGetValue(capability, out var supported)
                     || !supported)
                 {
                     errors.Add(
-                        $"Package '{packageLabel}' target '{targetKey}' requires Host capability '{capability}', but Sunder Worker Protocol V3 does not implement that capability, so the worker process cannot be launched.");
+                        $"Package '{packageLabel}' target '{targetKey}' requires Host capability '{capability}', but Sunder Worker Protocol V1 does not implement that capability, so the worker process cannot be launched.");
                 }
             }
         }

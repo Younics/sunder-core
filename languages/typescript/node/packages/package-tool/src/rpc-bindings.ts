@@ -3,13 +3,14 @@ import type { Stats } from "node:fs";
 import { lstat, mkdir, readFile, readdir, rmdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
-  SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR,
+  SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
   generateTypeScriptBindings,
   parseRpcContractDescriptor,
 } from "@sunder/sdk";
 import { readProjectDescriptorFile } from "./descriptor-files";
+import type { RegistryOriginOptions } from "./rpc-contract-lock";
 import {
   loadProject,
   resolveInside,
@@ -33,10 +34,10 @@ interface RpcBindingPlan {
   readonly source: string;
 }
 
-export async function generateRpcBindings(projectPath: string): Promise<void> {
+export async function generateRpcBindings(projectPath: string, options: RegistryOriginOptions = {}): Promise<void> {
   const root = resolve(projectPath);
   await withRpcBindingsOutputLock(root, async () => {
-    await generateRpcBindingsForLoadedProjectLocked(await loadProject(root));
+    await generateRpcBindingsForLoadedProjectLocked(await loadProject(root, options));
   });
 }
 
@@ -67,9 +68,11 @@ export function rpcBindingsOutputRoot(projectRoot: string): string {
 }
 
 export async function generateRpcBindingsForLoadedProjectLocked(project: LoadedProject): Promise<void> {
+  await project.ownedRpc?.revalidate();
   const outputRoot = rpcBindingsOutputRoot(project.root);
   await assertSafeGeneratedOutputParents(project.root, outputRoot);
   const plans: RpcBindingPlan[] = [];
+  for (const [outputFile, source] of project.ownedRpc?.files ?? []) plans.push({ outputFile, source });
   for (const [index, binding] of (project.config.rpcBindings ?? []).entries()) {
     const sourcePath = resolveInside(project.root, binding.path, `rpcBindings[${index}].path`);
     if (sourcePath === outputRoot || isInside(outputRoot, sourcePath) || isPortableOwnedOutputPath(binding.path)) {
@@ -82,18 +85,15 @@ export async function generateRpcBindingsForLoadedProjectLocked(project: LoadedP
     try {
       const descriptor = parseRpcContractDescriptor(bytes);
       const descriptorSha256 = contract?.descriptorSha256 ?? sha256(canonicalRpcDescriptorBytes(descriptor));
-      const generatorOptions = descriptor.descriptorVersion === 2
-        ? {
-          descriptorSha256,
-          abiSha256: contract?.abiSha256 ?? createHash("sha256")
-            .update(SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR, "utf8")
-            .update(canonicalRpcAbiProjectionBytes(descriptor))
-            .digest("hex"),
-        }
-        : { descriptorSha256 };
       plans.push({
         outputFile: binding.outputFile,
-        source: generateTypeScriptBindings(descriptor, generatorOptions),
+        source: generateTypeScriptBindings(descriptor, {
+          descriptorSha256,
+          abiSha256: contract?.abiSha256 ?? createHash("sha256")
+            .update(SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, "utf8")
+            .update(canonicalRpcAbiProjectionBytes(descriptor))
+            .digest("hex"),
+        }),
       });
     } catch (error) {
       throw new Error(`RPC binding descriptor '${binding.path}' could not be generated: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
@@ -106,7 +106,10 @@ export async function generateRpcBindingsForLoadedProjectLocked(project: LoadedP
   if (plans.length === 0 && output === undefined && marker === undefined) return;
 
   await assertReplaceableGeneratedDirectory(outputRoot);
-  if (output !== undefined && await generatedSetMatches(outputRoot, plans)) return;
+  if (output !== undefined && await generatedSetMatches(outputRoot, plans)) {
+    await project.ownedRpc?.revalidate();
+    return;
+  }
 
   const staged = await stageGeneratedDirectory(
     outputRoot,
@@ -121,6 +124,7 @@ export async function generateRpcBindingsForLoadedProjectLocked(project: LoadedP
   );
   const outputs = [staged.output, staged.marker];
   try {
+    await project.ownedRpc?.revalidate();
     await commitStagedOutputs(outputs);
   } finally {
     await cleanupStagedOutputs(outputs);

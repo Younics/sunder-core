@@ -99,6 +99,20 @@ export async function withOutputLocks<T>(
   operation: () => Promise<T>,
   waitMilliseconds = DEFAULT_LOCK_WAIT_MILLISECONDS,
 ): Promise<T> {
+  const keys = [...new Map(paths.map((path) => { const key = resolve(path); return [process.platform === "win32" ? key.toLowerCase() : key, key]; })).values()].sort(pathOrder);
+  return withOutputLeases(keys, async () => {
+    await recoverOutputTransactions(keys);
+    await cleanupOrphanedOutputArtifacts(keys);
+    return operation();
+  }, waitMilliseconds);
+}
+
+/** Mutual exclusion only. Authored baselines MUST NOT enter generated recovery/sweeps. */
+export async function withOutputLeases<T>(
+  paths: readonly string[],
+  operation: () => Promise<T>,
+  waitMilliseconds = DEFAULT_LOCK_WAIT_MILLISECONDS,
+): Promise<T> {
   if (!Number.isSafeInteger(waitMilliseconds) || waitMilliseconds <= 0) {
     throw new Error("Generated output lock waitMilliseconds must be a positive safe integer.");
   }
@@ -113,8 +127,6 @@ export async function withOutputLocks<T>(
   let operationError: unknown;
   try {
     for (const key of keys) locks.push(await acquireOutputLock(key, deadline, waitMilliseconds));
-    await recoverOutputTransactions(keys);
-    await cleanupOrphanedOutputArtifacts(keys);
     return await operation();
   } catch (error) {
     operationFailed = true;

@@ -7,7 +7,7 @@ namespace Sunder.Sdk.Rpc;
 
 internal static partial class SunderRpcDescriptorParser
 {
-    private static void ValidateTokenStream(ReadOnlySpan<byte> utf8, int descriptorVersion)
+    private static void ValidateTokenStream(ReadOnlySpan<byte> utf8)
     {
         var reader = new Utf8JsonReader(utf8, new JsonReaderOptions
         {
@@ -15,16 +15,13 @@ internal static partial class SunderRpcDescriptorParser
             CommentHandling = JsonCommentHandling.Disallow,
             MaxDepth = MaximumJsonDepth,
         });
-        IEqualityComparer<string> caseComparer = descriptorVersion == SunderRpcProtocol.DescriptorVersionV2
-            ? AsciiCaseInsensitiveComparer.Instance
-            : StringComparer.OrdinalIgnoreCase;
         var objects = new Stack<ObjectNames?>();
         while (reader.Read())
         {
             switch (reader.TokenType)
             {
                 case JsonTokenType.StartObject:
-                    objects.Push(new ObjectNames(caseComparer));
+                    objects.Push(new ObjectNames());
                     break;
                 case JsonTokenType.StartArray:
                     objects.Push(null);
@@ -53,39 +50,20 @@ internal static partial class SunderRpcDescriptorParser
                 case JsonTokenType.Number:
                     var token = reader.HasValueSequence ? reader.ValueSequence.ToArray() : reader.ValueSpan.ToArray();
                     var text = Encoding.ASCII.GetString(token);
-                    if (descriptorVersion == SunderRpcProtocol.DescriptorVersionV2)
-                    {
-                        if (!double.TryParse(
-                                text,
-                                NumberStyles.Float,
-                                CultureInfo.InvariantCulture,
-                                out var finiteNumber)
-                            || !double.IsFinite(finiteNumber))
-                        {
-                            throw Error(
-                                $"Descriptor number '{text}' is not a finite IEEE-754 binary64 value.",
-                                "descriptor-number");
-                        }
-                    }
-                    else if (!IsCanonicalInteger(text)
-                             || !long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value)
-                             || value is < -MaximumSafeInteger or > MaximumSafeInteger)
+                    if (!double.TryParse(
+                            text,
+                            NumberStyles.Float,
+                            CultureInfo.InvariantCulture,
+                            out var finiteNumber)
+                        || !double.IsFinite(finiteNumber))
                     {
                         throw Error(
-                            $"Descriptor number '{text}' is unsupported; V1 descriptor numbers must be canonical IEEE-754 safe integers.",
+                            $"Descriptor number '{text}' is not a finite IEEE-754 binary64 value.",
                             "descriptor-number");
                     }
                     break;
             }
         }
-    }
-
-    private static bool IsCanonicalInteger(string text)
-    {
-        if (text.Length == 0 || text == "-0") return false;
-        var offset = text[0] == '-' ? 1 : 0;
-        if (offset == text.Length || text[offset] == '0' && text.Length - offset != 1) return false;
-        return text.AsSpan(offset).IndexOfAnyExceptInRange('0', '9') < 0;
     }
 
     private static void ValidateUnicodeScalars(string value)
@@ -169,7 +147,7 @@ internal static partial class SunderRpcDescriptorParser
                 or >= '0' and <= '9'
                 or '.' or '-' or '_');
 
-    private static bool IsContractIdV2(string value)
+    private static bool IsContractId(string value)
         => value.Length is > 0 and <= 128
            && value[0] != '.'
            && value[^1] != '.'
@@ -183,10 +161,10 @@ internal static partial class SunderRpcDescriptorParser
            && value.All(static character => char.IsAsciiLetterOrDigit(character)
                || character is '.' or '-' or '_');
 
-    private sealed class ObjectNames(IEqualityComparer<string> caseComparer)
+    private sealed class ObjectNames
     {
         public HashSet<string> Exact { get; } = new(StringComparer.Ordinal);
-        public HashSet<string> IgnoreCase { get; } = new(caseComparer);
+        public HashSet<string> IgnoreCase { get; } = new(AsciiCaseInsensitiveComparer.Instance);
     }
 
     private sealed class AsciiCaseInsensitiveComparer : IEqualityComparer<string>

@@ -1,0 +1,90 @@
+using System.Collections.Concurrent;
+using Microsoft.Build.Locator;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.MSBuild;
+using Microsoft.CodeAnalysis.Text;
+
+var instance = MSBuildLocator.RegisterDefaults();
+await Probe.RunAsync(args[0], bool.Parse(args[1]));
+Console.WriteLine($"Workspace checks passed with SDK {instance.Version}, Roslyn {typeof(Compilation).Assembly.GetName().Version}.");
+
+internal static class Probe
+{
+    internal static async Task RunAsync(string projectPath, bool sourceSdk)
+    {
+        using var workspace = MSBuildWorkspace.Create();
+        workspace.LoadMetadataForReferencedProjects = false;
+        var failures = new ConcurrentQueue<WorkspaceDiagnostic>();
+        workspace.RegisterWorkspaceFailedHandler(value => failures.Enqueue(value.Diagnostic));
+        var project = await workspace.OpenProjectAsync(projectPath);
+        Require(!failures.Any(value => value.Kind == WorkspaceDiagnosticKind.Failure), string.Join(Environment.NewLine, failures));
+        var reference = project.ProjectReferences.Single(value => project.Solution.GetProject(value.ProjectId)!.Name == "SourceLibrary");
+        var library = project.Solution.GetProject(reference.ProjectId)!;
+        Require(library.Name == "SourceLibrary", "The project reference was not loaded as a source project.");
+        if (sourceSdk)
+            foreach (var name in new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia" })
+                Require(project.Solution.Projects.Any(value => value.Name == name), "The source SDK project was not loaded: " + name);
+        var source = project.Documents.Single(document => Path.GetFileName(document.FilePath) == "Mixed.cs");
+        var markup = project.AdditionalDocuments.Single(document => Path.GetFileName(document.FilePath) == "GreetingView.axaml");
+        var helper = library.Documents.Single(document => Path.GetFileName(document.FilePath) == "Formatter.cs");
+        var sourceText = (await source.GetTextAsync()).ToString();
+        var markupText = (await markup.GetTextAsync()).ToString();
+        var helperText = (await helper.GetTextAsync()).ToString();
+        var snapshots = project.Documents.Select(document => document.FilePath).OfType<string>()
+            .Where(path => path.Contains("sunder-editor-snapshots", StringComparison.Ordinal)).ToArray();
+        Require(snapshots.Length != 0, "Missing immutable import sources.");
+        var times = snapshots.Select(File.GetLastWriteTimeUtc).ToArray();
+        await VerifyAsync(project, "GreetAsync", "Status", "Format");
+        var generated = await project.GetSourceGeneratedDocumentsAsync();
+        Require(generated.Any(document => document.Name == "sunder-service-apis.editor.g.cs"), "The Sunder generator did not run in the workspace.");
+        Require(generated.Any(document => document.Name != "sunder-service-apis.editor.g.cs"), "The Avalonia generator did not run in the workspace.");
+
+        var liveSource = sourceText.Replace("GreetAsync", "WelcomeAsync", StringComparison.Ordinal);
+        var solution = project.Solution.WithDocumentText(source.Id, SourceText.From(liveSource));
+        project = solution.GetProject(project.Id)!;
+        var renamed = await VerifyAsync(project, "WelcomeAsync", "Status", "Format");
+        Require(renamed.GetTypeByMetadataName("Example.Generated.IGreetingService")!.GetMembers("GreetAsync").Length == 0, "The old service member survived an unsaved edit.");
+
+        liveSource = liveSource.Replace("Status.Text", "LiveStatus.Text", StringComparison.Ordinal);
+        solution = solution.WithDocumentText(source.Id, SourceText.From(liveSource))
+            .WithAdditionalDocumentText(markup.Id, SourceText.From(markupText.Replace("x:Name=\"Status\"", "x:Name=\"LiveStatus\"", StringComparison.Ordinal)));
+        project = solution.GetProject(project.Id)!;
+        var renamedMarkup = await VerifyAsync(project, "WelcomeAsync", "LiveStatus", "Format");
+        Require(renamedMarkup.GetTypeByMetadataName("Example.Generated.GreetingView")!.GetMembers("Status").Length == 0, "The old XAML member survived an unsaved edit.");
+
+        liveSource = liveSource.Replace("SourceLibrary.Formatter.Format", "SourceLibrary.Formatter.LiveFormat", StringComparison.Ordinal);
+        solution = solution.WithDocumentText(source.Id, SourceText.From(liveSource))
+            .WithDocumentText(helper.Id, SourceText.From(helperText.Replace("Format(", "LiveFormat(", StringComparison.Ordinal)));
+        project = solution.GetProject(project.Id)!;
+        await VerifyAsync(project, "WelcomeAsync", "LiveStatus", "LiveFormat");
+
+        var broken = solution.WithDocumentText(source.Id, SourceText.From(liveSource.Replace("SourceLibrary.Formatter.LiveFormat", "SourceLibrary.Formatter.Missing", StringComparison.Ordinal)))
+            .GetProject(project.Id)!;
+        var invalid = await broken.GetCompilationAsync() ?? throw new InvalidOperationException("No invalid compilation.");
+        Require(invalid.GetDiagnostics().Any(value => value.Id == "CS0117" && value.Location.GetLineSpan().Path == source.FilePath), "The invalid reference call did not report a diagnostic at its source location.");
+        Require(await File.ReadAllTextAsync(source.FilePath!) == sourceText, "A live source edit was written to disk.");
+        Require(await File.ReadAllTextAsync(markup.FilePath!) == markupText, "A live XAML edit was written to disk.");
+        Require(await File.ReadAllTextAsync(helper.FilePath!) == helperText, "A referenced source edit was written to disk.");
+        Require(!failures.Any(value => value.Kind == WorkspaceDiagnosticKind.Failure), string.Join(Environment.NewLine, failures));
+        workspace.CloseSolution();
+        await VerifyAsync(await workspace.OpenProjectAsync(projectPath), "GreetAsync", "Status", "Format");
+        Require(times.SequenceEqual(snapshots.Select(File.GetLastWriteTimeUtc)), "An unchanged workspace reload rewrote import sources.");
+    }
+
+    private static async Task<Compilation> VerifyAsync(Project project, string method, string control, string helper)
+    {
+        var compilation = await project.GetCompilationAsync() ?? throw new InvalidOperationException("No workspace compilation.");
+        var errors = compilation.GetDiagnostics().Where(value => value.Severity == DiagnosticSeverity.Error).ToArray();
+        Require(errors.Length == 0, string.Join(Environment.NewLine, errors.Select(value => value.ToString())));
+        Require(compilation.GetTypeByMetadataName("Example.Generated.IGreetingService")?.GetMembers(method).Length == 1, "Missing live service method " + method);
+        var view = compilation.GetTypeByMetadataName("Example.Generated.GreetingView");
+        Require(view?.GetMembers(control).Length == 1 && view.GetMembers("InitializeComponent").Length == 1, "Missing live XAML members.");
+        Require(compilation.GetTypeByMetadataName("SourceLibrary.Formatter")?.GetMembers(helper).Length == 1, "Missing live project-reference member " + helper);
+        return compilation;
+    }
+
+    private static void Require(bool condition, string message)
+    {
+        if (!condition) throw new InvalidOperationException(message);
+    }
+}

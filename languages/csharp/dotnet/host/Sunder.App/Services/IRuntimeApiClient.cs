@@ -75,6 +75,19 @@ public interface IRuntimePackageStoreClient : IRuntimeClient
     Task DiscardPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default);
 }
 
+public interface IRuntimeExecutionRuntimeClient : IRuntimeClient
+{
+    Task<IReadOnlyList<InstalledExecutionRuntimeSummary>> GetExecutionRuntimesAsync(
+        CancellationToken cancellationToken = default);
+    Task<RuntimeExecutionRuntimeImpact> GetExecutionRuntimeImpactAsync(
+        RuntimeExecutionRuntimeIdentity identity,
+        CancellationToken cancellationToken = default);
+    Task<RuntimeExecutionRuntimeOperationResult> RepairExecutionRuntimeAsync(
+        RuntimeExecutionRuntimeIdentity identity,
+        RuntimeExecutionRuntimeImpact impact,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IRuntimePackageSettingsClient : IRuntimeClient
 {
     Task<IReadOnlyList<PackageSettingsSchemaDescriptor>> GetPackageSettingsSchemasAsync(CancellationToken cancellationToken = default);
@@ -130,7 +143,7 @@ public interface IRuntimeRegistryStackClient : IRuntimeClient
 {
     Task<RegistryStackStarResponse> SetRegistryStackStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default);
     Task<RegistryPublishStackResponse> PublishRegistryStackAsync(RuntimeRegistryPublishRequest request, CancellationToken cancellationToken = default);
-    Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken cancellationToken = default);
+    Task<RegistryStackManagementOperationResponse> SetRegistryStackVisibilityAsync(RuntimeRegistryStackVisibilityRequest request, CancellationToken cancellationToken = default);
 }
 
 public interface IRuntimeShellClient :
@@ -153,7 +166,8 @@ public interface IRuntimePackageUpdateClient : IRuntimeClient
 public interface IRuntimePackagesClient :
     IRuntimePackageSessionClient,
     IRuntimePackageUiClient,
-    IRuntimePackageChangeClient;
+    IRuntimePackageChangeClient,
+    IRuntimeExecutionRuntimeClient;
 
 public interface IRuntimeStacksClient :
     IRuntimeStackClient,

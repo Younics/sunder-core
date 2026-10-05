@@ -1,0 +1,43 @@
+{
+  "runtimeId": "sunder.runtime.dotnet",
+  "version": "10.0.1",
+  "packagingRevision": 2,
+  "moduleAbi": "sunder.dotnet-worker-module.v1",
+  "workerProtocol": "sunder.worker.v1",
+  "minimumHostTrustGeneration": 2,
+  "expectedReleaseSigningKeyId": "sunder-runtime-release-2026-01",
+  "expectedNativeAttestations": [
+    {
+      "rid": "linux-arm64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "linux-x64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "osx-arm64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "osx-x64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "win-arm64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    },
+    {
+      "rid": "win-x64",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01"
+    }
+  ],
+  "expectedRids": [
+    "linux-arm64",
+    "linux-x64",
+    "osx-arm64",
+    "osx-x64",
+    "win-arm64",
+    "win-x64"
+  ]
+}

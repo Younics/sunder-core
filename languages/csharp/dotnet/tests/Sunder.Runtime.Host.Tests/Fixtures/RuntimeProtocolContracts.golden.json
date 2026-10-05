@@ -1,12 +1,12 @@
 {
   "protocolIdentity": "dev.sunder.runtime",
-  "protocolRevision": 8,
-  "minimumSupportedRevision": 8,
-  "maximumSupportedRevision": 8,
+  "protocolRevision": 1,
+  "minimumSupportedRevision": 1,
+  "maximumSupportedRevision": 1,
   "runtimeInstanceId": "11111111-1111-1111-1111-111111111111",
   "supportedFeatures": [
     "api.v1",
-    "schema-first-rpc.v2",
+    "schema-first-rpc.v1",
     "runtime-resource-policy.v1"
   ],
   "product": {

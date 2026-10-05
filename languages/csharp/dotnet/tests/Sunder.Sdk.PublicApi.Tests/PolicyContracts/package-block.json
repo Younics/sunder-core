@@ -1,0 +1,5 @@
+{
+  "idempotencyKey": "block-package",
+  "expectedPackagePolicyRevision": 41,
+  "publicReason": "Security policy blocks this package identity."
+}

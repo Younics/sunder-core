@@ -35,29 +35,37 @@ internal static class RuntimeRpcPermissionSubjects
             .Where(static source => source.HostRoles != PackageHostRoles.None
                                     && source.Manifest is not null
                                     && source.ContentIndex is not null)
-            .Select(static source => new RuntimeRpcPermissionSubject(
-                source.PackageId,
-                source.Manifest!.Version!,
-                RuntimeRpcPackageMetadata.GetManifestSha256(source.ContentIndex!),
-                source.Kind,
-                (source.Manifest.UsesContracts ?? [])
-                    .Where(static use => use is not null)
-                    .Select(static use => use!)
-                    .ToArray()))
+            .Select(static source =>
+            {
+                PackageManifestAdmissionPolicy.EnsureSupported(source.Manifest!);
+                return new RuntimeRpcPermissionSubject(
+                    source.PackageId,
+                    source.Manifest!.Version!,
+                    RuntimeRpcPackageMetadata.GetManifestSha256(source.ContentIndex!),
+                    source.Kind,
+                    (source.Manifest.UsesContracts ?? [])
+                        .Where(use => use is not null && InstalledPackageProjection.IncludesRole(source, use.Role!)
+                            && PackageCompatibilityAuthority.DevelopmentUseEnabled(source, use.Role!, use.ContractId!, use.ContractVersion!))
+                        .Select(static use => use!)
+                        .ToArray());
+            })
             .ToArray();
 }
 
 internal sealed class RuntimeRpcAppSessionManager(
     PackageSessionState sessions,
-    RuntimeRpcPolicyOptions policy) : IDisposable
+    RuntimeRpcPolicyOptions policy,
+    AppProcessPolicySessions? processPolicies = null) : IDisposable
 {
+    internal bool RequiresProcessSupervision => processPolicies is not null;
     private readonly object _gate = new();
     private readonly Dictionary<string, RuntimeRpcAppCallerSession> _active = new(StringComparer.Ordinal);
     private bool _disposed;
 
     public async Task<RuntimeRpcAppSessionDescriptor> OpenAsync(
         RuntimeRpcAppSessionOpenRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AppPolicyPeer? peer = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
@@ -85,6 +93,13 @@ internal sealed class RuntimeRpcAppSessionManager(
                 "The App RPC caller stamp does not identify an active package generation.");
         }
         var manifest = source.Manifest;
+        var policySubject = PackageUiSnapshotStore.PolicySubject(source);
+        if (processPolicies is not null)
+        {
+            if (peer is null || policySubject is null) throw new RuntimeAppPolicyException(Sunder.Registry.Contracts.PackagePolicyErrorCodes.AppProcessSupervisionRequired);
+            try { processPolicies.RequireLoaded(peer, source); }
+            catch (PackagePolicyDeniedException error) { throw new RuntimeAppPolicyException(error.Code); }
+        }
         var manifestSha256 = RuntimeRpcPackageMetadata.GetManifestSha256(source.ContentIndex);
         if (!string.Equals(manifest.Id, request.PackageId, StringComparison.Ordinal)
             || !string.Equals(manifest.Version, request.PackageVersion, StringComparison.Ordinal)
@@ -97,6 +112,7 @@ internal sealed class RuntimeRpcAppSessionManager(
 
         if (!SunderPackageTargetKey.TryCreate(targetDescriptor.Role, targetDescriptor.Rid, out var targetKey)
              || !string.Equals(targetDescriptor.Role, SunderPackageFormat.AppHostRole, StringComparison.Ordinal)
+             || !InstalledPackageProjection.Includes(source.AcquiredTargets, targetDescriptor.Role, targetDescriptor.Rid)
              || !SunderPackageTargetResolver.TryResolveTarget(manifest, targetKey, out var target)
              || target is null
              || target.Kind is not (SunderPackageFormat.WebTargetKind or SunderPackageFormat.AvaloniaTargetKind)
@@ -114,10 +130,17 @@ internal sealed class RuntimeRpcAppSessionManager(
             request.PackageId,
             request.PackageVersion,
             manifestSha256,
-            (manifest.UsesContracts ?? []).Where(static use => use is not null).Select(static use => use!).ToArray(),
+            (manifest.UsesContracts ?? []).Where(use => use is not null && InstalledPackageProjection.IncludesRole(source, use.Role!)).Select(static use => use!).ToArray(),
             contracts,
             request.SessionGeneration,
-            request.AppGenerationId);
+            request.AppGenerationId)
+        {
+            EnsureProcessPolicy = processPolicies is null ? null : () =>
+            {
+                try { processPolicies.RequireLoaded(peer!, source); }
+                catch (PackagePolicyDeniedException error) { throw SunderRpcException.Infrastructure(SunderRpcErrorKind.Unavailable, error.Code, "App process policy does not permit RPC acquisition."); }
+            },
+        };
         var sessionId = CreateSessionId();
         RuntimeRpcAppCallerSession[] retired = [];
         var capacityExceeded = false;
@@ -197,6 +220,7 @@ internal sealed class RuntimeRpcAppSessionManager(
         {
             if (!_disposed && _active.TryGetValue(sessionId, out var caller))
             {
+                caller.EnsureProcessPolicy?.Invoke();
                 return caller;
             }
         }
@@ -251,13 +275,15 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
         PackageId = packageId;
         PackageVersion = packageVersion;
         ManifestSha256 = manifestSha256;
-        RpcContractUses = contractUses;
+        RpcContractUses = contractUses.Where(use => PackageCompatibilityAuthority.DevelopmentUseEnabled(source, use.Role!, use.ContractId!, use.ContractVersion!)).ToArray();
         RpcContracts = contracts;
         SessionGeneration = sessionGeneration;
         AppGenerationId = appGenerationId;
     }
 
     public string SessionId { get; set; } = string.Empty;
+    internal RuntimePackageSource Source => _source;
+    internal Action? EnsureProcessPolicy { get; init; }
     public string PackageId { get; }
     public string PackageVersion { get; }
     public Guid? ActivationId => AppGenerationId;
@@ -275,6 +301,7 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
 
     public bool IsCurrent(PackageSessionLease sessionLease)
     {
+        EnsureProcessPolicy?.Invoke();
         lock (_gate)
         {
             return !_retired
@@ -339,6 +366,7 @@ internal static class RuntimeRpcPackageMetadata
         CancellationToken cancellationToken)
     {
         var manifest = source.Manifest ?? throw new InvalidDataException("Package source is missing its manifest.");
+        PackageManifestAdmissionPolicy.EnsureSupported(manifest);
         var contentIndex = source.ContentIndex ?? throw new InvalidDataException("Package source is missing its content index.");
         var indexedFiles = (contentIndex.Files ?? []).Where(static entry => entry?.Path is not null)
             .ToDictionary(static entry => entry!.Path!, StringComparer.Ordinal);
@@ -377,7 +405,17 @@ internal static class RuntimeRpcPackageMetadata
                 throw new InvalidDataException(
                     $"Package RPC contract descriptor '{relativePath}' failed its content-index integrity check.");
             }
-            var descriptor = SunderRpcContractDescriptor.Parse(bytes);
+            SunderRpcContractDescriptor descriptor;
+            try
+            {
+                descriptor = SunderRpcContractDescriptor.Parse(bytes);
+            }
+            catch (SunderRpcDescriptorException exception)
+            {
+                throw new InvalidDataException(
+                    $"Package RPC contract descriptor '{relativePath}' is invalid: {exception.Message}",
+                    exception);
+            }
             ValidateContractDescriptor(bundle, descriptor, relativePath.ToString());
             contracts.Add(PackageSessionPreparer.ContractKey(descriptor.ContractId, descriptor.Version), descriptor);
         }
@@ -389,10 +427,10 @@ internal static class RuntimeRpcPackageMetadata
         SunderRpcContractDescriptor descriptor,
         string descriptorPath)
     {
-        if (descriptor.DescriptorVersion != SunderRpcProtocol.DescriptorVersionV2)
+        if (descriptor.DescriptorVersion != SunderRpcProtocol.DescriptorVersion)
         {
             throw new InvalidDataException(
-                $"Package RPC contract descriptor '{descriptorPath}' must use descriptorVersion {SunderRpcProtocol.DescriptorVersionV2}.");
+                $"Package RPC contract descriptor '{descriptorPath}' must use descriptorVersion {SunderRpcProtocol.DescriptorVersion}.");
         }
         if (!string.Equals(descriptor.ContractId, bundle.ContractId, StringComparison.Ordinal)
             || !string.Equals(descriptor.Version, bundle.Version, StringComparison.Ordinal))

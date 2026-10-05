@@ -27,6 +27,7 @@ internal sealed class PackageIconGenerationCoordinator : IDisposable
             snapshot.SessionGeneration,
             EnumeratePackageIcons(activePackages),
             packageId => generation.State.GetLoadedPackage(packageId)?.Folder,
+            generation.Id,
             cancellationToken);
 
     public PackageIconGeneration Publish(PackageIconGeneration generation)

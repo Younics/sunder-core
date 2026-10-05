@@ -1,8 +1,16 @@
 # Sunder Package Standard
 
-This document is the normative archive format V1 and package manifest V3 contract implemented by `Sunder.Package.Build`, `Sunder.Package.Format`, the Sunder Hosts, and the Registry.
+This document is the normative archive format V1 and package manifest V1 contract implemented by `Sunder.Package.Build`, `Sunder.Package.Format`, the Sunder Hosts, and the Registry.
 
-The contract is independent of authoring language and UI framework. Manifest V3 permits only exact-RID `worker` Runtime targets; current tooling emits self-contained .NET workers and pinned Node SEA workers. App targets remain `avalonia` or `web`. Runtime `dotnet`, `process`, generic-RID targets, and Worker V1 are invalid. React/Vite is one web template, not a format requirement. Future Python, Rust, Go, other worker toolchains, other .NET UI approaches, and other web frameworks may emit this format, but Hosts still reject target protocols or required capabilities they do not support.
+> **RPC authoring transition:** C# package-authority import generation now joins
+> source compilation, verified receipts, and manifest projection. Generating a
+> structurally valid artifact does not authorize publication, installation, or
+> activation: Registry, Host, and Node admission still reject imports and optional
+> dependencies pending their cutovers. Remaining authored descriptors and Protocol
+> projects are pre-cutover inputs. See
+> [Implementation-First RPC Authoring](package-development/IMPLEMENTATION-FIRST-RPC.md).
+
+The contract is independent of authoring language and UI framework. Manifest V1 permits only exact-RID `worker` Runtime targets whose entry-point modules are loaded by exact bound execution runtimes. App targets remain `avalonia` or `web`. Runtime `dotnet`, `process`, generic-RID targets, directly executable package entry points, and Worker V3 are invalid. React/Vite is one web template, not a format requirement. Future Python, Rust, Go, other worker toolchains, other .NET UI approaches, and other web frameworks may emit this format, but Hosts still reject target protocols or required capabilities they do not support.
 
 ## Universal Package
 
@@ -27,7 +35,9 @@ Package dependency ranges support:
 - one comparison using `<`, `<=`, `>`, `>=`, or `=`;
 - space-conjoined comparisons, such as `>=1.2.3 <2.0.0`.
 
-Wildcards, comma conjunctions, hyphen ranges, caret/tilde ranges, unions, and whitespace between an operator and its version are invalid.
+Wildcards, comma conjunctions, hyphen ranges, caret/tilde ranges, unions, and whitespace between an operator and its version are invalid. Manifest dependency ranges must have canonical whitespace and a nonempty solution set.
+
+Every `dependsOn` record explicitly declares `presence: required|optional`; readers never default a missing value. Package installation presence is independent of `usesContracts[].required`, which controls provider readiness. Authored non-RPC dependencies currently emit `presence: required`.
 
 ```csharp
 using Sunder.Sdk.Packaging;
@@ -52,7 +62,7 @@ The canonical manifest is `manifest/sunder-package.json`. JSON member names are 
 ```json
 {
   "archiveFormatVersion": 1,
-  "manifestVersion": 3,
+  "manifestVersion": 1,
   "id": "example.notes",
   "name": "Example Notes",
   "summary": "Adds a notes workspace.",
@@ -61,7 +71,8 @@ The canonical manifest is `manifest/sunder-package.json`. JSON member names are 
   "dependsOn": [
     {
       "packageId": "example.foundation",
-      "versionRange": ">=1.0.0 <2.0.0"
+      "versionRange": ">=1.0.0 <2.0.0",
+      "presence": "required"
     }
   ],
   "targets": [
@@ -83,20 +94,29 @@ The canonical manifest is `manifest/sunder-package.json`. JSON member names are 
       "role": "runtime",
       "rid": "win-x64",
       "kind": "worker",
-      "entryPoint": "lib/Example.Notes.Worker.exe",
+      "entryPoint": "lib/Example.Notes.Worker.dll",
       "targetFramework": "net10.0",
       "sdkVersion": "1.1.0",
       "requiredHostCapabilities": [
         "sdk-baseline-1-1.v1",
         "core.v1",
         "contributions.v1",
-        "rpc.v2",
-        "worker-protocol.v3"
-      ]
+        "execution-runtime.v1",
+        "rpc.v1",
+        "worker-protocol.v1"
+      ],
+      "executionRuntime": {
+        "id": "sunder.runtime.dotnet",
+        "versionRange": ">=10.0.0 <11.0.0",
+        "moduleAbi": "sunder.dotnet-worker-module.v1"
+      }
     }
   ],
   "contractBundles": [
     {
+      "source": "owned",
+      "authorityKind": "package",
+      "authorityId": "example.notes",
       "contractId": "example.notes.search",
       "version": "2.0.0",
       "descriptorPath": "contracts/search.rpc.json",
@@ -125,11 +145,17 @@ The canonical manifest is `manifest/sunder-package.json`. JSON member names are 
       "abiSha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
       "audience": "public"
     }
-  ]
+  ],
+  "packageArtifactImports": [],
+  "packageApiImports": [],
+  "providerImports": [],
+  "platformImports": []
 }
 ```
 
-Package-wide fields are `archiveFormatVersion`, `manifestVersion`, `id`, `name`, `summary`, `version`, `icon`, `dependsOn`, `targets`, `contractBundles`, `usesContracts`, and `provides`.
+Package-wide fields are `archiveFormatVersion`, `manifestVersion`, `id`, `name`, `summary`, `version`, `icon`, `dependsOn`, `targets`, `contractBundles`, `usesContracts`, `provides`, `packageArtifactImports`, `packageApiImports`, `providerImports`, and `platformImports`.
+
+The four root import-group arrays may be absent or empty when unused; explicit JSON `null` is rejected. Bundle provenance and dependency presence are mandatory, not reader-defaulted. Conditional provenance members must be absent when forbidden, not present as `null`.
 
 Each target is keyed by exact `(role, rid)` and contains its own activation and compatibility metadata:
 
@@ -144,7 +170,7 @@ Each target is keyed by exact `(role, rid)` and contains its own activation and 
 
 An exact target key may appear only once. Payload layers without a matching declared role or target are invalid.
 
-Every Runtime target must require `rpc.v2`, `worker-protocol.v3`, and exactly the `sdk-baseline-<major>-<minor>.v1` capability matching its `sdkVersion`. Its entry point is an independently executable exact-RID worker. A C# worker entry point is the official self-contained apphost directly under `lib/`, uses `.exe` only for a Windows RID, is extensionless on Linux/macOS, and physically belongs to that exact Runtime/RID layer. `rpc.v1`, `worker-protocol.v1`, `dotnet`, and `process` are rejected rather than upgraded or interpreted as aliases.
+Every Runtime target must require `execution-runtime.v1`, `rpc.v1`, `worker-protocol.v1`, and exactly the `sdk-baseline-<major>-<minor>.v1` capability matching its `sdkVersion`. Its entry point is a module loaded by the exact bound execution runtime in an independently supervised process. A C# worker entry point is the official managed `.dll` directly under `lib/`; a Node worker entry point is a `.cjs` module. Package apphosts, directly executable entry points, legacy protocol capabilities, and generic `dotnet` or `process` capabilities are rejected rather than launched, upgraded, or interpreted as aliases.
 
 ## Layered Payload
 
@@ -187,7 +213,7 @@ For exact target `(role, rid)`, the Host constructs one immutable logical projec
 
 These layers form a union, not an override chain. Duplicate, case-colliding, or directory/file-colliding logical paths fail validation. A target sees no files belonging only to another role or RID.
 
-Build aggregation factors byte-identical files upward into the broadest valid layer. It rejects duplicate target keys and requires every leaf to agree on package-wide manifest metadata.
+Build aggregation factors byte-identical files upward into the broadest valid layer. It rejects duplicate target keys and requires matching package-wide manifest metadata, subject only to the owned-only App export projection described under Build Outputs.
 
 ## Content Index
 
@@ -202,10 +228,14 @@ Cross-package behavior uses strict language-neutral RPC descriptors. CLR interfa
 Every contract used or provided by a package must have a matching local `contractBundles` entry. Its descriptor:
 
 - is physically stored at `payload/shared/<descriptorPath>`;
-- uses strict UTF-8 JSON and descriptor version `2`;
+- uses strict UTF-8 JSON and descriptor version `1`;
 - has identity and version matching the manifest entry;
 - has a canonical descriptor SHA-256 matching `descriptorSha256` and a domain-separated structural ABI SHA-256 matching `abiSha256`;
-- uses the closed RPC V2 JSON Schema profile, keyed service/method/error maps, and local `#/$defs/...` references.
+- uses the closed RPC V1 JSON Schema profile, keyed service/method/error maps, and local `#/$defs/...` references.
+
+Every bundle also explicitly declares `source` (`owned` or `imported`), `authorityKind` (`package` or `platform`), and `authorityId`. An owned bundle requires package authority equal to the enclosing manifest `id` and forbids selected-authority fields, avoiding a package-content hash cycle.
+
+An imported bundle requires public exposure, `selectedAuthorityRelease`, and `selectedAuthorityContentIdentity`. Platform authority is `sunder.core`. The explicitly selected Registry establishes publication authority for both kinds; catalog signing/trust fields are absent from the closed format. Bundling or implementing a descriptor grants no authority.
 
 Each `usesContracts` entry binds one exact caller `role`, `contractVersion`, and `abiSha256`, then declares the maximum requested `discover`, `invoke`, and `subscribe` actions. Installing or updating a package consents to all actions declared by that exact manifest; Runtime records version- and manifest-fenced grants automatically. Development packages receive equivalent activation-scoped access without durable grants. Undeclared actions remain default-deny. `required` controls dependency readiness, not consent; Runtime does not resolve contract version ranges from an immutable package.
 
@@ -213,11 +243,32 @@ Each `usesContracts` entry binds one exact caller `role`, `contractVersion`, and
 
 Large content stays off the JSON control plane and uses Host-mediated content references. Requests, responses, and stream events are validated against the bundled descriptor before dispatch or delivery.
 
-MSBuild authoring uses `SunderContractBundle`, `SunderUsesContract`, and `SunderRpcProvider`. `SunderRpcCSharpGenerator` can produce deterministic package-local DTO, client, and provider scaffolding.
+Source-authored C# builds run the lock/cache-derived import prepass before semantic provider discovery and include generated imports in final compilation. `PackageContractBuilder` consumes the authoring receipt with its expected SHA-256, lock hash, and package identity; it validates descriptor snapshots and task-item agreement before projecting bundles, uses, providers, import groups, and dependencies. Generated source, owned/imported descriptor snapshots, and the applicable receipt/export outputs publish as one atomic marker-owned set. Neither receipt nor project export is package content.
+
+Descriptor-first `SunderContractBundle`, `SunderUsesContract`, and `SunderRpcProvider` inputs remain in pre-cutover projects. They cannot author imported authority metadata. `SunderRpcCSharpGenerator` remains the deterministic package-local binding backend, not a second contract authority.
+
+### Import Groups
+
+The closed Manifest V1 groups distinguish selected artifact evidence from ultimate contract authority:
+
+- `packageArtifactImports` records each selected package's reviewed `requestedVersionRange`, explicit `includePrerelease`, selected version/content identity, complete public-inventory count/hash, and ultimate `authorityConstraints`.
+- `packageApiImports` records package ID, explicit `presence`, and exact `bundleRefs`/role-scoped `useRefs` for the complete public package-authority subset. Platform-authority inventory members generate no consumer uses.
+- `providerImports` selects one public package-authority contract with an exact `bundleRef` and runtime `providerRefs`. Provider-only intent grants no consumer uses and contributes required dependencies.
+- `platformImports` describes provider-only Registry catalog selections and exact release/content, bundle and provider references. C# and Node validate the selected complete catalog and generate bindings offline from restored evidence.
+
+Groups and nested references are bounded, ordered, unique, and closed over the exact local bundle/use/provider tuples. Missing, extra, conflicting, or orphaned references fail validation. Receipt validation verifies the complete lock inventory projection; structural archive validation alone cannot independently authenticate the selected artifact or its authority.
+
+The [platform-catalog implementation](../specs/rpc/v1/authoring/platform-catalog/README.md) provides bounded Format and independent Node content validation, exact immutable pins and explicit Core catalog export. Administrator import into the selected Registry establishes publication authority; no catalog signing setup is required. The implemented Stack adapter derives the unchanged `2.0.0` descriptor and ABI from ordinary source, including all 48 definitions and six methods. SDK builds generate its neutral handler and required partial factory in immutable `obj` output. Check/Accept/Freeze/Export and Registry publication-evidence import use the baseline under `eng/platform-contracts`. Local bytes or generated handlers alone grant no publication or execution permission.
+
+Lock-derived dependencies preserve canonical reviewed ranges and package API presence, with `required` winning when contributors coalesce by package ID. Authored non-RPC dependencies cannot duplicate lock-derived dependency IDs. A distinct transitive package authority without an explicit selection and reviewed range fails closed; tooling must not infer a permissive range or an exact-equality/content pin from its provenance snapshot.
+
+**Compatible Installation** retains reviewed package range/prerelease policy plus exact imported contract ID, version, descriptor SHA-256, and ABI SHA-256. Selected package and ultimate package-authority release/content hashes are restore/build/inventory provenance only, not installation or routing hard pins. An in-range package patch with the same exact RPC identities may satisfy the target policy; ABI equality alone is insufficient. Restore still verifies the exact selected artifact and never substitutes another release. Execution-runtime exact pins and platform-catalog release/content constraints remain independent.
+
+Registry publication and Host admission validate imported groups and optional branches against complete accepted inventories, exact RPC identities and current lifecycle policy. Local Format validation or artifact generation cannot manufacture Registry publication or bypass those checks. Canonical first-party migration and deployment qualification remain separate program milestones.
 
 ## App And Worker Activation
 
-Managed App targets expose at most one public, top-level, non-abstract, non-generic `ISunderAppPackageModule` with a public parameterless constructor. The App creates its own load context, service provider, and activation lifetime. A Runtime target is an independently executable exact-RID process that speaks `sunder.worker.v3`; Runtime never loads an `ISunderRuntimePackageModule` or builds package-owned Runtime DI in the Host process.
+Managed App targets expose at most one public, top-level, non-abstract, non-generic `ISunderAppPackageModule` with a public parameterless constructor. The App creates its own load context, service provider, and activation lifetime. A Runtime target is a module launched through its exact execution-runtime recipe in an independently supervised process that speaks `sunder.worker.v1`; Runtime never loads an `ISunderRuntimePackageModule` or builds package-owned Runtime DI in the Host process.
 
 Workers advertise an immutable contribution catalog containing RPC providers, an optional settings schema, callbacks/auth, and migration plans. Package-local composition and lifecycle are owned inside the worker. App modules register shell-facing contributions such as Avalonia views. App-to-Runtime behavior uses owner RPC with generated package-local bindings; App and Runtime do not exchange object instances or local filesystem paths.
 
@@ -235,15 +286,21 @@ A `.sunderprojection` is an immutable derivative for one of:
 
 Each projection contains `manifest/sunder-projection.json`, the canonical package manifest, a projection-specific content index, and only the selected physical payload layer. Its descriptor binds package id/version, source archive SHA-256, projection kind/RID, manifest SHA-256, and projection SHA-256. Projections cannot be published as source packages and are always reproducible from the canonical archive.
 
-Registry installation accepts exactly the shared projection plus the selected role projections for the requesting Host's current RID. Missing, extra, duplicate, foreign-RID, or plan/manifest-mismatched projections fail before install. Runtime composes those inputs into an installed package manifest/index containing only selected targets and role-scoped declarations. Local sideload performs the equivalent current-RID projection from the validated universal archive before storage or activation; package-wide identity, dependencies, contract bundles, shared payload, and canonical source provenance remain available.
+Registry installation accepts exactly the shared projection plus the selected role projections for the requesting Host's current RID. Missing, extra, duplicate, foreign-RID, or plan/manifest-mismatched projections fail before install. Runtime retains the complete canonical source manifest byte-for-byte and composes an installed content index for the acquired shared/target payloads. The installed catalog records the exact acquired target keys separately. This preserves complete import groups, dependencies, public contract inventory and source provenance even when acquisition omits an import's last consumer or provider role.
+
+Installed projection validation checks the whole manifest's metadata/import graph and the complete acquired payload, including entry points, hashes and .NET Worker dependencies. Unacquired target payload is not required, and extra role/RID payload is rejected. Runtime bindings, activation, active uses, permissions and App snapshots are restricted to the recorded acquisition scope; a declaration in the source manifest alone does not authorize loading that target. Local sideload first validates the complete universal archive, then performs equivalent current-RID acquisition. The private Registry composition handoff and installed catalog supply this validation scope; ordinary `.sunderpkg` validation and publication still require a complete archive and never infer acquisition from missing files.
 
 ## Build Outputs
 
 For a primary .NET package project, `dotnet build` emits one exact current-RID Worker leaf at `bin/<Configuration>/<TFM>/<RID>/sunder-dev` and a validated composed tree at `bin/<Configuration>/<TFM>/sunder-dev`. The optional App project is a build-only input and is built once. The canonical explicit archive target is `PackSunderPackage`, which builds all configured exact-RID Worker leaves sequentially, aggregates them, and emits a deterministic universal `.sunderpkg` beside the composed output; `dotnet publish` also invokes the pack task and places its archive in the publish directory.
 
-The generated .NET template uses a root unsuffixed canonical Worker/package project plus optional App and Protocol projects; it has no separate Worker csproj or Aggregate wrapper. `SunderPackagePrimaryProject=true` opts the canonical project into composition. Each inner Worker build remains one self-contained exact-RID leaf, and aggregation combines all six native leaves into the universal package without factoring worker entry points into shared layers. The non-packable package-local Protocol project contains bundled RPC V2 descriptors and generated bindings; role projects consume it through private project references. `--withHostDependency` adds only `[SunderPackageDependency]` metadata. C# projects may register `SunderPackageWorkerSigningTargets`; those targets mutate a private copy of the computed publish closure before content indexing. Pack validates that established index unchanged, so later tampering fails. Signed prebuilt fan-in requires `SunderPackageUsePrebuiltLeaves=true` and `BuildProjectReferences=false`, runs no Worker/App build, and retains normal leaf validation.
+The generated .NET template uses a root unsuffixed canonical Worker/package project plus optional App and Protocol projects; it has no separate Worker csproj or Aggregate wrapper. `SunderPackagePrimaryProject=true` opts the canonical project into composition. Each inner Worker build remains one framework-dependent exact-RID module leaf, and aggregation combines all six leaves into the universal package without carrying apphosts or language-runtime/framework-pack bytes. The non-packable package-local Protocol project contains bundled RPC V1 descriptors and generated bindings; role projects consume it through private project references. `--withHostDependency` adds only `[SunderPackageDependency]` metadata. C# projects may register `SunderPackageWorkerSigningTargets`; those targets mutate a private copy of the package-owned publish set before content indexing. Pack validates that established index unchanged, so later tampering fails. Signed prebuilt fan-in requires `SunderPackageUsePrebuiltLeaves=true` and `BuildProjectReferences=false`, runs no Worker/App build, and retains normal leaf validation.
 
-TypeScript worker packages use `npm create sunder-package@latest`; `--template react-node` adds a Vite/React web App target. Production Runtime targets are pinned Node SEA executables built and smoked natively for each exact RID.
+Import-bearing C# aggregation supports only canonical exact-RID .NET Worker leaves with identical package-wide import evidence, plus an associated App export containing only owned contracts. The App preserves the producer lock hash but inherits no external imports, external use grants, or providers. General role-aware import merging, direct platform imports, and non-RPC optional dependencies remain unsupported by aggregation. Existing descriptor-first template/Protocol projects still require their separate authoring migration.
+
+TypeScript Worker V1 packages use bundled CommonJS modules with `.cjs` entry points; `--template react-node` adds a Vite/React web App target. `@sunder/package-tool` emits exact-RID Manifest V1 target records bound to the separately trusted Node 24 execution runtime, then factors byte-identical module payloads into the shared Runtime layer during aggregation.
+
+Current Node output explicitly stamps owned package-authority bundles, required dependencies, and all four empty import groups. Its descriptor-first tooling does not generate or admit imported bundles, nonempty import groups, or optional dependencies.
 
 ## Archive Safety
 
@@ -270,3 +327,5 @@ The validator also performs bounded heuristic secret scanning of UTF-8 text. A f
 `[SunderPackageDependency]` declares an installed Sunder package requirement. A normal NuGet reference is only a build-time source of helpers. Referencing another package's helper assembly does not share those CLR types across package load contexts; every consumer still bundles the exact descriptor it uses.
 
 Package code may reference public `Sunder.Sdk*` packages and `Sunder.Package.Build`. It must not reference `Sunder.App`, `Sunder.Runtime.Host`, or private Host implementation contracts.
+
+The import manifest models are a supported public type surface in the existing shared `Sunder.Package.Format` library for Core, Registry, and tooling consumers. That internally distributed library is not a new public NuGet package or a package-author SDK dependency. This generation/projection change adds no projects or compatibility readers.

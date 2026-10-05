@@ -1,26 +1,52 @@
 <Project>
-  <PropertyGroup>
-    <SunderPackageBuildTaskAssembly Condition="'$(SunderPackageBuildTaskAssembly)' == '' and Exists('$(MSBuildThisFileDirectory)..\tasks\$(TargetFramework)\Sunder.Package.Build.dll')">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\tasks\$(TargetFramework)\Sunder.Package.Build.dll'))</SunderPackageBuildTaskAssembly>
-    <SunderPackageBuildTaskAssembly Condition="'$(SunderPackageBuildTaskAssembly)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\bin\$(Configuration)\net10.0\Sunder.Package.Build.dll'))</SunderPackageBuildTaskAssembly>
-    <SunderPackageBuildProject Condition="'$(SunderPackageBuildProject)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Sunder.Package.Build.csproj'))</SunderPackageBuildProject>
+  <PropertyGroup Condition="'$(SunderRpcProjectExportBuild)' == 'true'">
+    <!-- The neutral export's intermediate directory belongs only to its package
+         project. Let source SDK/helper references use their own canonical layout
+         and request identity rather than writing compiler/FileList state here. -->
+    <_GlobalPropertiesToRemoveFromProjectReferences>$(_GlobalPropertiesToRemoveFromProjectReferences);IntermediateOutputPath;AppendRuntimeIdentifierToOutputPath;SunderRpcProjectExportBuild;SunderRpcExpectedAppProject;SunderPackagePrimaryProject;SunderPackageInnerBuild</_GlobalPropertiesToRemoveFromProjectReferences>
+    <RuntimeIdentifier></RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>false</UseAppHost>
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 
-  <ItemGroup Condition="Exists('$(SunderPackageBuildTaskAssembly)')">
-    <_SunderPackageBuildTaskAssembly Include="$(SunderPackageBuildTaskAssembly)" />
-  </ItemGroup>
-
   <PropertyGroup>
-    <_SunderPackageBuildTaskShadowStampSource Condition="'$(_SunderPackageBuildTaskShadowStampSource)' == ''">@(_SunderPackageBuildTaskAssembly->'%(ModifiedTime)')</_SunderPackageBuildTaskShadowStampSource>
-    <SunderPackageBuildTaskShadowStamp Condition="'$(SunderPackageBuildTaskShadowStamp)' == '' and '$(_SunderPackageBuildTaskShadowStampSource)' != ''">v$([MSBuild]::StableStringHash('$(_SunderPackageBuildTaskShadowStampSource)'))</SunderPackageBuildTaskShadowStamp>
-    <SunderPackageBuildTaskShadowStamp Condition="'$(SunderPackageBuildTaskShadowStamp)' == ''">bootstrap</SunderPackageBuildTaskShadowStamp>
-    <SunderPackageBuildTaskShadowDirectory Condition="'$(SunderPackageBuildTaskShadowDirectory)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'sunder-package-build-tasks', '$(Configuration)', '$(TargetFramework)', '$(SunderPackageBuildTaskShadowStamp)'))))\</SunderPackageBuildTaskShadowDirectory>
-    <SunderPackageBuildTaskShadowAssembly Condition="'$(SunderPackageBuildTaskShadowAssembly)' == ''">$(SunderPackageBuildTaskShadowDirectory)Sunder.Package.Build.dll</SunderPackageBuildTaskShadowAssembly>
-    <SunderGeneratedPackageManifest Condition="'$(SunderGeneratedPackageManifest)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'sunder-package.json'))))</SunderGeneratedPackageManifest>
+    <_SunderPackageBuildTaskAssemblyWasSpecified Condition="'$(SunderPackageBuildTaskAssembly)' != ''">true</_SunderPackageBuildTaskAssemblyWasSpecified>
+    <SunderPackageBuildTaskTargetFramework Condition="'$(SunderPackageBuildTaskTargetFramework)' == ''">net10.0</SunderPackageBuildTaskTargetFramework>
+    <SunderPackageBuildTaskSourceIsImmutable Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == '' and '$(SunderPackageBuildTaskAssembly)' == '' and Exists('$(MSBuildThisFileDirectory)..\tasks\$(SunderPackageBuildTaskTargetFramework)\Sunder.Package.Build.dll')">true</SunderPackageBuildTaskSourceIsImmutable>
+    <SunderPackageBuildTaskAssembly Condition="'$(SunderPackageBuildTaskAssembly)' == '' and Exists('$(MSBuildThisFileDirectory)..\tasks\$(SunderPackageBuildTaskTargetFramework)\Sunder.Package.Build.dll')">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\tasks\$(SunderPackageBuildTaskTargetFramework)\Sunder.Package.Build.dll'))</SunderPackageBuildTaskAssembly>
+    <SunderPackageBuildProject Condition="'$(SunderPackageBuildProject)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Sunder.Package.Build.csproj'))</SunderPackageBuildProject>
+    <SunderPackageBuildTaskSourceIsImmutable Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == ''">false</SunderPackageBuildTaskSourceIsImmutable>
+    <_SunderPackageBuildTaskGlobalPropertiesToRemove>Version;VersionPrefix;VersionSuffix;PackageVersion;InformationalVersion;TargetFramework;TargetFrameworks;Platform;PlatformName;PlatformTarget;Prefer32Bit;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;UseAppHost;PublishSingleFile;PublishTrimmed;PackageOutputPath;BuildProjectReferences;SunderPackagePrimaryProject;SunderPackageInnerBuild;SunderPackageUsePrebuiltLeaves;SunderPackageComposeRuntimeIdentifiers;SunderRpcProjectExportBuild;SunderRpcProjectImportBuild;SunderRpcPackageProjectExportPath;SunderRpcPackageProjectExportSha256;SunderRpcPackageProjectExportProjectIdentity;SunderRpcPackageProjectExportConfiguration;SunderRpcPackageProjectExportTargetFramework;SunderRpcPackageProjectExportPackageId;SunderRpcPackageProjectExportPackageVersion;SunderRpcExpectedAppProject;SunderPackageRootProject;BaseOutputPath;OutputPath;OutDir;UseArtifactsOutput;ArtifactsPath;ArtifactsPivots;BaseIntermediateOutputPath;IntermediateOutputPath;MSBuildProjectExtensionsPath;AppendTargetFrameworkToOutputPath;AppendRuntimeIdentifierToOutputPath;AppendPlatformToOutputPath</_SunderPackageBuildTaskGlobalPropertiesToRemove>
+    <_SunderPackageBuildProjectFullPath>$([System.IO.Path]::GetFullPath('$(SunderPackageBuildProject)', '$(MSBuildProjectDirectory)'))</_SunderPackageBuildProjectFullPath>
+    <_SunderPackageBuildTaskProjectDirectory>$([System.IO.Path]::GetDirectoryName('$(_SunderPackageBuildProjectFullPath)'))</_SunderPackageBuildTaskProjectDirectory>
+    <SunderPackageBuildTaskContractKey Condition="'$(SunderPackageBuildTaskContractKey)' == ''">source-contract-v3</SunderPackageBuildTaskContractKey>
+    <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == '' and $([System.String]::Copy('$(NETCoreSdkRuntimeIdentifier)').EndsWith('-x86'))">x86</SunderPackageBuildTaskHostArchitecture>
+    <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == '' and $([System.String]::Copy('$(NETCoreSdkRuntimeIdentifier)').EndsWith('-x64'))">x64</SunderPackageBuildTaskHostArchitecture>
+    <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == '' and $([System.String]::Copy('$(NETCoreSdkRuntimeIdentifier)').EndsWith('-arm64'))">arm64</SunderPackageBuildTaskHostArchitecture>
+    <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == ''">CurrentArchitecture</SunderPackageBuildTaskHostArchitecture>
+    <SunderPackageBuildTaskBootstrapConfiguration Condition="'$(SunderPackageBuildTaskBootstrapConfiguration)' == '' and '$(_SunderPackageBuildTaskAssemblyWasSpecified)' == 'true'">$(Configuration)</SunderPackageBuildTaskBootstrapConfiguration>
+    <SunderPackageBuildTaskBootstrapConfiguration Condition="'$(SunderPackageBuildTaskBootstrapConfiguration)' == '' and !Exists('$(_SunderPackageBuildProjectFullPath)')">$(Configuration)</SunderPackageBuildTaskBootstrapConfiguration>
+    <SunderPackageBuildTaskBootstrapConfiguration Condition="'$(SunderPackageBuildTaskBootstrapConfiguration)' == ''">$(Configuration)-sunder-bootstrap</SunderPackageBuildTaskBootstrapConfiguration>
+    <SunderPackageBuildTaskAssembly Condition="'$(SunderPackageBuildTaskAssembly)' == '' and Exists('$(_SunderPackageBuildProjectFullPath)')">$([System.IO.Path]::Combine('$(_SunderPackageBuildTaskProjectDirectory)', 'bin', '$(SunderPackageBuildTaskBootstrapConfiguration)', 'net10.0', 'Sunder.Package.Build.dll'))</SunderPackageBuildTaskAssembly>
+    <SunderPackageBuildTaskAssembly Condition="'$(SunderPackageBuildTaskAssembly)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\bin\$(Configuration)\net10.0\Sunder.Package.Build.dll'))</SunderPackageBuildTaskAssembly>
+    <_SunderPackageBuildTaskAssemblyFullPath>$([System.IO.Path]::GetFullPath('$(SunderPackageBuildTaskAssembly)', '$(MSBuildProjectDirectory)'))</_SunderPackageBuildTaskAssemblyFullPath>
+    <SunderPackageBuildTaskShadowStamp Condition="'$(SunderPackageBuildTaskShadowStamp)' == '' and '$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'">immutable-v1-$([MSBuild]::StableStringHash('$(_SunderPackageBuildTaskAssemblyFullPath)'))</SunderPackageBuildTaskShadowStamp>
+    <SunderPackageBuildTaskShadowStamp Condition="'$(SunderPackageBuildTaskShadowStamp)' == ''">$(SunderPackageBuildTaskContractKey)-$([MSBuild]::StableStringHash('$(MSBuildProjectFullPath)'))</SunderPackageBuildTaskShadowStamp>
+    <SunderPackageBuildTaskShadowRoot Condition="'$(SunderPackageBuildTaskShadowRoot)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'sunder-package-build-tasks', '$(Configuration)', '$(TargetFramework)'))))</SunderPackageBuildTaskShadowRoot>
+    <_SunderPackageBuildTaskShadowRootFullPath>$([System.IO.Path]::GetFullPath('$(SunderPackageBuildTaskShadowRoot)', '$(MSBuildProjectDirectory)'))</_SunderPackageBuildTaskShadowRootFullPath>
+    <SunderPackageBuildTaskShadowDirectory Condition="'$(SunderPackageBuildTaskShadowDirectory)' == ''">$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::Combine('$(_SunderPackageBuildTaskShadowRootFullPath)', '$(SunderPackageBuildTaskShadowStamp)'))))</SunderPackageBuildTaskShadowDirectory>
+    <_SunderPackageBuildTaskShadowDirectoryFullPath>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath('$(SunderPackageBuildTaskShadowDirectory)', '$(MSBuildProjectDirectory)'))))</_SunderPackageBuildTaskShadowDirectoryFullPath>
+    <SunderPackageBuildTaskShadowAssembly Condition="'$(SunderPackageBuildTaskShadowAssembly)' == ''">$([System.IO.Path]::Combine('$(_SunderPackageBuildTaskShadowDirectoryFullPath)', 'Sunder.Package.Build.dll'))</SunderPackageBuildTaskShadowAssembly>
+    <_SunderPackageBuildTaskShadowAssemblyFullPath>$([System.IO.Path]::GetFullPath('$(SunderPackageBuildTaskShadowAssembly)', '$(MSBuildProjectDirectory)'))</_SunderPackageBuildTaskShadowAssemblyFullPath>
+    <SunderPackageBuildTaskSourceLockPath Condition="'$(SunderPackageBuildTaskSourceLockPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine($([System.IO.Path]::GetDirectoryName('$(_SunderPackageBuildProjectFullPath)')), 'obj', '.sunder-package-build-task-source.lock'))))</SunderPackageBuildTaskSourceLockPath>
     <SunderPackageRuntimeIdentifiers Condition="'$(SunderPackageRuntimeIdentifiers)' == ''">win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</SunderPackageRuntimeIdentifiers>
     <SunderPackageAssetsDirectory Condition="'$(SunderPackageAssetsDirectory)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', 'Assets'))))</SunderPackageAssetsDirectory>
     <SunderPackagePrimaryProject Condition="'$(SunderPackagePrimaryProject)' == ''">false</SunderPackagePrimaryProject>
     <SunderPackageInnerBuild Condition="'$(SunderPackageInnerBuild)' == ''">false</SunderPackageInnerBuild>
     <SunderPackageUsePrebuiltLeaves Condition="'$(SunderPackageUsePrebuiltLeaves)' == ''">false</SunderPackageUsePrebuiltLeaves>
+    <_SunderPackageComposeRidsWereSpecified Condition="'$(SunderPackageComposeRuntimeIdentifiers)' != ''">true</_SunderPackageComposeRidsWereSpecified>
     <SunderPackageComposeRuntimeIdentifiers Condition="'$(SunderPackageComposeRuntimeIdentifiers)' == ''">$(SunderPackageRuntimeIdentifiers)</SunderPackageComposeRuntimeIdentifiers>
     <_SunderPackageBaseOutputPath Condition="'$(BaseOutputPath)' != ''">$(BaseOutputPath)</_SunderPackageBaseOutputPath>
     <_SunderPackageBaseOutputPath Condition="'$(_SunderPackageBaseOutputPath)' == ''">bin</_SunderPackageBaseOutputPath>
@@ -28,74 +54,1308 @@
     <SunderPackageComposedOutputPath Condition="'$(SunderPackageComposedOutputPath)' == ''">$([System.IO.Path]::Combine('$(SunderPackageComposedOutputRoot)', 'sunder-dev'))</SunderPackageComposedOutputPath>
     <SunderPackagePrimaryTargetLeafRoot Condition="'$(SunderPackagePrimaryTargetLeafRoot)' == ''">$(SunderPackageComposedOutputRoot)</SunderPackagePrimaryTargetLeafRoot>
     <SunderPackageAppTargetFramework Condition="'$(SunderPackageAppTargetFramework)' == ''">$(TargetFramework)</SunderPackageAppTargetFramework>
+    <_SunderPackageAppBuildProperties>Configuration=$(Configuration)</_SunderPackageAppBuildProperties>
+    <_SunderPackageAppBuildProperties Condition="'$(SunderPackageAppTargetFramework)' != '$(TargetFramework)'">$(_SunderPackageAppBuildProperties);TargetFramework=$(SunderPackageAppTargetFramework)</_SunderPackageAppBuildProperties>
+    <_SunderRpcProjectImportEnabled Condition="'$(SunderRpcProjectImportBuild)' == 'true' or '$(SunderRpcPackageProjectExportPath)' != '' or '$(SunderPackageRootProject)' != ''">true</_SunderRpcProjectImportEnabled>
+    <!-- Keep the package version local to its App leaf. A global Version would
+         also retag source-referenced SDK projects and corrupt their identity. -->
+    <Version Condition="'$(_SunderRpcProjectImportEnabled)' == 'true' and '$(SunderRpcPackageProjectExportPackageVersion)' != ''">$(SunderRpcPackageProjectExportPackageVersion)</Version>
+    <SunderContractCacheRoot Condition="'$(SunderContractCacheRoot)' == ''">$([System.IO.Path]::Combine($([System.Environment]::GetFolderPath(SpecialFolder.UserProfile)), '.sunder', 'contracts', 'v1', 'sha256'))</SunderContractCacheRoot>
+    <SunderAllowDevelopmentRegistryOrigin Condition="'$(SunderAllowDevelopmentRegistryOrigin)' == ''">false</SunderAllowDevelopmentRegistryOrigin>
+    <SunderAcknowledgeBreakingChange Condition="'$(SunderAcknowledgeBreakingChange)' == ''">false</SunderAcknowledgeBreakingChange>
+    <_SunderRpcPackResolveTargets Condition="'$(UsingMicrosoftNETSdk)' == 'true'">ResolveReferences;GenerateGlobalUsings</_SunderRpcPackResolveTargets>
+    <_SunderRpcHasOwnedContractsBaseline Condition="('$(SunderOwnedContractsPath)' != '' and Exists('$(SunderOwnedContractsPath)')) or ('$(SunderOwnedContractsPath)' == '' and Exists('$(MSBuildProjectDirectory)\sunder-contracts.owned.json'))">true</_SunderRpcHasOwnedContractsBaseline>
+    <_SunderRpcResolveReferencesTarget Condition="'$(_SunderRpcHasOwnedContractsBaseline)' == 'true'">ResolveReferences</_SunderRpcResolveReferencesTarget>
+    <SelfContained Condition="'$(SelfContained)' == ''">false</SelfContained>
+    <UseAppHost Condition="'$(UseAppHost)' == ''">false</UseAppHost>
+    <PublishSingleFile Condition="'$(PublishSingleFile)' == ''">false</PublishSingleFile>
+    <PublishTrimmed Condition="'$(PublishTrimmed)' == ''">false</PublishTrimmed>
     <_SunderPackagePreparationTarget Condition="'$(SunderPackagePrimaryProject)' == 'true'">AggregateSunderPackage</_SunderPackagePreparationTarget>
     <_SunderPackagePreparationTarget Condition="'$(_SunderPackagePreparationTarget)' == ''">Build;EmitSunderDevOutput</_SunderPackagePreparationTarget>
+    <_SunderPackageSingleProject>false</_SunderPackageSingleProject>
+    <AfterMicrosoftNETSdkTargets>$(AfterMicrosoftNETSdkTargets);$(MSBuildThisFileDirectory)Sunder.Package.Build.Authoring.targets</AfterMicrosoftNETSdkTargets>
+    <_SunderPreviousCrossTargetingTargets Condition="'$(SunderPackageProject)' == 'true' and '$(SunderPackageRole)' == '' and '$(SunderPackagePrimaryProject)' != 'true' and '$(SunderPackageRootProject)' == '' and '$(SunderPackageAppProject)' == '' and '$(_SunderRpcProjectImportEnabled)' != 'true'">$(CustomAfterMicrosoftCommonCrossTargetingTargets)</_SunderPreviousCrossTargetingTargets>
+    <CustomAfterMicrosoftCommonCrossTargetingTargets Condition="'$(SunderPackageProject)' == 'true' and '$(SunderPackageRole)' == '' and '$(SunderPackagePrimaryProject)' != 'true' and '$(SunderPackageRootProject)' == '' and '$(SunderPackageAppProject)' == '' and '$(_SunderRpcProjectImportEnabled)' != 'true'">$(MSBuildThisFileDirectory)Sunder.Package.Build.Authoring.CrossTargeting.targets</CustomAfterMicrosoftCommonCrossTargetingTargets>
   </PropertyGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)Sunder.Package.Build.SourceLock.targets" />
+
+  <UsingTask TaskName="_SunderGetPackageBuildTaskCallerProperties"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$([System.IO.Path]::Combine('$(MSBuildToolsPath)', 'Microsoft.Build.Tasks.Core.dll'))">
+    <ParameterGroup>
+      <KeepProperties ParameterType="System.String[]" Required="true" />
+      <RemoveProperties ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="Microsoft.Build.Framework" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var engine = BuildEngine as IBuildEngine6
+            ?? throw new InvalidOperationException("MSBuild does not expose global property enumeration.");
+        var keep = new HashSet<string>(KeepProperties.Select(name => name.Trim()), StringComparer.OrdinalIgnoreCase);
+        // MSBuild removes properties AFTER applying explicit values. Do not remove canonical overrides.
+        RemoveProperties = string.Join(";", engine.GetGlobalProperties().Keys
+            .Where(name => !keep.Contains(name)).OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
+      ]]></Code>
+    </Task>
+  </UsingTask>
 
   <ItemGroup>
     <_SunderPackageRuntimeIdentifier Include="$(SunderPackageRuntimeIdentifiers)" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('$(SunderPackageBuildProject)') and '$(MSBuildProjectFullPath)' != '$(SunderPackageBuildProject)'">
-    <ProjectReference Include="$(SunderPackageBuildProject)"
+  <ItemGroup Condition="Exists('$(_SunderPackageBuildProjectFullPath)') and '$(MSBuildProjectFullPath)' != '$(_SunderPackageBuildProjectFullPath)'">
+    <_SunderPackageBuildProjectReference Include="$(_SunderPackageBuildProjectFullPath)" />
+    <ProjectReference Remove="@(_SunderPackageBuildProjectReference)"
+                      MatchOnMetadata="FullPath"
+                      MatchOnMetadataOptions="PathLike" />
+    <ProjectReference Include="$(_SunderPackageBuildProjectFullPath)"
                       ReferenceOutputAssembly="false"
-                      GlobalPropertiesToRemove="Version;VersionPrefix;VersionSuffix;PackageVersion;InformationalVersion"
+                      BuildReference="false"
+                      GlobalPropertiesToRemove="$(_SunderPackageBuildTaskGlobalPropertiesToRemove)"
                       PrivateAssets="all" />
   </ItemGroup>
 
-  <UsingTask TaskName="Sunder.Package.Build.Tasks.GenerateSunderPackageManifestTask"
-             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
-  <UsingTask TaskName="Sunder.Package.Build.Tasks.PackSunderPackageTask"
-             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
-  <UsingTask TaskName="Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask"
-             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
-  <UsingTask TaskName="Sunder.Package.Build.Tasks.EmitSunderDevOutputTask"
-             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
-  <UsingTask TaskName="Sunder.Package.Build.Tasks.AggregateSunderPackageTask"
-             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
-  <UsingTask TaskName="Sunder.Package.Build.Tasks.CleanSunderPackageOutputTask"
-             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
-  <UsingTask TaskName="Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask"
-             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
+  <UsingTask TaskName="_SunderStagePackageBuildTaskSet"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$([System.IO.Path]::Combine('$(MSBuildToolsPath)', 'Microsoft.Build.Tasks.Core.dll'))">
+    <ParameterGroup>
+      <SourceFiles ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <ShadowRoot ParameterType="System.String" Required="true" />
+      <ShadowDirectory ParameterType="System.String" />
+      <Immutable ParameterType="System.Boolean" Required="true" />
+      <Fingerprint ParameterType="System.String" Output="true" />
+      <PublishedDirectory ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.Globalization" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Security.Cryptography" />
+      <Using Namespace="System.Text" />
+      <Using Namespace="System.Threading" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        const string markerFileName = ".sunder-task-set";
+        const string temporaryPrefix = ".sunder-stage-";
+        const string recoveryPrefix = ".sunder-recovery-";
+        var pathComparison = Path.DirectorySeparatorChar == '\\'
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var nameComparer = StringComparer.OrdinalIgnoreCase;
 
-  <Target Name="_BuildSunderPackageBuildTasks"
-          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and Exists('$(SunderPackageBuildProject)') and !Exists('$(SunderPackageBuildTaskAssembly)')">
-    <MSBuild Projects="$(SunderPackageBuildProject)"
-              Targets="Build"
-              Properties="Configuration=$(Configuration);TargetFramework=net10.0" />
+        string ToHex(byte[] bytes)
+        {
+            const string alphabet = "0123456789abcdef";
+            var characters = new char[bytes.Length * 2];
+            for (var index = 0; index < bytes.Length; index++)
+            {
+                characters[index * 2] = alphabet[bytes[index] >> 4];
+                characters[(index * 2) + 1] = alphabet[bytes[index] & 15];
+            }
+            return new string(characters);
+        }
+
+        string NormalizeDirectory(string path)
+        {
+            var fullPath = Path.GetFullPath(path);
+            var pathRoot = Path.GetPathRoot(fullPath) ?? string.Empty;
+            while (fullPath.Length > pathRoot.Length
+                   && (fullPath[fullPath.Length - 1] == Path.DirectorySeparatorChar
+                       || fullPath[fullPath.Length - 1] == Path.AltDirectorySeparatorChar))
+            {
+                fullPath = fullPath.Substring(0, fullPath.Length - 1);
+            }
+            return fullPath;
+        }
+
+        string HashFile(string path)
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var sha256 = SHA256.Create();
+            return ToHex(sha256.ComputeHash(stream));
+        }
+
+        List<(string Name, string SourcePath, long Length, string Hash)> Snapshot(
+            IReadOnlyList<(string Name, string SourcePath)> files)
+        {
+            var result = new List<(string Name, string SourcePath, long Length, string Hash)>(files.Count);
+            foreach (var file in files)
+            {
+                var info = new FileInfo(file.SourcePath);
+                if (!info.Exists)
+                {
+                    throw new FileNotFoundException(
+                        $"Required Sunder.Package.Build task dependency '{file.Name}' does not exist.",
+                        file.SourcePath);
+                }
+
+                result.Add((file.Name, file.SourcePath, info.Length, HashFile(file.SourcePath)));
+            }
+            return result;
+        }
+
+        string FingerprintSet(IReadOnlyList<(string Name, string SourcePath, long Length, string Hash)> files)
+        {
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            foreach (var file in files)
+            {
+                hash.AppendData(Encoding.UTF8.GetBytes(file.Name));
+                hash.AppendData(new byte[] { 0 });
+                hash.AppendData(Encoding.UTF8.GetBytes(file.Length.ToString(CultureInfo.InvariantCulture)));
+                hash.AppendData(new byte[] { 0 });
+                hash.AppendData(Encoding.UTF8.GetBytes(file.Hash));
+            }
+            return ToHex(hash.GetHashAndReset());
+        }
+
+        string[] MarkerLines(
+            IReadOnlyList<(string Name, string SourcePath, long Length, string Hash)> files,
+            string fingerprint)
+        {
+            var lines = new List<string>(files.Count + 2)
+            {
+                "sunder-package-build-task-set-v1",
+                "sha256=" + fingerprint,
+            };
+            lines.AddRange(files.Select(file =>
+                file.Name + "|" + file.Length.ToString(CultureInfo.InvariantCulture) + "|" + file.Hash));
+            return lines.ToArray();
+        }
+
+        bool SameSnapshot(
+            IReadOnlyList<(string Name, string SourcePath, long Length, string Hash)> left,
+            IReadOnlyList<(string Name, string SourcePath, long Length, string Hash)> right)
+        {
+            if (left.Count != right.Count)
+            {
+                return false;
+            }
+            for (var index = 0; index < left.Count; index++)
+            {
+                if (!string.Equals(left[index].Name, right[index].Name, StringComparison.Ordinal)
+                    || left[index].Length != right[index].Length
+                    || !string.Equals(left[index].Hash, right[index].Hash, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool ValidateDirectory(
+            string directory,
+            IReadOnlyList<(string Name, string SourcePath, long Length, string Hash)> expectedFiles,
+            string expectedFingerprint,
+            out string reason)
+        {
+            try
+            {
+                if (!Directory.Exists(directory))
+                {
+                    reason = "the directory does not exist";
+                    return false;
+                }
+
+                var expectedNames = new HashSet<string>(expectedFiles.Select(file => file.Name), nameComparer);
+                expectedNames.Add(markerFileName);
+                var entries = Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.TopDirectoryOnly)
+                    .ToArray();
+                if (entries.Any(Directory.Exists))
+                {
+                    reason = "the directory contains an unexpected subdirectory";
+                    return false;
+                }
+                var actualNames = new HashSet<string>(entries.Select(Path.GetFileName), nameComparer);
+                if (entries.Length != expectedNames.Count || !actualNames.SetEquals(expectedNames))
+                {
+                    reason = "the declared dependency set is incomplete or contains unexpected files";
+                    return false;
+                }
+
+                var markerPath = Path.Combine(directory, markerFileName);
+                if (!File.ReadAllLines(markerPath).SequenceEqual(MarkerLines(expectedFiles, expectedFingerprint)))
+                {
+                    reason = "the dependency-set marker does not match";
+                    return false;
+                }
+
+                foreach (var expectedFile in expectedFiles)
+                {
+                    var path = Path.Combine(directory, expectedFile.Name);
+                    var info = new FileInfo(path);
+                    if (!info.Exists
+                        || info.Length != expectedFile.Length
+                        || !string.Equals(HashFile(path), expectedFile.Hash, StringComparison.Ordinal))
+                    {
+                        reason = $"'{expectedFile.Name}' does not match its declared content";
+                        return false;
+                    }
+                }
+
+                reason = string.Empty;
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                reason = exception.Message;
+                return false;
+            }
+        }
+
+        void WriteMarker(
+            string path,
+            IReadOnlyList<(string Name, string SourcePath, long Length, string Hash)> files,
+            string fingerprint)
+        {
+            using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 1024, leaveOpen: true))
+            {
+                foreach (var line in MarkerLines(files, fingerprint))
+                {
+                    writer.WriteLine(line);
+                }
+                writer.Flush();
+            }
+            stream.Flush(flushToDisk: true);
+        }
+
+        void RemoveTemporaryDirectory(string path, string root)
+        {
+            if (!Directory.Exists(path))
+            {
+                return;
+            }
+
+            var fullPath = NormalizeDirectory(path);
+            var parent = NormalizeDirectory(Path.GetDirectoryName(fullPath)
+                ?? throw new InvalidDataException(
+                    "The Sunder.Package.Build temporary task directory has no parent."));
+            var name = Path.GetFileName(fullPath);
+            if (!string.Equals(parent, root, pathComparison)
+                || (!name.StartsWith(temporaryPrefix, StringComparison.Ordinal)
+                    && !name.StartsWith(recoveryPrefix, StringComparison.Ordinal)))
+            {
+                throw new InvalidDataException(
+                    $"Refusing to remove unowned Sunder.Package.Build task directory '{fullPath}'.");
+            }
+
+            var info = new DirectoryInfo(fullPath);
+            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidDataException(
+                    $"Refusing to traverse reparse-point Sunder.Package.Build task directory '{fullPath}'.");
+            }
+            Directory.Delete(fullPath, recursive: true);
+        }
+
+        try
+        {
+            var sources = SourceFiles
+                .Select(item =>
+                {
+                    var name = item.GetMetadata("TargetFileName");
+                    if (string.IsNullOrWhiteSpace(name))
+                    {
+                        name = Path.GetFileName(item.ItemSpec);
+                    }
+                    if (string.IsNullOrWhiteSpace(name)
+                        || !string.Equals(name, Path.GetFileName(name), StringComparison.Ordinal)
+                        || name.Contains('|'))
+                    {
+                        throw new InvalidDataException(
+                            $"Sunder.Package.Build task dependency name '{name}' is not a portable file name.");
+                    }
+                    var sourcePath = item.GetMetadata("FullPath");
+                    return (Name: name, SourcePath: Path.GetFullPath(
+                        string.IsNullOrWhiteSpace(sourcePath) ? item.ItemSpec : sourcePath));
+                })
+                .OrderBy(file => file.Name, StringComparer.Ordinal)
+                .ToArray();
+            if (sources.Length == 0)
+            {
+                throw new InvalidDataException("The Sunder.Package.Build task dependency set is empty.");
+            }
+            var duplicate = sources.GroupBy(file => file.Name, nameComparer).FirstOrDefault(group => group.Count() > 1);
+            if (duplicate is not null)
+            {
+                throw new InvalidDataException(
+                    $"The Sunder.Package.Build task dependency set declares '{duplicate.Key}' more than once.");
+            }
+
+            var root = NormalizeDirectory(ShadowRoot);
+            var requestedDestination = string.IsNullOrEmpty(ShadowDirectory) ? null : NormalizeDirectory(ShadowDirectory);
+            if (requestedDestination is not null
+                && !string.Equals(root, NormalizeDirectory(Path.GetDirectoryName(requestedDestination)
+                    ?? throw new InvalidDataException("The Sunder.Package.Build task shadow directory has no parent.")), pathComparison))
+            {
+                throw new InvalidDataException(
+                    $"Sunder.Package.Build task shadow directory '{requestedDestination}' must be a direct child of '{root}'.");
+            }
+
+            Directory.CreateDirectory(root);
+            var lockPath = Path.Combine(root, ".sunder-task-set.lock");
+            FileStream publishLock = null;
+            var lockDeadline = DateTime.UtcNow.AddMinutes(2);
+            while (publishLock is null)
+            {
+                try
+                {
+                    publishLock = new FileStream(
+                        lockPath,
+                        FileMode.OpenOrCreate,
+                        FileAccess.ReadWrite,
+                        FileShare.None,
+                        1,
+                        FileOptions.None);
+                }
+                catch (IOException) when (DateTime.UtcNow < lockDeadline)
+                {
+                    Thread.Sleep(25);
+                }
+            }
+
+            using (publishLock)
+            {
+                for (var attempt = 1; attempt <= 5; attempt++)
+                {
+                    var before = Snapshot(sources);
+                    var fingerprint = FingerprintSet(before);
+                    var destination = requestedDestination ?? Path.Combine(root, fingerprint);
+                    if (ValidateDirectory(destination, before, fingerprint, out _))
+                    {
+                        var afterValidation = Snapshot(sources);
+                        if (SameSnapshot(before, afterValidation))
+                        {
+                            Fingerprint = fingerprint;
+                            PublishedDirectory = destination;
+                            return true;
+                        }
+                    }
+
+                    var replaceExisting = Directory.Exists(destination);
+                    if (replaceExisting)
+                    {
+                        if (!File.Exists(Path.Combine(destination, markerFileName)))
+                        {
+                            throw new InvalidDataException(
+                                $"Sunder.Package.Build task shadow '{destination}' is not marker-owned and will not be replaced.");
+                        }
+                        if (Immutable)
+                        {
+                            throw new InvalidDataException(
+                                $"Immutable Sunder.Package.Build task shadow '{destination}' does not match the declared dependency set.");
+                        }
+                    }
+
+                    var temporary = Path.Combine(root, temporaryPrefix + Guid.NewGuid().ToString("N"));
+                    string recovery = null;
+                    try
+                    {
+                        Directory.CreateDirectory(temporary);
+                        foreach (var file in before)
+                        {
+                            using var source = new FileStream(
+                                file.SourcePath,
+                                FileMode.Open,
+                                FileAccess.Read,
+                                FileShare.Read);
+                            using var target = new FileStream(
+                                Path.Combine(temporary, file.Name),
+                                FileMode.CreateNew,
+                                FileAccess.Write,
+                                FileShare.None);
+                            source.CopyTo(target);
+                            target.Flush(flushToDisk: true);
+                        }
+                        WriteMarker(Path.Combine(temporary, markerFileName), before, fingerprint);
+
+                        var afterCopy = Snapshot(sources);
+                        if (!SameSnapshot(before, afterCopy)
+                            || !ValidateDirectory(temporary, before, fingerprint, out _))
+                        {
+                            RemoveTemporaryDirectory(temporary, root);
+                            if (attempt < 5)
+                            {
+                                Thread.Sleep(20 * attempt);
+                                continue;
+                            }
+                            throw new IOException(
+                                "Sunder.Package.Build task outputs changed repeatedly while their immutable shadow was staged.");
+                        }
+
+                        if (replaceExisting)
+                        {
+                            recovery = Path.Combine(root, recoveryPrefix + Guid.NewGuid().ToString("N"));
+                            Directory.Move(destination, recovery);
+                        }
+
+                        try
+                        {
+                            Directory.Move(temporary, destination);
+                            if (!ValidateDirectory(destination, before, fingerprint, out var validationFailure))
+                            {
+                                throw new IOException(
+                                    $"Published Sunder.Package.Build task shadow is incomplete: {validationFailure}.");
+                            }
+                        }
+                        catch
+                        {
+                            if (recovery is not null && Directory.Exists(recovery) && !Directory.Exists(destination))
+                            {
+                                Directory.Move(recovery, destination);
+                                recovery = null;
+                            }
+                            throw;
+                        }
+
+                        if (recovery is not null)
+                        {
+                            RemoveTemporaryDirectory(recovery, root);
+                            recovery = null;
+                        }
+                        Fingerprint = fingerprint;
+                        PublishedDirectory = destination;
+                        return true;
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            RemoveTemporaryDirectory(temporary, root);
+                        }
+                        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                        {
+                            Log.LogMessage(
+                                Microsoft.Build.Framework.MessageImportance.Low,
+                                $"Could not remove Sunder.Package.Build temporary task staging directory '{temporary}': {exception.Message}");
+                        }
+                        if (recovery is not null)
+                        {
+                            Log.LogMessage(
+                                Microsoft.Build.Framework.MessageImportance.Low,
+                                $"Retained prior Sunder.Package.Build task generation for recovery at '{recovery}'.");
+                        }
+                    }
+                }
+            }
+
+        }
+        catch (Exception exception)
+        {
+            Log.LogErrorFromException(exception, showStackTrace: false);
+            return false;
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.GenerateSunderPackageManifestTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory"
+             Runtime="NET"
+             Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.GenerateSunderPackageManifestTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.PackSunderPackageTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory"
+             Runtime="NET"
+             Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.PackSunderPackageTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.RestoreSunderContractsTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory" Runtime="NET" Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.RestoreSunderContractsTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory"
+             Runtime="NET"
+             Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.EmitSunderDevOutputTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory"
+             Runtime="NET"
+             Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.EmitSunderDevOutputTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.AggregateSunderPackageTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory"
+             Runtime="NET"
+             Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.AggregateSunderPackageTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.CleanSunderPackageOutputTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory"
+             Runtime="NET"
+             Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.CleanSunderPackageOutputTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory"
+             Runtime="NET"
+             Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ManageSunderRpcGeneratedOutputLockTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory"
+             Runtime="NET"
+             Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ManageSunderRpcGeneratedOutputLockTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+              Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+
+  <!-- Operation leases span nested builds and must call the scheduler. Compiler
+       and RPC-plan tasks continue to use their isolated task-host registrations. -->
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ManageSunderPackageOperationLockTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.CleanSunderRpcGeneratedOutputTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory"
+             Runtime="NET"
+             Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.CleanSunderRpcGeneratedOutputTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+
+  <Target Name="_ExcludeSunderPackageBuildTaskProjectFromClean"
+          BeforeTargets="CleanReferencedProjects"
+          DependsOnTargets="PrepareProjectReferences"
+          Condition="Exists('$(_SunderPackageBuildProjectFullPath)') and '$(MSBuildProjectFullPath)' != '$(_SunderPackageBuildProjectFullPath)'">
+    <ItemGroup>
+      <_MSBuildProjectReferenceExistent Remove="@(_SunderPackageBuildProjectReference)"
+                                        MatchOnMetadata="FullPath"
+                                        MatchOnMetadataOptions="PathLike" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_ReleaseSunderPackageBuildTaskSourceSnapshotLock"
+          Condition="'$(_SunderPackageBuildTaskSourceSnapshotLeaseId)' != ''">
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-snapshot $(_SunderPackageBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskSourceSnapshotLeaseId)" />
+    <PropertyGroup>
+      <_SunderPackageBuildTaskSourceSnapshotLeaseId></_SunderPackageBuildTaskSourceSnapshotLeaseId>
+    </PropertyGroup>
+  </Target>
+
+  <!-- Invoked on this targets file as a shared project, not on each consumer. MSBuild
+       coalesces the requests without creating yielded file-lock waiters that can
+       exhaust its scheduling budget and starve the holder's nested build. -->
+  <Target Name="_BuildSunderPackageBuildTaskSourceSnapshot"
+          Returns="@(_SunderPackageBuildTaskSourceSnapshotFiles)">
+    <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-snapshot $(_SunderPackageBuildProjectFullPath)"
+                                             AttemptSignalFile="$(_SunderPackageBuildTaskSourceLockAttemptSignalFile)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskSourceSnapshotLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <MSBuild Projects="$(_SunderPackageBuildProjectFullPath)"
+             Targets="Build"
+             Properties="Configuration=$(SunderPackageBuildTaskBootstrapConfiguration);TargetFramework=net10.0;BuildProjectReferences=true;GeneratePackageOnBuild=false;SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);SunderPackageBuildSourceLockTargetsPath=$(MSBuildThisFileDirectory)Sunder.Package.Build.SourceLock.targets"
+             RemoveProperties="SunderPackageBuildProject;SunderPackageBuildTaskAssembly;SunderPackageBuildTaskSourceIsImmutable"
+             BuildInParallel="false"
+             StopOnFirstFailure="true" />
+    <CallTarget Targets="_CollectSunderPackageBuildTaskDependencyFiles">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderPackageBuildTaskSnapshotInputs" />
+    </CallTarget>
+    <_SunderStagePackageBuildTaskSet SourceFiles="@(_SunderPackageBuildTaskSnapshotInputs)"
+                                      ShadowRoot="$([System.IO.Path]::Combine('$(_SunderPackageBuildTaskProjectDirectory)', 'obj', 'sunder-package-build-task-sources'))"
+                                      Immutable="true">
+      <Output TaskParameter="PublishedDirectory" PropertyName="_SunderPackageBuildTaskSourceSnapshotDirectory" />
+    </_SunderStagePackageBuildTaskSet>
+    <ItemGroup>
+      <_SunderPackageBuildTaskSourceSnapshotFiles Include="@(_SunderPackageBuildTaskSnapshotInputs->'$(_SunderPackageBuildTaskSourceSnapshotDirectory)/%(TargetFileName)')" />
+    </ItemGroup>
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-snapshot $(_SunderPackageBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskSourceSnapshotLeaseId)" />
+    <PropertyGroup>
+      <_SunderPackageBuildTaskSourceSnapshotLeaseId></_SunderPackageBuildTaskSourceSnapshotLeaseId>
+    </PropertyGroup>
+    <OnError ExecuteTargets="_ReleaseSunderPackageBuildTaskSourceSnapshotLock" />
+  </Target>
+
+  <Target Name="_CollectSunderPackageBuildTaskDependencyFiles"
+          Returns="@(_SunderPackageBuildTaskDependencyFiles)">
+    <PropertyGroup>
+      <_SunderPackageBuildTaskSourceDirectory>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetDirectoryName('$(_SunderPackageBuildTaskAssemblyFullPath)'))))</_SunderPackageBuildTaskSourceDirectory>
+      <_SunderPackageEditorAssembly>$(_SunderPackageBuildTaskSourceDirectory)Sunder.Package.Build.Editor.dll</_SunderPackageEditorAssembly>
+      <_SunderPackageEditorAssembly Condition="!Exists('$(_SunderPackageEditorAssembly)')">$(MSBuildThisFileDirectory)../analyzers/dotnet/cs/Sunder.Package.Build.Editor.dll</_SunderPackageEditorAssembly>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_SunderPackageBuildTaskDependencyFiles Remove="@(_SunderPackageBuildTaskDependencyFiles)" />
+      <_SunderPackageBuildTaskDependencyFiles Include="$(_SunderPackageBuildTaskAssemblyFullPath)" TargetFileName="Sunder.Package.Build.dll" />
+      <_SunderPackageBuildTaskDependencyFiles Include="$(_SunderPackageEditorAssembly)" TargetFileName="Sunder.Package.Build.Editor.dll" Condition="Exists('$(_SunderPackageEditorAssembly)')" />
+      <_SunderPackageBuildTaskDependencyFiles Include="$(_SunderPackageBuildTaskSourceDirectory)Sunder.Package.Format.dll" TargetFileName="Sunder.Package.Format.dll" />
+      <_SunderPackageBuildTaskDependencyFiles Include="$(_SunderPackageBuildTaskSourceDirectory)Sunder.Sdk.dll" TargetFileName="Sunder.Sdk.dll" />
+      <_SunderPackageBuildTaskDependencyFiles Include="$(_SunderPackageBuildTaskSourceDirectory)Microsoft.Extensions.DependencyInjection.Abstractions.dll" TargetFileName="Microsoft.Extensions.DependencyInjection.Abstractions.dll" />
+      <_SunderPackageBuildTaskDependencyFiles Include="$(_SunderPackageBuildTaskSourceDirectory)Microsoft.Extensions.Logging.Abstractions.dll" TargetFileName="Microsoft.Extensions.Logging.Abstractions.dll" />
+      <_SunderPackageBuildTaskDependencyFiles Include="$(_SunderPackageBuildTaskSourceDirectory)Microsoft.CodeAnalysis.dll" TargetFileName="Microsoft.CodeAnalysis.dll" />
+      <_SunderPackageBuildTaskDependencyFiles Include="$(_SunderPackageBuildTaskSourceDirectory)Microsoft.CodeAnalysis.CSharp.dll" TargetFileName="Microsoft.CodeAnalysis.CSharp.dll" />
+    </ItemGroup>
+    <Error Condition="!Exists('%(_SunderPackageBuildTaskDependencyFiles.Identity)')"
+           Text="Required Sunder.Package.Build task dependency '%(_SunderPackageBuildTaskDependencyFiles.TargetFileName)' was not produced at '%(_SunderPackageBuildTaskDependencyFiles.Identity)'." />
   </Target>
 
   <Target Name="_PrepareSunderPackageBuildTasks"
-          DependsOnTargets="_BuildSunderPackageBuildTasks"
-          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
+          Condition="'$(IsCrossTargetingBuild)' != 'true' and ('$(DesignTimeBuild)' != 'true' or ('$(_SunderPackageSingleProject)' == 'true' and '$(SunderPackageCompilationRole)' == ''))">
     <PropertyGroup>
-      <_SunderPackageBuildTaskSourceDirectory>$([System.IO.Path]::GetDirectoryName('$(SunderPackageBuildTaskAssembly)'))\</_SunderPackageBuildTaskSourceDirectory>
+      <_SunderPackageBuildTaskBuildFromSource>false</_SunderPackageBuildTaskBuildFromSource>
+      <_SunderPackageBuildTaskBuildFromSource Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true' and Exists('$(_SunderPackageBuildProjectFullPath)') and '$(MSBuildProjectFullPath)' != '$(_SunderPackageBuildProjectFullPath)'">true</_SunderPackageBuildTaskBuildFromSource>
     </PropertyGroup>
+    <!-- Owner compiler inputs and fixture hooks must opt in by name; all other
+         caller globals, including unknown future properties, are removed. -->
+    <_SunderGetPackageBuildTaskCallerProperties
+        KeepProperties="Configuration;TargetFramework;SunderPackageBuildProject;SunderPackageBuildTaskAssembly;SunderPackageBuildTaskSourceIsImmutable;SunderPackageBuildTaskSourceLockPath;$(SunderPackageBuildTaskSourceGlobalProperties)"
+        Condition="'$(_SunderPackageBuildTaskBuildFromSource)' == 'true'">
+      <Output TaskParameter="RemoveProperties" PropertyName="_SunderPackageBuildTaskCallerPropertiesToRemove" />
+    </_SunderGetPackageBuildTaskCallerProperties>
+    <MSBuild Projects="$(MSBuildThisFileFullPath)"
+             Targets="_BuildSunderPackageBuildTaskSourceSnapshot"
+             Properties="Configuration=$(SunderPackageBuildTaskBootstrapConfiguration);TargetFramework=net10.0;SunderPackageBuildProject=$(_SunderPackageBuildProjectFullPath);SunderPackageBuildTaskAssembly=$(_SunderPackageBuildTaskAssemblyFullPath);SunderPackageBuildTaskSourceIsImmutable=false;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath)"
+             RemoveProperties="$(_SunderPackageBuildTaskCallerPropertiesToRemove)"
+             BuildInParallel="false"
+             StopOnFirstFailure="true"
+             Condition="'$(_SunderPackageBuildTaskBuildFromSource)' == 'true'">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderPackageBuildTaskStagingInputs" />
+    </MSBuild>
+    <Error Condition="'$(_SunderPackageBuildTaskBuildFromSource)' == 'true' and '@(_SunderPackageBuildTaskStagingInputs)' == ''"
+           Text="The Sunder.Package.Build source request returned no snapshot files." />
+    <CallTarget Targets="_CollectSunderPackageBuildTaskDependencyFiles"
+                Condition="'$(_SunderPackageBuildTaskBuildFromSource)' != 'true'">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderPackageBuildTaskStagingInputs" />
+    </CallTarget>
+    <_SunderStagePackageBuildTaskSet SourceFiles="@(_SunderPackageBuildTaskStagingInputs)"
+                                      ShadowRoot="$(_SunderPackageBuildTaskShadowRootFullPath)"
+                                      ShadowDirectory="$(_SunderPackageBuildTaskShadowDirectoryFullPath)"
+                                      Immutable="$(SunderPackageBuildTaskSourceIsImmutable)">
+      <Output TaskParameter="Fingerprint" PropertyName="SunderPackageBuildTaskShadowFingerprint" />
+    </_SunderStagePackageBuildTaskSet>
+    <Error Condition="!Exists('$(_SunderPackageBuildTaskShadowAssemblyFullPath)')"
+           Text="Sunder.Package.Build task shadow '$(_SunderPackageBuildTaskShadowAssemblyFullPath)' is incomplete after staging." />
+  </Target>
 
-    <MakeDir Directories="$(SunderPackageBuildTaskShadowDirectory)" />
+  <Target Name="_ValidateSunderContractCommandProject">
+    <Error Condition="'$(DesignTimeBuild)' == 'true' or '$(IsCrossTargetingBuild)' == 'true' or '$(SunderPackageInnerBuild)' == 'true' or '$(SunderRpcProjectExportBuild)' == 'true' or '$(_SunderRpcProjectImportEnabled)' == 'true' or '$(SunderPackageProject)' == 'false'"
+           Text="Sunder contract lifecycle commands run only on the canonical package source project, not App, inner-RID, project-export, design-time, or cross-targeting builds." />
     <ItemGroup>
-      <_SunderPackageBuildTaskDependencyFiles Include="$(_SunderPackageBuildTaskSourceDirectory)*.dll" />
+      <_SunderContractCommandAppTarget Include="@(SunderPackageTarget)" Condition="'%(SunderPackageTarget.Role)' == 'app'" />
+      <_SunderContractCommandRuntimeTarget Include="@(SunderPackageTarget)" Condition="'%(SunderPackageTarget.Role)' == 'runtime'" />
     </ItemGroup>
-    <Copy SourceFiles="@(_SunderPackageBuildTaskDependencyFiles)"
-          DestinationFiles="@(_SunderPackageBuildTaskDependencyFiles->'$(SunderPackageBuildTaskShadowDirectory)%(Filename)%(Extension)')" />
+    <Error Condition="'@(_SunderContractCommandAppTarget)' != '' and '@(_SunderContractCommandRuntimeTarget)' == ''"
+           Text="Run Sunder contract lifecycle commands on the canonical package source project, not its App project." />
+  </Target>
+
+  <Target Name="_BeginSunderContractSourceResolution">
+    <Error Condition="'$(SunderPackageUsePrebuiltLeaves)' == 'true' and '$(BuildProjectReferences)' != 'false'"
+           Text="Prebuilt contract source checks require BuildProjectReferences=false; they cannot rebuild Worker or App inputs." />
+    <PropertyGroup>
+      <_SunderContractSourceResolution>true</_SunderContractSourceResolution>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="_PrepareSunderContractCommand"
+          DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks;_BeginSunderContractSourceResolution;ResolveReferences;GenerateGlobalUsings;$(_SunderPackageResourcePreparationTarget)">
+    <PropertyGroup>
+      <_SunderContractSourceResolution>false</_SunderContractSourceResolution>
+      <_SunderRpcNullableEnabled>false</_SunderRpcNullableEnabled>
+      <_SunderRpcNullableEnabled Condition="'$(Nullable)' == 'enable' or '$(Nullable)' == 'annotations'">true</_SunderRpcNullableEnabled>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderRpcCommandSource Remove="@(_SunderRpcCommandSource)" />
+      <_SunderRpcCommandSource Include="@(Compile)" Condition="'%(Compile.AutoGen)' != 'true'" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CheckSunderContracts" DependsOnTargets="_PrepareSunderContractCommand">
+    <GenerateSunderRpcBindingsTask ContractOperation="Check" GeneratePackageRoles="$(_SunderPackageSingleProject)"
+                                  ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                                  AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                                  ContractKey="$(SunderContractKey)" ContractCurrentVersion="$(SunderContractCurrentVersion)"
+                                  ContractNextVersion="$(SunderContractNextVersion)" AcknowledgeBreakingChange="$(SunderAcknowledgeBreakingChange)"
+                                  SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)"
+                                  PackageId="$(SunderPackageId)" PackageVersion="$(Version)"
+                                  ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                                  DefineConstants="$(DefineConstants)" OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" NullableEnabled="$(_SunderRpcNullableEnabled)"
+                                  OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
+                                  ContractCacheRoot="$(SunderContractCacheRoot)" ProjectDirectory="$(MSBuildProjectDirectory)"
+                                  IntermediateOutputPath="$(IntermediateOutputPath)" />
+  </Target>
+
+  <Target Name="RestoreSunderContracts" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
+    <Error Condition="'$(SunderRegistryOrigin)' != ''"
+           Text="package-api.registry-origin-invalid: Restore uses the locked Registry origins and rejects an override." />
+    <ItemGroup>
+      <_SunderContractRestoreCandidate Remove="@(_SunderContractRestoreCandidate)" />
+      <_SunderContractRestoreCandidate Include="$(SunderPackageCandidatePath)" Condition="'$(SunderPackageCandidatePath)' != ''" />
+    </ItemGroup>
+    <RestoreSunderContractsTask ProjectDirectory="$(MSBuildProjectDirectory)" ContractLockPath="$(SunderContractLockPath)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractCacheRoot="$(SunderContractCacheRoot)" CandidateArchives="@(_SunderContractRestoreCandidate)"
+                               PlatformCatalogPath="$(SunderPlatformCatalogPath)" />
+  </Target>
+
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.CollectSunderContractCacheTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.CollectSunderContractCacheTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory" Runtime="NET" Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <Target Name="CollectSunderContractCache" DependsOnTargets="_PrepareSunderPackageBuildTasks">
+    <ItemGroup>
+      <_SunderReviewedContractCacheLock Remove="@(_SunderReviewedContractCacheLock)" />
+      <_SunderReviewedContractCacheLock Include="$(SunderContractCacheLocks)" Condition="'$(SunderContractCacheLocks)' != ''" />
+    </ItemGroup>
+    <Error Condition="'@(_SunderReviewedContractCacheLock)' == ''"
+           Text="contract-cache.entry-corrupt: GC requires an explicit SunderContractCacheLocks list of reviewed workspace locks." />
+    <CollectSunderContractCacheTask ProjectDirectory="$(MSBuildProjectDirectory)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                                   ReviewedLocks="@(_SunderReviewedContractCacheLock)" GraceDays="$(SunderContractCacheGraceDays)" />
+  </Target>
+
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ManageSunderPackageApiTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ManageSunderPackageApiTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory" Runtime="NET" Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+
+  <Target Name="AddSunderPackageApi" DependsOnTargets="_PrepareSunderContractCommand">
+    <ManageSunderPackageApiTask Operation="Add" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
+                               GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                               PlatformCatalogPath="$(SunderPlatformCatalogPath)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)"
+                               Candidate="$(SunderPackageCandidatePath)"
+                               SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageVersion="$(Version)"
+                               OwnedContractsPath="$(SunderOwnedContractsPath)" IntermediateOutputPath="$(IntermediateOutputPath)"
+                               ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                               OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" DefineConstants="$(DefineConstants)" NullableEnabled="$(_SunderRpcNullableEnabled)" />
+  </Target>
+  <Target Name="UpdateSunderPackageApi" DependsOnTargets="_PrepareSunderContractCommand">
+    <ManageSunderPackageApiTask Operation="Update" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
+                               GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                               PlatformCatalogPath="$(SunderPlatformCatalogPath)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)"
+                               Candidate="$(SunderPackageCandidatePath)"
+                               SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageVersion="$(Version)"
+                               OwnedContractsPath="$(SunderOwnedContractsPath)" IntermediateOutputPath="$(IntermediateOutputPath)"
+                               ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                               OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" DefineConstants="$(DefineConstants)" NullableEnabled="$(_SunderRpcNullableEnabled)" />
+  </Target>
+  <Target Name="RemoveSunderPackageApi" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
+    <ManageSunderPackageApiTask Operation="Remove" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)"
+                               Candidate="$(SunderPackageCandidatePath)" />
+  </Target>
+  <Target Name="RequireSunderPackageApi" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
+    <ManageSunderPackageApiTask Operation="Require" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)"
+                               Candidate="$(SunderPackageCandidatePath)" />
+  </Target>
+  <Target Name="UnrequireSunderPackageApi" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
+    <ManageSunderPackageApiTask Operation="Unrequire" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)"
+                               Candidate="$(SunderPackageCandidatePath)" />
+  </Target>
+  <Target Name="ImplementSunderPackageApi" DependsOnTargets="_PrepareSunderContractCommand">
+    <ManageSunderPackageApiTask Operation="Implement" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
+                               GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                               PlatformCatalogPath="$(SunderPlatformCatalogPath)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)"
+                               Candidate="$(SunderPackageCandidatePath)"
+                               SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageVersion="$(Version)"
+                               OwnedContractsPath="$(SunderOwnedContractsPath)" IntermediateOutputPath="$(IntermediateOutputPath)"
+                               ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                               OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" DefineConstants="$(DefineConstants)" NullableEnabled="$(_SunderRpcNullableEnabled)" />
+  </Target>
+  <Target Name="UnimplementSunderPackageApi" DependsOnTargets="_PrepareSunderContractCommand">
+    <ManageSunderPackageApiTask Operation="Unimplement" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
+                               GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)"
+                               Candidate="$(SunderPackageCandidatePath)"
+                               SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageVersion="$(Version)"
+                               OwnedContractsPath="$(SunderOwnedContractsPath)" IntermediateOutputPath="$(IntermediateOutputPath)"
+                               ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                               OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" DefineConstants="$(DefineConstants)" NullableEnabled="$(_SunderRpcNullableEnabled)" />
+  </Target>
+  <Target Name="ListSunderPackageApis" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
+    <ManageSunderPackageApiTask Operation="List" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)"
+                               Candidate="$(SunderPackageCandidatePath)" />
+  </Target>
+
+  <Target Name="ImplementSunderPlatformApi" DependsOnTargets="_PrepareSunderContractCommand">
+    <ManageSunderPackageApiTask Operation="PlatformImplement" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
+                               GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                               PlatformCatalogPath="$(SunderPlatformCatalogPath)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)" Candidate="$(SunderPackageCandidatePath)"
+                               SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageVersion="$(Version)"
+                               OwnedContractsPath="$(SunderOwnedContractsPath)" IntermediateOutputPath="$(IntermediateOutputPath)"
+                               ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                               OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" DefineConstants="$(DefineConstants)" NullableEnabled="$(_SunderRpcNullableEnabled)" />
+  </Target>
+  <Target Name="UpdateSunderPlatformApi" DependsOnTargets="_PrepareSunderContractCommand">
+    <ManageSunderPackageApiTask Operation="PlatformUpdate" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
+                               GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                               PlatformCatalogPath="$(SunderPlatformCatalogPath)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)" Candidate="$(SunderPackageCandidatePath)"
+                               SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageVersion="$(Version)"
+                               OwnedContractsPath="$(SunderOwnedContractsPath)" IntermediateOutputPath="$(IntermediateOutputPath)"
+                               ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                               OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" DefineConstants="$(DefineConstants)" NullableEnabled="$(_SunderRpcNullableEnabled)" />
+  </Target>
+  <Target Name="UnimplementSunderPlatformApi" DependsOnTargets="_PrepareSunderContractCommand">
+    <ManageSunderPackageApiTask Operation="PlatformUnimplement" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
+                               GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)" Candidate="$(SunderPackageCandidatePath)"
+                               SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageVersion="$(Version)"
+                               OwnedContractsPath="$(SunderOwnedContractsPath)" IntermediateOutputPath="$(IntermediateOutputPath)"
+                               ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                               OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" DefineConstants="$(DefineConstants)" NullableEnabled="$(_SunderRpcNullableEnabled)" />
+  </Target>
+  <Target Name="ListSunderPlatformApis" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
+    <ManageSunderPackageApiTask Operation="PlatformList" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               PackageId="$(SunderPackageId)" ContractId="$(SunderContractId)" VersionRange="$(SunderPackageVersionRange)"
+                               IncludePrerelease="$(SunderPackageIncludePrerelease)" RegistryOrigin="$(SunderRegistryOrigin)"
+                               Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)" Candidate="$(SunderPackageCandidatePath)" />
+  </Target>
+
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ImportSunderContractPublicationTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ImportSunderContractPublicationTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory" Runtime="NET" Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <Target Name="ImportSunderContractPublication" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
+    <ImportSunderContractPublicationTask ProjectDirectory="$(MSBuildProjectDirectory)" OwnedContractsPath="$(SunderOwnedContractsPath)"
+                                         PackagePath="$(SunderPackagePublicationPath)" RegistryOrigin="$(SunderRegistryOrigin)"
+                                         AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)" />
+  </Target>
+
+  <Target Name="AcceptSunderContracts" DependsOnTargets="_PrepareSunderContractCommand">
+    <GenerateSunderRpcBindingsTask ContractOperation="Accept" GeneratePackageRoles="$(_SunderPackageSingleProject)"
+                                  ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                                  AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                                  ContractKey="$(SunderContractKey)" ContractCurrentVersion="$(SunderContractCurrentVersion)"
+                                  ContractNextVersion="$(SunderContractNextVersion)" AcknowledgeBreakingChange="$(SunderAcknowledgeBreakingChange)"
+                                  SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)"
+                                  PackageId="$(SunderPackageId)" PackageVersion="$(Version)"
+                                  ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                                  DefineConstants="$(DefineConstants)" OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" NullableEnabled="$(_SunderRpcNullableEnabled)"
+                                  OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
+                                  ContractCacheRoot="$(SunderContractCacheRoot)" ProjectDirectory="$(MSBuildProjectDirectory)"
+                                  IntermediateOutputPath="$(IntermediateOutputPath)" />
+    <PropertyGroup>
+      <_SunderRpcHasOwnedContractsBaseline>true</_SunderRpcHasOwnedContractsBaseline>
+      <_SunderRpcResolveReferencesTarget>ResolveReferences</_SunderRpcResolveReferencesTarget>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="FreezeSunderContracts" DependsOnTargets="_PrepareSunderContractCommand">
+    <GenerateSunderRpcBindingsTask ContractOperation="Freeze" GeneratePackageRoles="$(_SunderPackageSingleProject)"
+                                  ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                                  AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                                  ContractKey="$(SunderContractKey)" ContractCurrentVersion="$(SunderContractCurrentVersion)"
+                                  ContractNextVersion="$(SunderContractNextVersion)" AcknowledgeBreakingChange="$(SunderAcknowledgeBreakingChange)"
+                                  SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)"
+                                  PackageId="$(SunderPackageId)" PackageVersion="$(Version)"
+                                  ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                                  DefineConstants="$(DefineConstants)" OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" NullableEnabled="$(_SunderRpcNullableEnabled)"
+                                  OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
+                                  ContractCacheRoot="$(SunderContractCacheRoot)" ProjectDirectory="$(MSBuildProjectDirectory)"
+                                  IntermediateOutputPath="$(IntermediateOutputPath)" />
+  </Target>
+
+  <Target Name="_GenerateSunderRpcContractExports"
+          DependsOnTargets="_PrepareSunderPackageBuildTasks;ResolveReferences"
+          Returns="@(_SunderRpcPackageProjectExport)"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' == 'true'">
+    <PropertyGroup>
+      <_SunderRpcNullableEnabled>false</_SunderRpcNullableEnabled>
+      <_SunderRpcNullableEnabled Condition="'$(Nullable)' == 'enable' or '$(Nullable)' == 'annotations'">true</_SunderRpcNullableEnabled>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderRpcAuthoringSource Remove="@(_SunderRpcAuthoringSource)" />
+      <_SunderRpcAuthoringSource Include="@(Compile)"
+                                 Condition="'%(Compile.AutoGen)' != 'true'" />
+      <_SunderRpcPackageProjectExport Remove="@(_SunderRpcPackageProjectExport)" />
+      <_SunderRpcProjectExportLockDirectory Remove="@(_SunderRpcProjectExportLockDirectory)" />
+      <_SunderRpcProjectExportLockDirectory Include="$([System.IO.Path]::Combine('$(IntermediateOutputPath)', 'sunder-rpc'))">
+        <DiscoveryRoot>$(IntermediateOutputPath)</DiscoveryRoot>
+      </_SunderRpcProjectExportLockDirectory>
+    </ItemGroup>
+    <ManageSunderRpcGeneratedOutputLockTask Action="Acquire"
+                                             ProjectDirectory="$(MSBuildProjectDirectory)"
+                                             OutputDirectories="@(_SunderRpcProjectExportLockDirectory)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderRpcProjectExportOutputLockLeaseId" />
+    </ManageSunderRpcGeneratedOutputLockTask>
+    <GenerateSunderRpcBindingsTask GenerationMode="ProjectExport"
+                                  AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                                   SourceFiles="@(_SunderRpcAuthoringSource)"
+                                   ReferencePaths="@(ReferencePath)"
+                                   PackageId="$(SunderPackageId)"
+                                   PackageVersion="$(Version)"
+                                   ProjectIdentity="$(MSBuildProjectName)"
+                                   Configuration="$(Configuration)"
+                                   TargetFramework="$(TargetFramework)"
+                                   DefineConstants="$(DefineConstants)"
+                                   OutputType="$(OutputType)"
+                                   AssemblyName="$(AssemblyName)"
+                                   NullableEnabled="$(_SunderRpcNullableEnabled)"
+                                   OwnedContractsPath="$(SunderOwnedContractsPath)"
+                                     ContractLockPath="$(SunderContractLockPath)"
+                                     ContractCacheRoot="$(SunderContractCacheRoot)"
+                                    ProjectDirectory="$(MSBuildProjectDirectory)"
+                                    IntermediateOutputPath="$(IntermediateOutputPath)"
+                                    OutputLockLeaseId="$(_SunderRpcProjectExportOutputLockLeaseId)">
+      <Output TaskParameter="PackageProjectExports" ItemName="_SunderRpcPackageProjectExport" />
+    </GenerateSunderRpcBindingsTask>
+    <ManageSunderRpcGeneratedOutputLockTask Action="Release"
+                                             ProjectDirectory="$(MSBuildProjectDirectory)"
+                                             LeaseId="$(_SunderRpcProjectExportOutputLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderRpcProjectExportOutputLockLeaseId" />
+    </ManageSunderRpcGeneratedOutputLockTask>
+    <OnError ExecuteTargets="_ReleaseSunderRpcProjectExportOutputLock" />
+  </Target>
+
+  <Target Name="_ReleaseSunderRpcProjectExportOutputLock"
+          Condition="'$(_SunderRpcProjectExportOutputLockLeaseId)' != ''">
+    <ManageSunderRpcGeneratedOutputLockTask Action="Release"
+                                             ProjectDirectory="$(MSBuildProjectDirectory)"
+                                             LeaseId="$(_SunderRpcProjectExportOutputLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderRpcProjectExportOutputLockLeaseId" />
+    </ManageSunderRpcGeneratedOutputLockTask>
+  </Target>
+
+  <Target Name="GenerateSunderRpcContractExports"
+          Returns="@(_SunderRpcPackageProjectExport)"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true' and '$(_SunderRpcProjectImportEnabled)' != 'true' and '$(_SunderRpcHasOwnedContractsBaseline)' == 'true'">
+    <PropertyGroup Condition="'$(SunderRpcExpectedAppProject)' != ''">
+      <_SunderRpcExpectedAppProjectFullPath>$([System.IO.Path]::GetFullPath('$(SunderRpcExpectedAppProject)', '$(MSBuildProjectDirectory)'))</_SunderRpcExpectedAppProjectFullPath>
+      <_SunderRpcConfiguredAppProjectFullPath Condition="'$(SunderPackageAppProject)' != ''">$([System.IO.Path]::GetFullPath('$(SunderPackageAppProject)', '$(MSBuildProjectDirectory)'))</_SunderRpcConfiguredAppProjectFullPath>
+    </PropertyGroup>
+    <PropertyGroup>
+      <_SunderRpcProjectExportIntermediateOutputPath>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', '$(Configuration)', '$(TargetFramework)'))))))</_SunderRpcProjectExportIntermediateOutputPath>
+    </PropertyGroup>
+    <Error Condition="'$(SunderRpcExpectedAppProject)' != '' and '$(_SunderRpcConfiguredAppProjectFullPath)' != '$(_SunderRpcExpectedAppProjectFullPath)'"
+           Text="SunderPackageRootProject and SunderPackageAppProject must identify one another after path normalization." />
+    <ItemGroup>
+      <_SunderRpcPackageProjectExport Remove="@(_SunderRpcPackageProjectExport)" />
+    </ItemGroup>
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="_GenerateSunderRpcContractExports"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);SunderRpcProjectExportBuild=true;SunderPackagePrimaryProject=false;SunderPackageInnerBuild=true;IntermediateOutputPath=$(_SunderRpcProjectExportIntermediateOutputPath);AppendRuntimeIdentifierToOutputPath=false"
+             RemoveProperties="RuntimeIdentifier;SelfContained;UseAppHost;PublishSingleFile;PublishTrimmed;OutputPath;OutDir;MSBuildProjectExtensionsPath"
+             BuildInParallel="false"
+             StopOnFirstFailure="true">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderRpcPackageProjectExport" />
+    </MSBuild>
+  </Target>
+
+  <Target Name="_ResolveSunderRpcProjectImport"
+           Returns="@(_SunderRpcPackageProjectExport)"
+           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true' and '$(_SunderRpcProjectImportEnabled)' == 'true'">
+    <PropertyGroup Condition="'$(SunderRpcPackageProjectExportPath)' != ''">
+      <_SunderRpcExplicitPackageProjectExportFullPath>$([System.IO.Path]::GetFullPath('$(SunderRpcPackageProjectExportPath)', '$(MSBuildProjectDirectory)'))</_SunderRpcExplicitPackageProjectExportFullPath>
+      <_SunderRpcExplicitPackageProjectExportGeneratedDirectory>$([System.IO.Path]::GetDirectoryName('$(_SunderRpcExplicitPackageProjectExportFullPath)'))</_SunderRpcExplicitPackageProjectExportGeneratedDirectory>
+      <_SunderRpcExplicitPackageProjectExportIntermediateOutputPath>$([System.IO.Path]::GetDirectoryName('$(_SunderRpcExplicitPackageProjectExportGeneratedDirectory)'))</_SunderRpcExplicitPackageProjectExportIntermediateOutputPath>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(SunderRpcPackageProjectExportPath)' == '' and '$(SunderPackageRootProject)' != ''">
+      <_SunderPackageRootProjectFullPath>$([System.IO.Path]::GetFullPath('$(SunderPackageRootProject)', '$(MSBuildProjectDirectory)'))</_SunderPackageRootProjectFullPath>
+    </PropertyGroup>
+    <Error Condition="'$(SunderRpcPackageProjectExportPath)' == '' and '$(SunderPackageRootProject)' == ''"
+           Text="Project RPC import requires an explicit package project export or SunderPackageRootProject." />
+    <Error Condition="'$(_SunderPackageRootProjectFullPath)' != '' and '$(_SunderPackageRootProjectFullPath)' == '$(MSBuildProjectFullPath)'"
+           Text="SunderPackageRootProject must identify the canonical package project, not the App project itself." />
+    <Error Condition="'$(_SunderPackageRootProjectFullPath)' != '' and !Exists('$(_SunderPackageRootProjectFullPath)')"
+           Text="SunderPackageRootProject '$(_SunderPackageRootProjectFullPath)' does not exist." />
+    <ItemGroup>
+      <_SunderRpcPackageProjectExport Remove="@(_SunderRpcPackageProjectExport)" />
+      <_SunderRpcPackageProjectExport Include="$(_SunderRpcExplicitPackageProjectExportFullPath)"
+                                      Condition="'$(SunderRpcPackageProjectExportPath)' != ''">
+        <Sha256>$(SunderRpcPackageProjectExportSha256)</Sha256>
+        <ProjectIdentity>$(SunderRpcPackageProjectExportProjectIdentity)</ProjectIdentity>
+        <Configuration>$(SunderRpcPackageProjectExportConfiguration)</Configuration>
+        <TargetFramework>$(SunderRpcPackageProjectExportTargetFramework)</TargetFramework>
+        <PackageId>$(SunderRpcPackageProjectExportPackageId)</PackageId>
+        <PackageVersion>$(SunderRpcPackageProjectExportPackageVersion)</PackageVersion>
+        <GeneratedDirectory>$(_SunderRpcExplicitPackageProjectExportGeneratedDirectory)</GeneratedDirectory>
+        <IntermediateOutputPath>$(_SunderRpcExplicitPackageProjectExportIntermediateOutputPath)</IntermediateOutputPath>
+      </_SunderRpcPackageProjectExport>
+    </ItemGroup>
+    <MSBuild Projects="$(_SunderPackageRootProjectFullPath)"
+             Targets="GenerateSunderRpcContractExports"
+             Properties="Configuration=$(Configuration);SunderRpcExpectedAppProject=$(MSBuildProjectFullPath)"
+             RemoveProperties="TargetFramework;RuntimeIdentifier;SelfContained;UseAppHost;PublishSingleFile;PublishTrimmed;OutputPath;OutDir;IntermediateOutputPath;MSBuildProjectExtensionsPath;AppendRuntimeIdentifierToOutputPath;SunderRpcProjectImportBuild;SunderRpcPackageProjectExportPath;SunderRpcPackageProjectExportSha256;SunderRpcPackageProjectExportProjectIdentity;SunderRpcPackageProjectExportConfiguration;SunderRpcPackageProjectExportTargetFramework;SunderRpcPackageProjectExportPackageId;SunderRpcPackageProjectExportPackageVersion;SunderPackageRootProject"
+             BuildInParallel="false"
+             StopOnFirstFailure="true"
+             Condition="'$(SunderRpcPackageProjectExportPath)' == '' and '$(_SunderPackageRootProjectFullPath)' != ''">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderRpcPackageProjectExport" />
+    </MSBuild>
+  </Target>
+
+  <Target Name="PrepareSunderRpcImportedSources"
+          DependsOnTargets="GenerateSunderRpcContractExports;_ResolveSunderRpcProjectImport"
+           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true'" />
+
+  <Target Name="_AcquireSunderRpcImplementationOutputLock"
+          DependsOnTargets="PrepareSunderRpcImportedSources;_PrepareSunderPackageBuildTasks;$(_SunderRpcResolveReferencesTarget)"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true' and '$(_SunderRpcGeneratedOutputLockLeaseId)' == ''">
+    <PropertyGroup>
+      <_SunderRpcLocalIntermediateOutputPath>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)', '$(MSBuildProjectDirectory)'))</_SunderRpcLocalIntermediateOutputPath>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderRpcLocalGeneratedOutputLockDirectory Remove="@(_SunderRpcLocalGeneratedOutputLockDirectory)" />
+      <_SunderRpcLocalGeneratedOutputLockDirectory Include="$([System.IO.Path]::Combine('$(_SunderRpcLocalIntermediateOutputPath)', 'sunder-rpc'))">
+        <DiscoveryRoot>$(_SunderRpcLocalIntermediateOutputPath)</DiscoveryRoot>
+      </_SunderRpcLocalGeneratedOutputLockDirectory>
+      <_SunderRpcGeneratedOutputLockDirectory Remove="@(_SunderRpcGeneratedOutputLockDirectory)" />
+      <_SunderRpcGeneratedOutputLockDirectory Include="@(_SunderRpcLocalGeneratedOutputLockDirectory)" />
+      <_SunderRpcGeneratedOutputLockDirectory Include="@(_SunderRpcPackageProjectExport->'%(GeneratedDirectory)')"
+                                              Condition="'%(_SunderRpcPackageProjectExport.GeneratedDirectory)' != ''">
+        <DiscoveryRoot>%(_SunderRpcPackageProjectExport.IntermediateOutputPath)</DiscoveryRoot>
+      </_SunderRpcGeneratedOutputLockDirectory>
+    </ItemGroup>
+    <ManageSunderRpcGeneratedOutputLockTask Action="Acquire"
+                                             ProjectDirectory="$(MSBuildProjectDirectory)"
+                                             OutputDirectories="@(_SunderRpcGeneratedOutputLockDirectory)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderRpcGeneratedOutputLockLeaseId" />
+    </ManageSunderRpcGeneratedOutputLockTask>
+  </Target>
+
+  <Target Name="_ReleaseSunderRpcGeneratedOutputLock"
+          Condition="'$(_SunderRpcGeneratedOutputLockLeaseId)' != ''">
+    <ManageSunderRpcGeneratedOutputLockTask Action="Release"
+                                             ProjectDirectory="$(MSBuildProjectDirectory)"
+                                             LeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderRpcGeneratedOutputLockLeaseId" />
+    </ManageSunderRpcGeneratedOutputLockTask>
+  </Target>
+
+  <Target Name="_ReleaseSunderRpcGeneratedOutputLockAfterCompile"
+          AfterTargets="CoreCompile"
+          DependsOnTargets="_ReleaseSunderRpcGeneratedOutputLock"
+          Condition="'$(_SunderRpcGeneratedOutputLockLeaseId)' != '' and '$(SunderPackageProject)' == 'false'" />
+
+  <Target Name="_ReleaseSunderRpcGeneratedOutputLockAfterManifest"
+          AfterTargets="GenerateSunderPackageManifest"
+          DependsOnTargets="_ReleaseSunderRpcGeneratedOutputLock"
+          Condition="'$(_SunderRpcGeneratedOutputLockLeaseId)' != ''" />
+
+  <Target Name="GenerateSunderRpcImplementationBindings"
+           BeforeTargets="CoreCompile"
+           DependsOnTargets="_AcquireSunderRpcImplementationOutputLock"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true' and '$(_SunderRpcProjectImportEnabled)' != 'true' and '$(_SunderPackageSingleProject)' != 'true'">
+    <PropertyGroup>
+      <_SunderRpcNullableEnabled>false</_SunderRpcNullableEnabled>
+      <_SunderRpcNullableEnabled Condition="'$(Nullable)' == 'enable' or '$(Nullable)' == 'annotations'">true</_SunderRpcNullableEnabled>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderRpcAuthoringSource Remove="@(_SunderRpcAuthoringSource)" />
+      <_SunderRpcAuthoringSource Include="@(Compile)"
+                                 Condition="'%(Compile.AutoGen)' != 'true'" />
+      <_SunderSourceContractBundle Remove="@(_SunderSourceContractBundle)" />
+      <_SunderSourceRpcProvider Remove="@(_SunderSourceRpcProvider)" />
+      <_SunderSourceRpcUse Remove="@(_SunderSourceRpcUse)" />
+      <_SunderRpcAuthoringReceipt Remove="@(_SunderRpcAuthoringReceipt)" />
+    </ItemGroup>
+    <GenerateSunderRpcBindingsTask GenerationMode="Implementation"
+                                  AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                                   Bindings="@(SunderRpcBinding)"
+                                   SourceFiles="@(_SunderRpcAuthoringSource)"
+                                   ReferencePaths="@(ReferencePath)"
+                                   ExpectedPackageProjectExports="@(_SunderRpcPackageProjectExport)"
+                                   PackageId="$(SunderPackageId)"
+                                   PackageVersion="$(Version)"
+                                   ProjectIdentity="$(MSBuildProjectName)"
+                                   Configuration="$(Configuration)"
+                                   TargetFramework="$(TargetFramework)"
+                                   DefineConstants="$(DefineConstants)"
+                                   OutputType="$(OutputType)"
+                                   AssemblyName="$(AssemblyName)"
+                                   NullableEnabled="$(_SunderRpcNullableEnabled)"
+                                   OwnedContractsPath="$(SunderOwnedContractsPath)"
+                                     ContractLockPath="$(SunderContractLockPath)"
+                                     ContractCacheRoot="$(SunderContractCacheRoot)"
+                                    ProjectDirectory="$(MSBuildProjectDirectory)"
+                                    IntermediateOutputPath="$(IntermediateOutputPath)"
+                                    OutputLockLeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)">
+      <Output TaskParameter="CompileItems" ItemName="Compile" />
+      <Output TaskParameter="BindingSnapshots" ItemName="_SunderRpcBindingSnapshot" />
+      <Output TaskParameter="ContractBundles" ItemName="_SunderSourceContractBundle" />
+      <Output TaskParameter="RpcProviders" ItemName="_SunderSourceRpcProvider" />
+      <Output TaskParameter="RpcUses" ItemName="_SunderSourceRpcUse" />
+      <Output TaskParameter="AuthoringReceipts" ItemName="_SunderRpcAuthoringReceipt" />
+    </GenerateSunderRpcBindingsTask>
+    <ManageSunderRpcGeneratedOutputLockTask Action="Retain"
+                                             ProjectDirectory="$(MSBuildProjectDirectory)"
+                                             OutputDirectories="@(_SunderRpcLocalGeneratedOutputLockDirectory)"
+                                             LeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)" />
+    <OnError ExecuteTargets="_ReleaseSunderRpcGeneratedOutputLock" />
+  </Target>
+
+  <Target Name="ImportSunderRpcProjectContracts"
+           BeforeTargets="CoreCompile"
+           DependsOnTargets="_AcquireSunderRpcImplementationOutputLock"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true' and '$(_SunderRpcProjectImportEnabled)' == 'true'">
+    <ItemGroup>
+      <_SunderSourceContractBundle Remove="@(_SunderSourceContractBundle)" />
+      <_SunderSourceRpcUse Remove="@(_SunderSourceRpcUse)" />
+      <_SunderRpcAuthoringReceipt Remove="@(_SunderRpcAuthoringReceipt)" />
+    </ItemGroup>
+    <GenerateSunderRpcBindingsTask GenerationMode="ProjectImport"
+                                  AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                                   ExpectedPackageProjectExports="@(_SunderRpcPackageProjectExport)"
+                                   PackageId="%(_SunderRpcPackageProjectExport.PackageId)"
+                                   PackageVersion="$(Version)"
+                                    ProjectIdentity="$(MSBuildProjectName)"
+                                    Configuration="$(Configuration)"
+                                    TargetFramework="$(TargetFramework)"
+                                    ProjectDirectory="$(MSBuildProjectDirectory)"
+                                    IntermediateOutputPath="$(IntermediateOutputPath)"
+                                    OutputLockLeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)"
+                                    Condition="'@(_SunderRpcPackageProjectExport)' != ''">
+      <Output TaskParameter="CompileItems" ItemName="Compile" />
+      <Output TaskParameter="BindingSnapshots" ItemName="_SunderRpcBindingSnapshot" />
+      <Output TaskParameter="ContractBundles" ItemName="_SunderSourceContractBundle" />
+      <Output TaskParameter="RpcUses" ItemName="_SunderSourceRpcUse" />
+      <Output TaskParameter="AuthoringReceipts" ItemName="_SunderRpcAuthoringReceipt" />
+    </GenerateSunderRpcBindingsTask>
+    <ManageSunderRpcGeneratedOutputLockTask Action="Retain"
+                                             ProjectDirectory="$(MSBuildProjectDirectory)"
+                                             OutputDirectories="@(_SunderRpcLocalGeneratedOutputLockDirectory)"
+                                             LeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)" />
+    <OnError ExecuteTargets="_ReleaseSunderRpcGeneratedOutputLock" />
   </Target>
 
   <Target Name="GenerateSunderRpcBindings"
-          BeforeTargets="CoreCompile"
-          DependsOnTargets="_PrepareSunderPackageBuildTasks"
-          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
-    <GenerateSunderRpcBindingsTask Bindings="@(SunderRpcBinding)"
-                                   ProjectDirectory="$(MSBuildProjectDirectory)"
-                                   IntermediateOutputPath="$(IntermediateOutputPath)">
-      <Output TaskParameter="CompileItems" ItemName="Compile" />
-      <Output TaskParameter="FileWrites" ItemName="FileWrites" />
-      <Output TaskParameter="BindingSnapshots" ItemName="_SunderRpcBindingSnapshot" />
-    </GenerateSunderRpcBindingsTask>
+           DependsOnTargets="GenerateSunderRpcImplementationBindings;ImportSunderRpcProjectContracts"
+           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true'" />
+
+  <Target Name="CleanSunderRpcGeneratedOutput"
+          BeforeTargets="CoreClean"
+          DependsOnTargets="_ReleaseSunderRpcGeneratedOutputLock;_PrepareSunderPackageBuildTasks"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true'">
+    <PropertyGroup>
+      <_SunderRpcCleanLocalIntermediateOutputPath>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)', '$(MSBuildProjectDirectory)'))</_SunderRpcCleanLocalIntermediateOutputPath>
+      <_SunderRpcCleanNeutralIntermediateOutputPath>$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', '$(Configuration)', '$(TargetFramework)'))))</_SunderRpcCleanNeutralIntermediateOutputPath>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderRpcGeneratedDirectoryToClean Remove="@(_SunderRpcGeneratedDirectoryToClean)" />
+      <_SunderRpcGeneratedDirectoryToClean Include="$([System.IO.Path]::Combine('$(_SunderRpcCleanLocalIntermediateOutputPath)', 'sunder-rpc'))">
+        <DiscoveryRoot>$(_SunderRpcCleanLocalIntermediateOutputPath)</DiscoveryRoot>
+      </_SunderRpcGeneratedDirectoryToClean>
+      <_SunderRpcGeneratedDirectoryToClean Include="$([System.IO.Path]::Combine('$(_SunderRpcCleanNeutralIntermediateOutputPath)', 'sunder-rpc'))"
+                                          Condition="'$(SunderPackageCompilationRole)' == ''">
+        <DiscoveryRoot>$(_SunderRpcCleanNeutralIntermediateOutputPath)</DiscoveryRoot>
+      </_SunderRpcGeneratedDirectoryToClean>
+      <_SunderRpcGeneratedDirectoryToClean Include="$([System.IO.Path]::Combine('$(_SunderRpcCleanNeutralIntermediateOutputPath)', 'sunder-design-time', 'sunder-rpc'))"
+                                          Condition="'$(SunderPackageCompilationRole)' == '' and '$(_SunderPackageSingleProject)' == 'true'">
+        <DiscoveryRoot>$([System.IO.Path]::Combine('$(_SunderRpcCleanNeutralIntermediateOutputPath)', 'sunder-design-time'))</DiscoveryRoot>
+      </_SunderRpcGeneratedDirectoryToClean>
+    </ItemGroup>
+    <CleanSunderRpcGeneratedOutputTask ProjectDirectory="$(MSBuildProjectDirectory)"
+                                       GeneratedDirectories="@(_SunderRpcGeneratedDirectoryToClean)" />
   </Target>
 
   <Target Name="GenerateSunderPackageManifest"
            DependsOnTargets="_PrepareSunderPackageBuildTasks;GenerateSunderRpcBindings"
-            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
+            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false' and ('$(_SunderPackageSingleProject)' != 'true' or '$(SunderPackageCompilationRole)' != '')">
+    <Error Condition="'$(SunderGeneratedPackageManifest)' == '' and '$(IntermediateOutputPath)' == ''"
+           Text="Sunder manifest generation requires a resolved intermediate output path or an explicit SunderGeneratedPackageManifest." />
+    <PropertyGroup>
+      <!-- A source import may precede Sdk.targets and its TFM/RID path defaults. -->
+      <SunderGeneratedPackageManifest Condition="'$(SunderGeneratedPackageManifest)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'sunder-package.json'))))</SunderGeneratedPackageManifest>
+    </PropertyGroup>
     <ItemGroup>
       <_SunderAuthoredAssembly Include="$(TargetPath)" />
       <_SunderAuthoredAssembly Include="@(ReferenceCopyLocalPaths)"
@@ -117,20 +1377,24 @@
                                          RuntimeIdentifiers="@(_SunderPackageRuntimeIdentifier)"
                                          PackageTargets="@(SunderPackageTarget)"
                                           PackageViews="@(SunderPackageView)"
-                                          ContractBundles="@(SunderContractBundle)"
+                                           ContractBundles="@(SunderContractBundle);@(_SunderSourceContractBundle)"
                                           BindingSnapshots="@(_SunderRpcBindingSnapshot)"
-                                          UsesContracts="@(SunderUsesContract)"
-                                         RpcProviders="@(SunderRpcProvider)"
-                                         RuntimeIdentifier="$(RuntimeIdentifier)"
+                                           UsesContracts="@(SunderUsesContract);@(_SunderSourceRpcUse)"
+                                            RpcProviders="@(SunderRpcProvider);@(_SunderSourceRpcProvider)"
+                                            AuthoringReceipts="@(_SunderRpcAuthoringReceipt)"
+                                           RpcOutputLockLeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)"
+                                          RuntimeIdentifier="$(RuntimeIdentifier)"
                                          OutputType="$(OutputType)"
-                                         SelfContained="$(SelfContained)"
-                                         UseAppHost="$(UseAppHost)"
-                                         PublishSingleFile="$(PublishSingleFile)">
+                                          SelfContained="$(SelfContained)"
+                                          UseAppHost="$(UseAppHost)"
+                                          PublishSingleFile="$(PublishSingleFile)"
+                                          PublishTrimmed="$(PublishTrimmed)">
       <Output TaskParameter="ResolvedTargets" ItemName="_SunderResolvedPackageTarget" />
       <Output TaskParameter="ResolvedContractFiles" ItemName="_SunderResolvedContractFile" />
       <Output TaskParameter="HasWorkerTarget" PropertyName="_SunderHasWorkerTarget" />
       <Output TaskParameter="WorkerEntryPointRelativePath" PropertyName="SunderPackageWorkerEntryPointRelativePath" />
     </GenerateSunderPackageManifestTask>
+    <OnError ExecuteTargets="_ReleaseSunderRpcGeneratedOutputLock" />
   </Target>
 
   <Target Name="_CollectSunderWorkerFiles"
@@ -144,15 +1408,31 @@
     <MakeDir Directories="$(_SunderPackageWorkerSigningDirectory)"
                Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
     <ItemGroup>
-      <_SunderPublishedAssembly Include="@(ResolvedFileToPublish)"
-                                Condition="'%(ResolvedFileToPublish.Extension)' == '.dll'" />
+      <_SunderWorkerPublishFile Remove="@(_SunderWorkerPublishFile)" />
+      <_SunderWorkerReferenceFile Remove="@(_SunderWorkerReferenceFile)" />
+      <_SunderPublishedAssembly Remove="@(_SunderPublishedAssembly)" />
+      <_SunderXmlDocumentationFile Remove="@(_SunderXmlDocumentationFile)" />
+      <_SunderWorkerSymbolFile Remove="@(_SunderWorkerSymbolFile)" />
+      <_SunderWorkerSourceFile Remove="@(_SunderWorkerSourceFile)" />
+      <_SunderWorkerFile Remove="@(_SunderWorkerFile)" />
+      <_SunderWorkerPublishFile Include="@(ResolvedFileToPublish)" />
+      <_SunderWorkerReferenceFile Include="@(ReferenceCopyLocalPaths)"
+                                  Exclude="@(ResolvedFileToPublish)">
+        <RelativePath Condition="'%(ReferenceCopyLocalPaths.DestinationSubPath)' != ''">%(ReferenceCopyLocalPaths.DestinationSubPath)</RelativePath>
+        <RelativePath Condition="'%(ReferenceCopyLocalPaths.DestinationSubPath)' == ''">%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)</RelativePath>
+      </_SunderWorkerReferenceFile>
+      <_SunderWorkerPublishFile Include="@(_SunderWorkerReferenceFile)" />
+      <_SunderPublishedAssembly Include="@(_SunderWorkerPublishFile)"
+                                 Condition="'%(_SunderWorkerPublishFile.Extension)' == '.dll'" />
       <_SunderXmlDocumentationFile Include="@(_SunderPublishedAssembly->'%(RootDir)%(Directory)%(Filename).xml')" />
-      <_SunderWorkerSourceFile Include="@(ResolvedFileToPublish)"
-                               Exclude="@(_SunderXmlDocumentationFile)"
-                               Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
-      <_SunderWorkerFile Include="@(ResolvedFileToPublish)"
-                         Exclude="@(_SunderXmlDocumentationFile)"
-                         Condition="'$(SunderPackageWorkerSigningTargets)' == ''" />
+      <_SunderWorkerSymbolFile Include="@(_SunderWorkerPublishFile)"
+                               Condition="'%(_SunderWorkerPublishFile.Extension)' == '.pdb' or '%(_SunderWorkerPublishFile.Extension)' == '.mdb'" />
+      <_SunderWorkerSourceFile Include="@(_SunderWorkerPublishFile)"
+                                Exclude="@(_SunderXmlDocumentationFile);@(_SunderWorkerSymbolFile)"
+                                Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
+      <_SunderWorkerFile Include="@(_SunderWorkerPublishFile)"
+                          Exclude="@(_SunderXmlDocumentationFile);@(_SunderWorkerSymbolFile)"
+                          Condition="'$(SunderPackageWorkerSigningTargets)' == ''" />
     </ItemGroup>
     <Copy SourceFiles="@(_SunderWorkerSourceFile)"
           DestinationFiles="@(_SunderWorkerSourceFile->'$(_SunderPackageWorkerSigningDirectory)%(RelativePath)')"
@@ -189,7 +1469,7 @@
   <Target Name="EmitSunderDevOutput"
             AfterTargets="Build"
             DependsOnTargets="GenerateSunderPackageManifest;_RunSunderPackageWorkerSigning;_ValidateSunderDevOutputPath"
-            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
+            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false' and ('$(_SunderPackageSingleProject)' != 'true' or '$(SunderPackageCompilationRole)' != '')">
     <ItemGroup>
       <_SunderRuntimeFiles Include="$(TargetDir)*.dll" />
       <_SunderRuntimeFiles Include="$(TargetDir)*.pdb" />
@@ -246,7 +1526,8 @@
                              AssetsDirectory="$(SunderPackageAssetsDirectory)"
                                ManagedFiles="@(_SunderRuntimeFiles)"
                                NativeRuntimeFiles="@(_SunderNativeRuntimeFiles)"
-                               WorkerFiles="@(_SunderWorkerFile)"
+                                WorkerFiles="@(_SunderWorkerFile)"
+                                RoleContentFiles="@(_SunderRoleAppContent)"
                                AssetFiles="@(_SunderAssetFiles)"
                               ContractFiles="@(_SunderResolvedContractFile)" />
   </Target>
@@ -278,17 +1559,30 @@
   </Target>
 
   <Target Name="_RejectSunderPackageBuildInPrebuiltMode"
-          BeforeTargets="PrepareForBuild;Build"
+          BeforeTargets="BeforeBuild;Compile;CoreCompile;Build"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true' and '$(SunderPackageUsePrebuiltLeaves)' == 'true'">
     <Error Text="SunderPackageUsePrebuiltLeaves=true does not permit Build. Invoke PackSunderPackage with BuildProjectReferences=false." />
   </Target>
 
+  <Target Name="_RejectSunderPackagePreparationInPrebuiltMode"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true' and '$(SunderPackageUsePrebuiltLeaves)' == 'true' and '$(_SunderContractSourceResolution)' != 'true'">
+    <Error Text="SunderPackageUsePrebuiltLeaves=true permits reference-only contract checks, not Build preparation. Invoke PackSunderPackage with BuildProjectReferences=false." />
+  </Target>
+
+  <Target Name="_PrepareSunderPackageAppRpcExport"
+          DependsOnTargets="_ValidateSunderPackagePrimaryProject;GenerateSunderRpcContractExports"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true' and '$(SunderPackageUsePrebuiltLeaves)' != 'true' and '$(SunderPackageAppProject)' != '' and '$(_SunderRpcHasOwnedContractsBaseline)' == 'true'" />
+
   <Target Name="_BuildSunderPackageApp"
-          DependsOnTargets="_ValidateSunderPackagePrimaryProject"
+          DependsOnTargets="_ValidateSunderPackagePrimaryProject;_PrepareSunderPackageAppRpcExport"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true' and '$(SunderPackageUsePrebuiltLeaves)' != 'true' and '$(SunderPackageAppProject)' != ''">
+    <PropertyGroup Condition="'@(_SunderRpcPackageProjectExport)' != ''">
+      <_SunderPackageAppBuildProperties>$(_SunderPackageAppBuildProperties);SunderRpcProjectImportBuild=true;SunderPackageRootProject=$(MSBuildProjectFullPath);SunderRpcPackageProjectExportPath=@(_SunderRpcPackageProjectExport->'%(FullPath)');SunderRpcPackageProjectExportSha256=@(_SunderRpcPackageProjectExport->'%(Sha256)');SunderRpcPackageProjectExportProjectIdentity=@(_SunderRpcPackageProjectExport->'%(ProjectIdentity)');SunderRpcPackageProjectExportConfiguration=@(_SunderRpcPackageProjectExport->'%(Configuration)');SunderRpcPackageProjectExportTargetFramework=@(_SunderRpcPackageProjectExport->'%(TargetFramework)');SunderRpcPackageProjectExportPackageId=@(_SunderRpcPackageProjectExport->'%(PackageId)');SunderRpcPackageProjectExportPackageVersion=@(_SunderRpcPackageProjectExport->'%(PackageVersion)')</_SunderPackageAppBuildProperties>
+    </PropertyGroup>
     <MSBuild Projects="$(_SunderPackageAppProjectFullPath)"
              Targets="Build"
-             Properties="Configuration=$(Configuration);TargetFramework=$(SunderPackageAppTargetFramework)"
+             Properties="$(_SunderPackageAppBuildProperties)"
              RemoveProperties="RuntimeIdentifier;SunderPackagePrimaryProject;SunderPackageInnerBuild;SunderPackageUsePrebuiltLeaves;SunderPackageComposeRuntimeIdentifiers"
              BuildInParallel="false"
              StopOnFirstFailure="true" />
@@ -328,7 +1622,7 @@
   </Target>
 
   <Target Name="AggregateSunderPackage"
-          DependsOnTargets="_ValidateSunderPackagePrimaryProject;_BuildSunderPackagePrimaryLeaves;_BuildSunderPackageApp;_PrepareSunderPackageBuildTasks"
+          DependsOnTargets="_ValidateSunderPackagePrimaryProject;_BuildSunderPackageApp;_BuildSunderPackagePrimaryLeaves;_PrepareSunderPackageBuildTasks"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true'">
     <ItemGroup>
       <_SunderPackageCompositionLeaf Remove="@(_SunderPackageCompositionLeaf)" />
@@ -362,8 +1656,39 @@
                                   TargetDirectory="$(SunderPackageComposedOutputRoot)" />
   </Target>
 
+  <!-- Query authored App uses without building or trusting a prebuilt leaf's grants.
+       Preserve duplicates so the manifest builder can reject invalid declarations. -->
+  <Target Name="_GetSunderPackageAppContractUses"
+          Returns="@(SunderUsesContract)"
+          KeepDuplicateOutputs="true">
+    <Error Condition="'@(SunderUsesContract)' != '' and !$([System.String]::Copy('%(SunderUsesContract.Role)').Trim().Equals('app'))"
+           Text="SunderPackageAppProject contract uses must explicitly declare Role=app." />
+  </Target>
+
+  <Target Name="_PrepareSunderContractPackInputs" DependsOnTargets="_BeginSunderContractSourceResolution;$(_SunderRpcPackResolveTargets)">
+    <PropertyGroup>
+      <_SunderContractSourceResolution>false</_SunderContractSourceResolution>
+      <_SunderRpcPackNullableEnabled>false</_SunderRpcPackNullableEnabled>
+      <_SunderRpcPackNullableEnabled Condition="'$(Nullable)' == 'enable' or '$(Nullable)' == 'annotations'">true</_SunderRpcPackNullableEnabled>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderRpcPackSource Remove="@(_SunderRpcPackSource)" />
+      <_SunderRpcPackSource Include="@(Compile)" Condition="'%(Compile.AutoGen)' != 'true'" />
+      <_SunderRpcPackAppUse Remove="@(_SunderRpcPackAppUse)" />
+    </ItemGroup>
+    <MSBuild Projects="$(_SunderPackageAppProjectFullPath)"
+             Targets="_GetSunderPackageAppContractUses"
+             Properties="$(_SunderPackageAppBuildProperties);BuildProjectReferences=false"
+             RemoveProperties="RuntimeIdentifier;SunderPackagePrimaryProject;SunderPackageInnerBuild;SunderPackageUsePrebuiltLeaves;SunderPackageComposeRuntimeIdentifiers"
+             BuildInParallel="false"
+             StopOnFirstFailure="true"
+             Condition="'$(SunderPackagePrimaryProject)' == 'true' and '$(SunderPackageInnerBuild)' != 'true' and '$(_SunderPackageAppProjectFullPath)' != ''">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderRpcPackAppUse" />
+    </MSBuild>
+  </Target>
+
   <Target Name="PackSunderPackage"
-            DependsOnTargets="$(_SunderPackagePreparationTarget)"
+            DependsOnTargets="$(_SunderPackagePreparationTarget);_PrepareSunderContractPackInputs"
             Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <PropertyGroup>
       <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
@@ -379,14 +1704,22 @@
     </PropertyGroup>
 
     <PackSunderPackageTask DevPackagePath="$(_SunderPackagePackInputPath)"
+                          AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                              DevPackageDiscoveryRoot="$(_SunderPackagePackDiscoveryRoot)"
                              PackageOutputPath="$(SunderPackageOutputPath)"
-                             ProjectDirectory="$(MSBuildProjectDirectory)" />
+                              ProjectDirectory="$(MSBuildProjectDirectory)"
+                              SourceFiles="@(_SunderRpcPackSource)" ReferencePaths="@(ReferencePath)"
+                              AuthoringReceipts="@(_SunderRpcAuthoringReceipt)"
+                               ContractBundles="@(SunderContractBundle)" UsesContracts="@(SunderUsesContract);@(_SunderRpcPackAppUse)" RpcProviders="@(SunderRpcProvider)"
+                              ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                              DefineConstants="$(DefineConstants)" OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" NullableEnabled="$(_SunderRpcPackNullableEnabled)"
+                              OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
+                              ContractCacheRoot="$(SunderContractCacheRoot)" IntermediateOutputPath="$(IntermediateOutputPath)" />
   </Target>
 
   <Target Name="PackSunderPackageOnPublish"
             AfterTargets="Publish"
-            DependsOnTargets="$(_SunderPackagePreparationTarget)"
+            DependsOnTargets="$(_SunderPackagePreparationTarget);_PrepareSunderContractPackInputs"
            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <PropertyGroup>
       <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
@@ -401,8 +1734,16 @@
 
     <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(SunderPublishPackageOutputPath)'))" />
     <PackSunderPackageTask DevPackagePath="$(_SunderPackagePublishInputPath)"
+                          AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                              DevPackageDiscoveryRoot="$(_SunderPackagePublishDiscoveryRoot)"
                              PackageOutputPath="$(SunderPublishPackageOutputPath)"
-                             ProjectDirectory="$(MSBuildProjectDirectory)" />
+                              ProjectDirectory="$(MSBuildProjectDirectory)"
+                              SourceFiles="@(_SunderRpcPackSource)" ReferencePaths="@(ReferencePath)"
+                              AuthoringReceipts="@(_SunderRpcAuthoringReceipt)"
+                               ContractBundles="@(SunderContractBundle)" UsesContracts="@(SunderUsesContract);@(_SunderRpcPackAppUse)" RpcProviders="@(SunderRpcProvider)"
+                              ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                              DefineConstants="$(DefineConstants)" OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" NullableEnabled="$(_SunderRpcPackNullableEnabled)"
+                              OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
+                              ContractCacheRoot="$(SunderContractCacheRoot)" IntermediateOutputPath="$(IntermediateOutputPath)" />
   </Target>
 </Project>

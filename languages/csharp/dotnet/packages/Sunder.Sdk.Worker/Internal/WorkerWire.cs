@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Settings;
 
@@ -61,7 +62,7 @@ internal static class WorkerWire
             || profile.InlineDecodedBytes > 4 * 1024 * 1024
             || profile.ContentReferenceBytes > 256 * 1024 * 1024)
         {
-            throw new WorkerProtocolException("Host resourceProfile exceeds Worker V3 protocol ceilings.");
+            throw new WorkerProtocolException("Host resourceProfile exceeds Worker V1 protocol ceilings.");
         }
         var actualHash = ComputeResourceProfileHash(profile);
         if (!string.Equals(actualHash, expectedHash, StringComparison.Ordinal))
@@ -102,7 +103,7 @@ internal static class WorkerWire
         return new WorkerProviderIdentity(
             WorkerJson.RequiredString(value, "providerId", 256),
             WorkerJson.RequiredString(value, "contractId", 256),
-            WorkerJson.RequiredString(value, "contractVersion", 128),
+            WorkerJson.RequiredString(value, "contractVersion", SemanticVersion.MaximumLength),
             ReadSha256(value, "descriptorSha256", requireLowercase: true),
             ReadSha256(value, "abiSha256", requireLowercase: true));
     }
@@ -146,10 +147,10 @@ internal static class WorkerWire
 
         return new SunderRpcProviderSnapshot(
             WorkerJson.RequiredString(value, "packageId", 256),
-            WorkerJson.RequiredString(value, "packageVersion", 128),
+            WorkerJson.RequiredString(value, "packageVersion", SemanticVersion.MaximumLength),
             WorkerJson.RequiredString(value, "providerId", 256),
             WorkerJson.RequiredString(value, "contractId", 256),
-            WorkerJson.RequiredString(value, "contractVersion", 128),
+            WorkerJson.RequiredString(value, "contractVersion", SemanticVersion.MaximumLength),
             ReadSha256(value, "descriptorSha256", requireLowercase: true),
             ReadSha256(value, "abiSha256", requireLowercase: true),
             activationGuid,
@@ -427,6 +428,7 @@ internal static class WorkerWire
     {
         var element = WorkerJson.RequiredValue(value, propertyName);
         if (element.ValueKind != JsonValueKind.Number
+            || !WorkerJson.IsCanonicalNonNegativeIntegerToken(element.GetRawText())
             || !element.TryGetInt32(out var result)
             || result <= 0)
         {

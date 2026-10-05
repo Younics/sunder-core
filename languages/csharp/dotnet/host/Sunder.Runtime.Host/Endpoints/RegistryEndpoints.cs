@@ -36,8 +36,8 @@ internal static class RegistryEndpoints
             Results.Ok(await operations.PublishPackageAsync(request, token)));
         group.MapPost("stacks/publish", async (RuntimeRegistryPublishRequest request, RegistryAuthenticatedOperations operations, CancellationToken token) =>
             Results.Ok(await operations.PublishStackAsync(request, token)));
-        group.MapPost("stacks/delete", async (RuntimeRegistryDeleteStackRequest request, RegistryAuthenticatedOperations operations, CancellationToken token) =>
-            Results.Ok(await operations.DeleteStackAsync(request, token)));
+        group.MapPost("stacks/visibility", async (RuntimeRegistryStackVisibilityRequest request, RegistryAuthenticatedOperations operations, CancellationToken token) =>
+            Results.Ok(await operations.SetStackVisibilityAsync(request, token)));
         group.MapPost("packages/yank", async (RuntimeRegistryYankRequest request, RegistryAuthenticatedOperations operations, CancellationToken token) =>
             Results.Ok(await operations.SetYankAsync(request, token)));
         group.MapPost("packages/deprecate", async (RuntimeRegistryDeprecateRequest request, RegistryAuthenticatedOperations operations, CancellationToken token) =>

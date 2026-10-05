@@ -15,7 +15,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed class RuntimeRpcBrokerTests
+public sealed partial class RuntimeRpcBrokerTests
 {
     [Fact]
     public async Task Permission_DefaultDenyGrantDomainErrorAndSpoofProtection()
@@ -253,7 +253,7 @@ public sealed class RuntimeRpcBrokerTests
     }
 
     [Fact]
-    public async Task Matching_UsesExactVersionAndAbiRatherThanFullDescriptorHash()
+    public async Task Matching_RejectsDescriptorDriftEvenWithEqualVersionAndAbi()
     {
         await using var fixture = new RpcFixture();
         var callerContract = Contract(requestTitle: "Caller-local annotation");
@@ -267,14 +267,11 @@ public sealed class RuntimeRpcBrokerTests
         await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
         var client = fixture.CreateClient(activation.Caller);
 
-        var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
-        var response = await client.InvokeAsync(
-            endpoint,
-            "messages",
-            "send",
-            JsonSerializer.SerializeToElement(new { message = "hello" }));
-
-        Assert.True(response.GetProperty("accepted").GetBoolean());
+        Assert.Empty((await client.DiscoverAsync("example.rpc")).Providers);
+        var endpoint = Assert.Single(fixture.Catalog.GetSnapshot().Providers).Endpoint;
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(() => client.InvokeAsync(endpoint, "messages", "send",
+            JsonSerializer.SerializeToElement(new { message = "hello" })).AsTask());
+        Assert.Equal(SunderRpcDispatchState.NotDispatched, failure.Error.DispatchState);
     }
 
     [Fact]
@@ -595,10 +592,17 @@ public sealed class RuntimeRpcBrokerTests
     }
 
     [Fact]
-    public async Task InvariantReport_RejectsUntrustedCaller()
+    public async Task InvariantReport_RejectsCallerThatDoesNotOwnTheContract()
     {
         await using var fixture = new RpcFixture();
-        var activation = await fixture.PublishAsync(new TestHandler());
+        var activation = await fixture.PublishAsync(new TestHandler(), transform: package =>
+        {
+            if (package.Descriptor.PackageId != "caller.package") return package;
+            var manifest = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(package.Source.Manifest))!;
+            manifest["contractBundles"]![0]!["source"] = "imported";
+            manifest["contractBundles"]![0]!["authorityId"] = "authority.package";
+            return package with { Source = package.Source with { Manifest = manifest.Deserialize<SunderPackageManifest>()! } };
+        });
         await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
         var client = fixture.CreateClient(activation.Caller);
         var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
@@ -608,6 +612,17 @@ public sealed class RuntimeRpcBrokerTests
             new InvalidOperationException("untrusted report")));
         Assert.Equal(PackageReadinessState.Ready, fixture.Owner.State.GetSessionPackage("provider.package")!.Readiness);
         Assert.Single(fixture.Catalog.GetSnapshot().Providers);
+    }
+
+    [Fact]
+    public async Task InvariantReport_AuthorityOwnerIsNotPackageNameSpecific()
+    {
+        await using var fixture = new RpcFixture();
+        var activation = await fixture.PublishAsync(new TestHandler(), callerPackageId: "example.contract.owner");
+        await fixture.GrantAsync("example.contract.owner", SunderRpcProtocol.DiscoverAction);
+        var client = fixture.CreateClient(activation.Caller);
+        var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
+        Assert.True(await client.TryReportInvariantViolationAsync(endpoint, new InvalidOperationException("contract invariant")));
     }
 
     [Fact]
@@ -3588,7 +3603,8 @@ public sealed class RuntimeRpcBrokerTests
         public RpcFixture(
             RuntimeRpcPolicyOptions? policy = null,
             TimeProvider? timeProvider = null,
-            RuntimeTransportPolicyOptions? transportPolicy = null)
+            RuntimeTransportPolicyOptions? transportPolicy = null,
+            PackagePolicyAdmission? packagePolicy = null)
         {
             Directory.CreateDirectory(_root);
             timeProvider ??= TimeProvider.System;
@@ -3616,7 +3632,8 @@ public sealed class RuntimeRpcBrokerTests
                 CancellationToken.None,
                 AppSessions,
                 _transfers,
-                transportPolicy);
+                transportPolicy,
+                packagePolicy);
         }
 
         public RuntimeRpcCatalog Catalog { get; }
@@ -3644,7 +3661,8 @@ public sealed class RuntimeRpcBrokerTests
             bool appCallerUsesContract = true,
             string providerAudience = SunderPackageFormat.PublicProviderAudience,
             SunderRpcContractDescriptor? providerContract = null,
-            IReadOnlyList<string>? providerRequiredHostCapabilities = null)
+            IReadOnlyList<string>? providerRequiredHostCapabilities = null,
+            Func<ActiveLoadedPackage, ActiveLoadedPackage>? transform = null)
         {
             var descriptor = providerContract ?? Contract();
             callerContract ??= descriptor;
@@ -3674,6 +3692,9 @@ public sealed class RuntimeRpcBrokerTests
                     healthyHandler,
                     usesContract: false,
                     providerId: "healthy.provider");
+            caller = transform?.Invoke(caller) ?? caller;
+            provider = transform?.Invoke(provider) ?? provider;
+            if (healthy is not null) healthy = transform?.Invoke(healthy) ?? healthy;
             var session = healthy is null
                 ? CreateSession(caller, provider)
                 : CreateSession(caller, provider, healthy);
@@ -3849,7 +3870,7 @@ public sealed class RuntimeRpcBrokerTests
                     Kind = SunderPackageFormat.WebTargetKind,
                     EntryPoint = "index.html",
                     SdkVersion = "1.1.0",
-                    RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "rpc.v2"],
+                    RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "rpc.v1"],
                     Views =
                     [
                         new SunderPackageWebViewManifest
@@ -3921,6 +3942,9 @@ public sealed class RuntimeRpcBrokerTests
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = packageId,
                     ContractId = descriptor.ContractId,
                     Version = descriptor.Version,
                     DescriptorPath = "contracts/rpc.json",
@@ -4078,7 +4102,7 @@ public sealed class RuntimeRpcBrokerTests
         return SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes($$$$"""
             {
               "$schema":"https://json-schema.org/draft/2020-12/schema",
-              "descriptorVersion":2,
+              "descriptorVersion":1,
               "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.rpc",
               "version":"{{{{version}}}}",
@@ -4099,7 +4123,7 @@ public sealed class RuntimeRpcBrokerTests
         => SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "$schema":"https://json-schema.org/draft/2020-12/schema",
-              "descriptorVersion":2,
+              "descriptorVersion":1,
               "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.rpc",
               "version":"1.0.0",

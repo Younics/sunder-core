@@ -12,13 +12,13 @@ namespace Sunder.App.Tests;
 public sealed class RuntimeAvailabilityManagerTests
 {
     [Theory]
-    [InlineData("dev.sunder.runtime", 1, 1, 1, false)]
+    [InlineData("dev.sunder.runtime", 1, 1, 1, true)]
     [InlineData("dev.sunder.runtime", 2, 1, 2, false)]
     [InlineData("dev.sunder.runtime", 4, 4, 4, false)]
     [InlineData("dev.sunder.runtime", 5, 5, 5, false)]
     [InlineData("dev.sunder.runtime", 6, 6, 6, false)]
     [InlineData("dev.sunder.runtime", 7, 7, 7, false)]
-    [InlineData("dev.sunder.runtime", 8, 8, 8, true)]
+    [InlineData("dev.sunder.runtime", 8, 8, 8, false)]
     [InlineData("dev.sunder.runtime", 0, 0, 0, false)]
     [InlineData("other.runtime", 1, 1, 1, false)]
     public void CanReuseRunningRuntime_UsesProtocolIdentityAndRange(
@@ -325,7 +325,7 @@ public sealed class RuntimeAvailabilityManagerTests
                 replacementStarted
                     ? CreateHandshake()
                     : runtimeRunning
-                        ? CreateHandshake(revision: 1, minimum: 1, maximum: 1)
+                        ? CreateHandshake(revision: 2, minimum: 1, maximum: 2)
                         : null),
             isRuntimeHealthyAsync: (_, _) => Task.FromResult(runtimeRunning),
             shutdownRuntimeAsync: (_, _) =>

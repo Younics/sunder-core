@@ -48,6 +48,53 @@ public static class SunderPackageArchiveInspector
         string stagingPath,
         int maxMetadataJsonBytes,
         CancellationToken cancellationToken = default)
+        => await ValidateExtractedPackageCoreAsync(
+            stagingPath,
+            maxMetadataJsonBytes,
+            cancellationToken,
+            ioObserver: null);
+
+    internal static Task<SunderPackageArchiveValidationResult> ValidateExtractedPackageAsync(
+        string stagingPath,
+        CancellationToken cancellationToken,
+        ISunderPackageValidationIoObserver ioObserver)
+        => ValidateExtractedPackageCoreAsync(
+            stagingPath,
+            SunderArchiveExtractionOptions.Default.MaxMetadataJsonBytes,
+            cancellationToken,
+            ioObserver);
+
+    // Host-owned installed projections retain the complete source manifest. Their
+    // acquisition scope is supplied by the trusted installation transaction, never
+    // inferred from missing files or accepted from an ordinary package archive.
+    internal static Task<SunderPackageArchiveValidationResult> ValidateExtractedProjectionSetAsync(
+        string stagingPath,
+        IReadOnlyList<SunderPackageTargetKey> acquiredTargets,
+        CancellationToken cancellationToken = default,
+        ISunderPackageValidationIoObserver? ioObserver = null)
+    {
+        ArgumentNullException.ThrowIfNull(acquiredTargets);
+        return ValidateExtractedPackageCoreAsync(stagingPath,
+            SunderArchiveExtractionOptions.Default.MaxMetadataJsonBytes, cancellationToken, ioObserver, acquiredTargets);
+    }
+
+    internal static async Task<SunderPackageArchiveValidationResult> ExtractAndValidateProjectionSetAsync(
+        string packagePath,
+        string stagingPath,
+        IReadOnlyList<SunderPackageTargetKey> acquiredTargets,
+        CancellationToken cancellationToken = default)
+    {
+        await SunderArchive.ExtractAtomicAsync(packagePath, stagingPath,
+            SunderArchiveExtractionOptions.Default with { CancellationToken = cancellationToken });
+        return await ValidateExtractedProjectionSetAsync(stagingPath, acquiredTargets, cancellationToken);
+    }
+
+    private static async Task<SunderPackageArchiveValidationResult> ValidateExtractedPackageCoreAsync(
+        string stagingPath,
+        int maxMetadataJsonBytes,
+        CancellationToken cancellationToken,
+        ISunderPackageValidationIoObserver? ioObserver,
+        IReadOnlyList<SunderPackageTargetKey>? acquiredTargets = null)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -74,10 +121,20 @@ public static class SunderPackageArchiveInspector
         try
         {
             manifest = StrictJsonSerializer.Deserialize(
-                await SunderArchive.ReadMetadataJsonAsync(stagingPath, ManifestPath, maxMetadataJsonBytes, cancellationToken),
+                await SunderArchiveMetadataReader.ReadJsonAsync(
+                    stagingPath,
+                    ManifestPath,
+                    maxMetadataJsonBytes,
+                    cancellationToken,
+                    ioObserver),
                 JsonContext.SunderPackageManifest);
             contentIndex = StrictJsonSerializer.Deserialize(
-                await SunderArchive.ReadMetadataJsonAsync(stagingPath, ContentIndexPath, maxMetadataJsonBytes, cancellationToken),
+                await SunderArchiveMetadataReader.ReadJsonAsync(
+                    stagingPath,
+                    ContentIndexPath,
+                    maxMetadataJsonBytes,
+                    cancellationToken,
+                    ioObserver),
                 JsonContext.SunderPackageContentIndex);
         }
         catch (OperationCanceledException)
@@ -90,8 +147,19 @@ public static class SunderPackageArchiveInspector
             return new SunderPackageArchiveValidationResult(null, warnings, errors);
         }
 
-        SunderPackageManifestValidator.Validate(manifest, stagingPath, errors);
-        await PackageContentIndexValidator.ValidateAsync(contentIndex, stagingPath, errors, cancellationToken);
+        if (acquiredTargets is not null && (acquiredTargets.Count > SunderPackageFormat.MaxTargets
+            || acquiredTargets.Distinct().Count() != acquiredTargets.Count
+            || acquiredTargets.Any(key => !SunderPackageTargetKey.TryCreate(key.Role, key.Rid, out _))))
+        {
+            errors.Add("Installed projection acquisition targets are invalid or duplicated.");
+        }
+        SunderPackageManifestValidator.ValidateCore(manifest, stagingPath, errors, acquiredTargets?.ToHashSet());
+        await PackageContentIndexValidator.ValidateAsync(
+            contentIndex,
+            stagingPath,
+            errors,
+            cancellationToken,
+            ioObserver);
         return new SunderPackageArchiveValidationResult(errors.Count == 0 ? manifest : null, warnings, errors)
         {
             ContentIndex = errors.Count == 0 ? contentIndex : null,

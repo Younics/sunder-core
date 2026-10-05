@@ -199,7 +199,10 @@ internal static class RuntimeProblemDetailsWriter
             context.Response.Headers[HeaderNames.WWWAuthenticate] = "Bearer";
         }
 
-        return WriteAsync(context, Create(exception.Code, exception.Title, exception.StatusCode, exception.Message, correlationId));
+        var problem = Create(exception.Code, exception.Title, exception.StatusCode, exception.Message, correlationId);
+        if (exception.Details is { } details)
+            problem.Extensions["details"] = JsonSerializer.SerializeToElement(details, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return WriteAsync(context, problem);
     }
 
     public static Task WriteInternalAsync(HttpContext context, string correlationId)

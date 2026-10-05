@@ -34,6 +34,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private readonly LatestAsyncRequest _marketplaceVersionDetailsRequest = new();
     private readonly TimeSpan _marketplaceDetailSpinnerDelay;
     private readonly IUiDispatcher _uiDispatcher;
+    private readonly Func<RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? _confirmSharedRuntimeRepair;
     private readonly OwnedTaskObserver _tasks = new(nameof(PackagesWindowViewModel));
     private readonly SemaphoreSlim _installedPackageGate = new(1, 1);
     private RuntimePackageSnapshot? _latestPackageSnapshot;
@@ -61,11 +62,13 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         double backgroundProcessPopoverHeight = ShellState.DefaultBackgroundProcessPopoverHeight,
         Action<double, double>? persistBackgroundProcessPopoverSize = null,
         IUiDispatcher? uiDispatcher = null,
-        RemoteImageService? remoteImageService = null)
+        RemoteImageService? remoteImageService = null,
+        Func<RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? confirmSharedRuntimeRepair = null)
     {
         _runtimeApiClient = runtimeApiClient;
         _packageOperationExecutor = packageOperationExecutor;
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
+        _confirmSharedRuntimeRepair = confirmSharedRuntimeRepair;
         _registryClientProvider = new PackageRegistryClientProvider(
             () => RegistryUrlText,
             registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl)));
@@ -127,6 +130,22 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     public ObservableCollection<RegistrySearchSortOptionViewModel> MarketplaceSortOptions { get; } = new(RegistrySearchSortOptionViewModel.Defaults);
 
     public BackgroundProcessMonitorViewModel PackageProcesses { get; }
+
+    public ObservableCollection<PackageExecutionRuntimeStatusViewModel> SelectedPackageExecutionRuntimes { get; } = [];
+
+    public bool HasSelectedPackageExecutionRuntimes => SelectedPackageExecutionRuntimes.Count > 0;
+
+    public string SelectedPackageExecutionRuntimeSummary
+    {
+        get
+        {
+            var count = SelectedPackageExecutionRuntimes.Count;
+            var warningCount = SelectedPackageExecutionRuntimes.Count(runtime => runtime.ShowWarning);
+            if (count == 0) return "This package does not require an external execution runtime.";
+            if (warningCount == 0) return count == 1 ? "1 compatible runtime binding" : $"{count} compatible runtime bindings";
+            return $"{warningCount} of {count} runtime binding(s) require attention";
+        }
+    }
 
     public PackageCatalogItemViewModel? SelectedInstalledPackage
     {
@@ -260,6 +279,12 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     public bool ShowAdoptSelectedInstalledPackageSource => IsInstalledMode
         && Installed.SelectedPackage?.CanAdoptRegistrySource == true;
 
+    private bool CanRepairExecutionRuntime(PackageExecutionRuntimeStatusViewModel? runtime)
+        => !Operations.IsBusy
+           && IsInstalledMode
+           && runtime?.CanRepair == true
+           && SelectedPackageExecutionRuntimes.Contains(runtime);
+
     public bool IsSelectedMarketplacePackageInstalled => Marketplace.SelectedPackage?.InstalledVersion is not null;
 
     public bool ShowMarketplaceInstallAction => IsMarketplaceMode && Marketplace.SelectedPackage is not null && !IsSelectedMarketplacePackageInstalled;
@@ -283,6 +308,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         && Marketplace.SelectedPackage is { IsYanked: false }
         && Marketplace.SelectedVersion is { IsYanked: false }
         && Marketplace.RpcAccessLoaded
+        && Marketplace.RuntimePlanCanApply
         && !Operations.SelectedPackageHasActiveOperation;
 
     public bool CanUninstallSelectedMarketplacePackage => ShowMarketplaceInstalledActions && !Operations.SelectedPackageHasActiveOperation;
@@ -293,6 +319,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         && GetPackageUpdate(Marketplace.SelectedPackage.PackageId) is { } update
         && string.Equals(selectedVersion.Version, update.AvailableVersion, StringComparison.Ordinal)
         && Marketplace.RpcAccessLoaded
+        && Marketplace.RuntimePlanCanApply
         && !Operations.SelectedPackageHasActiveOperation;
 
     public bool CanUpdateAllPackages => !Operations.IsBusy && AvailableUpdateCount > 0;

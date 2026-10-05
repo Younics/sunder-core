@@ -97,6 +97,73 @@ public sealed class RuntimeAppWebRpcClientTests
     }
 
     [Fact]
+    public async Task FirstUsefulRpcTrace_RecordsOnlyTheFirstSuccessfulInvoke()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"sunder-app-rpc-trace-{Guid.NewGuid():N}");
+        var tracePath = Path.Combine(root, "app-startup.json");
+        try
+        {
+            var traceSession = AppStartupTrace.CreateSession(
+                tracePath,
+                System.Diagnostics.Stopwatch.GetTimestamp(),
+                processId: 42);
+            traceSession.RecordShellRevealed(elapsedMilliseconds: 0, openCoreShell: false);
+            var traceOperation = Assert.IsType<AppStartupTraceOperation>(traceSession.BeginOperation(
+                AppStartupTrace.FirstUsefulRpcStartedEvent,
+                AppStartupTrace.FirstUsefulRpcCompletedEvent,
+                new AppStartupTraceMetadata(
+                    PackageId: "sunder.agent",
+                    AppGenerationId: Guid.NewGuid().ToString("N"),
+                    SessionGeneration: 7)));
+            var handler = new InvariantReportHandler { InvokeSucceeds = true };
+            var management = new RuntimeManagementClient(
+                () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+                handler);
+
+            await using (var client = new RuntimeAppWebRpcClient(
+                             management,
+                             "app-session",
+                             traceOperation))
+            {
+                var request = JsonSerializer.SerializeToElement(new { message = "hello" });
+                await client.InvokeAsync(
+                    "rpc1_exact_provider",
+                    "messages",
+                    "send",
+                    request,
+                    null,
+                    CancellationToken.None);
+                await client.InvokeAsync(
+                    "rpc1_exact_provider",
+                    "messages",
+                    "send",
+                    request,
+                    null,
+                    CancellationToken.None);
+            }
+
+            using var document = JsonDocument.Parse(File.ReadAllBytes(tracePath));
+            var completed = Assert.Single(
+                document.RootElement.GetProperty("events").EnumerateArray(),
+                item => string.Equals(
+                    item.GetProperty("event").GetString(),
+                    AppStartupTrace.FirstUsefulRpcCompletedEvent,
+                    StringComparison.Ordinal));
+            Assert.Equal("succeeded", completed.GetProperty("outcome").GetString());
+            Assert.Equal("invoke", completed.GetProperty("operation").GetString());
+            Assert.Equal("sunder.agent", completed.GetProperty("packageId").GetString());
+            Assert.True(completed.GetProperty("activeDurationMilliseconds").GetDouble() >= 0);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task CallScopeDisposal_RuntimeUnavailable_DoesNotLogExpectedRestartFailure()
     {
         var handler = new InvariantReportHandler
@@ -163,6 +230,8 @@ public sealed class RuntimeAppWebRpcClientTests
 
         public RuntimeRpcErrorDescriptor? CallScopeOpenError { get; init; }
 
+        public bool InvokeSucceeds { get; init; }
+
         public int CallScopeOpenCount { get; private set; }
 
         public int CallScopeCloseCount { get; private set; }
@@ -180,7 +249,7 @@ public sealed class RuntimeAppWebRpcClientTests
                 var features = new List<string>
                 {
                     RuntimeProtocolFeatures.VersionedApiV1,
-                    RuntimeProtocolFeatures.AppWebRpcV2,
+                    RuntimeProtocolFeatures.AppWebRpcV1,
                 };
                 RuntimeResourceProfileDescriptor? profile = null;
                 if (resourcePolicy is not null)
@@ -240,6 +309,12 @@ public sealed class RuntimeAppWebRpcClientTests
 
             if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app/invoke")
             {
+                if (InvokeSucceeds)
+                {
+                    return Json(new RuntimeRpcAppInvokeResponse(
+                        JsonSerializer.SerializeToElement(new { accepted = true }),
+                        null));
+                }
                 return Json(new RuntimeRpcAppInvokeResponse(
                     null,
                     new RuntimeRpcErrorDescriptor(

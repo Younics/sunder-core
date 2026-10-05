@@ -96,12 +96,19 @@
       "sunder.core.testsupport": {
         "type": "Project"
       },
+      "sunder.package.projections": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Runtime.LocalState": "[1.0.0, )"
+        }
+      },
       "sunder.registry.contracts": {
         "type": "Project"
       },
       "sunder.runtime.client": {
         "type": "Project",
         "dependencies": {
+          "Sunder.Package.Projections": "[1.0.0, )",
           "Sunder.Registry.Contracts": "[1.0.0, )",
           "Sunder.Runtime.Contracts": "[1.0.0, )",
           "Sunder.Runtime.LocalState": "[1.0.0, )"

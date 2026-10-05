@@ -223,6 +223,64 @@ public sealed partial class PackagesWindowViewModel
     private async Task UpdateAllPackagesAsync()
         => await _selectedOperationCommands.UpdateAllPackagesAsync();
 
+    [RelayCommand(CanExecute = nameof(CanRepairExecutionRuntime))]
+    private async Task RepairExecutionRuntimeAsync(PackageExecutionRuntimeStatusViewModel? runtime)
+    {
+        if (runtime is null || !CanRepairExecutionRuntime(runtime))
+        {
+            return;
+        }
+
+        var cancellationToken = _tasks.Token;
+        using var busy = Operations.EnterBusy();
+        try
+        {
+            Operations.StatusText = $"Checking the impact of repairing {runtime.Title}...";
+            var impact = await _runtimeApiClient.GetExecutionRuntimeImpactAsync(
+                runtime.Identity,
+                cancellationToken);
+            if (impact.PackageReferenceCount > 1
+                && (_confirmSharedRuntimeRepair is null
+                    || !await _confirmSharedRuntimeRepair(impact, cancellationToken)))
+            {
+                Operations.StatusText = "Execution runtime repair cancelled.";
+                return;
+            }
+
+            Operations.StatusText = $"Repairing {runtime.Title} for {runtime.Identity.Rid}...";
+            var result = await _runtimeApiClient.RepairExecutionRuntimeAsync(
+                runtime.Identity,
+                impact,
+                cancellationToken);
+            Operations.StatusText = result.Message;
+            if (result.Runtime is not null || result.Success)
+            {
+                await _installedPackages.RefreshExecutionRuntimesAsync(cancellationToken);
+                if (Installed.SelectedPackage is { } selected)
+                {
+                    ApplySelectedPackageExecutionRuntimeState(selected.PackageId);
+                }
+            }
+            if (!result.Success)
+            {
+                AddWarningLine(result.Message);
+                return;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Operations.StatusText = ex.Message;
+            AddWarningLine(ex.Message);
+        }
+        finally
+        {
+            NotifyCommandStateChanged();
+        }
+    }
+
     [RelayCommand]
     private void CancelSelectedPackageOperation()
         => _selectedOperationCommands.CancelSelectedPackageOperation();

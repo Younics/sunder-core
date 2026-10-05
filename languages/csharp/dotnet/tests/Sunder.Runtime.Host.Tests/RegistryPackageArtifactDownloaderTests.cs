@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -7,20 +8,78 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed class RegistryPackageArtifactDownloaderTests
+public sealed partial class RegistryPackageArtifactDownloaderTests
 {
     private const string Origin = "https://registry.example/";
     private const string PackageId = "test.projection.composition";
     private const string Version = "1.0.0";
 
     [Fact]
-    public async Task DownloadAsync_FiltersContractUsesToSelectedRoles()
+    public async Task ImportedContracts_RetainSourceGraphAndStillRequireCompleteGraphAuthority()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var fixture = await CreateProjectionFixtureAsync(
+                root, "imported", new string('a', 64), "imported authority",
+                includeContractUses: true, importContract: true);
+            await using var provider = CreateProvider(root, fixture.ContentByUrl);
+
+            var upload = await provider.GetRequiredService<RegistryPackageArtifactDownloader>().DownloadAsync(
+                new Uri(Origin),
+                CreatePlanItem(fixture.SharedArtifact, fixture.RuntimeArtifact, fixture.Targets),
+                RuntimeSelection(), [], CancellationToken.None);
+            var transfers = provider.GetRequiredService<RuntimeContentTransferStore>();
+            var sessions = provider.GetRequiredService<PackageSessionLifecycleService>();
+            var lease = transfers.AcquireUpload(upload.UploadId, RuntimeUploadKind.Package, sessions.Generation, consume: false);
+            Assert.NotNull(lease);
+            var composed = await SunderPackageArchiveInspector.ExtractAndValidateProjectionSetAsync(lease.FilePath, Path.Combine(root, "composed"), RuntimeKeys());
+            Assert.True(composed.Success, string.Join(" | ", composed.Errors));
+            var imported = Assert.Single(composed.Manifest!.PackageApiImports!);
+            Assert.Equal(new[] { "app", "runtime" }, imported!.UseRefs!.Select(use => use!.Role));
+            Assert.Equal(new[] { "app", "runtime" }, composed.Manifest.UsesContracts!.Select(use => use!.Role));
+            Assert.Equal("other.package", Assert.Single(composed.Manifest.PackageArtifactImports!)!.PackageId);
+            Assert.Equal(new string('c', 64), Assert.Single(composed.Manifest.PackageArtifactImports!)!.PublicInventorySha256);
+            Assert.Equal("imported", Assert.Single(composed.Manifest.ContractBundles!)!.Source);
+            Assert.Contains(PackagePolicyErrorCodes.PolicyRequired, Assert.Throws<InvalidDataException>(() =>
+                PackageCompatibilityAuthority.ValidateGraph([new(PackageId, PackageSourceKind.Installed, Path.Combine(root, "composed"),
+                    ContentIdentity: new string('a', 64), Manifest: composed.Manifest)])).Message);
+
+            var source = Path.Combine(root, "artifacts", "imported", "source");
+            var original = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(source);
+            var projected = await PackageProjectionMaterializer.MaterializeCurrentRidInstallPackageAsync(source,
+                Path.Combine(root, "local-projection"), original.Manifest!, original.ContentIndex!,
+                RuntimeInformation.RuntimeIdentifier, CancellationToken.None);
+            Assert.True(projected.Success, string.Join(" | ", projected.Errors));
+            Assert.Equal(2, Assert.Single(projected.Manifest!.PackageApiImports!)!.UseRefs!.Count);
+            Assert.Equal(imported.BundleRefs!.Count, Assert.Single(projected.Manifest.PackageApiImports!)!.BundleRefs!.Count);
+
+            var archivePath = Path.Combine(root, "imported.sunderpkg");
+            ZipFile.CreateFromDirectory(source, archivePath);
+            var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+            var coordinator = new PackageStoreCoordinator(paths, new(paths), new(paths),
+                packagePolicies: new(paths, new PolicyContinuousClock()));
+            var result = await coordinator.PrepareStageAsync([new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archivePath)]);
+            Assert.False(result.Success);
+            Assert.Contains(PackagePolicyErrorCodes.PolicyRequired, result.Failure!.Message!);
+            Assert.False(Directory.Exists(paths.GetInstalledPackagePath(PackageId, Version)));
+            transfers.DiscardUpload(upload.UploadId);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DownloadAsync_PreservesCompleteManifestWhileAcquiringOnlySelectedPayloads()
     {
         var root = CreateTempDirectory();
         try
@@ -48,16 +107,20 @@ public sealed class RegistryPackageArtifactDownloaderTests
                 sessions.Generation,
                 consume: false);
             Assert.NotNull(lease);
-            var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            var validation = await SunderPackageArchiveInspector.ExtractAndValidateProjectionSetAsync(
                 lease!.FilePath,
-                Path.Combine(root, "composed"));
+                Path.Combine(root, "composed"), RuntimeKeys());
 
             Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
             Assert.Equal(2, fixture.Targets.Count);
-            var target = Assert.IsType<SunderPackageTargetManifest>(Assert.Single(validation.Manifest!.Targets!));
-            var use = Assert.IsType<SunderPackageContractUseManifest>(Assert.Single(validation.Manifest.UsesContracts!));
-            Assert.Equal(SunderPackageFormat.RuntimeHostRole, target.Role);
-            Assert.Equal(SunderPackageFormat.RuntimeHostRole, use.Role);
+            Assert.Equal(2, validation.Manifest!.Targets!.Count);
+            Assert.Equal(2, validation.Manifest.UsesContracts!.Count);
+            Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(root, "artifacts", "role-filtering", "source", SunderPackageFormat.ManifestPath)),
+                await File.ReadAllBytesAsync(Path.Combine(root, "composed", SunderPackageFormat.ManifestPath)));
+            Assert.NotNull(validation.Manifest.PackageArtifactImports);
+            Assert.NotNull(validation.Manifest.PackageApiImports);
+            Assert.NotNull(validation.Manifest.ProviderImports);
+            Assert.NotNull(validation.Manifest.PlatformImports);
             transfers.DiscardUpload(upload.UploadId);
         }
         finally
@@ -97,14 +160,15 @@ public sealed class RegistryPackageArtifactDownloaderTests
                 sessions.Generation,
                 consume: false);
             Assert.NotNull(lease);
-            var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            var validation = await SunderPackageArchiveInspector.ExtractAndValidateProjectionSetAsync(
                 lease!.FilePath,
-                Path.Combine(root, "universal-composed"));
+                Path.Combine(root, "universal-composed"), RuntimeKeys());
 
             Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
-            var target = Assert.IsType<SunderPackageTargetManifest>(Assert.Single(validation.Manifest!.Targets!));
-            Assert.Equal(SunderPackageFormat.RuntimeHostRole, target.Role);
-            Assert.Equal(RuntimeInformation.RuntimeIdentifier, target.Rid);
+            Assert.Equal(SunderPackageFormat.SupportedRuntimeIdentifiers.Count, validation.Manifest!.Targets!.Count);
+            Assert.All(validation.ContentIndex!.Files!.Where(file => file!.Path!.StartsWith("payload/runtime/", StringComparison.Ordinal)),
+                file => Assert.StartsWith($"payload/runtime/{RuntimeInformation.RuntimeIdentifier}/", file!.Path));
+            Assert.False((await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(Path.Combine(root, "universal-composed"))).Success);
             transfers.DiscardUpload(upload.UploadId);
         }
         finally
@@ -280,7 +344,9 @@ public sealed class RegistryPackageArtifactDownloaderTests
         string summary,
         bool includeContractUses = false,
         IReadOnlyList<string>? roles = null,
-        IReadOnlyList<string>? runtimeIdentifiers = null)
+        IReadOnlyList<string>? runtimeIdentifiers = null,
+        bool importContract = false,
+        Action<JsonObject, SunderRpcContractDescriptor>? configureManifest = null)
     {
         var artifactRoot = Path.Combine(root, "artifacts", name);
         var sourceRoot = Path.Combine(artifactRoot, "source");
@@ -288,6 +354,11 @@ public sealed class RegistryPackageArtifactDownloaderTests
         var contract = SunderRpcContractDescriptor.Parse(descriptorBytes);
         var contractBundle = new SunderPackageContractBundleManifest
         {
+            Source = importContract ? "imported" : "owned",
+            AuthorityKind = "package",
+            AuthorityId = importContract ? "other.package" : PackageId,
+            SelectedAuthorityRelease = importContract ? "1.0.0" : null,
+            SelectedAuthorityContentIdentity = importContract ? new string('b', 64) : null,
             ContractId = contract.ContractId,
             Version = contract.Version,
             DescriptorPath = "contracts/example.json",
@@ -308,6 +379,7 @@ public sealed class RegistryPackageArtifactDownloaderTests
             Version,
             typeof(RegistryPackageArtifactDownloaderTests).Assembly.Location,
             roles: roles,
+            dependencies: importContract ? [new InstalledPackageDependencyRecord("other.package", ">=1.0.0")] : null,
             runtimeIdentifiers: runtimeIdentifiers,
             contractBundles: [contractBundle],
             usesContracts: uses);
@@ -315,6 +387,55 @@ public sealed class RegistryPackageArtifactDownloaderTests
         var manifestPath = Path.Combine(sourceRoot, "manifest", "sunder-package.json");
         var manifestJson = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!.AsObject();
         manifestJson["summary"] = summary;
+        if (importContract)
+        {
+            manifestJson["packageArtifactImports"] = JsonSerializer.SerializeToNode(new[]
+            {
+                new SunderPackageArtifactImportManifest
+                {
+                    PackageId = "other.package",
+                    RequestedVersionRange = ">=1.0.0",
+                    IncludePrerelease = false,
+                    SelectedPackageVersion = "1.0.0",
+                    SelectedPackageContentIdentity = new string('b', 64),
+                    PublicContractCount = 1,
+                    PublicInventorySha256 = new string('c', 64),
+                    AuthorityConstraints =
+                    [
+                        new SunderPackageAuthorityConstraintManifest
+                        {
+                            AuthorityKind = "package",
+                            AuthorityId = "other.package",
+                            SelectedAuthorityRelease = "1.0.0",
+                            SelectedAuthorityContentIdentity = new string('b', 64),
+                        },
+                    ],
+                },
+            }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
+            manifestJson["packageApiImports"] = JsonSerializer.SerializeToNode(new[]
+            {
+                new SunderPackageApiImportManifest
+                {
+                    PackageId = "other.package",
+                    Presence = "required",
+                    BundleRefs =
+                    [
+                        new SunderPackageContractReferenceManifest
+                        {
+                            ContractId = contract.ContractId,
+                            ContractVersion = contract.Version,
+                        },
+                    ],
+                    UseRefs = uses.Select(use => new SunderPackageContractUseReferenceManifest
+                    {
+                        Role = use!.Role,
+                        ContractId = use.ContractId,
+                        ContractVersion = use.ContractVersion,
+                    }).ToArray(),
+                },
+            });
+        }
+        configureManifest?.Invoke(manifestJson, contract);
         await File.WriteAllTextAsync(
             manifestPath,
             manifestJson.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
@@ -345,15 +466,23 @@ public sealed class RegistryPackageArtifactDownloaderTests
             .OrderBy(static target => ProjectionOrder(target.Role))
             .ThenBy(static target => target.Rid, StringComparer.Ordinal)
             .ToArray();
+        var content = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            [shared.Artifact.DownloadUrl] = shared.Content,
+            [runtime.Artifact.DownloadUrl] = runtime.Content,
+        };
+        RegistryPackageProjectionArtifact? app = null;
+        if (validation.Manifest.Targets!.Any(target => target!.Role == "app" && target.Rid == RuntimeInformation.RuntimeIdentifier))
+        {
+            var projection = await WriteProjectionAsync(artifactRoot, name, sourceRoot, validation, sourceArchiveSha256, SunderPackageProjectionKey.App(RuntimeInformation.RuntimeIdentifier));
+            app = projection.Artifact;
+            content.Add(app.DownloadUrl, projection.Content);
+        }
         return new ProjectionFixture(
             shared.Artifact,
             runtime.Artifact,
             targets,
-            new Dictionary<string, byte[]>(StringComparer.Ordinal)
-            {
-                [shared.Artifact.DownloadUrl] = shared.Content,
-                [runtime.Artifact.DownloadUrl] = runtime.Content,
-            });
+            content) { AppArtifact = app };
     }
 
     private static async Task<(RegistryPackageProjectionArtifact Artifact, byte[] Content)> WriteProjectionAsync(
@@ -400,7 +529,7 @@ public sealed class RegistryPackageArtifactDownloaderTests
             ContractVersion = contract.Version,
             AbiSha256 = contract.AbiSha256,
             Required = true,
-            Actions = [SunderPackageFormat.InvokeContractAction],
+            Actions = [SunderPackageFormat.DiscoverContractAction, SunderPackageFormat.InvokeContractAction],
         };
 
     private static RegistryPackageInstallPlanItem CreatePlanItem(
@@ -408,16 +537,20 @@ public sealed class RegistryPackageArtifactDownloaderTests
         RegistryPackageProjectionArtifact runtime,
         IReadOnlyList<RegistryPackageTarget> targets)
         => new(
-            PackageId,
-            CurrentVersion: null,
-            Version,
-            IsUpdate: false,
+             PackageId,
+             CurrentVersion: null,
+             Version,
+             PackageContentIdentity: new string('a', 64),
+             ActionKind: RegistryPackageActionKinds.PackageInstall,
             DeprecatedMessage: null,
             DependsOn: [],
             Targets: targets,
             Artifacts: [shared, runtime]);
 
     private static IReadOnlyList<RegistryPackageTargetRequest> RuntimeSelection()
+        => [new(SunderPackageFormat.RuntimeHostRole, RuntimeInformation.RuntimeIdentifier)];
+
+    private static IReadOnlyList<SunderPackageTargetKey> RuntimeKeys()
         => [new(SunderPackageFormat.RuntimeHostRole, RuntimeInformation.RuntimeIdentifier)];
 
     private static RegistryPackageTarget ToRegistryTarget(SunderPackageTargetManifest target)
@@ -429,13 +562,19 @@ public sealed class RegistryPackageArtifactDownloaderTests
             target.TargetFramework,
             target.SdkVersion,
             (target.RequiredHostCapabilities ?? []).Select(static capability => capability!).ToArray(),
-            (target.Views ?? []).Where(static view => view is not null).Select(static view => new RegistryPackageWebView(
-                view!.ViewId!,
+             (target.Views ?? []).Where(static view => view is not null).Select(static view => new RegistryPackageWebView(
+                 view!.ViewId!,
                 view.DisplayName!,
                 view.Route!,
-                view.Icon,
-                view.DefaultPlacement!,
-                view.ShowInHotbar!.Value)).ToArray());
+                 view.Icon,
+                 view.DefaultPlacement!,
+                 view.ShowInHotbar!.Value)).ToArray(),
+             target.ExecutionRuntime is null
+                 ? null
+                 : new RegistryExecutionRuntimeRequirement(
+                     target.ExecutionRuntime.Id!,
+                     target.ExecutionRuntime.VersionRange!,
+                     target.ExecutionRuntime.ModuleAbi!));
 
     private static string AlternateRid()
         => SunderPackageFormat.SupportedRuntimeIdentifiers.First(rid =>
@@ -460,7 +599,7 @@ public sealed class RegistryPackageArtifactDownloaderTests
     private static byte[] CreateContractDescriptor()
         => Encoding.UTF8.GetBytes("""
             {
-              "descriptorVersion": 2,
+              "descriptorVersion": 1,
               "schemaProfile": "sunder.rpc.values.v1",
               "contractId": "example.projection",
               "version": "1.0.0",
@@ -528,5 +667,8 @@ public sealed class RegistryPackageArtifactDownloaderTests
         RegistryPackageProjectionArtifact SharedArtifact,
         RegistryPackageProjectionArtifact RuntimeArtifact,
         IReadOnlyList<RegistryPackageTarget> Targets,
-        IReadOnlyDictionary<string, byte[]> ContentByUrl);
+        IReadOnlyDictionary<string, byte[]> ContentByUrl)
+    {
+        internal RegistryPackageProjectionArtifact? AppArtifact { get; init; }
+    }
 }

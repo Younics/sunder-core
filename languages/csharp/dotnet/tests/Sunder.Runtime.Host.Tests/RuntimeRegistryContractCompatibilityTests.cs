@@ -22,6 +22,13 @@ public sealed class RuntimeRegistryContractCompatibilityTests
         { typeof(RegistryPackageProjectionArtifact), typeof(RuntimeRegistryPackageProjectionArtifact) },
         { typeof(RegistryPackageTarget), typeof(RuntimeRegistryPackageTarget) },
         { typeof(RegistryPackageWebView), typeof(RuntimeRegistryPackageWebView) },
+        { typeof(RegistryExecutionRuntimeRequirement), typeof(RuntimeRegistryExecutionRuntimeRequirement) },
+        { typeof(RegistryExecutionRuntimeIdentity), typeof(RuntimeRegistryExecutionRuntimeIdentity) },
+        { typeof(RegistryExecutionRuntimeLifecycle), typeof(RuntimeRegistryExecutionRuntimeLifecycle) },
+        { typeof(RegistryResolvedExecutionRuntimeArtifact), typeof(RuntimeRegistryResolvedExecutionRuntimeArtifact) },
+        { typeof(RegistryPackageTargetRuntimeBinding), typeof(RuntimeRegistryPackageTargetRuntimeBinding) },
+        { typeof(RegistryRuntimeOnlyRebindDetails), typeof(RuntimeRegistryRuntimeOnlyRebindDetails) },
+        { typeof(RegistryExecutionRuntimeResolutionConflict), typeof(RuntimeRegistryExecutionRuntimeResolutionConflict) },
         { typeof(RegistryPackageInstallPlanItem), typeof(RuntimeRegistryPackageInstallPlanItem) },
         { typeof(RegistryPackageInstallPlanConflict), typeof(RuntimeRegistryPackageInstallPlanConflict) },
         { typeof(RegistryResolveInstallPlanResponse), typeof(RuntimeRegistryResolveInstallPlanResponse) },
@@ -33,14 +40,16 @@ public sealed class RuntimeRegistryContractCompatibilityTests
     {
         var registryParameters = Assert.Single(registryType.GetConstructors()).GetParameters();
         var runtimeParameters = Assert.Single(runtimeType.GetConstructors()).GetParameters();
-        var alignedRuntimeParameters = runtimeParameters.Take(registryParameters.Length).ToArray();
+        var alignedRuntimeParameters = runtimeParameters
+            .Where(static parameter => parameter.Name != "RequiredCapabilityConsents")
+            .ToArray();
 
         Assert.Equal(registryParameters.Select(static parameter => parameter.Name), alignedRuntimeParameters.Select(static parameter => parameter.Name));
         Assert.Equal(registryParameters.Select(static parameter => parameter.HasDefaultValue), alignedRuntimeParameters.Select(static parameter => parameter.HasDefaultValue));
         Assert.Equal(registryParameters.Select(parameter => NormalizeShape(parameter.ParameterType)), alignedRuntimeParameters.Select(parameter => NormalizeShape(parameter.ParameterType)));
         if (runtimeType == typeof(RuntimeRegistryResolveInstallPlanResponse))
         {
-            var consentParameter = Assert.Single(runtimeParameters.Skip(registryParameters.Length));
+            var consentParameter = Assert.Single(runtimeParameters, static parameter => parameter.Name == "RequiredCapabilityConsents");
             Assert.Equal("RequiredCapabilityConsents", consentParameter.Name);
             Assert.True(consentParameter.HasDefaultValue);
             Assert.Equal(
@@ -72,7 +81,8 @@ public sealed class RuntimeRegistryContractCompatibilityTests
                 "test.package",
                 "1.0.0",
                 "1.1.0",
-                true,
+                new string('e', 64),
+                RegistryPackageActionKinds.PackageUpdate,
                 null,
                 [new RegistryPackageDependency("test.base", ">=1.1.0 <1.2.0")],
                 [new RegistryPackageTarget(
@@ -122,15 +132,29 @@ public sealed class RuntimeRegistryContractCompatibilityTests
     }
 
     [Fact]
+    public void RuntimeProjection_PreservesExactCompatibilityConflictDiagnostics()
+    {
+        var registry = new RegistryResolveInstallPlanResponse(false, [], [], [], [], [])
+        {
+            CompatibilityConflicts = [new("example.authority", PackagePolicyErrorCodes.ContractAuthorityReleaseConflict,
+                [new("example.authority", ">=1.0.0 <2.0.0", false, "required",
+                    [new("example.rpc", "1.0.0", new('a', 64), new('b', 64))], "example.consumer")])],
+        };
+        var mapped = RuntimeRegistryContractMapper.ToRuntime(registry);
+        Assert.True(JsonNode.DeepEquals(JsonSerializer.SerializeToNode(registry.CompatibilityConflicts, JsonOptions),
+            JsonSerializer.SerializeToNode(mapped.CompatibilityConflicts, JsonOptions)));
+    }
+
+    [Fact]
     public void RegistryCompatibilityProfile_TracksCurrentManifestWorkerAndSdkSupport()
     {
         var profile = RuntimeRegistryContractMapper.CompatibilityProfile;
 
         Assert.Equal([SunderPackageFormat.CurrentManifestVersion], profile.ManifestVersions);
         Assert.Equal([SunderPackageFormat.WorkerTargetKind], profile.RuntimeTargetKinds);
-        Assert.Equal(SunderWorkerProtocol.V3Capability, profile.WorkerProtocol);
+        Assert.Equal(SunderWorkerProtocol.V1Capability, profile.WorkerProtocol);
         Assert.Equal(
-            SunderSdkCompatibilityProfile.WorkerV3CapabilityClassification
+            SunderSdkCompatibilityProfile.WorkerV1CapabilityClassification
                 .Where(static capability => capability.Value)
                 .Select(static capability => capability.Key)
                 .Order(StringComparer.Ordinal),

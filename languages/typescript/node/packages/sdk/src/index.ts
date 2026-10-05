@@ -1,7 +1,16 @@
 export * from "./types";
 export * from "./resource-profile";
-export * from "./framing";
+export {
+  FrameDecoder,
+  ProtocolError,
+  TransportResourceError,
+  encodeFrame,
+  encodedJsonByteLength,
+} from "./framing";
+export type { FrameLimits } from "./framing";
 export * from "./worker";
+export { rpc } from "./authoring";
+export type { RpcSchema, RpcSchemaValue, RpcContract, RpcHandlers, RpcProvider, RpcImportedProvider } from "./authoring";
 export * from "./storage";
 export * from "./generator";
 export * from "./timestamp";
@@ -15,11 +24,11 @@ export {
 export type { RpcDescriptorErrorCode } from "./descriptor";
 export {
   RpcInstanceError,
-  SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR,
+  SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
   computeRpcAbiSha256,
   computeRpcDescriptorSha256,
-  rpcAbiV2Projection,
+  rpcAbiV1Projection,
   validateRpcInstance,
-} from "./descriptor-v2";
+} from "./descriptor-v1";

@@ -35,7 +35,8 @@ internal sealed class WorkerHarness : IAsyncDisposable
         Func<SunderWorkerContext, SunderWorkerOptions> configure,
         WorkerLimits? limits = null,
         bool ignoreInputReadCancellation = false,
-        bool rpcExtendedDeadlineV1 = false)
+        bool rpcExtendedDeadlineV1 = false,
+        string packageVersion = PackageVersion)
     {
         Limits = (limits ?? WorkerLimits.Default) with { };
         Input = new AsyncByteStream(ignoreInputReadCancellation);
@@ -53,25 +54,37 @@ internal sealed class WorkerHarness : IAsyncDisposable
         {
             ["SUNDER_WORKER_PROTOCOL"] = WorkerProtocol.Name,
             ["SUNDER_PACKAGE_ID"] = PackageId,
-            ["SUNDER_PACKAGE_VERSION"] = PackageVersion,
+            ["SUNDER_PACKAGE_VERSION"] = packageVersion,
             ["SUNDER_ACTIVATION_ID"] = ActivationId,
             ["SUNDER_SESSION_ID"] = SessionId,
             ["SUNDER_PACKAGE_CONTENT_ROOT"] = ContentPath,
             ["SUNDER_WORKER_TEMP_ROOT"] = DataPath,
-            ["SUNDER_PACKAGE_WORKSPACE_ROOT"] = WorkspacePath,
         };
         if (rpcExtendedDeadlineV1)
         {
             environment["SUNDER_RPC_EXTENDED_DEADLINE_V1"] = "1";
         }
-        RunTask = SunderWorker.RunAsync(
-            configure,
-            Input,
-            Output,
-            Diagnostics,
-            name => environment.GetValueOrDefault(name),
-            Limits,
-            _runCancellation.Token);
+        try
+        {
+            RunTask = SunderWorker.RunAsync(
+                configure,
+                Input,
+                Output,
+                Diagnostics,
+                name => environment.GetValueOrDefault(name),
+                Limits,
+                _runCancellation.Token);
+            Version = packageVersion;
+        }
+        catch
+        {
+            Input.Dispose();
+            Output.Dispose();
+            Diagnostics.Dispose();
+            _runCancellation.Dispose();
+            Directory.Delete(_root, recursive: true);
+            throw;
+        }
     }
 
     public AsyncByteStream Input { get; }
@@ -82,6 +95,7 @@ internal sealed class WorkerHarness : IAsyncDisposable
     public string ContentPath { get; }
     public string DataPath { get; }
     public string WorkspacePath { get; }
+    public string Version { get; }
 
     public void Cancel() => _runCancellation.Cancel();
 
@@ -93,7 +107,7 @@ internal sealed class WorkerHarness : IAsyncDisposable
         await HandshakeAsync();
         await StartCandidateAndCommitAsync(sessionGeneration);
         await PrepareStorageMigrationsAsync(sessionGeneration);
-        await SendAsync(new { type = "host.activate", sessionGeneration });
+        await ActivateAsync(sessionGeneration);
         using var activated = await ReadAsync();
         Assert.Equal("worker.activated", activated.RootElement.GetProperty("type").GetString());
         Assert.Equal(sessionGeneration, activated.RootElement.GetProperty("sessionGeneration").GetInt64());
@@ -130,7 +144,7 @@ internal sealed class WorkerHarness : IAsyncDisposable
             protocolVersion = WorkerProtocol.Version,
             challenge,
             packageId = PackageId,
-            packageVersion = PackageVersion,
+            packageVersion = Version,
             activationId = ActivationId,
             sessionId = SessionId,
             providers = new[] { ProviderIdentity() },
@@ -183,12 +197,21 @@ internal sealed class WorkerHarness : IAsyncDisposable
         Assert.Equal(sessionGeneration, prepared.RootElement.GetProperty("sessionGeneration").GetInt64());
     }
 
+    public Task ActivateAsync(long sessionGeneration = 7, string? workspaceRootPath = null)
+        => SendAsync(new
+        {
+            type = "host.activate",
+            sessionGeneration,
+            workspaceRootPath = workspaceRootPath ?? WorkspacePath,
+        });
+
     public Task SendInvocationAsync(
         string id,
         string kind,
         string methodId,
         object? request = null,
-        long sessionGeneration = 7)
+        long sessionGeneration = 7,
+        string callerPackageVersion = "1.0.0")
         => SendAsync(new
         {
             type = "host.invoke",
@@ -201,10 +224,10 @@ internal sealed class WorkerHarness : IAsyncDisposable
             context = new
             {
                 callerPackageId = "caller.package",
-                callerPackageVersion = "1.0.0",
+                callerPackageVersion,
                 deadlineUtc = DateTimeOffset.UtcNow.AddMinutes(1).UtcDateTime.ToString("O"),
                 callDepth = 1,
-                provider = ProviderSnapshot(sessionGeneration),
+                provider = ProviderSnapshot(sessionGeneration, Version),
             },
         });
 
@@ -237,11 +260,11 @@ internal sealed class WorkerHarness : IAsyncDisposable
     public async ValueTask<JsonDocument> ReadAsync()
         => await _outputReader.ReadAsync(CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
-    public static object ProviderSnapshot(long sessionGeneration = 7)
+    public static object ProviderSnapshot(long sessionGeneration = 7, string packageVersion = PackageVersion)
         => new
         {
             packageId = PackageId,
-            packageVersion = PackageVersion,
+            packageVersion,
             providerId = ProviderId,
             contractId = ContractId,
             contractVersion = ContractVersion,

@@ -20,10 +20,9 @@ public static class RuntimeProtocolCompatibility
         {
             return $"Runtime protocol identity '{handshake.ProtocolIdentity}' is not supported.";
         }
-        if (handshake.ProtocolRevision < handshake.MinimumSupportedRevision
-            || handshake.ProtocolRevision > handshake.MaximumSupportedRevision
-            || handshake.MinimumSupportedRevision > RuntimeProtocol.CurrentRevision
-            || handshake.MaximumSupportedRevision < RuntimeProtocol.CurrentRevision)
+        if (handshake.ProtocolRevision != RuntimeProtocol.CurrentRevision
+            || handshake.MinimumSupportedRevision != RuntimeProtocol.MinimumSupportedRevision
+            || handshake.MaximumSupportedRevision != RuntimeProtocol.MaximumSupportedRevision)
         {
             return $"Runtime protocol revision {handshake.ProtocolRevision} with supported range "
                    + $"{handshake.MinimumSupportedRevision}-{handshake.MaximumSupportedRevision} is incompatible with client revision {RuntimeProtocol.CurrentRevision}.";

@@ -1,0 +1,10 @@
+{
+  "contract": {
+    "contractId": "example.agent.tools",
+    "contractVersion": "1.0.0",
+    "descriptorSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "abiSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "selectedPackageId": "example.agent",
+  "matchCount": 0
+}

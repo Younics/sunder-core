@@ -2,7 +2,7 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
@@ -11,7 +11,11 @@ namespace Sunder.Runtime.Host.Tests;
 
 internal static class CanonicalPackageTestBuilder
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     public static string WriteExplodedPackage(
         string root,
@@ -40,21 +44,10 @@ internal static class CanonicalPackageTestBuilder
 
         if (roles.Contains(SunderPackageFormat.RuntimeHostRole, StringComparer.Ordinal))
         {
-            var workerOutput = GetTestWorkerOutput();
-            var sourceExecutableName = GetTestWorkerExecutableName(RuntimeInformation.RuntimeIdentifier);
             foreach (var rid in runtimeIdentifiers)
             {
                 var workerFolder = Path.Combine(root, "payload", SunderPackageFormat.RuntimeHostRole, rid, "lib");
-                Directory.CreateDirectory(workerFolder);
-                foreach (var workerFile in Directory.EnumerateFiles(workerOutput))
-                {
-                    var fileName = Path.GetFileName(workerFile);
-                    if (string.Equals(fileName, sourceExecutableName, StringComparison.Ordinal))
-                    {
-                        fileName = GetTestWorkerExecutableName(rid);
-                    }
-                    File.Copy(workerFile, Path.Combine(workerFolder, fileName), overwrite: true);
-                }
+                TestWorkerFixture.CopyPayload(workerFolder, rid);
             }
         }
 
@@ -68,13 +61,23 @@ internal static class CanonicalPackageTestBuilder
                     : runtimeTargetKind,
                 EntryPoint = role == SunderPackageFormat.AppHostRole
                     ? appEntryPoint ?? $"lib/{entryAssemblyName}"
-                    : runtimeEntryPoint ?? $"lib/{GetTestWorkerExecutableName(rid)}",
+                    : runtimeEntryPoint ?? "lib/Sunder.Runtime.Host.TestWorker.dll",
                 TargetFramework = "net10.0",
                 SdkVersion = "1.1.0",
                 RequiredHostCapabilities = role == SunderPackageFormat.RuntimeHostRole
-                    ? runtimeRequiredHostCapabilities
-                      ?? ["sdk-baseline-1-1.v1", "core.v1", "rpc.v2", "worker-protocol.v3"]
+                    ? CreateRuntimeRequiredHostCapabilities(
+                        runtimeRequiredHostCapabilities,
+                        runtimeTargetKind)
                     : ["sdk-baseline-1-1.v1", "core.v1"],
+                ExecutionRuntime = role == SunderPackageFormat.RuntimeHostRole
+                                   && runtimeTargetKind == SunderPackageFormat.WorkerTargetKind
+                    ? new SunderPackageExecutionRuntimeManifest
+                    {
+                        Id = SunderPackageFormat.DotNetExecutionRuntimeId,
+                        VersionRange = ">=10.0.0 <11.0.0",
+                        ModuleAbi = SunderPackageFormat.DotNetWorkerModuleAbi,
+                    }
+                    : null,
                 Views = role == SunderPackageFormat.AppHostRole ? appViews : null,
             }))
             .Cast<SunderPackageTargetManifest?>()
@@ -91,9 +94,14 @@ internal static class CanonicalPackageTestBuilder
                 {
                     PackageId = dependency.PackageId,
                     VersionRange = dependency.VersionRange,
+                    Presence = "required",
                 })
                 .ToArray(),
             ContractBundles = contractBundles ?? [],
+            PackageArtifactImports = [],
+            PackageApiImports = [],
+            ProviderImports = [],
+            PlatformImports = [],
             UsesContracts = usesContracts ?? [],
             Targets = targets,
         };
@@ -108,7 +116,8 @@ internal static class CanonicalPackageTestBuilder
         string packageId,
         string version,
         bool isEnabled = true,
-        IReadOnlyList<InstalledPackageDependencyRecord>? dependencies = null)
+        IReadOnlyList<InstalledPackageDependencyRecord>? dependencies = null,
+        IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord>? executionRuntimeBindings = null)
     {
         var validation = SunderPackageArchiveInspector.ValidateExtractedPackageAsync(root)
             .GetAwaiter()
@@ -134,7 +143,8 @@ internal static class CanonicalPackageTestBuilder
             isEnabled,
             DateTimeOffset.UtcNow,
             InstalledPackageProvenanceRecord.Unknown,
-            []);
+            [],
+            executionRuntimeBindings ?? CreateExecutionRuntimeBindings(validation.Manifest));
     }
 
     public static async Task<string> CreateArchiveAsync(string sourceRoot)
@@ -168,6 +178,7 @@ internal static class CanonicalPackageTestBuilder
             root,
             root,
             role == SunderPackageFormat.AppHostRole ? PackageHostRoles.App : PackageHostRoles.Runtime,
+            ContentIdentity: sourceKind == PackageSourceKind.Installed ? ComputeContentIdentity(root) : null,
             Manifest: manifest,
             ContentIndex: contentIndex,
             SelectedTargetKey: key,
@@ -212,42 +223,52 @@ internal static class CanonicalPackageTestBuilder
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
-    private static string GetTestWorkerOutput()
-        => Path.Combine(
-            FindRepositoryRoot(),
-            "languages",
-            "csharp",
-            "dotnet",
-            "tests",
-            "Sunder.Runtime.Host.TestWorker",
-            "bin",
-            ResolveConfiguration(),
-            "net10.0");
-
-    private static string GetTestWorkerExecutableName(string rid)
-        => rid.StartsWith("win-", StringComparison.Ordinal)
-            ? "Sunder.Runtime.Host.TestWorker.exe"
-            : "Sunder.Runtime.Host.TestWorker";
-
-    private static string ResolveConfiguration()
-        => new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(
-                Path.DirectorySeparatorChar,
-                Path.AltDirectorySeparatorChar))
-            .Parent?.Name
-           ?? "Debug";
-
-    private static string FindRepositoryRoot()
+    private static IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> CreateExecutionRuntimeBindings(
+        SunderPackageManifest manifest)
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "Sunder.Core.slnx")))
+        var policyObservedAtUtc = DateTimeOffset.Parse("2026-07-11T10:00:00Z");
+        var resolvedAtUtc = DateTimeOffset.Parse("2026-07-11T10:01:00Z");
+        return (manifest.Targets ?? [])
+            .Where(target => target is
             {
-                return directory.FullName;
-            }
-            directory = directory.Parent;
+                Role: SunderPackageFormat.RuntimeHostRole,
+                Kind: SunderPackageFormat.WorkerTargetKind,
+                ExecutionRuntime: not null,
+            })
+            .Select(target => new InstalledPackageExecutionRuntimeBindingRecord(
+                target!.Role!,
+                target.Rid!,
+                target.ExecutionRuntime!.Id!,
+                "10.0.1",
+                1,
+                target.ExecutionRuntime.ModuleAbi!,
+                new string('a', 64),
+                new string('b', 64),
+                104857600,
+                "https://registry.example/",
+                RuntimeExecutionRuntimeAcquisitionSources.Registry,
+                "sunder-runtime-release-2026-01",
+                1,
+                1,
+                "supported",
+                policyObservedAtUtc,
+                resolvedAtUtc))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> CreateRuntimeRequiredHostCapabilities(
+        IReadOnlyList<string>? requiredHostCapabilities,
+        string runtimeTargetKind)
+    {
+        var capabilities = requiredHostCapabilities
+                           ?? ["sdk-baseline-1-1.v1", "core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1"];
+        if (runtimeTargetKind != SunderPackageFormat.WorkerTargetKind
+            || capabilities.Contains(SunderPackageFormat.ExecutionRuntimeV1Capability, StringComparer.Ordinal))
+        {
+            return capabilities;
         }
-        throw new DirectoryNotFoundException("Could not locate the Sunder Core repository root.");
+
+        return [.. capabilities, SunderPackageFormat.ExecutionRuntimeV1Capability];
     }
 
     private static bool PathsEqual(string left, string right)

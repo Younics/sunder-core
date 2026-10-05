@@ -1,101 +1,107 @@
 # Sunder.Package.Templates
 
-> **Release/source channel:** The NuGet README describes that published template version. The repository copy tracks current source and may be ahead of NuGet; use the matching `sdk/v*` tag when auditing a release.
+> **Release/source channel:** The NuGet README describes that published template version. The repository copy may be ahead of NuGet; use the matching `sdk/v*` tag when auditing a release.
 
-`Sunder.Package.Templates` provides `dotnet new sunder-package`, a canonical .NET Worker/package scaffold that builds development output and one universal Sunder package directly.
+`dotnet new sunder-package` creates one authored .NET project with ordinary services
+and optional Avalonia views. Sunder generates typed APIs, composition and isolated
+Worker/App outputs. Node/React presets use `npm create sunder-package@latest` and the
+same package/runtime model.
 
-It is the current .NET Worker V3/Avalonia preset, not the only valid authoring route. Node worker/web presets use `npm create sunder-package@latest`; future Python, Rust, Go, other worker toolchains, other .NET UI approaches, and other web frameworks may emit the same canonical package format with their own tooling.
-
-## Install
+## Install And Create
 
 ```powershell
 dotnet new install Sunder.Package.Templates
-```
-
-## Create
-
-Headless Worker package:
-
-```powershell
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
+dotnet new sunder-package --name MyUiPackage --packageId my.company.ui --packageName "My UI Package" --withAvalonia
 ```
 
-Avalonia App plus Worker targets:
-
-```powershell
-dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withAvalonia
-```
-
-Stack provider example:
-
-```powershell
-dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withStacks
-```
-
-Package dependency metadata:
-
-```powershell
-dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent --hostPackageVersionRange ">=2.0.0 <3.0.0"
-```
-
-Use `--output .\MyPackage` to choose an explicit empty destination.
-
-## Options
+Use `--output` to select an empty destination.
 
 | Option | Meaning |
 | --- | --- |
-| `--packageId <id>` | Required lowercase dot-separated package id. |
-| `--packageName <name>` | Required user-facing package name. |
-| `--withAvalonia` | Adds an Avalonia App leaf and default package view. |
-| `--noDefaultView` | Retains the Avalonia leaf but omits its starter shell view. |
-| `--withStacks` | Adds `Sunder.Sdk.Stacks` and a Stack RPC provider example. |
+| `--packageId <id>` | Required lowercase dot-separated package identity. |
+| `--packageName <name>` | Required user-facing name. |
+| `--withAvalonia` | Adds Avalonia references and a starter package view. |
+| `--noDefaultView` | With Avalonia, retains SDK references but omits the starter view. No empty App role is emitted until UI source is added. |
+| `--withStacks` | Adds the domain Stack contributor; requires explicit local or Registry platform-contract selection. |
 | `--withHostDependency` | Adds `[SunderPackageDependency]` metadata. |
-| `--hostPackageId <id>` | Required package id for `--withHostDependency`. |
-| `--hostPackageVersionRange <range>` | Dependency range; defaults to `>=1.1.0 <1.2.0`. |
+| `--hostPackageId <id>` | Required with `--withHostDependency`. |
+| `--hostPackageVersionRange <range>` | Reviewed dependency range; defaults to `>=1.1.0 <1.2.0`. |
 
 ## Generated Shape
 
-Every generated package contains:
-
 ```text
 MyPackage/
-  Sunder.Package.props           # single Version source for every generated project
   MyPackage.csproj
   PackageMetadata.cs
-  Assets/
-    icon.png
-  MyPackage.Protocol/
-    MyPackage.Protocol.csproj
-    Contracts/
-      sample.rpc.json
-    PackageProtocol.cs
-  MyPackage.Worker/
-    Program.cs
-    SampleRpcProvider.cs
-  MyPackage.App/                 # only with --withAvalonia
-    MyPackage.App.csproj
-    PackageModule.cs
+  sunder-contracts.lock.json
+  Assets/icon.png
+  Services/SampleService.cs
+  Views/                         # optional Avalonia source
+    Avalonia.PackageReferences.props
+    DefaultPackageView.axaml
+    DefaultPackageView.axaml.cs
+    DefaultPackageViewModel.cs
+  Stacks/                        # optional Stack source/references
 ```
 
-`MyPackage.csproj` is the canonical Worker/package project and sets `SunderPackagePrimaryProject=true`. Worker source remains under `MyPackage.Worker/`, but there is no separate Worker csproj or Aggregate wrapper. `MyPackage.Protocol` is always generated, non-packable, and package-local. It embeds the language-neutral descriptor and generates DTO, client, and provider adapter source under `obj` during build; generated bindings are not checked in. `SampleRpcProvider.cs` implements the starter owner-only provider, and `Program.cs` registers it with the canonical Worker V3 overload on `SunderWorker`. Worker and App reference Protocol with `PrivateAssets="all"`; it is not a separately published ABI.
+The annotated service generates `ISampleService`, which the view model receives
+through its constructor. `[SunderPackageView]` supplies view metadata. Default DI,
+Worker entry, App module, provider registration and RPC lifetime are generated.
+Source folders do not define role boundaries, and authors maintain no App/Protocol
+project, manual descriptor, client scope or default bootstrap.
 
-Both role leaves bundle the same descriptorVersion 2 contract with package exposure. Worker declares its owner-only sample provider, while the optional App leaf declares an exact `2.0.0` role-scoped use. `SunderPackageAppProject` treats the App csproj as a non-compiling build-only input; an outer-only restore edge lets the canonical restore include it, while explicit composition builds it exactly once. The canonical project validates package-wide metadata agreement, combines all six exact-RID Worker V3 targets with optional App targets during pack, and factors identical content into `payload/shared`.
+Stable templates reference the coordinated SDK minor range. Prerelease templates
+pin their exact coordinated SDK release. The package's own version is `1.0.0` in
+its project file; it is independent of the owned RPC contract version.
 
-Coordinated Sunder references use the bounded minor range derived from the template package version. Avalonia and Stack dependencies appear only when selected. RPC uses and providers bind exact contract version `2.0.0` and never carry `VersionRange`; the dependency option deliberately retains its independently authored installed-package version range and does not add a NuGet reference to another package's implementation or protocol helpers.
+## Build, Run And Package
 
-## Build And Package
+With `--withStacks`, select the platform import described below before the first
+Accept command. Local selection requires no Registry.
 
 ```powershell
 dotnet restore .\MyPackage\MyPackage.csproj
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:AcceptSunderContracts -p:SunderContractKey=sample -p:SunderContractNextVersion=2.0.0
 dotnet build .\MyPackage\MyPackage.csproj --no-restore
+dotnet run --project .\MyPackage\MyPackage.csproj --no-build
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:FreezeSunderContracts
 dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
 
-Build emits an exact current-RID Worker leaf under `bin/Debug/net10.0/<rid>/sunder-dev` and composes it with the optional App into `bin/Debug/net10.0/sunder-dev`. Output uses archive format 1, manifest version 3, descriptor and ABI hashes, `rpc.v2`, `worker-protocol.v3`, the matching SDK baseline, the content index, shared descriptors, and exact target layers. Edit the package version only in `Sunder.Package.props`; every generated project imports it. The canonical pack target sequentially builds all six Worker RIDs and emits one validated universal `.sunderpkg` under `bin/Release/net10.0`.
+First Accept creates the reviewed owned baseline; retain it and the contract lock.
+The explicit initial RPC version `2.0.0` preserves the sample's wire identity. Normal
+Build/Rebuild are offline and never accept/freeze or change selections automatically.
 
-Package identity and dependencies come from `PackageMetadata.cs`; authors do not maintain a source package manifest. Runtime code executes only through the self-contained Worker V3 apphost and uses `SunderWorkerContext` for Host-mediated package data and RPC.
+Build composes the current RID at `bin/Debug/net10.0/sunder-dev`. Internal role outputs
+are under `sunder-roles/<role>/<rid>`; Pack builds all declared RIDs and emits one
+validated `.sunderpkg`. Runtime payloads carry managed modules and package-owned
+dependencies, not apphosts or embedded .NET runtimes. First-restore flags avoid
+downloading SDK runtime/apphost packs that Sunder's managed launch does not use.
 
-## Documentation
+`dotnet run` delegates to `sunder dev package run`. The Sunder CLI must be on PATH
+or selected with `-p:SunderCliPath=...`. Forward `-- --watch` to reload changed
+development output. Runtime acquisition is explicit through Sunder; a missing
+managed runtime is not replaced with a direct Worker launch or hidden download.
+Single-project signed-prebuilt packing remains fail-closed until its role-input
+provenance is qualified; ordinary Pack builds current source.
+
+## Optional Stack Contributor
+
+Select `sunder.stack.contributor` with `ImplementSunderPlatformApi` before first Accept.
+Use `SunderPlatformCatalogPath` for a local Core catalog, or `SunderRegistryOrigin` for
+a published catalog. First Accept validates the owned greeting and imported contributor
+together. Generated composition registers the exact selected adapter automatically.
+
+Local creation and development require no Registry. Published selection uses the
+explicitly chosen Registry's administrator-published catalog.
+Missing selection reports `platform-api.import-not-found`; unsupported SDK/catalog
+version lines report `platform-api.catalog-version-unsupported`. No catalog signing
+key or trust bundle is needed. The legacy embedded SDK descriptor does not create a
+Registry selection.
+
+See the generated README and the package-development documentation for explicit
+public package API selection, optional presence/readiness, updates and offline restore.
 
 - Package development: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
 - Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md

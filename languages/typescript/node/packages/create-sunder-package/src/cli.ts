@@ -55,7 +55,7 @@ async function main(): Promise<void> {
     ["SUNDER_PACKAGE_NAME", escapeMarkdown(packageName)],
   ]);
   await copyTemplate(templateRoot, output, replacements);
-  process.stdout.write(`Created Sunder ${preset.label} package at ${output}\n\nNext steps:\n  npm install\n  npm test\n  npm run sunder:dev\n  npm run build\n  npm run smoke\n  npm run package\n`);
+  process.stdout.write(`Created Sunder ${preset.label} package at ${output}\n\nNext steps:\n  npm install\n  npm run contracts:accept\n  npm test\n  npm run sunder:dev\n  npm run build\n  npm run smoke\n  npm run contracts:freeze\n  npm run package\n\nReview and commit sunder-contracts.owned.json and sunder-contracts.lock.json. First Accept must precede generation for a new package.\n`);
 }
 
 async function copyTemplate(source: string, destination: string, replacements: ReadonlyMap<string, string>): Promise<void> {

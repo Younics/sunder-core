@@ -66,7 +66,12 @@ public sealed record RegistryPackageVersionDetails(
     int ManifestFormatVersion,
     int ArchiveFormatVersion,
     DateTimeOffset PublishedAtUtc,
-    IReadOnlyList<string> TrustedArtifactOrigins);
+    IReadOnlyList<string> TrustedArtifactOrigins)
+{
+    /// <summary>Verified original publication policy; absent evidence never confirms a previous upload.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPackagePublicationEvidence? Publication { get; init; }
+}
 
 public sealed record RegistryPackageDependency(
     string PackageId,
@@ -85,7 +90,8 @@ public sealed record RegistryPackageTarget(
     string? TargetFramework,
     string? SdkVersion,
     IReadOnlyList<string> RequiredHostCapabilities,
-    IReadOnlyList<RegistryPackageWebView>? Views = null)
+    IReadOnlyList<RegistryPackageWebView>? Views = null,
+    RegistryExecutionRuntimeRequirement? ExecutionRuntime = null)
 {
     public IReadOnlyList<RegistryPackageWebView> Views { get; }
         = Array.AsReadOnly((Views ?? []).ToArray());
@@ -217,17 +223,45 @@ public sealed record RegistryResolveUpdatesRequest(
     IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets,
     [property: System.Text.Json.Serialization.JsonRequired]
     RegistryClientCompatibilityProfile Compatibility,
+    [property: System.Text.Json.Serialization.JsonRequired]
+    RegistryHostRuntimeTrustProfile RuntimeTrust,
+    string? ExpectedResolutionFingerprint = null,
     bool IncludePrerelease = false);
 
 public sealed record RegistryInstalledPackage(
     string PackageId,
     string Version,
-    IReadOnlyList<RegistryPackageProjectionKey> AcquiredProjections);
+    IReadOnlyList<RegistryPackageProjectionKey> AcquiredProjections,
+    string PackageContentIdentity,
+    IReadOnlyList<RegistryPackageTargetRuntimeBinding> RuntimeBindings);
 
 public sealed record RegistryResolveUpdatesResponse(
     IReadOnlyList<RegistryPackageUpdate> Updates,
     IReadOnlyList<string> Errors,
-    IReadOnlyList<string> TrustedArtifactOrigins);
+    IReadOnlyList<string> TrustedArtifactOrigins,
+    IReadOnlyList<RegistryPackageInstallPlanItem>? Actions = null,
+    IReadOnlyList<RegistryResolvedExecutionRuntimeArtifact>? RuntimeArtifacts = null,
+    IReadOnlyList<RegistryExecutionRuntimeResolutionConflict>? RuntimeConflicts = null,
+    string ResolutionFingerprint = "",
+    long RuntimePolicyRevision = 0,
+    DateTimeOffset ExpiresAtUtc = default)
+{
+    /// <summary>Verified package policy for these actions; absence is not authorization.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPolicyIdentity? PackagePolicy { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPolicyCheckpointIdentity? PolicyCheckpoint { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPackageResolutionPolicy? ResolutionPolicy { get; init; }
+    private IReadOnlyList<RegistryPackageCompatibilityConflict> _compatibilityConflicts = [];
+    public IReadOnlyList<RegistryPackageCompatibilityConflict> CompatibilityConflicts { get => _compatibilityConflicts; init => _compatibilityConflicts = PolicyCollections.Freeze(value); }
+    public IReadOnlyList<RegistryPackageInstallPlanItem> Actions { get; }
+        = Array.AsReadOnly((Actions ?? []).ToArray());
+    public IReadOnlyList<RegistryResolvedExecutionRuntimeArtifact> RuntimeArtifacts { get; }
+        = Array.AsReadOnly((RuntimeArtifacts ?? []).ToArray());
+    public IReadOnlyList<RegistryExecutionRuntimeResolutionConflict> RuntimeConflicts { get; }
+        = Array.AsReadOnly((RuntimeConflicts ?? []).ToArray());
+}
 
 public sealed record RegistryPackageUpdate(
     string PackageId,
@@ -244,6 +278,9 @@ public sealed record RegistryResolveInstallPlanRequest(
     IReadOnlyList<RegistryInstalledPackageState> InstalledPackages,
     [property: System.Text.Json.Serialization.JsonRequired]
     RegistryClientCompatibilityProfile Compatibility,
+    [property: System.Text.Json.Serialization.JsonRequired]
+    RegistryHostRuntimeTrustProfile RuntimeTrust,
+    string? ExpectedResolutionFingerprint = null,
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
     bool Reinstall = false,
@@ -263,6 +300,9 @@ public sealed record RegistryResolvePackageChangesRequest(
     IReadOnlyList<RegistryInstalledPackageState> InstalledPackages,
     [property: System.Text.Json.Serialization.JsonRequired]
     RegistryClientCompatibilityProfile Compatibility,
+    [property: System.Text.Json.Serialization.JsonRequired]
+    RegistryHostRuntimeTrustProfile RuntimeTrust,
+    string? ExpectedResolutionFingerprint = null,
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
     bool Reinstall = false);
@@ -271,17 +311,26 @@ public sealed record RegistryInstalledPackageState(
     string PackageId,
     string Version,
     IReadOnlyList<RegistryPackageDependency> DependsOn,
-    IReadOnlyList<RegistryPackageProjectionKey> AcquiredProjections);
+    IReadOnlyList<RegistryPackageProjectionKey> AcquiredProjections,
+    string PackageContentIdentity,
+    IReadOnlyList<RegistryPackageTargetRuntimeBinding> RuntimeBindings);
 
 public sealed record RegistryPackageInstallPlanItem(
     string PackageId,
     string? CurrentVersion,
-    string Version,
-    bool IsUpdate,
+    string? Version,
+    string PackageContentIdentity,
+    string ActionKind,
     string? DeprecatedMessage,
     IReadOnlyList<RegistryPackageDependency> DependsOn,
     IReadOnlyList<RegistryPackageTarget> Targets,
-    IReadOnlyList<RegistryPackageProjectionArtifact> Artifacts);
+    IReadOnlyList<RegistryPackageProjectionArtifact> Artifacts,
+    IReadOnlyList<RegistryPackageTargetRuntimeBinding>? RuntimeBindings = null,
+    RegistryRuntimeOnlyRebindDetails? RuntimeOnlyRebind = null)
+{
+    public IReadOnlyList<RegistryPackageTargetRuntimeBinding> RuntimeBindings { get; }
+        = Array.AsReadOnly((RuntimeBindings ?? []).ToArray());
+}
 
 public sealed record RegistryPackageInstallPlanConflict(
     string PackageId,
@@ -297,4 +346,24 @@ public sealed record RegistryResolveInstallPlanResponse(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<RegistryPackageInstallPlanConflict> Conflicts,
-    IReadOnlyList<string> TrustedArtifactOrigins);
+    IReadOnlyList<string> TrustedArtifactOrigins,
+    IReadOnlyList<RegistryResolvedExecutionRuntimeArtifact>? RuntimeArtifacts = null,
+    IReadOnlyList<RegistryExecutionRuntimeResolutionConflict>? RuntimeConflicts = null,
+    string ResolutionFingerprint = "",
+    long RuntimePolicyRevision = 0,
+    DateTimeOffset ExpiresAtUtc = default)
+{
+    /// <summary>Verified package policy for this plan; absence is not authorization.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPolicyIdentity? PackagePolicy { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPolicyCheckpointIdentity? PolicyCheckpoint { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPackageResolutionPolicy? ResolutionPolicy { get; init; }
+    private IReadOnlyList<RegistryPackageCompatibilityConflict> _compatibilityConflicts = [];
+    public IReadOnlyList<RegistryPackageCompatibilityConflict> CompatibilityConflicts { get => _compatibilityConflicts; init => _compatibilityConflicts = PolicyCollections.Freeze(value); }
+    public IReadOnlyList<RegistryResolvedExecutionRuntimeArtifact> RuntimeArtifacts { get; }
+        = Array.AsReadOnly((RuntimeArtifacts ?? []).ToArray());
+    public IReadOnlyList<RegistryExecutionRuntimeResolutionConflict> RuntimeConflicts { get; }
+        = Array.AsReadOnly((RuntimeConflicts ?? []).ToArray());
+}

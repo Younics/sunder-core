@@ -1,0 +1,32 @@
+{
+  "type": "about:blank",
+  "title": "Required providers form an activation cycle.",
+  "status": 409,
+  "detail": "Required providers form an activation cycle.",
+  "instance": "/api/v1/packages/example.consumer/activate",
+  "code": "rpc.required-provider-cycle",
+  "traceId": "trace-policy-1",
+  "correlationId": "correlation-policy-1",
+  "details": {
+    "packageIds": [
+      "example.agent",
+      "example.consumer"
+    ],
+    "predicates": [
+      {
+        "consumerPackageId": "example.consumer",
+        "consumerRole": "runtime",
+        "contract": {
+          "contractId": "example.agent.tools",
+          "contractVersion": "1.0.0",
+          "descriptorSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "abiSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "actions": [
+          "discover",
+          "invoke"
+        ]
+      }
+    ]
+  }
+}

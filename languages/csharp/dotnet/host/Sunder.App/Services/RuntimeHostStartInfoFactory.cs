@@ -11,6 +11,10 @@ internal static class RuntimeHostStartInfoFactory
         "SUNDER_HOST_RUNTIME_PATH",
         "SUNDER_HOST_STATE_ROOT",
         "SUNDER_RUNTIME_STATE_ROOT",
+        "SUNDER_RUNTIME_DEVELOPMENT_RELEASE_KEY_ID",
+        "SUNDER_RUNTIME_DEVELOPMENT_RELEASE_PUBLIC_KEY_BASE64",
+        "SUNDER_RUNTIME_DEVELOPMENT_TRUST_GENERATION",
+        "SUNDER_RUNTIME_DEVELOPMENT_ALLOW_INSECURE_LOOPBACK_REGISTRY",
     };
 
     public static ProcessStartInfo Create(
@@ -30,6 +34,7 @@ internal static class RuntimeHostStartInfoFactory
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(runtimeHostPath)!,
         };
+        startInfo.Environment.Remove("SUNDER_EXECUTION_RUNTIME_DEVELOPMENT_STATE_ROOT");
         if (managedSupervisor)
         {
             SanitizeManagedSupervisorEnvironment(startInfo.Environment);

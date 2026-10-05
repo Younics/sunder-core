@@ -2,6 +2,10 @@ namespace Sunder.Runtime.LocalState;
 
 public sealed record RuntimeConnectionInfo(Uri RuntimeUrl, string BearerToken)
 {
+    // Private local discovery metadata, never part of Runtime HTTP DTOs.
+    internal RuntimeIpcEndpoint? IpcEndpoint { get; init; }
+    internal string? WorkerConnectionInfoPath { get; init; }
+
     public bool Matches(Uri runtimeUrl)
         => Normalize(RuntimeUrl) == Normalize(runtimeUrl);
 

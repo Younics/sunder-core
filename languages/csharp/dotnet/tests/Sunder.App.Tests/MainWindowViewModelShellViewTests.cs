@@ -161,7 +161,7 @@ public sealed class MainWindowViewModelShellViewTests
             "agent",
             new PackageViewRegistration("agent.subsessions", "Subsessions"),
             serviceProvider);
-        var packageViewHostService = new PackageViewHostService(
+        var packageViewHostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -231,7 +231,7 @@ public sealed class MainWindowViewModelShellViewTests
             "agent",
             new PackageViewRegistration("agent.subsessions", "Subsessions"),
             serviceProvider);
-        var packageViewHostService = new PackageViewHostService(
+        var packageViewHostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -286,7 +286,7 @@ public sealed class MainWindowViewModelShellViewTests
             "agent",
             new PackageViewRegistration("agent.subsessions", "Subsessions"),
             serviceProvider);
-        var packageViewHostService = new PackageViewHostService(
+        var packageViewHostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -330,7 +330,7 @@ public sealed class MainWindowViewModelShellViewTests
             "agent",
             new PackageViewRegistration("agent.workspaces", "Workspaces"),
             serviceProvider);
-        var packageViewHostService = new PackageViewHostService(
+        var packageViewHostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -421,7 +421,7 @@ public sealed class MainWindowViewModelShellViewTests
             "agent",
             new PackageViewRegistration("agent.subsessions", "Subsessions"),
             serviceProvider);
-        var packageViewHostService = new PackageViewHostService(
+        var packageViewHostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -486,7 +486,7 @@ public sealed class MainWindowViewModelShellViewTests
             "agent",
             new PackageViewRegistration("agent.workspaces", "Workspaces"),
             serviceProvider);
-        var packageViewHostService = new PackageViewHostService(
+        var packageViewHostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -854,7 +854,7 @@ public sealed class MainWindowViewModelShellViewTests
             "agent",
             new PackageViewRegistration("agent.workspaces", "Workspaces"),
             serviceProvider);
-        var packageViewHostService = new PackageViewHostService(
+        var packageViewHostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -1079,7 +1079,7 @@ public sealed class MainWindowViewModelShellViewTests
             "agent",
             new PackageViewRegistration("agent.workspaces", "Workspaces"),
             serviceProvider);
-        var packageViewHostService = new PackageViewHostService(
+        var packageViewHostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -1214,7 +1214,7 @@ public sealed class MainWindowViewModelShellViewTests
             "agent",
             "agent.subsessions",
             serviceProvider);
-        var packageViewHostService = new PackageViewHostService(
+        var packageViewHostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -1585,7 +1585,7 @@ public sealed class MainWindowViewModelShellViewTests
         using var runtimeTransport = new RuntimeClientTransport(
             () => new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5199"), "test-token"),
             runtimeHandler);
-        var packageViewHostService = new PackageViewHostService(
+        var packageViewHostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -2858,7 +2858,7 @@ public sealed class MainWindowViewModelShellViewTests
         );
 
     private static PackageViewHostService CreatePackageViewHostService() =>
-        new(
+        TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -2888,7 +2888,7 @@ public sealed class MainWindowViewModelShellViewTests
             );
         }
 
-        return new PackageViewHostService(
+        return TestAppPackageHost.Create(
             registry,
             [],
             [],
@@ -2909,7 +2909,7 @@ public sealed class MainWindowViewModelShellViewTests
             "agent.chat",
             serviceProvider
         );
-        return new PackageViewHostService(
+        return TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -3566,7 +3566,7 @@ public sealed class MainWindowViewModelShellViewTests
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":8,\"minimumSupportedRevision\":8,\"maximumSupportedRevision\":8,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"app-web-rpc.v2\",\"rpc.v2\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}",
+                        "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":1,\"minimumSupportedRevision\":1,\"maximumSupportedRevision\":1,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"app-web-rpc.v1\",\"schema-first-rpc.v1\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}",
                         System.Text.Encoding.UTF8,
                         "application/json"),
                 });

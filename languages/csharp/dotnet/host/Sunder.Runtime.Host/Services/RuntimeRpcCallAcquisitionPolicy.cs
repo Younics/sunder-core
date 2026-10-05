@@ -357,14 +357,16 @@ internal static class RuntimeRpcCallAcquisitionPolicy
                 PackageSessionPreparer.ContractKey(provider.ContractId, use.ContractVersion),
                 out descriptor)
             || !string.Equals(descriptor.ContractId, provider.ContractId, StringComparison.Ordinal)
-            || !string.Equals(descriptor.Version, use.ContractVersion, StringComparison.Ordinal))
+            || !string.Equals(descriptor.Version, use.ContractVersion, StringComparison.Ordinal)
+            || !string.Equals(descriptor.Sha256, provider.DescriptorSha256, StringComparison.Ordinal)
+            || !CallerExposureAllows(caller, provider))
         {
             descriptor = null;
             return false;
         }
 
-        if (descriptor.DescriptorVersion == SunderRpcProtocol.DescriptorVersionV2
-            && registration.Contract.DescriptorVersion == SunderRpcProtocol.DescriptorVersionV2
+        if (descriptor.DescriptorVersion == SunderRpcProtocol.DescriptorVersion
+            && registration.Contract.DescriptorVersion == SunderRpcProtocol.DescriptorVersion
             && use.AbiSha256 is not null
             && declaration.AbiSha256 is not null
             && string.Equals(descriptor.AbiSha256, use.AbiSha256, StringComparison.Ordinal)
@@ -376,6 +378,19 @@ internal static class RuntimeRpcCallAcquisitionPolicy
 
         descriptor = null;
         return false;
+    }
+
+    private static bool CallerExposureAllows(IRuntimeRpcCallerActivation caller, SunderRpcProviderSnapshot provider)
+    {
+        if (caller.PackageId == provider.PackageId) return true;
+        var source = caller switch
+        {
+            RuntimeRpcPackageActivation package => package.Package.Source,
+            RuntimeRpcAppCallerSession app => app.Source,
+            _ => null,
+        };
+        return source is null || source.Manifest?.ContractBundles?.Any(bundle => bundle?.ContractId == provider.ContractId
+            && bundle.Version == provider.ContractVersion && bundle.Exposure == SunderPackageFormat.PublicContractExposure) == true;
     }
 
     private static bool AudienceAllows(

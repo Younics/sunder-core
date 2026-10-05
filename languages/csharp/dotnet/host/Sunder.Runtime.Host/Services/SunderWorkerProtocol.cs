@@ -9,9 +9,9 @@ namespace Sunder.Runtime.Host.Services;
 
 internal static class SunderWorkerProtocol
 {
-    public const string V3Capability = "worker-protocol.v3";
-    public const string Name = "sunder.worker.v3";
-    public const int Version = 3;
+    public const string V1Capability = "worker-protocol.v1";
+    public const string Name = "sunder.worker.v1";
+    public const int Version = 1;
     public const long MaximumSafeInteger = 9_007_199_254_740_991;
     public const int EnvelopeReserveBytes = 64 * 1024;
 
@@ -203,6 +203,7 @@ internal static class SunderWorkerProtocol
 
     private static byte[] SerializeValue(JsonElement value, WorkerTransportLimits limits)
     {
+        ValidateValueBounds(value, limits);
         using var buffer = new FixedPooledBufferWriter(limits.MaximumRpcValueBytes);
         try
         {
@@ -275,6 +276,7 @@ internal static class SunderWorkerProtocol
     {
         if (!root.TryGetProperty(propertyName, out var value)
             || value.ValueKind != JsonValueKind.Number
+            || !IsCanonicalNonNegativeIntegerToken(value.GetRawText())
             || !value.TryGetInt64(out var result)
             || result is < 0 or > MaximumSafeInteger)
         {
@@ -283,6 +285,32 @@ internal static class SunderWorkerProtocol
         }
         return result;
     }
+
+    public static int RequiredInt32(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var value)
+            || value.ValueKind != JsonValueKind.Number
+            || !IsCanonicalIntegerToken(value.GetRawText())
+            || !value.TryGetInt32(out var result))
+        {
+            throw new SunderWorkerProtocolException(
+                $"Worker envelope property '{propertyName}' must be a signed 32-bit integer.");
+        }
+        return result;
+    }
+
+    public static bool IsCanonicalNonNegativeIntegerToken(string value)
+        => value.Length > 0
+           && (value == "0"
+               || value[0] is >= '1' and <= '9'
+               && value.AsSpan(1).IndexOfAnyExceptInRange('0', '9') < 0);
+
+    private static bool IsCanonicalIntegerToken(string value)
+        => IsCanonicalNonNegativeIntegerToken(value)
+           || value.Length > 1
+           && value[0] == '-'
+           && value[1] is >= '1' and <= '9'
+           && value.AsSpan(2).IndexOfAnyExceptInRange('0', '9') < 0;
 
     public static JsonElement RequiredValue(JsonElement root, string propertyName)
     {
@@ -385,11 +413,7 @@ internal static class SunderWorkerProtocol
             throw new WorkerTransportResourceException(
                 "Worker protocol envelope metadata exceeded its reserved byte limit.");
         }
-        if (hasRpcValue && GetValueDepth(rpcValue) > limits.MaximumValueDepth)
-        {
-            throw new WorkerTransportResourceException(
-                "Worker RPC value exceeded the negotiated depth limit.");
-        }
+        if (hasRpcValue) ValidateValueBounds(rpcValue, limits);
     }
 
     private static bool TryGetErrorDetails(JsonElement root, out JsonElement details)
@@ -404,14 +428,25 @@ internal static class SunderWorkerProtocol
         return false;
     }
 
-    private static int GetValueDepth(JsonElement value)
+    private static void ValidateValueBounds(JsonElement value, WorkerTransportLimits limits)
     {
         var maximum = 0;
+        var nodes = 0;
         var pending = new Stack<(JsonElement Value, int Depth)>();
         pending.Push((value, 1));
         while (pending.TryPop(out var item))
         {
             maximum = Math.Max(maximum, item.Depth);
+            if (maximum > limits.MaximumValueDepth)
+            {
+                throw new WorkerTransportResourceException(
+                    "Worker RPC value exceeded the negotiated depth limit.");
+            }
+            if (++nodes > limits.MaximumValueNodes)
+            {
+                throw new WorkerTransportResourceException(
+                    "Worker RPC value exceeded the negotiated node-count limit.");
+            }
             if (item.Value.ValueKind == JsonValueKind.Array)
             {
                 foreach (var child in item.Value.EnumerateArray())
@@ -421,13 +456,18 @@ internal static class SunderWorkerProtocol
             }
             else if (item.Value.ValueKind == JsonValueKind.Object)
             {
+                var members = 0;
                 foreach (var property in item.Value.EnumerateObject())
                 {
+                    if (++members > limits.MaximumObjectMembers)
+                    {
+                        throw new WorkerTransportResourceException(
+                            "Worker RPC value exceeded the negotiated object-member limit.");
+                    }
                     pending.Push((property.Value, item.Depth + 1));
                 }
             }
         }
-        return maximum;
     }
 
     private sealed class JsonObjectNames
@@ -521,6 +561,8 @@ internal static class SunderWorkerProtocol
 internal sealed record WorkerTransportLimits(
     int MaximumRpcValueBytes,
     int MaximumValueDepth,
+    int MaximumValueNodes,
+    int MaximumObjectMembers,
     long MaximumContentReferenceBytes,
     int MaximumFrameBytes,
     int MaximumHeaderBytes,
@@ -539,6 +581,8 @@ internal sealed record WorkerTransportLimits(
         return new WorkerTransportLimits(
             policy.MaximumRpcValueBytes,
             policy.MaximumValueDepth,
+            policy.MaximumValueNodes,
+            policy.MaximumObjectMembers,
             policy.MaximumContentReferenceBytes,
             checked(policy.MaximumRpcValueBytes + SunderWorkerProtocol.EnvelopeReserveBytes),
             maximumHeaderBytes,

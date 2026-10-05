@@ -44,10 +44,10 @@ internal sealed class RuntimeStackExportService
         {
             try
             {
-                var client = SunderStackContributorRpc.CreateClient(callScope, registration.Provider.Endpoint);
-                var discovered = await client.ListExportItemsAsync(
+                var client = new StackTransport.StackDomainClient(callScope, registration.Provider.Endpoint);
+                var discovered = (await client.ListExportItemsAsync(
                     new StackExportDiscoveryContext(registration.PackageId),
-                    linked.Token).ConfigureAwait(false);
+                    linked.Token).ConfigureAwait(false)).Items;
                 if (!RuntimeStackContributorCatalog.ValidateExportItemIds(discovered, registration.ContributorId, errors))
                 {
                     continue;
@@ -98,7 +98,7 @@ internal sealed class RuntimeStackExportService
             }
             try
             {
-                var scopedClient = SunderStackContributorRpc.CreateClient(
+                var scopedClient = new StackTransport.StackDomainClient(
                     callScope,
                     registration.Provider.Endpoint);
                 var selections = group.GroupBy(item => item.ItemId, StringComparer.OrdinalIgnoreCase)
@@ -110,9 +110,9 @@ internal sealed class RuntimeStackExportService
                             detail.ValueOverride,
                             Enum.TryParse<StackValueSensitivity>(detail.SensitivityOverride, true, out var sensitivity) ? sensitivity : null)).ToArray()))
                     .ToArray();
-                var discovered = await scopedClient.ListExportItemsAsync(
+                var discovered = (await scopedClient.ListExportItemsAsync(
                     new StackExportDiscoveryContext(registration.PackageId),
-                    linked.Token).ConfigureAwait(false);
+                    linked.Token).ConfigureAwait(false)).Items;
                 if (!RuntimeStackContributorCatalog.ValidateExportItemIds(discovered, registration.ContributorId, errors))
                 {
                     continue;

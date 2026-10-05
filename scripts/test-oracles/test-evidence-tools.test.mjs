@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
@@ -11,6 +12,30 @@ import {
 import { missingPrerequisites } from "./test-lane-prerequisites.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+test("project-scoped test selection excludes process cases from the fast lane and keeps them in full validation", () => {
+  const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
+  const select = (...args) => spawnSync(process.execPath, [runner, "--list", ...args], { cwd: repositoryRoot, encoding: "utf8" });
+  const fast = select("--project", "Sunder.Package.Build.Tests", "--primary-lane", "dotnet-linux");
+  assert.equal(fast.status, 0, fast.stderr);
+  const fastIds = JSON.parse(fast.stdout).declarations;
+  assert.ok(fastIds.includes("Sunder.Package.Build.Tests.ServiceApiEditorGeneratorTests.ReusedDriverTracksUnsavedRenameRemovalAndIncompleteBody"));
+  const projectIds = new Set(loadCoreTestModel().declarations.filter((test) => test.project === "Sunder.Package.Build.Tests").map((test) => test.id));
+  assert.ok(fastIds.every((id) => projectIds.has(id)));
+  const workspace = "Sunder.Package.Build.Tests.ImplementationFirstRpcBuildTests.SingleProject_ActualWorkspaceLoadsUnbuiltReferencesAndRefreshesBothGenerators";
+  assert.ok(!fastIds.includes(workspace));
+  const packageBuild = "Sunder.Package.Build.Tests.PrimaryPackageIntegrationTests.PrimaryProject_ComposesBuildPacksPrebuiltLeavesAndCleansSafely";
+  assert.ok(!fastIds.includes(packageBuild));
+  const full = select("--project", "Sunder.Package.Build.Tests");
+  assert.equal(full.status, 0, full.stderr);
+  const fullIds = JSON.parse(full.stdout).declarations;
+  assert.ok(fullIds.includes(workspace));
+  assert.ok(fullIds.includes(packageBuild));
+  assert.ok(fastIds.every((id) => fullIds.includes(id)));
+  const unknown = select("--project", "does-not-exist");
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /Unknown .NET test project/u);
+});
 
 test("compact Core policy deterministically partitions every test project into owned lanes", async () => {
   const first = loadCoreTestModel();
@@ -45,6 +70,10 @@ test("runtime model retains theories, dynamic Node declarations, platform owners
   const unix = declarations.find((item) => item.id
     === "Sunder.App.Tests.RuntimePersistentLauncherTests.HostServiceCommandRunner_ReturnsBoundedSanitizedOutputAndExitCode");
   assert.deepEqual(unix.operatingSystems, ["Linux", "MacOS"]);
+  const live = declarations.find((item) => item.id
+    === "Sunder.Runtime.Host.Tests.LivePlatformRegistryRuntimeTests.RealCatalogPolicyAdmitsOfflineStackAndRevocationSurvivesRestart");
+  assert.ok(live.externalPrerequisites.some((item) => item.name === "SUNDER_LIVE_PLATFORM_INPUT" && item.pathKind === "file"));
+  assert.ok(live.externalPrerequisites.some((item) => item.name === "SUNDER_LIVE_PLATFORM_PHASE" && item.kind === "environment"));
 });
 
 test("characterization ledger rejects missing evidence and overstated gap coverage", async () => {
@@ -155,13 +184,21 @@ test("candidate-safe workflows retain lane gates, runtime reports, and compact e
 
   const sdk = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-sdk-ci.yml"), "utf8");
   const host = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-host-validation.yml"), "utf8");
-  const node = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-node-sea-ci.yml"), "utf8");
+  const node = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-node-ci.yml"), "utf8");
   const app = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-app-packaging-ci.yml"), "utf8");
   assert.match(sdk, /--primary-lane dotnet-linux/u);
   assert.match(host, /--primary-lane host-platform/u);
   assert.match(host, /ubuntu-24\.04[\s\S]*windows-2022[\s\S]*macos-14/u);
   assert.match(node, /--primary-lane node/u);
   assert.doesNotMatch(node, /run: npm test/u);
+  assert.match(node, /template-lifecycle:[\s\S]*npm --prefix "\$sample" run package/u);
+  assert.match(node, /run contracts:accept[\s\S]*run contracts:check[\s\S]*run typecheck[\s\S]*run contracts:freeze[\s\S]*run package/u);
+  assert.match(node, /SUNDER_REQUIRE_NODE_MODULE_INTEROP: "1"/u);
+  assert.match(node, /SUNDER_REQUIRE_NODE_TEMPLATE_HOST_SMOKE: "1"/u);
+  assert.match(node, /GeneratedNodeTemplate_ActivatesThroughSignedRuntimeHost/u);
+  assert.match(node, /sunder-node-package-ownership-evidence/u);
+  assert.match(sdk, /SUNDER_REQUIRE_DOTNET_TEMPLATE_HOST_SMOKE: "1"/u);
+  assert.match(sdk, /GeneratedDotNetTemplate_ActivatesThroughSignedRuntimeHost/u);
   assert.match(app, /--test Sunder\.App\.Tests\.BundledBuildOutputTests\.AppBuildContainsSupervisorRuntimeAndCliExecutables/u);
   for (const ciWorkflow of [sdk, host, node, app, workflow]) {
     assert.match(ciWorkflow, /--results-directory/u);

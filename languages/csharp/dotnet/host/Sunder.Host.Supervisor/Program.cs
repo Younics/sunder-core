@@ -37,6 +37,13 @@ var runtimeStateRoot = options.RuntimeStateRoot ?? RuntimeLocalState.GetV1RootPa
 var externalConnectionPath = string.IsNullOrWhiteSpace(configuredConnectionPath)
     ? Path.Combine(hostStateRoot, "connection", "host.json")
     : Path.GetFullPath(configuredConnectionPath);
+HostRuntimeStatePathValidator.Validate(
+    hostStateRoot,
+    runtimeStateRoot,
+    externalConnectionPath,
+    options.RuntimeHostPath,
+    AppContext.BaseDirectory,
+    options.RuntimeResourcePolicyFilePath);
 var workerConnectionPath = Path.Combine(
     hostStateRoot,
     "connection",
@@ -170,7 +177,11 @@ app.MapPost("/api/v1/system/shutdown", async (HttpContext context, RuntimeWorker
 app.MapPost("/api/v1/system/reset/prepare", (HostRuntimeResetChallengeService challenges) =>
 {
     var challenge = challenges.Create();
-    return Results.Ok(new RuntimeResetChallengeResponse(challenge.Challenge, challenge.ExpiresAtUtc));
+    return Results.Ok(new RuntimeResetChallengeResponse(challenge.Challenge, challenge.ExpiresAtUtc)
+    {
+        SupportsBoundStateRoot = true,
+        SupportsHostExecutedReset = true,
+    });
 });
 app.MapPost("/api/v1/system/reset/drain", async (
     RuntimeResetConfirmRequest request,
@@ -178,6 +189,22 @@ app.MapPost("/api/v1/system/reset/drain", async (
     RuntimeWorkerCoordinator worker,
     CancellationToken cancellationToken) =>
 {
+    if (!request.RequireBoundStateRoot)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            title: "Runtime state conflict",
+            detail: "The Runtime reset client must bind deletion to the Host-owned Runtime state root.",
+            extensions: new Dictionary<string, object?> { ["code"] = "runtime.v1.conflict" });
+    }
+    if (!request.RequireHostExecutedReset)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            title: "Runtime state conflict",
+            detail: "The Runtime reset client must require reset execution while the Host retains lifecycle ownership.",
+            extensions: new Dictionary<string, object?> { ["code"] = "runtime.v1.conflict" });
+    }
     if (!challenges.TryConsume(request.Challenge))
     {
         return Results.Problem(
@@ -187,9 +214,19 @@ app.MapPost("/api/v1/system/reset/drain", async (
             extensions: new Dictionary<string, object?> { ["code"] = "runtime.v1.conflict" });
     }
 
-    await worker.EnsureStoppedDurablyAsync(cancellationToken);
+    var executed = await worker.ResetRuntimeStateAsync(request.StartupCacheOnly, cancellationToken);
     return Results.Ok(new RuntimeResetDrainResponse(
-        RuntimeV1StateDescriptor.ResetCategories.Select(static category => category.Id).ToArray()));
+        RuntimeV1StateDescriptor.ResetCategories.Select(static category => category.Id).ToArray())
+    {
+        CategoryResults = executed.Result.Categories.Select(static category => new RuntimeResetCategoryResult(
+            category.Category,
+            category.Status,
+            RelativePaths: null)).ToArray(),
+        HostExecutedReset = true,
+        ReceiptRelativePath = executed.Result.ReceiptRelativePath,
+        RuntimeStateRootPath = worker.RuntimeStateRootPath,
+        RuntimeStateRootIdentity = executed.RootIdentity,
+    });
 });
 
 var forwardedMethods = new[] { "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS" };
@@ -213,7 +250,10 @@ try
     var boundAddress = addresses is { Count: 1 }
         ? addresses.Single()
         : throw new InvalidOperationException("The Sunder Host did not publish exactly one listener address.");
-    externalConnection = new RuntimeConnectionInfo(new Uri(boundAddress), externalToken);
+    externalConnection = new RuntimeConnectionInfo(new Uri(boundAddress), externalToken)
+    {
+        WorkerConnectionInfoPath = workerConnectionPath,
+    };
     RuntimeConnectionInfoStore.Save(externalConnection, externalConnectionPath);
 
     try

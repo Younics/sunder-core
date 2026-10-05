@@ -9,28 +9,41 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const { policy, declarations } = loadCoreTestModel();
 const requestedArguments = process.argv.slice(2);
 const primaryLane = takeOption("--primary-lane");
-const requestedOutputDirectory = takeOption("--results-directory") ?? "artifacts/test-results/dotnet";
+const project = takeOption("--project");
+const list = takeFlag("--list");
+const requestedOutputDirectory = takeOption("--results-directory")
+  ?? (project === undefined ? "artifacts/test-results/dotnet" : `artifacts/test-results/local/${project}/${primaryLane ?? "full"}`);
 const build = takeFlag("--build");
 if (requestedArguments.some((argument) => ["--filter", "--logger", "-l", "--results-directory", "-m", "--maxcpucount"].includes(argument))) {
   throw new Error("The Core .NET reporter owns filtering, logging, result paths, and serialized MSBuild execution.");
 }
+const allDotnetTests = declarations.filter((test) => test.framework === "dotnet");
+const operatingSystem = currentOperatingSystem();
+if (project !== undefined && !allDotnetTests.some((test) => test.project === project)) {
+  throw new Error(`Unknown .NET test project '${project}'. Use its project name, such as Sunder.Package.Build.Tests.`);
+}
+if (primaryLane !== undefined && !policy.primaryLanes.includes(primaryLane)) {
+  throw new Error(`Unknown primary lane '${primaryLane}'.`);
+}
+const laneTests = primaryLane === undefined
+  ? allDotnetTests
+  : allDotnetTests.filter((test) => test.primaryLane === primaryLane && test.operatingSystems.includes(operatingSystem));
+const selectedTests = project === undefined ? laneTests : laneTests.filter((test) => test.project === project);
+if (selectedTests.length === 0) {
+  throw new Error(`Selection project='${project ?? "all"}', lane='${primaryLane ?? "all"}' has no runnable .NET tests on ${operatingSystem}.`);
+}
+if (list) {
+  const output = `${JSON.stringify({ project: project ?? "all", primaryLane: primaryLane ?? "all", operatingSystem,
+    declarations: selectedTests.map((test) => test.id) }, null, 2)}\n`;
+  await new Promise((resolve, reject) => process.stdout.write(output, (error) => error ? reject(error) : resolve()));
+  process.exit(0);
+}
 const outputDirectory = resolve(repositoryRoot, requestedOutputDirectory);
-const cleanDirectory = primaryLane === undefined && requestedOutputDirectory === "artifacts/test-results/dotnet"
+const cleanDirectory = project === undefined && primaryLane === undefined && requestedOutputDirectory === "artifacts/test-results/dotnet"
   ? dirname(outputDirectory)
   : outputDirectory;
 rmSync(cleanDirectory, { recursive: true, force: true });
 mkdirSync(outputDirectory, { recursive: true });
-const allDotnetTests = declarations.filter((test) => test.framework === "dotnet");
-const operatingSystem = currentOperatingSystem();
-if (primaryLane !== undefined && !policy.primaryLanes.includes(primaryLane)) {
-  throw new Error(`Unknown primary lane '${primaryLane}'.`);
-}
-const selectedTests = primaryLane === undefined
-  ? allDotnetTests
-  : allDotnetTests.filter((test) => test.primaryLane === primaryLane && test.operatingSystems.includes(operatingSystem));
-if (selectedTests.length === 0) {
-  throw new Error(`Primary lane '${primaryLane}' selected no runnable .NET tests on ${operatingSystem}.`);
-}
 const projectPaths = [...new Set(selectedTests
   .map((test) => `languages/csharp/dotnet/tests/${test.project}/${test.project}.csproj`))].sort();
 
@@ -58,7 +71,7 @@ for (const projectPath of projectPaths) {
     outputDirectory,
     ...(filter === undefined ? [] : ["--filter", filter]),
     ...requestedArguments,
-  ], { cwd: repositoryRoot, encoding: "utf8", timeout: 30 * 60 * 1000 });
+  ], { cwd: repositoryRoot, encoding: "utf8", timeout: 60 * 60 * 1000 });
   process.stdout.write(result.stdout ?? "");
   process.stderr.write(result.stderr ?? "");
   if (result.error !== undefined || result.status !== 0) failed.push(projectName);

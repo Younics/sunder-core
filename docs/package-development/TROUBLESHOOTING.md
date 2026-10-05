@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V3, .NET 10, and Runtime protocol revision 8.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
 Start with the first failing boundary: build, archive validation, Runtime activation, App activation, or a leased call. Keep the correlation id from CLI/App errors and inspect Runtime package logs or the App session log without copying secrets into diagnostics.
 
@@ -18,7 +18,7 @@ Start with the first failing boundary: build, archive validation, Runtime activa
 - Ensure the entry assembly has exactly one `SunderPackageAttribute` with a lowercase dot-separated package id.
 - Set `Version` to strict SemVer 2.0.
 - Declare at most one public, non-abstract App module with a public parameterless constructor.
-- Give each Worker leaf exactly one explicit exact-RID `worker` target and set `OutputType=Exe`, `SelfContained=true`, `UseAppHost=true`, and `PublishSingleFile=false`.
+- Give each Worker leaf exactly one explicit exact-RID `worker` target. `Sunder.Package.Build` owns the framework-dependent profile (`OutputType=Exe`, `SelfContained=false`, `UseAppHost=false`, and `PublishSingleFile=false`); package projects must not override it.
 - Remove stale output and rebuild rather than editing generated manifest/role data.
 - Keep App-only Avalonia types out of Runtime-only dependency paths.
 
@@ -75,7 +75,7 @@ An App package runs in-process, so a UI-thread deadlock, infinite loop, native c
 
 ### Runtime Package Is Restarting
 
-An exact Worker V3 activation fault disables that activation, retires its endpoints, and schedules a bounded package-only restart. Runtime waits 250 ms, 500 ms, 1 second, 2 seconds, and 4 seconds across failures in a rolling one-minute window; the sixth failure suspends recovery. Healthy package workers and endpoint identities remain in place, but calls from the retired session generation terminate and stream clients must reconnect. Old endpoints stay stale, so clients must rediscover the recovered provider rather than retrying an old endpoint. Runtime and App publish restart, success, and suspension notifications automatically.
+An exact Worker V1 activation fault disables that activation, retires its endpoints, and schedules a bounded package-only restart. Runtime waits 250 ms, 500 ms, 1 second, 2 seconds, and 4 seconds across failures in a rolling one-minute window; the sixth failure suspends recovery. Healthy package workers and endpoint identities remain in place, but calls from the retired session generation terminate and stream clients must reconnect. Old endpoints stay stale, so clients must rediscover the recovered provider rather than retrying an old endpoint. Runtime and App publish restart, success, and suspension notifications automatically.
 
 If worker cleanup, authority drain, or storage rollback cannot be proven safe, Runtime does not overlap another worker with the quarantined activation. A storage-integrity rollback failure fences Runtime lifecycle operations and requests a supervised Runtime restart.
 
@@ -113,7 +113,7 @@ Confirm the provider id and contract version match the manifest, the Worker regi
 
 ### Request, Response, Or Event Is Rejected
 
-Validate the value against the bundled RPC V2 descriptor, including closed record members, required/null presence, bounded strings/collections/numbers, and safe integers. Page collections and use Host-mediated content references for large bytes. Every response/event must match its schema, and every server stream must terminate normally or with an authenticated error.
+Validate the value against the bundled RPC V1 descriptor, including closed record members, required/null presence, bounded strings/collections/numbers, and safe integers. Page collections and use Host-mediated content references for large bytes. Every response/event must match its schema, and every server stream must terminate normally or with an authenticated error.
 
 ### Stream Ends With `rpc.worker.stream-queue-limit`
 

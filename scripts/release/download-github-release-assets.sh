@@ -11,7 +11,7 @@ destination="$3"
 shift 3
 [[ "$release_id" =~ ^[1-9][0-9]*$ ]] \
   || { printf 'Release ID must be a positive decimal integer.\n' >&2; exit 2; }
-[[ "$tag" =~ ^(app|cli|host|sdk)/v[A-Za-z0-9.-]+$ ]] \
+[[ "$tag" =~ ^(app|cli|host|sdk|runtime)/v[A-Za-z0-9.-]+$ ]] \
   || { printf 'Unexpected release tag: %s\n' "$tag" >&2; exit 2; }
 [[ -d "$destination" && ! -L "$destination" ]] \
   || { printf 'Release asset destination must be a real directory: %s\n' "$destination" >&2; exit 1; }
@@ -36,21 +36,36 @@ hash_file() {
   fi
 }
 
-release_json="$(gh api -H 'Accept: application/vnd.github+json' \
-  -H 'X-GitHub-Api-Version: 2022-11-28' \
-  "repos/$GH_REPO/releases/$release_id")"
-jq -e --argjson release_id "$release_id" --arg tag "$tag" '
-  .id == $release_id
-  and .tag_name == $tag
-  and (.assets | type == "array")
-  and all(.assets[];
-    (.id | type == "number" and . > 0 and floor == .)
-    and (.name | test("^[A-Za-z0-9][A-Za-z0-9._+-]*$"))
-    and .state == "uploaded"
-    and (.size | type == "number" and . >= 0 and floor == .)
-    and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")))
-' <<< "$release_json" >/dev/null \
-  || { printf 'Numeric GitHub release state is invalid for asset download.\n' >&2; exit 1; }
+release_json=''
+for _ in {1..30}; do
+  if release_json="$(gh api -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      "repos/$GH_REPO/releases/$release_id")" \
+    && jq -e --argjson release_id "$release_id" --arg tag "$tag" '
+      .id == $release_id
+      and .tag_name == $tag
+      and (.assets | type == "array")
+      and all(.assets[];
+        (.id | type == "number" and . > 0 and floor == .)
+        and (.name | test("^[A-Za-z0-9][A-Za-z0-9._+-]*$"))
+        and .state == "uploaded"
+        and (.size | type == "number" and . >= 0 and floor == .)
+        and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")))
+    ' <<< "$release_json" >/dev/null; then
+    requested_assets_ready=true
+    for requested_name in "$@"; do
+      if [[ "$(jq --arg name "$requested_name" '[.assets[] | select(.name == $name)] | length' <<< "$release_json")" != 1 ]]; then
+        requested_assets_ready=false
+        break
+      fi
+    done
+    [[ "$requested_assets_ready" != true ]] || break
+  fi
+  release_json=''
+  sleep 2
+done
+[[ -n "$release_json" ]] \
+  || { printf 'Numeric GitHub release state is invalid or incomplete for asset download.\n' >&2; exit 1; }
 
 asset_names=("$@")
 if [[ ${#asset_names[@]} -eq 0 ]]; then

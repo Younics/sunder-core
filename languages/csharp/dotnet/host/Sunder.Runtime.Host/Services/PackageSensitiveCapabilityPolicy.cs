@@ -11,9 +11,10 @@ internal static class PackageSensitiveCapabilityPolicy
         SunderSdkCapabilities.DockerEnvironmentV1,
     };
 
-    public static IReadOnlyList<string> GetRequiredCapabilities(SunderPackageManifest manifest)
+    public static IReadOnlyList<string> GetRequiredCapabilities(SunderPackageManifest manifest, IReadOnlyList<SunderPackageTargetKey>? acquiredTargets = null)
         => (manifest.Targets ?? [])
-            .Where(static target => target is not null
+            .Where(target => target is not null
+                                     && InstalledPackageProjection.Includes(acquiredTargets, target.Role, target.Rid)
                                     && string.Equals(target.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
                                     && string.Equals(target.Kind, SunderPackageFormat.WorkerTargetKind, StringComparison.Ordinal))
             .SelectMany(static target => target!.RequiredHostCapabilities ?? [])
@@ -96,7 +97,8 @@ internal static class PackageSensitiveCapabilityPolicy
         var requirements = new List<PackageCapabilityConsent>();
         foreach (var item in planItems)
         {
-            var sensitive = GetRequiredCapabilities(item.Targets);
+            var acquired = item.Artifacts.Select(artifact => (artifact.Kind, artifact.Rid)).ToHashSet();
+            var sensitive = GetRequiredCapabilities(item.Targets.Where(target => acquired.Contains((target.Role, target.Rid))).ToArray());
             if (sensitive.Count == 0)
             {
                 continue;
@@ -119,7 +121,8 @@ internal static class PackageSensitiveCapabilityPolicy
             }
             requirements.Add(new PackageCapabilityConsent(
                 item.PackageId,
-                item.Version,
+                item.Version ?? throw new InvalidDataException(
+                    $"Registry action '{item.ActionKind}' for package '{item.PackageId}' does not identify package content."),
                 hashes[0],
                 required));
         }

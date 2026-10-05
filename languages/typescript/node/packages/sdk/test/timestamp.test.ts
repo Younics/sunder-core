@@ -17,7 +17,7 @@ test("UTC formatter emits exactly seven fractional digits", () => {
 test("all advertised browser calls use the host round-trip deadline shape", async () => {
   const received = new Map<string, BrowserCallOptions | undefined>();
   const candidate: SunderBrowserApi = {
-    version: 2,
+    version: 1,
     resourceProfile: {
       reportedByRuntime: true,
       runtimeInstanceId: "11111111-1111-1111-1111-111111111111",
@@ -98,6 +98,15 @@ test("all advertised browser calls use the host round-trip deadline shape", asyn
     for (const receivedOptions of received.values()) {
       assert.equal(receivedOptions?.deadline?.toISOString(), "2026-08-01T12:34:56.7890000Z");
     }
+  } finally {
+    delete (globalThis as typeof globalThis & { sunder?: SunderBrowserApi }).sunder;
+  }
+});
+
+test("browser bridge rejects an unknown version without fallback", () => {
+  Object.defineProperty(globalThis, "sunder", { configurable: true, value: { version: 99 } });
+  try {
+    assert.throws(() => getSunder(), /browser bridge is not available/u);
   } finally {
     delete (globalThis as typeof globalThis & { sunder?: SunderBrowserApi }).sunder;
   }

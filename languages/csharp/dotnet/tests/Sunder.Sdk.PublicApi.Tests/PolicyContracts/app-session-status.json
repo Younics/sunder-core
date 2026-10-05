@@ -1,0 +1,13 @@
+{
+  "sessionId": "0123456789abcdef0123456789abcdef",
+  "state": "termination-required",
+  "errorCode": "package.app-process-termination-required",
+  "shutdownRequired": true,
+  "loadedPackages": [
+    {
+      "packageId": "example.agent",
+      "version": "2.0.0",
+      "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

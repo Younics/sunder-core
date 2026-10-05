@@ -3,7 +3,9 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Sunder.Package.Format;
+using Sunder.Package.Projections;
 using Sunder.Runtime.Contracts;
+using Sunder.Runtime.LocalState;
 
 namespace Sunder.App.Services;
 
@@ -27,11 +29,15 @@ internal sealed class AppPackageSnapshotCache
     private readonly ConcurrentDictionary<string, byte> _observedHashes = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _materializationGate = new(4, 4);
     private readonly SemaphoreSlim _fillGate = new(2, 2);
+    private readonly PackageProjectionCache _projectionCache;
+    private readonly Guid _hostInstanceId;
 
     public AppPackageSnapshotCache(
         Func<string> getSessionFolder,
         Func<PackageUiSnapshotDescriptor, Stream, CancellationToken, Task> downloadSnapshotAsync,
-        string? cacheRootPath = null)
+        string? cacheRootPath = null,
+        string? runtimeStateRootPath = null,
+        Guid? hostInstanceId = null)
     {
         _ = getSessionFolder;
         _downloadSnapshotAsync = downloadSnapshotAsync;
@@ -39,6 +45,11 @@ internal sealed class AppPackageSnapshotCache
         _objectRoot = Path.Combine(_cacheRoot, "objects");
         _stagingRoot = Path.Combine(_cacheRoot, "staging");
         _quarantineRoot = Path.Combine(_cacheRoot, "quarantine");
+        _projectionCache = new PackageProjectionCache(
+            runtimeStateRootPath ?? RuntimeLocalState.GetV1RootPath());
+        _hostInstanceId = hostInstanceId is { } instanceId && instanceId != Guid.Empty
+            ? instanceId
+            : AppProjectionProcessIdentity.HostInstanceId;
     }
 
     public int Count => _observedHashes.Count;
@@ -48,6 +59,16 @@ internal sealed class AppPackageSnapshotCache
         string generationFolder,
         CancellationToken cancellationToken)
     {
+        if (snapshot.SourceKind == PackageSourceKind.Installed)
+        {
+            return await AcquireInstalledProjectionAsync(snapshot, generationFolder, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        if (snapshot.ProjectionReference is not null)
+        {
+            throw new InvalidDataException(
+                $"Development package UI snapshot '{snapshot.SnapshotId}' must use the mutable overlay transfer path.");
+        }
         if (!IsCanonicalHash(snapshot.ContentHash))
         {
             throw new InvalidDataException($"Package UI snapshot '{snapshot.SnapshotId}' has an invalid content hash.");
@@ -89,6 +110,71 @@ internal sealed class AppPackageSnapshotCache
         finally
         {
             _materializationGate.Release();
+        }
+    }
+
+    private async Task<AppPreparedPackageSource> AcquireInstalledProjectionAsync(
+        PackageUiSnapshotDescriptor snapshot,
+        string generationFolder,
+        CancellationToken cancellationToken)
+    {
+        var descriptor = snapshot.ProjectionReference
+                         ?? throw new InvalidDataException(
+                             $"Installed package UI source '{snapshot.SnapshotId}' has no immutable projection reference.");
+        if (!string.Equals(descriptor.ConsumerRole, "app", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Installed package UI source '{snapshot.SnapshotId}' does not reference an App-only projection.");
+        }
+        var reference = new PackageProjectionReference(
+            descriptor.FormatRevision,
+            descriptor.CacheKey,
+            PackageProjectionRole.App,
+            descriptor.SourceContentIdentity,
+            descriptor.ProjectionRulesIdentity,
+            descriptor.TargetKeys);
+        if (!string.Equals(snapshot.ContentHash, reference.CacheKey, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Installed package UI source '{snapshot.SnapshotId}' content identity does not match its projection reference.");
+        }
+        var acquisition = await _projectionCache.AcquireAndLeaseAsync(
+                reference,
+                new PackageProjectionOwner(
+                    "app",
+                    _hostInstanceId,
+                    snapshot.PackageId,
+                    Path.GetFileName(generationFolder)),
+                [SunderPackageFormat.ManifestPath, snapshot.Target.EntryPoint],
+                cancellationToken)
+            .ConfigureAwait(false);
+        try
+        {
+            var manifest = AppPackageManifestReader.Read(acquisition.RootPath);
+            if (!string.Equals(manifest.Id, snapshot.PackageId, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"Installed package UI projection '{snapshot.SnapshotId}' resolved to package '{manifest.Id}'.");
+            }
+            ValidateTarget(manifest, snapshot);
+            var files = acquisition.Receipt.Inventory
+                .Select(static file => new AppPackageFileMetadata(file.Path, file.Size, file.Sha256))
+                .ToArray();
+            _observedHashes.TryAdd(reference.CacheKey, 0);
+            AppSessionLog.WriteInfo(
+                $"Package projection cache hit for '{snapshot.PackageId}'; read {acquisition.Metrics.BytesRead} bytes, hashed {acquisition.Metrics.BytesHashed} bytes, copied {acquisition.Metrics.BytesCopied} bytes.",
+                visibleInDeveloperLog: false);
+            return new AppPreparedPackageSource(
+                manifest.Id!,
+                acquisition.RootPath,
+                manifest,
+                AppPackageContentIndexer.ToContentIndex(files),
+                new AppPackageProjectionLease(acquisition));
+        }
+        catch
+        {
+            await acquisition.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
     }
 
@@ -504,6 +590,11 @@ internal sealed class AppPackageSnapshotCache
     private sealed record CacheObject(string Path, string Hash, DateTime LastAccessUtc, long Length);
 
     private sealed class CacheIdentityMismatchException(string message) : IOException(message);
+
+    private static class AppProjectionProcessIdentity
+    {
+        internal static readonly Guid HostInstanceId = Guid.NewGuid();
+    }
 
     private sealed class BoundedHashingWriteStream(Stream inner, long maxLength) : Stream
     {

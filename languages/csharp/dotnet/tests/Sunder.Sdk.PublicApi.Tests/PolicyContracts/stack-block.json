@@ -1,0 +1,5 @@
+{
+  "idempotencyKey": "block-stack",
+  "expectedPublicationAuthorityRevision": 41,
+  "publicReason": "Security policy blocks this Stack."
+}

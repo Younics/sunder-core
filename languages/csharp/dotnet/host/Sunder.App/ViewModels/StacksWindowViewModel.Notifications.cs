@@ -25,11 +25,11 @@ public sealed partial class StacksWindowViewModel
         OnPropertyChanged(nameof(CanEditSelectedStack));
         OnPropertyChanged(nameof(CanImportSelectedRegistryStack));
         OnPropertyChanged(nameof(CanUseSelectedRegistryStack));
-        OnPropertyChanged(nameof(CanDeleteSelectedRegistryStack));
+        OnPropertyChanged(nameof(CanUnlistSelectedRegistryStack));
         OnPropertyChanged(nameof(CanToggleSelectedRegistryStackStar));
         SearchRegistryStacksCommand.NotifyCanExecuteChanged();
         ImportSelectedRegistryStackCommand.NotifyCanExecuteChanged();
-        DeleteSelectedRegistryStackCommand.NotifyCanExecuteChanged();
+        UnlistSelectedRegistryStackCommand.NotifyCanExecuteChanged();
         ToggleSelectedRegistryStackStarCommand.NotifyCanExecuteChanged();
     }
 
@@ -146,7 +146,7 @@ public sealed partial class StacksWindowViewModel
         OnPropertyChanged(nameof(CanImportSelectedRegistryStack));
         OnPropertyChanged(nameof(CanUseSelectedRegistryStack));
         OnPropertyChanged(nameof(CanUseSelectedStack));
-        OnPropertyChanged(nameof(CanDeleteSelectedRegistryStack));
+        OnPropertyChanged(nameof(CanUnlistSelectedRegistryStack));
         OnPropertyChanged(nameof(CanExportSelectedStack));
         OnPropertyChanged(nameof(CanPublishSelectedStack));
         OnPropertyChanged(nameof(CanUnpublishSelectedStack));
@@ -157,7 +157,7 @@ public sealed partial class StacksWindowViewModel
         ImportStackCommand.NotifyCanExecuteChanged();
         SearchRegistryStacksCommand.NotifyCanExecuteChanged();
         ImportSelectedRegistryStackCommand.NotifyCanExecuteChanged();
-        DeleteSelectedRegistryStackCommand.NotifyCanExecuteChanged();
+        UnlistSelectedRegistryStackCommand.NotifyCanExecuteChanged();
         ExportSelectedStackCommand.NotifyCanExecuteChanged();
         PublishSelectedStackCommand.NotifyCanExecuteChanged();
         UnpublishSelectedStackCommand.NotifyCanExecuteChanged();

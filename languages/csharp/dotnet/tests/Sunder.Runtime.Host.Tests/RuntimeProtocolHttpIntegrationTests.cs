@@ -24,25 +24,31 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed class RuntimeProtocolHttpIntegrationTests
+public sealed partial class RuntimeProtocolHttpIntegrationTests
 {
     [Fact]
-    public void ProtocolRevision8_IsACleanBreakFromRevision7()
+    public void ProtocolRevision1_IsExactAndRejectsOtherRevisions()
     {
-        var revision7 = CreateHandshake(
-            protocolRevision: 7,
-            minimumSupportedRevision: 7,
-            maximumSupportedRevision: 7,
+        var otherRevision = CreateHandshake(
+            protocolRevision: 2,
+            minimumSupportedRevision: 2,
+            maximumSupportedRevision: 2,
             [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1]);
-        var revision8 = CreateHandshake(
+        var revision1 = CreateHandshake(
             RuntimeProtocol.CurrentRevision,
             RuntimeProtocol.MinimumSupportedRevision,
             RuntimeProtocol.MaximumSupportedRevision,
             [RuntimeProtocolFeatures.VersionedApiV1]);
+        var overlappingRange = CreateHandshake(
+            protocolRevision: 2,
+            minimumSupportedRevision: 1,
+            maximumSupportedRevision: 2,
+            [RuntimeProtocolFeatures.VersionedApiV1]);
 
-        Assert.Equal(8, RuntimeProtocol.CurrentRevision);
-        Assert.NotNull(RuntimeProtocolCompatibility.GetIncompatibility(revision7));
-        Assert.Null(RuntimeProtocolCompatibility.GetIncompatibility(revision8));
+        Assert.Equal(1, RuntimeProtocol.CurrentRevision);
+        Assert.NotNull(RuntimeProtocolCompatibility.GetIncompatibility(otherRevision));
+        Assert.NotNull(RuntimeProtocolCompatibility.GetIncompatibility(overlappingRange));
+        Assert.Null(RuntimeProtocolCompatibility.GetIncompatibility(revision1));
     }
 
     [Fact]
@@ -244,8 +250,9 @@ public sealed class RuntimeProtocolHttpIntegrationTests
         Assert.Contains(RuntimeProtocolFeatures.AtomicPackageSnapshotV1, first.SupportedFeatures);
         Assert.Contains(RuntimeProtocolFeatures.PackageStageStatusV1, first.SupportedFeatures);
         Assert.Contains(RuntimeProtocolFeatures.DevPackageOwnerLeasesV1, first.SupportedFeatures);
-        Assert.Contains(RuntimeProtocolFeatures.SchemaFirstRpcV2, first.SupportedFeatures);
-        Assert.Contains(RuntimeProtocolFeatures.RpcPermissionsV2, first.SupportedFeatures);
+        Assert.Contains(RuntimeProtocolFeatures.DevPackageImportsV1, first.SupportedFeatures);
+        Assert.Contains(RuntimeProtocolFeatures.SchemaFirstRpcV1, first.SupportedFeatures);
+        Assert.Contains(RuntimeProtocolFeatures.RpcPermissionsV1, first.SupportedFeatures);
         Assert.Contains(RuntimeProtocolFeatures.RuntimeResourcePolicyV1, first.SupportedFeatures);
         Assert.Contains(RuntimeProtocolFeatures.PackageRuntimeRecoveryV1, first.SupportedFeatures);
         Assert.Equal(
@@ -486,6 +493,124 @@ public sealed class RuntimeProtocolHttpIntegrationTests
     }
 
     [Fact]
+    public async Task ExecutionRuntimeManagement_UsesTypedResultsAndConsumesOpaqueUploadsOnce()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "sunder-execution-runtime-http-tests",
+            Guid.NewGuid().ToString("N"));
+        try
+        {
+            await using var server = await RuntimeHttpServer.StartAsync(
+                app => app.MapGroup("/api/v1")
+                    .MapContentTransferEndpoints()
+                    .MapExecutionRuntimeEndpoints(),
+                services => services.AddRuntimeHostServices(
+                    new RuntimePackagePaths(root),
+                    new RuntimeBearerTokenValidator(RuntimeHttpServer.Token)));
+            using var client = new HttpClient { BaseAddress = server.BaseUri };
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                "Bearer",
+                RuntimeHttpServer.Token);
+
+            var installed = await client.GetFromJsonAsync<IReadOnlyList<InstalledExecutionRuntimeSummary>>(
+                "api/v1/execution-runtimes");
+            Assert.Empty(installed ?? []);
+
+            using var invalidEnsure = await client.PostAsJsonAsync(
+                "api/v1/execution-runtimes/ensure",
+                new RuntimeExecutionRuntimeEnsureRequest(
+                    "https://registry.example.test/",
+                    new RuntimeExecutionRuntimeRequirement(
+                        SunderExecutionRuntimeFormat.DotNetRuntimeId,
+                        ">=8.0.0",
+                        SunderExecutionRuntimeFormat.DotNetModuleAbi)));
+            var invalidEnsureProblem = await invalidEnsure.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(HttpStatusCode.BadRequest, invalidEnsure.StatusCode);
+            Assert.Equal(
+                Sunder.Registry.Contracts.ExecutionRuntimeErrorCodes.RequirementInvalid,
+                invalidEnsureProblem.GetProperty("code").GetString());
+
+            using var uploadContent = new ByteArrayContent("not a runtime archive"u8.ToArray());
+            uploadContent.Headers.ContentType = new MediaTypeHeaderValue(
+                "application/vnd.sunder.execution-runtime");
+            using var uploadResponse = await client.PostAsync(
+                "api/v1/uploads/execution-runtimes",
+                uploadContent);
+            var upload = await uploadResponse.Content.ReadFromJsonAsync<ContentUploadDescriptor>();
+            Assert.Equal(HttpStatusCode.OK, uploadResponse.StatusCode);
+            Assert.NotNull(upload);
+            Assert.DoesNotContain(root, JsonSerializer.Serialize(upload), StringComparison.OrdinalIgnoreCase);
+
+            using var importResponse = await client.PostAsJsonAsync(
+                "api/v1/execution-runtimes/import",
+                new RuntimeExecutionRuntimeImportRequest(upload.UploadId));
+            var import = await importResponse.Content.ReadFromJsonAsync<RuntimeExecutionRuntimeOperationResult>();
+            Assert.Equal(HttpStatusCode.OK, importResponse.StatusCode);
+            Assert.NotNull(import);
+            Assert.False(import.Success);
+            Assert.Equal(Sunder.Registry.Contracts.ExecutionRuntimeErrorCodes.ArtifactInvalid, import.ErrorCode);
+
+            using var repeatedImport = await client.PostAsJsonAsync(
+                "api/v1/execution-runtimes/import",
+                new RuntimeExecutionRuntimeImportRequest(upload.UploadId));
+            var repeatedProblem = await repeatedImport.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(HttpStatusCode.NotFound, repeatedImport.StatusCode);
+            Assert.Equal("runtime.v1.not-found", repeatedProblem.GetProperty("code").GetString());
+
+            using var verifyResponse = await client.PostAsync(
+                "api/v1/execution-runtimes/sunder.runtime.dotnet/versions/8.0.1/revisions/1/linux-x64/abis/sunder.dotnet-worker-module.v1/verify",
+                content: null);
+            var verify = await verifyResponse.Content.ReadFromJsonAsync<RuntimeExecutionRuntimeOperationResult>();
+            Assert.Equal(HttpStatusCode.OK, verifyResponse.StatusCode);
+            Assert.False(verify?.Success);
+            Assert.Equal(Sunder.Registry.Contracts.ExecutionRuntimeErrorCodes.Missing, verify?.ErrorCode);
+
+            var malformedIdentity = new ExecutionRuntimeIdentity(
+                SunderExecutionRuntimeFormat.DotNetRuntimeId,
+                "8.0.2",
+                1,
+                "linux-x64",
+                SunderExecutionRuntimeFormat.DotNetModuleAbi);
+            var malformedReceiptPath = new ExecutionRuntimeStoreLayout(new RuntimePackagePaths(root))
+                .GetReceiptPath(malformedIdentity);
+            Directory.CreateDirectory(Path.GetDirectoryName(malformedReceiptPath)!);
+            await File.WriteAllTextAsync(malformedReceiptPath, "{");
+            var malformedRoute =
+                "api/v1/execution-runtimes/sunder.runtime.dotnet/versions/8.0.2/revisions/1/linux-x64/abis/sunder.dotnet-worker-module.v1";
+
+            using var malformedVerifyResponse = await client.PostAsync(malformedRoute + "/verify", content: null);
+            var malformedVerify = await malformedVerifyResponse.Content
+                .ReadFromJsonAsync<RuntimeExecutionRuntimeOperationResult>();
+            Assert.Equal(HttpStatusCode.OK, malformedVerifyResponse.StatusCode);
+            Assert.False(malformedVerify?.Success);
+            Assert.Equal(
+                Sunder.Registry.Contracts.ExecutionRuntimeErrorCodes.IntegrityFailed,
+                malformedVerify?.ErrorCode);
+
+            var malformedImpact = await client.GetFromJsonAsync<RuntimeExecutionRuntimeImpact>(
+                malformedRoute + "/impact");
+            Assert.NotNull(malformedImpact);
+            Assert.Equal(0, malformedImpact.PackageReferenceCount);
+            using var malformedRepairResponse = await client.PostAsJsonAsync(
+                malformedRoute + "/repair",
+                new RuntimeExecutionRuntimeActionRequest(malformedImpact.Fingerprint));
+            var malformedRepair = await malformedRepairResponse.Content
+                .ReadFromJsonAsync<RuntimeExecutionRuntimeOperationResult>();
+            Assert.Equal(HttpStatusCode.OK, malformedRepairResponse.StatusCode);
+            Assert.False(malformedRepair?.Success);
+            Assert.Equal(
+                Sunder.Registry.Contracts.ExecutionRuntimeErrorCodes.IntegrityFailed,
+                malformedRepair?.ErrorCode);
+            Assert.Equal(malformedImpact, malformedRepair?.Impact);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public async Task Reset_conflict_uses_coded_problem_details_instead_of_anonymous_error_shape()
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-runtime-reset-conflict-tests", Guid.NewGuid().ToString("N"));
@@ -499,7 +624,7 @@ public sealed class RuntimeProtocolHttpIntegrationTests
 
         using var response = await client.PostAsJsonAsync(
             "api/v1/system/reset/drain",
-            new RuntimeResetConfirmRequest("invalid"));
+            new RuntimeResetConfirmRequest("invalid") { RequireBoundStateRoot = true });
         var body = await response.Content.ReadAsStringAsync();
 
         Assert.True(
@@ -551,6 +676,25 @@ public sealed class RuntimeProtocolHttpIntegrationTests
                 "wrong-owner-token-xxxxxxxxxxxxxxxx"));
         Assert.Equal(HttpStatusCode.Unauthorized, wrongToken.StatusCode);
         TryDeleteDirectory(root);
+    }
+
+    [Fact]
+    public async Task DevelopmentImportsEndpointRequiresRuntimeAuthenticationAndReturnsUnpublishedEvidence()
+    {
+        using var fixture = new DevelopmentImportAuthorityTests.Fixture();
+        await using var server = await RuntimeHttpServer.StartAsync(app => app.MapGroup("/api/v1").MapDevPackageOwnerEndpoints(), services =>
+        {
+            services.AddRuntimeHostServices(fixture.Policy.Paths, new RuntimeBearerTokenValidator(RuntimeHttpServer.Token));
+            services.AddSingleton(fixture.Preparation);
+        });
+        using var anonymous = new HttpClient { BaseAddress = server.BaseUri };
+        using var denied = await anonymous.PostAsJsonAsync("api/v1/dev-packages/prepare-imports", new RuntimePrepareDevPackageImportsRequest(fixture.Folder, ActivePolicyTestContext.Origin));
+        Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode); Assert.Equal(0, fixture.Requests);
+        using var client = new RuntimeManagementClient(() => new RuntimeConnectionInfo(server.BaseUri, RuntimeHttpServer.Token), new HttpClientHandler());
+        var result = await client.PrepareDevPackageImportsAsync(new(fixture.Folder, ActivePolicyTestContext.Origin));
+        Assert.Equal("example.local", result.PackageId); Assert.Equal(1, result.PackageArtifacts); Assert.Equal(1, fixture.Requests);
+        Assert.Empty(await server.Services.GetRequiredService<InstalledPackageStore>().ListAsync());
+        Assert.NotNull(await fixture.Store.ResolveAsync(fixture.Source(), default));
     }
 
     private static IResult ThrowRuntimeRouteNotFound()

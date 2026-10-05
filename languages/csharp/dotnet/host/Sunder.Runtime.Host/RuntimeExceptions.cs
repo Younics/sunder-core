@@ -1,3 +1,5 @@
+using Sunder.Registry.Contracts;
+
 namespace Sunder.Runtime.Host;
 
 internal abstract class RuntimeException(
@@ -12,6 +14,8 @@ internal abstract class RuntimeException(
     public string Title { get; } = title;
 
     public int StatusCode { get; } = statusCode;
+
+    public virtual object? Details => null;
 }
 
 internal sealed class RuntimeValidationException(string detail)
@@ -35,11 +39,36 @@ internal sealed class RuntimeUnavailableException(string detail, Exception? inne
 internal sealed class RuntimeCancellationException(string detail = "The Runtime operation was cancelled.")
     : RuntimeException(RuntimeErrorCodes.Cancellation, "Runtime operation cancelled", 499, detail);
 
+internal sealed class RuntimeAppPolicyException(string code)
+    : RuntimeException(code, "App process policy prevents the operation", StatusCodes.Status409Conflict, code);
+
 internal sealed class RuntimeUploadLimitException(string detail)
     : RuntimeException(RuntimeErrorCodes.UploadLimit, "Upload limit exceeded", StatusCodes.Status413PayloadTooLarge, detail);
 
 internal sealed class RuntimePackageValidationException(string detail)
     : RuntimeException(RuntimeErrorCodes.PackageValidation, "Package validation failed", StatusCodes.Status422UnprocessableEntity, detail);
+
+internal sealed class RuntimeExecutionRuntimeException : RuntimeException
+{
+    public RuntimeExecutionRuntimeException(string code, string? detail = null)
+        : this(Find(code), detail)
+    {
+    }
+
+    private RuntimeExecutionRuntimeException(ExecutionRuntimeErrorDescriptor descriptor, string? detail)
+        : base(
+            descriptor.Code,
+            "Execution runtime request failed",
+            descriptor.HttpStatus,
+            string.IsNullOrWhiteSpace(detail) ? descriptor.SafeMessage : detail)
+    {
+    }
+
+    private static ExecutionRuntimeErrorDescriptor Find(string code)
+        => ExecutionRuntimeErrorCatalog.All.FirstOrDefault(descriptor =>
+               string.Equals(descriptor.Code, code, StringComparison.Ordinal))
+           ?? throw new ArgumentException("The execution-runtime error code is not registered.", nameof(code));
+}
 
 internal static class RuntimeErrorCodes
 {

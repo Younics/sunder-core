@@ -45,10 +45,8 @@ public static class SunderSdkCapabilities
     public const string ShellViewV1 = "shell-view.v1";
     /// <summary>Hidden package-view navigation preparation and presentation acknowledgement contracts.</summary>
     public const string ViewNavigationPreparationV1 = "view-navigation-preparation.v1";
-    /// <summary>Legacy RPC V1 capability identifier retained for compatibility diagnostics.</summary>
+    /// <summary>Canonical schema-first RPC contracts, discovery, invocation, and provider registration.</summary>
     public const string RpcV1 = "rpc.v1";
-    /// <summary>Canonical schema-first RPC V2 contracts, discovery, invocation, and provider registration.</summary>
-    public const string RpcV2 = "rpc.v2";
     /// <summary>Capability-gated support for caller-requested RPC deadlines beyond the Host default.</summary>
     public const string RpcExtendedDeadlineV1 = "rpc.extended-deadline.v1";
     /// <summary>Stack data contracts.</summary>

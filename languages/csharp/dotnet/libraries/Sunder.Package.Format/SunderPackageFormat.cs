@@ -6,16 +6,24 @@ public static class SunderPackageFormat
         ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"]);
 
     public const int CurrentArchiveFormatVersion = 1;
-    public const int CurrentManifestVersion = 3;
+    public const int CurrentManifestVersion = 1;
     public const int CurrentContentIndexVersion = 1;
     public const string AppHostRole = "app";
     public const string RuntimeHostRole = "runtime";
     public const string AvaloniaTargetKind = "avalonia";
     public const string WebTargetKind = "web";
     public const string WorkerTargetKind = "worker";
-    internal const string RpcV2Capability = "rpc.v2";
+    public const string ExecutionRuntimeV1Capability = "execution-runtime.v1";
+    internal const string RpcV1Capability = "rpc.v1";
     internal const string RpcExtendedDeadlineV1Capability = "rpc.extended-deadline.v1";
-    internal const string WorkerProtocolV3Capability = "worker-protocol.v3";
+    internal const string WorkerProtocolV1Capability = "worker-protocol.v1";
+    public const string DotNetExecutionRuntimeId = "sunder.runtime.dotnet";
+    public const string NodeExecutionRuntimeId = "sunder.runtime.node";
+    public const string DotNetWorkerModuleAbi = "sunder.dotnet-worker-module.v1";
+    public const string NodeWorkerModuleAbi = "sunder.node-worker-module.v1";
+    internal const string DotNetWorkerTargetFramework = "net10.0";
+    internal const string DotNetExecutionRuntimeVersionRange = ">=10.0.0 <11.0.0";
+    internal const string DotNetFrameworkName = "Microsoft.NETCore.App";
     public const string DiscoverContractAction = "discover";
     public const string InvokeContractAction = "invoke";
     public const string SubscribeContractAction = "subscribe";
@@ -47,6 +55,9 @@ public static class SunderPackageFormat
     public const int MaxProviders = 128;
     public const int MaxHostCapabilities = 64;
     public const int MaxHostCapabilityLength = 128;
+    public const int MaxExecutionRuntimeIdentifierLength = 128;
+    public const int MaxExecutionRuntimeIdentifierSegments = 16;
+    public const int MaxExecutionRuntimeIdentifierSegmentLength = 32;
     public const int MaxContentIndexEntries = 4096;
 
     public static IReadOnlyList<string> SupportedRuntimeIdentifiers => Rids;
@@ -191,6 +202,23 @@ public static class SunderPackageFormat
 
     public static bool IsHostCapabilityId(string? value)
         => IsCapabilityId(value);
+
+    public static bool IsExecutionRuntimeIdentifier(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length > MaxExecutionRuntimeIdentifierLength)
+        {
+            return false;
+        }
+
+        var segments = value.Split('.');
+        return segments.Length <= MaxExecutionRuntimeIdentifierSegments
+               && segments.All(static segment => segment.Length is > 0 and <= MaxExecutionRuntimeIdentifierSegmentLength
+                                                  && segment[0] != '-'
+                                                  && segment[^1] != '-'
+                                                  && segment.All(static character => character is >= 'a' and <= 'z'
+                                                      or >= '0' and <= '9'
+                                                      or '-'));
+    }
 
     private static bool IsCapabilityId(string? value)
     {

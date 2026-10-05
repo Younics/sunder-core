@@ -1,0 +1,10 @@
+{
+  "state": "required",
+  "errorCode": "package.policy-required",
+  "watermark": null,
+  "responseNonce": null,
+  "responseSha256": null,
+  "observedAtUtc": null,
+  "validUntilUtc": null,
+  "clock": null
+}

@@ -41,6 +41,6 @@ public sealed partial class RuntimeApiClient
     public Task<RegistryPublishStackResponse> PublishRegistryStackAsync(RuntimeRegistryPublishRequest request, CancellationToken cancellationToken = default)
         => _management.PublishRegistryStackAsync(request, cancellationToken);
 
-    public Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken cancellationToken = default)
-        => _management.DeleteRegistryStackAsync(request, cancellationToken);
+    public Task<RegistryStackManagementOperationResponse> SetRegistryStackVisibilityAsync(RuntimeRegistryStackVisibilityRequest request, CancellationToken cancellationToken = default)
+        => _management.SetRegistryStackVisibilityAsync(request, cancellationToken);
 }

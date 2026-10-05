@@ -29,10 +29,18 @@ public sealed class RegistryApiRoutesTests
         Assert.Equal("/api/v1/packages/resolve-install-plan", RegistryApiRoutes.PackageResolveInstallPlan);
         Assert.Equal("/api/v1/packages/resolve-package-changes", RegistryApiRoutes.PackageResolvePackageChanges);
         Assert.Equal("/api/v1/packages/publish", RegistryApiRoutes.PackagePublish);
+        Assert.Equal("/api/v1/execution-runtimes", RegistryApiRoutes.ExecutionRuntimes);
+        Assert.Equal("/api/v1/execution-runtimes/resolve", RegistryApiRoutes.ExecutionRuntimeResolve);
+        Assert.Equal("/api/v1/admin/execution-runtimes", RegistryApiRoutes.AdministratorExecutionRuntimes);
+        Assert.Equal("/api/v1/admin/execution-runtimes/stages", RegistryApiRoutes.ExecutionRuntimeStages);
+        Assert.Equal("/api/v1/admin/execution-runtimes/stages/lookup", RegistryApiRoutes.ExecutionRuntimeStageLookup);
         Assert.Equal("/api/v1/stacks", RegistryApiRoutes.Stacks);
         Assert.Equal("/api/v1/stacks/publish", RegistryApiRoutes.StackPublish);
         Assert.Equal("/api/v1/dev/packages", RegistryApiRoutes.DevelopmentPackages);
         Assert.Equal("/api/v1/dev/packages/publish/local", RegistryApiRoutes.DevelopmentPackagePublishLocal);
+        Assert.Equal("/api/v1/dev/execution-runtimes", RegistryApiRoutes.DevelopmentExecutionRuntimes);
+        Assert.Equal("/api/v1/dev/execution-runtimes/stages", RegistryApiRoutes.DevelopmentExecutionRuntimeStages);
+        Assert.Equal("/api/v1/dev/execution-runtimes/stages/lookup", RegistryApiRoutes.DevelopmentExecutionRuntimeStageLookup);
         Assert.Equal("/api/v1/dev/stacks", RegistryApiRoutes.DevelopmentStacks);
         Assert.Equal("/api/v1/dev/stacks/publish/local", RegistryApiRoutes.DevelopmentStackPublishLocal);
     }
@@ -93,6 +101,39 @@ public sealed class RegistryApiRoutesTests
     }
 
     [Fact]
+    public void ExecutionRuntimeBuilders_MatchRegistryV1Routes()
+    {
+        Assert.Equal("/api/v1/execution-runtimes/sunder.runtime.dotnet", RegistryApiRoutes.ExecutionRuntime("sunder.runtime.dotnet"));
+        Assert.Equal("/api/v1/execution-runtimes/sunder.runtime.dotnet/releases", RegistryApiRoutes.ExecutionRuntimeReleases("sunder.runtime.dotnet"));
+        Assert.Equal("/api/v1/execution-runtimes/sunder.runtime.dotnet/releases/10.0.1/revisions/2", RegistryApiRoutes.ExecutionRuntimeRelease("sunder.runtime.dotnet", "10.0.1", 2));
+        Assert.Equal("/api/v1/execution-runtimes/sunder.runtime.dotnet/releases/10.0.1/revisions/2/artifacts/win-x64", RegistryApiRoutes.ExecutionRuntimeArtifact("sunder.runtime.dotnet", "10.0.1", 2, "win-x64"));
+        Assert.Equal("/api/v1/execution-runtimes/sunder.runtime.dotnet/releases/10.0.1/revisions/2/artifacts/win-x64/download", RegistryApiRoutes.ExecutionRuntimeArtifactDownload("sunder.runtime.dotnet", "10.0.1", 2, "win-x64"));
+        Assert.Equal("/api/v1/execution-runtimes/sunder.runtime.dotnet/releases/10.0.1/revisions/2/lifecycle", RegistryApiRoutes.ExecutionRuntimeReleaseLifecycle("sunder.runtime.dotnet", "10.0.1", 2));
+        Assert.Equal("/api/v1/admin/execution-runtimes/stages/stage-1", RegistryApiRoutes.ExecutionRuntimeStage("stage-1"));
+        Assert.Equal("/api/v1/admin/execution-runtimes/stages/stage-1/artifacts/win-x64", RegistryApiRoutes.ExecutionRuntimeStageArtifact("stage-1", "win-x64"));
+        Assert.Equal("/api/v1/admin/execution-runtimes/stages/stage-1/promotion", RegistryApiRoutes.ExecutionRuntimeStagePromotion("stage-1"));
+        Assert.Equal("/api/v1/dev/execution-runtimes/stages/stage-1", RegistryApiRoutes.DevelopmentExecutionRuntimeStage("stage-1"));
+        Assert.Equal("/api/v1/dev/execution-runtimes/stages/stage-1/artifacts/win-x64/local", RegistryApiRoutes.DevelopmentExecutionRuntimeStageArtifactLocal("stage-1", "win-x64"));
+        Assert.Equal("/api/v1/dev/execution-runtimes/stages/stage-1/promotion", RegistryApiRoutes.DevelopmentExecutionRuntimeStagePromotion("stage-1"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => RegistryApiRoutes.ExecutionRuntimeRelease("sunder.runtime.dotnet", "10.0.1", 0));
+    }
+
+    [Fact]
+    public void ExecutionRuntimeOperationNames_AreStable()
+    {
+        Assert.Equal("BrowseExecutionRuntimes", RegistryApiOperationNames.BrowseExecutionRuntimes);
+        Assert.Equal("GetExecutionRuntime", RegistryApiOperationNames.GetExecutionRuntime);
+        Assert.Equal("GetExecutionRuntimeRelease", RegistryApiOperationNames.GetExecutionRuntimeRelease);
+        Assert.Equal("DownloadExecutionRuntimeArtifact", RegistryApiOperationNames.DownloadExecutionRuntimeArtifact);
+        Assert.Equal("ResolveExecutionRuntime", RegistryApiOperationNames.ResolveExecutionRuntime);
+        Assert.Equal("LookupExecutionRuntimePublication", RegistryApiOperationNames.LookupExecutionRuntimePublication);
+        Assert.Equal("StageExecutionRuntimeRelease", RegistryApiOperationNames.StageExecutionRuntimeRelease);
+        Assert.Equal("PublishExecutionRuntimeArtifact", RegistryApiOperationNames.PublishExecutionRuntimeArtifact);
+        Assert.Equal("PromoteExecutionRuntimeRelease", RegistryApiOperationNames.PromoteExecutionRuntimeRelease);
+        Assert.Equal("TransitionExecutionRuntimeLifecycle", RegistryApiOperationNames.TransitionExecutionRuntimeLifecycle);
+    }
+
+    [Fact]
     public void Builders_StrictlyEscapeEveryRawStringSegment()
     {
         var routes = typeof(RegistryApiRoutes)
@@ -100,14 +141,14 @@ public sealed class RegistryApiRoutesTests
             .Where(method => method.Name != nameof(RegistryApiRoutes.ToHttpClientRelativePath))
             .ToArray();
 
-        Assert.Equal(40, routes.Length);
+        Assert.Equal(73, routes.Length);
         foreach (var route in routes)
         {
             var parameters = route.GetParameters();
             var arguments = parameters
                 .Select(static parameter => parameter.ParameterType == typeof(string)
                     ? (object)"raw/value"
-                    : MediaId)
+                    : ValidNonStringArgument(parameter))
                 .ToArray();
             var path = Assert.IsType<string>(route.Invoke(null, arguments));
             Assert.Equal(parameters.Count(static parameter => parameter.ParameterType == typeof(string)), Count(path, "%2F"));
@@ -138,7 +179,7 @@ public sealed class RegistryApiRoutesTests
                     object?[] arguments = parameters
                         .Select(static parameter => parameter.ParameterType == typeof(string)
                             ? (object?)"valid"
-                            : MediaId)
+                            : ValidNonStringArgument(parameter))
                         .ToArray();
                     arguments[parameterIndex] = invalidSegment;
                     var exception = Assert.Throws<TargetInvocationException>(() => route.Invoke(null, arguments));
@@ -192,4 +233,10 @@ public sealed class RegistryApiRoutesTests
 
     private static int Count(string value, string fragment)
         => value.Split(fragment, StringSplitOptions.None).Length - 1;
+
+    private static object ValidNonStringArgument(ParameterInfo parameter)
+        => parameter.ParameterType == typeof(int) ? 1
+            : parameter.ParameterType == typeof(long) ? 1L
+            : parameter.ParameterType == typeof(Guid) ? MediaId
+            : throw new InvalidOperationException($"Route parameter type requires an explicit test value: {parameter.ParameterType}.");
 }

@@ -3,14 +3,151 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Sunder.Package.Format;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
 namespace Sunder.Package.Format.Tests;
 
-public sealed class SunderPackageArchiveInspectorTests
+public sealed partial class SunderPackageArchiveInspectorTests
 {
+    public static TheoryData<string, string, string, string> RuntimeOwnershipCases => new()
+    {
+        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "win-x64", "linux-arm64" },
+        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "win-arm64", "osx-x64" },
+        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "linux-x64", "win-arm64" },
+        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "linux-arm64", "osx-arm64" },
+        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "osx-x64", "win-x64" },
+        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "osx-arm64", "linux-x64" },
+        { "sunder.runtime.node", "sunder.node-worker-module.v1", "win-x64", "linux-arm64" },
+        { "sunder.runtime.node", "sunder.node-worker-module.v1", "win-arm64", "osx-x64" },
+        { "sunder.runtime.node", "sunder.node-worker-module.v1", "linux-x64", "win-arm64" },
+        { "sunder.runtime.node", "sunder.node-worker-module.v1", "linux-arm64", "osx-arm64" },
+        { "sunder.runtime.node", "sunder.node-worker-module.v1", "osx-x64", "win-x64" },
+        { "sunder.runtime.node", "sunder.node-worker-module.v1", "osx-arm64", "linux-x64" },
+    };
+
+    [Theory]
+    [MemberData(nameof(RuntimeOwnershipCases))]
+    public void RuntimeOwnershipClassifier_FindsRuntimeBytesAfterInnocuousPackageRename(
+        string runtimeId,
+        string moduleAbi,
+        string runtimeRid,
+        string foreignPackageRid)
+    {
+        var runtimeBytes = "real runtime bytes"u8.ToArray();
+        var runtimeSha256 = Convert.ToHexStringLower(SHA256.HashData(runtimeBytes));
+        var inventory = CreateRuntimeOwnershipInventory(
+            runtimeId,
+            moduleAbi,
+            runtimeRid,
+            "payload/runtime/bin/runtime-launcher",
+            runtimeSha256,
+            runtimeBytes.Length);
+        var packagePath = $"payload/runtime/{foreignPackageRid}/lib/innocent.dat";
+
+        var owned = SunderExecutionRuntimeOwnershipClassifier.Classify(
+            [new SunderPackageContentIndexEntry(packagePath, runtimeSha256, runtimeBytes.Length)],
+            [inventory]);
+
+        var file = Assert.Single(owned);
+        Assert.Equal(packagePath, file.PackagePath);
+        var match = Assert.Single(file.Matches);
+        Assert.Equal(runtimeRid, match.Rid);
+        Assert.True(match.Sha256Match);
+        Assert.False(match.RelativePathMatch);
+        Assert.False(match.FileNameMatch);
+    }
+
+    [Theory]
+    [MemberData(nameof(RuntimeOwnershipCases))]
+    public void RuntimeOwnershipClassifier_FindsRuntimeRelativePathAcrossForeignRidWithDifferentBytes(
+        string runtimeId,
+        string moduleAbi,
+        string runtimeRid,
+        string foreignPackageRid)
+    {
+        var inventory = CreateRuntimeOwnershipInventory(
+            runtimeId,
+            moduleAbi,
+            runtimeRid,
+            "payload/runtime/bin/runtime-launcher",
+            new string('a', 64),
+            100);
+
+        var owned = SunderExecutionRuntimeOwnershipClassifier.Classify(
+            [new SunderPackageContentIndexEntry(
+                $"payload/runtime/{foreignPackageRid}/bin/runtime-launcher",
+                new string('b', 64),
+                50)],
+            [inventory]);
+
+        var match = Assert.Single(Assert.Single(owned).Matches);
+        Assert.Equal(runtimeRid, match.Rid);
+        Assert.True(match.RelativePathMatch);
+        Assert.True(match.FileNameMatch);
+        Assert.False(match.Sha256Match);
+    }
+
+    [Fact]
+    public void RuntimeOwnershipClassifier_FindsRuntimePathWithDifferentBytes()
+    {
+        var inventory = CreateRuntimeOwnershipInventory(
+            "sunder.runtime.dotnet",
+            "sunder.dotnet-worker-module.v1",
+            "linux-x64",
+            "payload/runtime/shared/Microsoft.NETCore.App/10.0.1/System.Private.CoreLib.dll",
+            new string('a', 64),
+            100);
+
+        var owned = SunderExecutionRuntimeOwnershipClassifier.Classify(
+            [new SunderPackageContentIndexEntry(
+                "payload/runtime/linux-x64/lib/System.Private.CoreLib.dll",
+                new string('b', 64),
+                50)],
+            [inventory]);
+
+        var match = Assert.Single(Assert.Single(owned).Matches);
+        Assert.True(match.FileNameMatch);
+        Assert.False(match.Sha256Match);
+    }
+
+    [Fact]
+    public void RuntimeOwnershipClassifier_IgnoresRuntimeProvenanceAndLicenseContent()
+    {
+        var inventory = new SunderExecutionRuntimeOwnershipInventory(
+            "sunder.runtime.node",
+            "24.0.0",
+            1,
+            "linux-x64",
+            "sunder.node-worker-module.v1",
+            new string('c', 64),
+            [
+                new SunderExecutionRuntimeContentRecord
+                {
+                    Path = "payload/licenses/LICENSE",
+                    Sha256 = new string('d', 64),
+                    Size = 10,
+                },
+                new SunderExecutionRuntimeContentRecord
+                {
+                    Path = SunderExecutionRuntimeFormat.NativeAttestationPath,
+                    Sha256 = new string('e', 64),
+                    Size = 20,
+                },
+            ]);
+
+        var owned = SunderExecutionRuntimeOwnershipClassifier.Classify(
+            [
+                new SunderPackageContentIndexEntry("payload/shared/LICENSE", new string('d', 64), 10),
+                new SunderPackageContentIndexEntry("payload/shared/attestation.json", new string('e', 64), 20),
+            ],
+            [inventory]);
+
+        Assert.Empty(owned);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(2)]
@@ -32,9 +169,25 @@ public sealed class SunderPackageArchiveInspectorTests
             result.Errors);
     }
 
+    private static SunderExecutionRuntimeOwnershipInventory CreateRuntimeOwnershipInventory(
+        string runtimeId,
+        string moduleAbi,
+        string rid,
+        string path,
+        string sha256,
+        long size)
+        => new(
+            runtimeId,
+            runtimeId == "sunder.runtime.node" ? "24.0.0" : "10.0.1",
+            1,
+            rid,
+            moduleAbi,
+            new string('f', 64),
+            [new SunderExecutionRuntimeContentRecord { Path = path, Sha256 = sha256, Size = size }]);
+
     [Theory]
+    [InlineData(0)]
     [InlineData(2)]
-    [InlineData(4)]
     public async Task ExtractAndValidateAsync_RejectsOldAndFutureManifestVersions(int version)
     {
         var root = CreateTempDirectory();
@@ -85,9 +238,7 @@ public sealed class SunderPackageArchiveInspectorTests
     public async Task ExtractAndValidateAsync_AcceptsEachExactRid(string rid)
     {
         var root = CreateTempDirectory();
-        var executableName = rid.StartsWith("win-", StringComparison.Ordinal)
-            ? "Test.Worker.exe"
-            : "Test.Worker";
+        const string executableName = "Test.Worker.dll";
         var manifest = CreateManifest(
             [CreateTarget(
                 SunderPackageFormat.RuntimeHostRole,
@@ -95,14 +246,9 @@ public sealed class SunderPackageArchiveInspectorTests
                 SunderPackageFormat.WorkerTargetKind,
                 $"lib/{executableName}",
                 targetFramework: "net10.0")]);
-        var archivePath = CreatePackageArchive(
-            root,
-            manifest,
-            new Dictionary<string, byte[]>
-            {
-                [$"payload/runtime/{rid}/lib/{executableName}"] = [1, 2, 3, 4],
-                ["payload/shared/config/defaults.json"] = "{}"u8.ToArray(),
-            });
+        var files = CreateDotNetWorkerFiles($"payload/runtime/{rid}/lib", rid, executableName);
+        files["payload/shared/config/defaults.json"] = "{}"u8.ToArray();
+        var archivePath = CreatePackageArchive(root, manifest, files);
 
         var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
             archivePath,
@@ -117,14 +263,12 @@ public sealed class SunderPackageArchiveInspectorTests
     }
 
     [Theory]
-    [InlineData("win-x64", "lib/Test.Worker", "Windows RID")]
-    [InlineData("linux-x64", "lib/Test.Worker.exe", "extensionless apphost")]
-    [InlineData("osx-arm64", "lib/Test.Worker.dll", "extensionless apphost")]
-    [InlineData("linux-arm64", "bin/Test.Worker", "directly under 'lib/'")]
-    public async Task ExtractAndValidateAsync_RejectsInvalidDotNetWorkerAppHostNameForRid(
+    [InlineData("win-x64", "lib/Test.Worker.exe")]
+    [InlineData("linux-x64", "lib/Test.Worker")]
+    [InlineData("osx-arm64", "lib/Test.Worker.cjs")]
+    public async Task ExtractAndValidateAsync_RejectsInvalidDotNetWorkerModuleName(
         string rid,
-        string entryPoint,
-        string expectedError)
+        string entryPoint)
     {
         var root = CreateTempDirectory();
         var manifest = CreateManifest(
@@ -142,30 +286,258 @@ public sealed class SunderPackageArchiveInspectorTests
             Path.Combine(root, "staging"));
 
         Assert.False(result.Success);
-        Assert.Contains(result.Errors, error => error.Contains(expectedError, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, error => error.Contains("must end with '.dll'", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task ExtractAndValidateAsync_RejectsDotNetWorkerAppHostOutsideExactRidLayer()
+    public async Task ExtractAndValidateAsync_AcceptsDotNetWorkerModuleFromSharedLayer()
     {
         var root = CreateTempDirectory();
         var manifest = CreateManifest(
-            [CreateTarget("runtime", "linux-x64", "worker", "lib/Test.Worker", targetFramework: "net10.0")]);
+            [CreateTarget("runtime", "linux-x64", "worker", "lib/Test.Worker.dll", targetFramework: "net10.0")]);
         var archivePath = CreatePackageArchive(
             root,
             manifest,
-            new Dictionary<string, byte[]>
-            {
-                ["payload/shared/lib/Test.Worker"] = [1, 2, 3],
-            });
+            CreateDotNetWorkerFiles("payload/shared/lib", "linux-x64", "Test.Worker.dll"));
 
         var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
             archivePath,
             Path.Combine(root, "staging"));
 
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+    }
+
+    [Fact]
+    public async Task ExtractAndValidateAsync_AcceptsDeclaredPackageOwnedDotNetDependencies()
+    {
+        var root = CreateTempDirectory();
+        const string rid = "osx-arm64";
+        var manifest = CreateManifest(
+            [CreateTarget("runtime", rid, "worker", "lib/Test.Worker.dll", targetFramework: "net10.0")]);
+        var archivePath = CreatePackageArchive(
+            root,
+            manifest,
+            CreateDotNetWorkerFiles(
+                $"payload/runtime/{rid}/lib",
+                rid,
+                "Test.Worker.dll",
+                "System.PackageOwned.dll",
+                $"runtimes/{rid}/native/libpackage.dylib"));
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "package-dependencies"));
+
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+    }
+
+    [Theory]
+    [InlineData("Test.Worker", "apphost")]
+    [InlineData("Test.Worker.exe", "apphost")]
+    [InlineData("libhostfxr.so", "forbidden .NET runtime file")]
+    [InlineData("System.Private.CoreLib.dll", "forbidden .NET runtime file")]
+    [InlineData("Test.Worker.pdb", "symbol file")]
+    [InlineData("Test.Worker.xml", "XML documentation file")]
+    [InlineData("tools/compiler.dll", "build-time/toolchain file")]
+    public async Task ExtractAndValidateAsync_RejectsForbiddenDotNetWorkerPayload(
+        string relativePath,
+        string expectedError)
+    {
+        var root = CreateTempDirectory();
+        const string rid = "linux-x64";
+        var manifest = CreateManifest(
+            [CreateTarget("runtime", rid, "worker", "lib/Test.Worker.dll", targetFramework: "net10.0")]);
+        var files = CreateDotNetWorkerFiles($"payload/runtime/{rid}/lib", rid, "Test.Worker.dll");
+        files[$"payload/runtime/{rid}/lib/{relativePath}"] = [5, 4, 3, 2, 1];
+        var archivePath = CreatePackageArchive(root, manifest, files);
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "forbidden-worker-payload"));
+
         Assert.False(result.Success);
-        Assert.Contains(result.Errors, error =>
-            error.Contains("exact Runtime/RID payload layer", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, error => error.Contains(expectedError, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("missing-runtimeconfig", "missing required 'lib/Test.Worker.runtimeconfig.json'")]
+    [InlineData("self-contained-runtimeconfig", "includedFrameworks is not allowed")]
+    [InlineData("malformed-runtimeconfig", "runtimeconfig is invalid")]
+    [InlineData("wrong-deps-rid", "runtimeTarget.name must be")]
+    [InlineData("runtime-pack-dependency", "runtime-pack identity")]
+    public async Task ExtractAndValidateAsync_RejectsInvalidDotNetWorkerRuntimeMetadata(
+        string mutation,
+        string expectedError)
+    {
+        var root = CreateTempDirectory();
+        const string rid = "linux-x64";
+        const string payloadRoot = "payload/runtime/linux-x64/lib";
+        var manifest = CreateManifest(
+            [CreateTarget("runtime", rid, "worker", "lib/Test.Worker.dll", targetFramework: "net10.0")]);
+        var files = CreateDotNetWorkerFiles(payloadRoot, rid, "Test.Worker.dll");
+        var runtimeConfigPath = $"{payloadRoot}/Test.Worker.runtimeconfig.json";
+        var depsPath = $"{payloadRoot}/Test.Worker.deps.json";
+        switch (mutation)
+        {
+            case "missing-runtimeconfig":
+                files.Remove(runtimeConfigPath);
+                break;
+            case "self-contained-runtimeconfig":
+                files[runtimeConfigPath] = """
+                    {"runtimeOptions":{"tfm":"net10.0","includedFrameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.0"}]}}
+                    """u8.ToArray();
+                break;
+            case "malformed-runtimeconfig":
+                files[runtimeConfigPath] = "{"u8.ToArray();
+                break;
+            case "wrong-deps-rid":
+                files[depsPath] = Encoding.UTF8.GetBytes(
+                    Encoding.UTF8.GetString(files[depsPath]).Replace("linux-x64", "linux-arm64", StringComparison.Ordinal));
+                break;
+            case "runtime-pack-dependency":
+                files[depsPath] = Encoding.UTF8.GetBytes(
+                    Encoding.UTF8.GetString(files[depsPath]).Replace(
+                        "Test.Worker/1.0.0",
+                        "Microsoft.NETCore.App.Runtime.linux-x64/10.0.0",
+                        StringComparison.Ordinal));
+                break;
+        }
+        var archivePath = CreatePackageArchive(root, manifest, files);
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "invalid-worker-metadata"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains(expectedError, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExtractAndValidateAsync_RejectsDotNetWorkerWithoutExecutionRuntimeWithoutThrowing()
+    {
+        var root = CreateTempDirectory();
+        const string rid = "linux-x64";
+        var manifest = CreateManifest(
+            [CreateTarget(
+                "runtime",
+                rid,
+                "worker",
+                "lib/Test.Worker.dll",
+                targetFramework: "net10.0",
+                includeExecutionRuntime: false)]);
+        var archivePath = CreatePackageArchive(
+            root,
+            manifest,
+            CreateDotNetWorkerFiles($"payload/runtime/{rid}/lib", rid, "Test.Worker.dll"));
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "missing-execution-runtime"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains("is missing executionRuntime", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExtractAndValidateAsync_RequiresExecutionRuntimeOnlyForWorkers()
+    {
+        var root = CreateTempDirectory();
+        var missingWorkerRequirement = CreateTarget(
+            "runtime",
+            "linux-x64",
+            "worker",
+            "worker.cjs",
+            includeExecutionRuntime: false);
+        var appRequirement = new SunderPackageTargetManifest
+        {
+            Role = "app",
+            Rid = "linux-x64",
+            Kind = "web",
+            EntryPoint = "index.html",
+            TargetFramework = "web",
+            SdkVersion = "1.1.0",
+            RequiredHostCapabilities = ["core.v1"],
+            ExecutionRuntime = RuntimeRequirement("example.runtime", ">=1.0.0 <2.0.0", "example.module.v1"),
+        };
+        var archivePath = CreatePackageArchive(
+            root,
+            CreateManifest([missingWorkerRequirement, appRequirement]),
+            new Dictionary<string, byte[]>
+            {
+                ["payload/runtime/linux-x64/worker.cjs"] = [1],
+                ["payload/app/linux-x64/index.html"] = [2],
+            });
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "execution-runtime-presence-staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains("is missing executionRuntime", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, error => error.Contains("cannot declare executionRuntime", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Example.Runtime", ">=1.0.0 <2.0.0", "example.module.v1", "executionRuntime.id")]
+    [InlineData("example.runtime", ">=1.0.0", "example.module.v1", "bounded to one major")]
+    [InlineData("example.runtime", ">=1.0.0 <3.0.0", "example.module.v1", "bounded to one major")]
+    [InlineData("example.runtime", ">=1.0.0-alpha <2.0.0", "example.module.v1", "bounded to one major")]
+    [InlineData("example.runtime", ">=2.0.0 <2.0.0", "example.module.v1", "bounded to one major")]
+    [InlineData("example.runtime", ">=1.0.0 <2.0.0", "Example.Module", "executionRuntime.moduleAbi")]
+    public async Task ExtractAndValidateAsync_RejectsInvalidExecutionRuntimeRequirement(
+        string runtimeId,
+        string versionRange,
+        string moduleAbi,
+        string expectedError)
+    {
+        var root = CreateTempDirectory();
+        var target = CreateTarget(
+            "runtime",
+            "linux-x64",
+            "worker",
+            "worker.module",
+            executionRuntime: RuntimeRequirement(runtimeId, versionRange, moduleAbi));
+        var archivePath = CreatePackageArchive(
+            root,
+            CreateManifest([target]),
+            new Dictionary<string, byte[]> { ["payload/runtime/linux-x64/worker.module"] = [1] });
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "execution-runtime-invalid-staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains(expectedError, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExtractAndValidateAsync_RejectsWorkerRequirementDisagreementAcrossRids()
+    {
+        var root = CreateTempDirectory();
+        var archivePath = CreatePackageArchive(
+            root,
+            CreateManifest(
+            [
+                CreateTarget("runtime", "linux-x64", "worker", "worker.cjs"),
+                CreateTarget(
+                    "runtime",
+                    "osx-arm64",
+                    "worker",
+                    "worker.cjs",
+                    executionRuntime: RuntimeRequirement("different.runtime", ">=1.0.0 <2.0.0", "example.worker-module.v1")),
+            ]),
+            new Dictionary<string, byte[]>
+            {
+                ["payload/runtime/linux-x64/worker.cjs"] = [1],
+                ["payload/runtime/osx-arm64/worker.cjs"] = [1],
+            });
+
+        var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archivePath,
+            Path.Combine(root, "execution-runtime-disagreement-staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains("Worker targets must agree", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -307,9 +679,10 @@ public sealed class SunderPackageArchiveInspectorTests
             [
                 "core.v1",
                 "rpc.extended-deadline.v1",
-                "rpc.v2",
+                "execution-runtime.v1",
+                "rpc.v1",
                 "sdk-baseline-1-1.v1",
-                "worker-protocol.v3",
+                "worker-protocol.v1",
             ]);
         var archivePath = CreatePackageArchive(
             root,
@@ -324,13 +697,14 @@ public sealed class SunderPackageArchiveInspectorTests
     }
 
     [Theory]
-    [InlineData("rpc.v2")]
-    [InlineData("worker-protocol.v3")]
+    [InlineData("execution-runtime.v1")]
+    [InlineData("rpc.v1")]
+    [InlineData("worker-protocol.v1")]
     [InlineData("sdk-baseline-1-1.v1")]
     public async Task ExtractAndValidateAsync_RejectsWorkerMissingMandatoryCapability(string capability)
     {
         var root = CreateTempDirectory();
-        var capabilities = new[] { "core.v1", "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3" }
+        var capabilities = new[] { "core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1" }
             .Where(value => !string.Equals(value, capability, StringComparison.Ordinal))
             .ToArray();
         var target = CreateTarget(
@@ -400,9 +774,9 @@ public sealed class SunderPackageArchiveInspectorTests
     }
 
     [Theory]
-    [InlineData("rpc.v1")]
-    [InlineData("worker-protocol.v1")]
-    public async Task ExtractAndValidateAsync_RejectsLegacyWorkerCapability(string capability)
+    [InlineData("rpc.v3")]
+    [InlineData("worker-protocol.v3")]
+    public async Task ExtractAndValidateAsync_RejectsUnsupportedWorkerCapability(string capability)
     {
         var root = CreateTempDirectory();
         var target = CreateTarget(
@@ -413,9 +787,10 @@ public sealed class SunderPackageArchiveInspectorTests
             requiredHostCapabilities:
             [
                 "core.v1",
-                "rpc.v2",
+                "execution-runtime.v1",
+                "rpc.v1",
                 "sdk-baseline-1-1.v1",
-                "worker-protocol.v3",
+                "worker-protocol.v1",
                 capability,
             ]);
         var archivePath = CreatePackageArchive(
@@ -516,8 +891,8 @@ public sealed class SunderPackageArchiveInspectorTests
         var manifest = CreateManifest(
             [
                 CreateTarget("app", "win-x64", "avalonia", "shared-app.dll"),
-                CreateTarget("runtime", "win-x64", "worker", "runtime.dll"),
-                CreateTarget("runtime", "linux-x64", "worker", "bin/worker"),
+                CreateTarget("runtime", "win-x64", "worker", "runtime.module"),
+                CreateTarget("runtime", "linux-x64", "worker", "runtime.module"),
             ]);
         var archivePath = CreatePackageArchive(
             root,
@@ -525,7 +900,7 @@ public sealed class SunderPackageArchiveInspectorTests
             new Dictionary<string, byte[]>
             {
                 ["payload/shared/shared-app.dll"] = [1],
-                ["payload/runtime/shared/runtime.dll"] = [2],
+                ["payload/runtime/shared/runtime.module"] = [2],
                 ["payload/runtime/linux-x64/bin/worker"] = [3],
                 ["payload/runtime/win-x64/other.dll"] = [4],
             });
@@ -570,6 +945,9 @@ public sealed class SunderPackageArchiveInspectorTests
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = "test.package",
                     ContractId = "example.messaging",
                     Version = "1.0.0",
                     DescriptorPath = "contracts/messaging.json",
@@ -592,21 +970,23 @@ public sealed class SunderPackageArchiveInspectorTests
     }
 
     [Fact]
-    public async Task ExtractAndValidateAsync_RejectsV1DescriptorInV2ContractBundle()
+    public async Task ExtractAndValidateAsync_RejectsRemovedLegacyDescriptorShape()
     {
         var root = CreateTempDirectory();
-        var descriptor = CreateV1ContractDescriptor("example.contract", "1.0.0");
-        var parsedDescriptor = SunderRpcContractDescriptor.Parse(descriptor);
+        var descriptor = CreateRemovedLegacyContractDescriptor("example.contract", "1.0.0");
         var manifest = CreateManifest(
             [],
             contractBundles:
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = "test.package",
                     ContractId = "example.contract",
                     Version = "1.0.0",
                     DescriptorPath = "contracts/example.json",
-                    DescriptorSha256 = parsedDescriptor.Sha256,
+                    DescriptorSha256 = new string('0', 64),
                     AbiSha256 = new string('0', 64),
                     Exposure = SunderPackageFormat.PublicContractExposure,
                 },
@@ -616,15 +996,17 @@ public sealed class SunderPackageArchiveInspectorTests
             manifest,
             new Dictionary<string, byte[]> { ["payload/shared/contracts/example.json"] = descriptor });
 
-        Assert.Equal(SunderRpcProtocol.DescriptorVersionV1, parsedDescriptor.DescriptorVersion);
+        var parseException = Assert.Throws<SunderRpcDescriptorException>(() =>
+            SunderRpcContractDescriptor.Parse(descriptor));
+        Assert.Equal("schema-profile", parseException.ErrorCode);
         var result = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
             archivePath,
             Path.Combine(root, "staging"));
 
         Assert.False(result.Success);
         Assert.Contains(result.Errors, error =>
-            error.Contains("descriptorVersion 1", StringComparison.Ordinal)
-            && error.Contains("package manifest V3 supports only descriptorVersion 2", StringComparison.Ordinal));
+            error.Contains("is invalid", StringComparison.Ordinal)
+            && error.Contains("schemaProfile", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -657,6 +1039,9 @@ public sealed class SunderPackageArchiveInspectorTests
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = "test.package",
                     ContractId = "example.events",
                     Version = "1.2.0",
                     DescriptorPath = "contracts/events.json",
@@ -674,7 +1059,7 @@ public sealed class SunderPackageArchiveInspectorTests
                     ContractVersion = "1.2.0",
                     AbiSha256 = abiHash,
                     Required = true,
-                    Actions = ["discover", "invoke", "subscribe"],
+                    Actions = ["discover", "invoke"],
                 },
             ],
             provides:
@@ -798,6 +1183,9 @@ public sealed class SunderPackageArchiveInspectorTests
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = "test.package",
                     ContractId = "example.contract",
                     Version = "1.0.0",
                     DescriptorPath = "contract.json",
@@ -834,6 +1222,9 @@ public sealed class SunderPackageArchiveInspectorTests
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = "test.package",
                     ContractId = "example.contract",
                     Version = "1.0.0",
                     DescriptorPath = "contract.json",
@@ -866,6 +1257,9 @@ public sealed class SunderPackageArchiveInspectorTests
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = "test.package",
                     ContractId = "example.contract",
                     Version = "1.0.0",
                     DescriptorPath = "contract.json",
@@ -895,6 +1289,9 @@ public sealed class SunderPackageArchiveInspectorTests
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = "test.package",
                     ContractId = "other.contract",
                     Version = "1.0.0",
                     DescriptorPath = "invalid.json",
@@ -1015,6 +1412,9 @@ public sealed class SunderPackageArchiveInspectorTests
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = "test.package",
                     ContractId = parsed.ContractId,
                     Version = parsed.Version,
                     DescriptorPath = "contracts/hashes.json",
@@ -1088,6 +1488,9 @@ public sealed class SunderPackageArchiveInspectorTests
         var parsed = SunderRpcContractDescriptor.Parse(descriptor);
         var mismatchedBundle = new SunderPackageContractBundleManifest
         {
+            Source = "owned",
+            AuthorityKind = "package",
+            AuthorityId = "test.package",
             ContractId = parsed.ContractId,
             Version = "1.0.0+windows",
             DescriptorPath = "contracts/identity.json",
@@ -1180,6 +1583,9 @@ public sealed class SunderPackageArchiveInspectorTests
         var invalidHash = "A" + parsed.Sha256[1..];
         var bundle = new SunderPackageContractBundleManifest
         {
+            Source = "owned",
+            AuthorityKind = "package",
+            AuthorityId = "test.package",
             ContractId = invalidField == "bundle-contract-id" ? "Example.lexical" : parsed.ContractId,
             Version = invalidField == "bundle-version" ? "01.0.0" : parsed.Version,
             DescriptorPath = "contracts/lexical.json",
@@ -1513,7 +1919,7 @@ public sealed class SunderPackageArchiveInspectorTests
     [InlineData("sha256")]
     [InlineData("versionRange")]
     [InlineData("contractSha256")]
-    public async Task ValidateExtractedPackageAsync_RejectsV1RpcFieldNames(string oldField)
+    public async Task ValidateExtractedPackageAsync_RejectsLegacyRpcFieldNames(string oldField)
     {
         var root = CreateTempDirectory();
         var descriptor = CreateContractDescriptor("example.oldfields", "1.0.0");
@@ -1850,10 +2256,9 @@ public sealed class SunderPackageArchiveInspectorTests
 
     [Theory]
     [InlineData("archiveFormatVersion", 2, 1)]
-    [InlineData("manifestVersion", 1, 3)]
-    [InlineData("manifestVersion", 2, 3)]
-    [InlineData("manifestVersion", 4, 3)]
-    public async Task ExtractAndValidateAsync_RequiresArchiveOneAndManifestThree(
+    [InlineData("manifestVersion", 0, 1)]
+    [InlineData("manifestVersion", 2, 1)]
+    public async Task ExtractAndValidateAsync_RequiresArchiveAndManifestV1(
         string propertyName,
         int value,
         int expected)
@@ -1868,6 +2273,10 @@ public sealed class SunderPackageArchiveInspectorTests
             Name = source.Name,
             Version = source.Version,
             Targets = source.Targets,
+            PackageArtifactImports = source.PackageArtifactImports,
+            PackageApiImports = source.PackageApiImports,
+            ProviderImports = source.ProviderImports,
+            PlatformImports = source.PlatformImports,
         };
         var archivePath = CreatePackageArchive(
             root,
@@ -1997,7 +2406,7 @@ public sealed class SunderPackageArchiveInspectorTests
     }
 
     [Fact]
-    public void ManifestModel_DoesNotExposeRemovedV1Properties()
+    public void ManifestV1Model_ExposesOnlyCanonicalProperties()
     {
         var properties = typeof(SunderPackageManifest).GetProperties().Select(static property => property.Name).ToHashSet();
 
@@ -2007,9 +2416,26 @@ public sealed class SunderPackageArchiveInspectorTests
         Assert.DoesNotContain("SdkPackageVersion", properties);
         Assert.DoesNotContain("RequiredSdkCapabilities", properties);
         Assert.DoesNotContain("TargetFramework", properties);
+        Assert.Equal(
+            ["Id", "ModuleAbi", "VersionRange"],
+            typeof(SunderPackageExecutionRuntimeManifest).GetProperties()
+                .Select(static property => property.Name)
+                .Order(StringComparer.Ordinal));
         Assert.Equal(3, typeof(SunderPackageContentIndexEntry).GetProperties().Length);
         Assert.Equal(
-            ["AbiSha256", "ContractId", "DescriptorPath", "DescriptorSha256", "Exposure", "Version"],
+            [
+                "AbiSha256",
+                "AuthorityId",
+                "AuthorityKind",
+                "ContractId",
+                "DescriptorPath",
+                "DescriptorSha256",
+                "Exposure",
+                "SelectedAuthorityContentIdentity",
+                "SelectedAuthorityRelease",
+                "Source",
+                "Version",
+            ],
             typeof(SunderPackageContractBundleManifest).GetProperties()
                 .Select(static property => property.Name)
                 .Order(StringComparer.Ordinal));
@@ -2026,10 +2452,12 @@ public sealed class SunderPackageArchiveInspectorTests
     }
 
     [Fact]
-    public void PackageFormat_DeclaresManifestV3ArchiveV1RpcConstants()
+    public void PackageFormat_DeclaresCanonicalV1Constants()
     {
         Assert.Equal(1, SunderPackageFormat.CurrentArchiveFormatVersion);
-        Assert.Equal(3, SunderPackageFormat.CurrentManifestVersion);
+        Assert.Equal(1, SunderPackageFormat.CurrentManifestVersion);
+        Assert.True(SunderPackageFormat.IsExecutionRuntimeIdentifier(SunderPackageFormat.DotNetExecutionRuntimeId));
+        Assert.True(SunderPackageFormat.IsExecutionRuntimeIdentifier(SunderPackageFormat.DotNetWorkerModuleAbi));
         Assert.True(SunderPackageFormat.IsContractExposure(SunderPackageFormat.PackageContractExposure));
         Assert.True(SunderPackageFormat.IsContractExposure(SunderPackageFormat.PublicContractExposure));
         Assert.False(SunderPackageFormat.IsContractExposure("Public"));
@@ -2052,14 +2480,26 @@ public sealed class SunderPackageArchiveInspectorTests
             ManifestVersion = manifestVersion,
             Id = "test.package",
             Name = "Test Package",
-            Summary = "Canonical V3 test package.",
+            Summary = "Canonical V1 test package.",
             Version = "1.0.0",
             Icon = icon,
-            DependsOn = [new SunderPackageDependencyManifest { PackageId = "base.package", VersionRange = ">=1.0.0 <2.0.0" }],
+            DependsOn =
+            [
+                new SunderPackageDependencyManifest
+                {
+                    PackageId = "base.package",
+                    VersionRange = ">=1.0.0 <2.0.0",
+                    Presence = "required",
+                },
+            ],
             Targets = targets,
             ContractBundles = contractBundles,
             UsesContracts = usesContracts,
             Provides = provides,
+            PackageArtifactImports = [],
+            PackageApiImports = [],
+            ProviderImports = [],
+            PlatformImports = [],
         };
 
     private static SunderPackageTargetManifest CreateTarget(
@@ -2070,7 +2510,9 @@ public sealed class SunderPackageArchiveInspectorTests
         string? sdkVersion = null,
         IReadOnlyList<string?>? requiredHostCapabilities = null,
         bool includeSdkVersion = true,
-        string? targetFramework = null)
+        string? targetFramework = null,
+        SunderPackageExecutionRuntimeManifest? executionRuntime = null,
+        bool includeExecutionRuntime = true)
         => new()
         {
             Role = role,
@@ -2084,8 +2526,21 @@ public sealed class SunderPackageArchiveInspectorTests
                 ? sdkVersion ?? (role == SunderPackageFormat.RuntimeHostRole || kind == "avalonia" ? "1.1.0" : null)
                 : null,
             RequiredHostCapabilities = requiredHostCapabilities ?? (role == SunderPackageFormat.RuntimeHostRole
-                ? ["core.v1", "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"]
+                ? ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"]
                 : ["core.v1"]),
+            ExecutionRuntime = role == SunderPackageFormat.RuntimeHostRole && includeExecutionRuntime
+                ? executionRuntime ?? (targetFramework == "net10.0"
+                    ? RuntimeRequirement(
+                        SunderPackageFormat.DotNetExecutionRuntimeId,
+                        ">=10.0.0 <11.0.0",
+                        SunderPackageFormat.DotNetWorkerModuleAbi)
+                    : RuntimeRequirement(
+                        "example.runtime",
+                        ">=1.0.0 <2.0.0",
+                        targetFramework?.StartsWith("node", StringComparison.Ordinal) == true
+                            ? SunderPackageFormat.NodeWorkerModuleAbi
+                            : "example.worker-module.v1"))
+                : null,
             Views = kind == SunderPackageFormat.WebTargetKind
                 ?
                 [
@@ -2100,6 +2555,72 @@ public sealed class SunderPackageArchiveInspectorTests
                 ]
                 : null,
         };
+
+    private static SunderPackageExecutionRuntimeManifest RuntimeRequirement(
+        string id,
+        string versionRange,
+        string moduleAbi)
+        => new()
+        {
+            Id = id,
+            VersionRange = versionRange,
+            ModuleAbi = moduleAbi,
+        };
+
+    private static Dictionary<string, byte[]> CreateDotNetWorkerFiles(
+        string payloadRoot,
+        string rid,
+        string moduleName,
+        params string[] dependencyAssets)
+    {
+        var runtimeTarget = $".NETCoreApp,Version=v10.0/{rid}";
+        var libraryIdentity = $"{Path.GetFileNameWithoutExtension(moduleName)}/1.0.0";
+        var runtimeAssets = new JsonObject { [moduleName] = new JsonObject() };
+        var nativeAssets = new JsonObject();
+        foreach (var asset in dependencyAssets)
+        {
+            var assets = asset.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                ? runtimeAssets
+                : nativeAssets;
+            assets[asset] = new JsonObject();
+        }
+        var targetLibrary = new JsonObject { ["runtime"] = runtimeAssets };
+        if (nativeAssets.Count > 0) targetLibrary["native"] = nativeAssets;
+        var dependencies = new JsonObject
+        {
+            ["runtimeTarget"] = new JsonObject
+            {
+                ["name"] = runtimeTarget,
+                ["signature"] = string.Empty,
+            },
+            ["targets"] = new JsonObject
+            {
+                [runtimeTarget] = new JsonObject { [libraryIdentity] = targetLibrary },
+            },
+            ["libraries"] = new JsonObject
+            {
+                [libraryIdentity] = new JsonObject
+                {
+                    ["type"] = "project",
+                    ["serviceable"] = false,
+                    ["sha512"] = string.Empty,
+                },
+            },
+        };
+        var files = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            [$"{payloadRoot}/{moduleName}"] = [1, 2, 3, 4],
+            [$"{payloadRoot}/{Path.GetFileNameWithoutExtension(moduleName)}.runtimeconfig.json"] = """
+                {"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}
+                """u8.ToArray(),
+            [$"{payloadRoot}/{Path.GetFileNameWithoutExtension(moduleName)}.deps.json"] = Encoding.UTF8.GetBytes(dependencies.ToJsonString()),
+        };
+        foreach (var asset in dependencyAssets)
+        {
+            files[$"{payloadRoot}/{asset}"] = [9, 8, 7];
+        }
+        return files;
+    }
 
     private static string CreatePackageArchive(
         string root,
@@ -2125,7 +2646,8 @@ public sealed class SunderPackageArchiveInspectorTests
         {
             WriteFile(source, file.Key, file.Value);
         }
-        WriteFile(source, SunderPackageFormat.ManifestPath, JsonSerializer.SerializeToUtf8Bytes(manifest));
+        WriteFile(source, SunderPackageFormat.ManifestPath, JsonSerializer.SerializeToUtf8Bytes(
+            manifest, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }));
 
         var entries = Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
             .Select(path => CreateIndexEntry(source, path))
@@ -2162,7 +2684,7 @@ public sealed class SunderPackageArchiveInspectorTests
         => SunderRpcContractDescriptor.Parse(bytes).Sha256;
 
     private static string AbiHash(byte[] bytes)
-        => SunderRpcContractDescriptor.Parse(bytes).AbiSha256!;
+        => SunderRpcContractDescriptor.Parse(bytes).AbiSha256;
 
     private static SunderPackageContractBundleManifest CreateContractBundle(
         byte[] descriptor,
@@ -2172,6 +2694,9 @@ public sealed class SunderPackageArchiveInspectorTests
         var parsed = SunderRpcContractDescriptor.Parse(descriptor);
         return new SunderPackageContractBundleManifest
         {
+            Source = "owned",
+            AuthorityKind = "package",
+            AuthorityId = "test.package",
             ContractId = parsed.ContractId,
             Version = parsed.Version,
             DescriptorPath = descriptorPath,
@@ -2181,7 +2706,7 @@ public sealed class SunderPackageArchiveInspectorTests
         };
     }
 
-    private static byte[] CreateV1ContractDescriptor(string contractId, string version)
+    private static byte[] CreateRemovedLegacyContractDescriptor(string contractId, string version)
         => System.Text.Encoding.UTF8.GetBytes($$"""
             {
               "descriptorVersion": 1,
@@ -2224,7 +2749,7 @@ public sealed class SunderPackageArchiveInspectorTests
     private static byte[] CreateContractDescriptor(string contractId, string version)
         => Encoding.UTF8.GetBytes($$"""
             {
-              "descriptorVersion": 2,
+              "descriptorVersion": 1,
               "schemaProfile": "sunder.rpc.values.v1",
               "contractId": "{{contractId}}",
               "version": "{{version}}",

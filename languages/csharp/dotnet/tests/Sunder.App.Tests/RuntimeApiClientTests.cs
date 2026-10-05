@@ -80,9 +80,9 @@ public sealed class RuntimeApiClientTests
         {
             Handshake = CreateHandshake() with
             {
-                ProtocolRevision = 1,
+                ProtocolRevision = 2,
                 MinimumSupportedRevision = 1,
-                MaximumSupportedRevision = 1,
+                MaximumSupportedRevision = 2,
             },
         };
         var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), "test-runtime-token");

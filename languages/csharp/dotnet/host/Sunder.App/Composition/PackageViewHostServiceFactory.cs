@@ -13,6 +13,7 @@ public sealed class PackageViewHostServiceFactory(
     AppPackageResourceAssemblyRegistry packageResourceAssemblyRegistry,
     IUiDispatcher uiDispatcher)
 {
+    internal IAppPackagePolicy? PackagePolicy { get; init; }
     public async Task<PackageViewHostService> CreateForPackagesAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
@@ -27,5 +28,5 @@ public sealed class PackageViewHostServiceFactory(
             packageResourceAssemblyRegistry,
             runtimeTransport.GetConnectionInfo,
             uiDispatcher,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, PackagePolicy).ConfigureAwait(false);
 }

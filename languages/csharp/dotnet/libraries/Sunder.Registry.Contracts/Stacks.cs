@@ -30,7 +30,11 @@ public sealed record RegistryStackDetails(
     RegistryStackStats? Stats = null,
     RegistryStackProfile? Profile = null,
     RegistryUserAttribution? Creator = null,
-    IReadOnlyList<RegistryUserAttribution>? Maintainers = null);
+    IReadOnlyList<RegistryUserAttribution>? Maintainers = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryStackPolicySnapshot? Policy { get; init; }
+}
 
 public sealed record RegistryStackStats(
     long TotalDownloads,

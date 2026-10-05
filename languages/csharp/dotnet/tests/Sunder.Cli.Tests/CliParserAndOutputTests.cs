@@ -371,7 +371,7 @@ public sealed class CliParserAndOutputTests
                 true, RuntimeRegistryErrorCode.None, "Installed.", true, false, [], [], ["demo"], [])),
         };
 
-        var result = await CliTestHost.RunAsync(["package", "install", "demo", "--json"], runtime);
+        var result = await CliTestHost.RunAsync(["package", "install", "demo", "--yes", "--json"], runtime);
 
         Assert.Equal(CliExitCodes.Success, result.ExitCode);
         Assert.Empty(result.Error);
@@ -532,7 +532,7 @@ public sealed class CliParserAndOutputTests
                 [])),
         };
 
-        var result = await CliTestHost.RunAsync(["package", "install", "demo"], runtime);
+        var result = await CliTestHost.RunAsync(["package", "install", "demo", "--yes"], runtime);
 
         Assert.DoesNotContain("super-secret", result.Error, StringComparison.Ordinal);
         Assert.DoesNotContain("proxy failure", result.Error, StringComparison.Ordinal);

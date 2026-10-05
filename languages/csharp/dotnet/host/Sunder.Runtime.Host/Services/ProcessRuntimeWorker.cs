@@ -11,10 +11,12 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 using Sunder.Package.Format;
+using Sunder.Package.Projections;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Compatibility;
+using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.Runtime.Host.Services;
@@ -29,6 +31,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     private readonly Guid _activationId;
     private readonly RuntimeRpcBroker _broker;
     private readonly RuntimeRpcCallerStamp _callerStamp;
+    private readonly ResolvedExecutionRuntimeLaunch _launch;
+    private readonly IExecutionRuntimeProcessLease _runtimeLease;
+    private PackageProjectionAcquisition? _packageProjection;
+    private readonly ExecutionRuntimePhaseTelemetry _telemetry;
     private readonly PackageSessionState? _packageSessionState;
     private readonly RuntimeProcessPolicyOptions _policy;
     private readonly RuntimeResourcePolicy _resourcePolicy;
@@ -61,10 +67,11 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     private readonly TaskCompletionSource _activated = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _shutdownAcknowledged = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _generationCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _forceStopGate = new();
     private readonly string _challenge = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
     private Process? _process;
+    private IExecutionRuntimeContainedProcess? _containedProcess;
     private Channel<byte[]>? _writes;
     private Task _readerTask = Task.CompletedTask;
     private Task _writerTask = Task.CompletedTask;
@@ -73,6 +80,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     private Task? _forceStopCallbacks;
     private CancellationTokenRegistration _hostStopRegistration;
     private WorkerState _state;
+    private WorkerState _shutdownAdmissionState;
     private long? _sessionGeneration;
     private string? _shutdownId;
     private Exception? _fault;
@@ -88,16 +96,23 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         RuntimePackageDataResources packageData,
         Guid activationId,
         RuntimeRpcBroker broker,
+        ResolvedExecutionRuntimeLaunch launch,
         RuntimeProcessPolicyOptions? policy = null,
         CancellationToken hostStopping = default,
-        PackageSessionState? packageSessionState = null)
+        PackageSessionState? packageSessionState = null,
+        ExecutionRuntimePhaseTelemetry? telemetry = null)
     {
+        PackageManifestAdmissionPolicy.EnsureSupported(
+            package.Source.Manifest ?? throw new InvalidDataException("Package source is missing its manifest."));
         _logger = logger;
         _package = package;
         _packageData = packageData;
         _activationId = activationId;
         _broker = broker;
         _callerStamp = new RuntimeRpcCallerStamp(package.PackageId, activationId);
+        _launch = launch ?? throw new ArgumentNullException(nameof(launch));
+        _telemetry = telemetry ?? ExecutionRuntimePhaseTelemetry.Disabled;
+        ValidateResolvedLaunch(package, _launch);
         _packageSessionState = packageSessionState;
         _policy = ValidatePolicy(policy ?? new RuntimeProcessPolicyOptions());
         _resourcePolicy = ResolveEffectiveResourcePolicy(_policy);
@@ -125,6 +140,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 provider.AbiSha256!))
             .OrderBy(static provider => provider.ProviderId, StringComparer.Ordinal)
             .ToArray();
+        _runtimeLease = _launch.TransferLease();
+        _packageProjection = package.PackageProjectionLease?.Take();
     }
 
     public Task GenerationCompletion => _generationCompletion.Task;
@@ -176,16 +193,28 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             _state = WorkerState.Starting;
         }
 
+        using var startupTimeout = new CancellationTokenSource(_policy.StartupTimeout);
+        using var startup = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _hostStopping,
+            startupTimeout.Token);
         try
         {
+            _broker.RequirePackagePolicy(_package.Source, _package.ExecutionRuntimeBinding);
+            _package.StartupTrace?.RecordProcessStartRequested();
             var startInfo = CreateStartInfo();
-            var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-            if (!process.Start())
+            var containedProcess = await LaunchProcessAsync(startInfo, startup.Token).ConfigureAwait(false);
+            var process = containedProcess.Process;
+            DateTimeOffset? processStartedAtUtc = null;
+            try
             {
-                process.Dispose();
-                throw new InvalidOperationException("The process Runtime target did not start.");
+                processStartedAtUtc = process.StartTime.ToUniversalTime();
             }
-            _process = process;
+            catch
+            {
+                // Startup instrumentation must not change Worker launch behavior.
+            }
+            _package.StartupTrace?.RecordProcessStarted(process.Id, processStartedAtUtc);
             _writes = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(_policy.MaxWriteQueueMessages)
             {
                 FullMode = BoundedChannelFullMode.Wait,
@@ -193,9 +222,9 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 SingleWriter = false,
                 AllowSynchronousContinuations = false,
             });
-            _writerTask = WriteLoopAsync(process.StandardInput.BaseStream);
-            _readerTask = ReadLoopAsync(process.StandardOutput.BaseStream);
-            _stderrTask = DrainStderrAsync(process.StandardError.BaseStream);
+            _writerTask = WriteLoopAsync(containedProcess.StandardInput);
+            _readerTask = ReadLoopAsync(containedProcess.StandardOutput);
+            _stderrTask = DrainStderrAsync(containedProcess.StandardError);
             _exitTask = MonitorExitAsync(process);
             _hostStopRegistration = _hostStopping.Register(static state =>
             {
@@ -218,24 +247,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 resourceProfileHash = _resourceProfileHash,
             });
 
-            using var startupTimeout = new CancellationTokenSource(_policy.StartupTimeout);
-            using var startup = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken,
-                _hostStopping,
-                startupTimeout.Token);
-            try
-            {
-                await _ready.Task.WaitAsync(startup.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException exception) when (
-                startupTimeout.IsCancellationRequested
-                && !cancellationToken.IsCancellationRequested
-                && !_hostStopping.IsCancellationRequested)
-            {
-                throw new TimeoutException(
-                    $"Process Runtime target for package '{_package.PackageId}' did not become ready within {_policy.StartupTimeout.TotalSeconds:0.###} seconds.",
-                    exception);
-            }
+            await _ready.Task.WaitAsync(startup.Token).ConfigureAwait(false);
 
             lock (_stateGate)
             {
@@ -246,9 +258,59 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 }
             }
         }
+        catch (OperationCanceledException exception) when (
+            startupTimeout.IsCancellationRequested
+            && !cancellationToken.IsCancellationRequested
+            && !_hostStopping.IsCancellationRequested)
+        {
+            _package.StartupTrace?.CompleteWorkerReady("failed");
+            await TerminateAfterFailureAsync().ConfigureAwait(false);
+            throw new TimeoutException(
+                $"Process Runtime target for package '{_package.PackageId}' did not become ready within {_policy.StartupTimeout.TotalSeconds:0.###} seconds.",
+                exception);
+        }
+        catch (OperationCanceledException)
+        {
+            _package.StartupTrace?.CompleteWorkerReady("canceled");
+            await TerminateAfterFailureAsync().ConfigureAwait(false);
+            throw;
+        }
         catch
         {
+            _package.StartupTrace?.CompleteWorkerReady("failed");
             await TerminateAfterFailureAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async Task<IExecutionRuntimeContainedProcess> LaunchProcessAsync(
+        ProcessStartInfo startInfo,
+        CancellationToken cancellationToken)
+    {
+        using var phase = _telemetry.BeginPhase(
+            ExecutionRuntimePhaseNames.ProcessStart,
+            _launch.Identity,
+            correlationId: _launch.CorrelationId);
+        try
+        {
+            var containedProcess = await _runtimeLease.LaunchAsync(
+                    startInfo,
+                    cancellationToken,
+                    _packageProjection)
+                .ConfigureAwait(false);
+            _containedProcess = containedProcess;
+            _process = containedProcess.Process;
+            phase.Succeeded();
+            return containedProcess;
+        }
+        catch (OperationCanceledException)
+        {
+            phase.Canceled();
+            throw;
+        }
+        catch (Exception exception)
+        {
+            phase.Failed(exception);
             throw;
         }
     }
@@ -260,20 +322,35 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             ThrowIfFaulted();
             if (_state != WorkerState.Ready)
             {
-                throw new InvalidOperationException("The V3 process Runtime worker candidate can only be started once after composition.");
+                throw new InvalidOperationException("The V1 process Runtime worker candidate can only be started once after composition.");
             }
             _state = WorkerState.CandidateStarting;
         }
 
-        QueueEnvelope(new { type = "host.start-candidate" });
-        await _candidateStarted.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-        lock (_stateGate)
+        _package.StartupTrace?.BeginCandidate();
+        try
         {
-            ThrowIfFaulted();
-            if (_state != WorkerState.CandidateStarted)
+            QueueEnvelope(new { type = "host.start-candidate" });
+            await _candidateStarted.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            lock (_stateGate)
             {
-                throw new InvalidOperationException("The V3 process worker did not enter the candidate-started state.");
+                ThrowIfFaulted();
+                if (_state != WorkerState.CandidateStarted)
+                {
+                    throw new InvalidOperationException("The V1 process worker did not enter the candidate-started state.");
+                }
             }
+            _package.StartupTrace?.CompleteCandidate("succeeded");
+        }
+        catch (OperationCanceledException)
+        {
+            _package.StartupTrace?.CompleteCandidate("canceled");
+            throw;
+        }
+        catch
+        {
+            _package.StartupTrace?.CompleteCandidate("failed");
+            throw;
         }
     }
 
@@ -313,7 +390,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
             else
             {
-                throw new InvalidOperationException("The V3 process worker is not ready to commit this Runtime generation.");
+                throw new InvalidOperationException("The V1 process worker is not ready to commit this Runtime generation.");
             }
         }
 
@@ -332,7 +409,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             ThrowIfFaulted();
             if (_state != WorkerState.Committed || _sessionGeneration != generation.SessionGeneration)
             {
-                throw new InvalidOperationException("The V3 process worker did not commit the requested Runtime generation.");
+                throw new InvalidOperationException("The V1 process worker did not commit the requested Runtime generation.");
             }
         }
     }
@@ -372,7 +449,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             else
             {
                 throw new InvalidOperationException(
-                    "The V3 process worker is not ready to prepare storage migrations for this generation.");
+                    "The V1 process worker is not ready to prepare storage migrations for this generation.");
             }
         }
 
@@ -393,7 +470,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 || _sessionGeneration != generation.SessionGeneration)
             {
                 throw new InvalidOperationException(
-                    "The V3 process worker did not prepare storage migrations for the requested Runtime generation.");
+                    "The V1 process worker did not prepare storage migrations for the requested Runtime generation.");
             }
         }
     }
@@ -422,6 +499,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 {
                     type = "host.activate",
                     sessionGeneration = generation,
+                    workspaceRootPath = WorkspaceRootPath,
                 }, _transportLimits);
                 Volatile.Write(ref _activationFrameBody, body);
                 if (!TryQueueFrameBody(body))
@@ -479,17 +557,21 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     {
         Process? process;
         Task? existingStop = null;
+        var releaseWithoutRunningProcess = false;
         lock (_stateGate)
         {
             if (_state is WorkerState.Stopped or WorkerState.Created)
             {
-                _state = WorkerState.Stopped;
+                if (_state == WorkerState.Created)
+                {
+                    _state = WorkerState.Stopping;
+                }
                 _stopStarted = true;
                 _generationCompletion.TrySetResult();
-                _stopped.TrySetResult();
-                return;
+                process = null;
+                releaseWithoutRunningProcess = true;
             }
-            if (_stopStarted)
+            else if (_stopStarted)
             {
                 existingStop = _stopped.Task;
                 process = null;
@@ -499,11 +581,26 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 _stopStarted = true;
                 if (_state != WorkerState.Faulted)
                 {
+                    _shutdownAdmissionState = _state;
                     _state = WorkerState.Stopping;
                 }
                 process = _process;
                 _shutdownId ??= Guid.NewGuid().ToString("N");
             }
+        }
+        if (releaseWithoutRunningProcess)
+        {
+            try
+            {
+                await ReleaseExecutionRootsAsync().ConfigureAwait(false);
+                CompleteExpectedStop();
+            }
+            catch (Exception exception)
+            {
+                ResetFailedStop(exception);
+                throw;
+            }
+            return;
         }
         if (existingStop is not null)
         {
@@ -514,65 +611,83 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         var scopeCleanup = ObserveAsync(CloseAllWorkerCallScopesAsync());
         if (process is null)
         {
-            await scopeCleanup.ConfigureAwait(false);
-            CompleteExpectedStop();
+            try
+            {
+                await scopeCleanup.ConfigureAwait(false);
+                await ReleaseExecutionRootsAsync().ConfigureAwait(false);
+                CompleteExpectedStop();
+            }
+            catch (Exception exception)
+            {
+                ResetFailedStop(exception);
+                throw;
+            }
             return;
         }
 
         try
         {
-            if (!process.HasExited && _fault is null)
-            {
-                QueueEnvelope(new
-                {
-                    type = "host.shutdown",
-                    shutdownId = _shutdownId,
-                    reason = _hostStopping.IsCancellationRequested ? "host-stopping" : "activation-retired",
-                });
-            }
-
-            using var timeout = new CancellationTokenSource(_policy.ShutdownTimeout);
-            using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
             try
             {
                 if (!process.HasExited && _fault is null)
                 {
-                    await _shutdownAcknowledged.Task.WaitAsync(shutdown.Token).ConfigureAwait(false);
+                    QueueEnvelope(new
+                    {
+                        type = "host.shutdown",
+                        shutdownId = _shutdownId,
+                        reason = _hostStopping.IsCancellationRequested ? "host-stopping" : "activation-retired",
+                    });
                 }
-                if (!process.HasExited)
+
+                using var timeout = new CancellationTokenSource(_policy.ShutdownTimeout);
+                using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+                try
                 {
-                    await process.WaitForExitAsync(shutdown.Token).ConfigureAwait(false);
+                    if (!process.HasExited && _fault is null)
+                    {
+                        await _shutdownAcknowledged.Task.WaitAsync(shutdown.Token).ConfigureAwait(false);
+                    }
+                    if (!process.HasExited)
+                    {
+                        await process.WaitForExitAsync(shutdown.Token).ConfigureAwait(false);
+                    }
+                    await scopeCleanup.WaitAsync(shutdown.Token).ConfigureAwait(false);
                 }
-                await scopeCleanup.WaitAsync(shutdown.Token).ConfigureAwait(false);
+                catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+                {
+                    bool shutdownAcknowledged;
+                    lock (_stateGate) shutdownAcknowledged = _shutdownAcknowledgementReceived;
+                    _logger.LogWarning(
+                        shutdownAcknowledged
+                            ? "Process Runtime target for package {PackageId} acknowledged shutdown but did not exit within its deadline; killing its process tree"
+                            : "Process Runtime target for package {PackageId} did not acknowledge shutdown within its deadline; killing its process tree",
+                        _package.PackageId);
+                    await TerminateContainedProcessAsync().ConfigureAwait(false);
+                }
             }
-            catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+            finally
             {
-                bool shutdownAcknowledged;
-                lock (_stateGate) shutdownAcknowledged = _shutdownAcknowledgementReceived;
-                _logger.LogWarning(
-                    shutdownAcknowledged
-                        ? "Process Runtime target for package {PackageId} acknowledged shutdown but did not exit within its deadline; killing its process tree"
-                        : "Process Runtime target for package {PackageId} did not acknowledge shutdown within its deadline; killing its process tree",
-                    _package.PackageId);
-                KillProcessTree(process);
+                _writes?.Writer.TryComplete();
+                _ = SignalForceStop();
+                await TerminateContainedProcessAsync().ConfigureAwait(false);
+                await ObserveAsync(_writerTask).ConfigureAwait(false);
+                await ObserveAsync(_readerTask).ConfigureAwait(false);
+                await ObserveAsync(_stderrTask).ConfigureAwait(false);
+                await ObserveAsync(_exitTask).ConfigureAwait(false);
+                if (scopeCleanup.IsCompleted)
+                {
+                    await scopeCleanup.ConfigureAwait(false);
+                }
+                CleanupAllWorkerPayloads();
+                TryDeleteDirectory(_workerTemporaryPath);
+                await ReleaseExecutionRootsAsync().ConfigureAwait(false);
+                CompleteExpectedStop();
             }
         }
-        finally
+        catch (Exception exception)
         {
-            _writes?.Writer.TryComplete();
-            _ = SignalForceStop();
-            if (!process.HasExited) KillProcessTree(process);
-            await ObserveAsync(_writerTask).ConfigureAwait(false);
-            await ObserveAsync(_readerTask).ConfigureAwait(false);
-            await ObserveAsync(_stderrTask).ConfigureAwait(false);
-            await ObserveAsync(_exitTask).ConfigureAwait(false);
-            if (scopeCleanup.IsCompleted)
-            {
-                await scopeCleanup.ConfigureAwait(false);
-            }
-            CleanupAllWorkerPayloads();
-            TryDeleteDirectory(_workerTemporaryPath);
-            CompleteExpectedStop();
+            ResetFailedStop(exception);
+            throw;
         }
     }
 
@@ -585,6 +700,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         TryDeleteDirectory(_workerTemporaryPath);
         _hostStopRegistration.Dispose();
         _process?.Dispose();
+        if (_containedProcess is not null)
+        {
+            await _containedProcess.DisposeAsync().ConfigureAwait(false);
+        }
         RuntimeCancellation.DisposeAfterCallbacks(_forceStop, SignalForceStop());
         _packageData.Dispose();
     }
@@ -762,17 +881,14 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
     }
 
-    private ProcessStartInfo CreateStartInfo()
+    internal ProcessStartInfo CreateStartInfo()
     {
-        if (_package.EntryAssemblyPath is null || _package.SelectedTarget is null)
-        {
-            throw new InvalidOperationException("A process Runtime target requires a validated declared entry point.");
-        }
-        var entryPoint = Path.GetFullPath(_package.EntryAssemblyPath);
-        var devLaunch = _package.DevProcessLaunch;
+        var selectedTarget = _package.SelectedTarget
+                             ?? throw new InvalidOperationException(
+                                 "A process Runtime target requires validated selected-target metadata.");
         var startInfo = new ProcessStartInfo
         {
-            FileName = devLaunch?.NodePath ?? entryPoint,
+            FileName = _launch.LauncherPath,
             WorkingDirectory = Path.GetFullPath(_package.ShadowFolder),
             UseShellExecute = false,
             RedirectStandardInput = true,
@@ -780,9 +896,9 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             RedirectStandardError = true,
             CreateNoWindow = true,
         };
-        if (devLaunch is not null)
+        foreach (var argument in _launch.ArgumentTokens)
         {
-            startInfo.ArgumentList.Add(entryPoint);
+            startInfo.ArgumentList.Add(argument);
         }
 
         startInfo.Environment.Clear();
@@ -792,9 +908,9 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         foreach (var variable in WorkerProcessEnvironment.CreateBaseline(
                      Environment.GetEnvironmentVariable,
                      temporaryPath,
-                     OperatingSystem.IsWindows(),
+                     WorkerProcessEnvironment.GetCurrentPlatform(),
                      WorkerProcessEnvironment.AllowsDockerEnvironment(
-                         _package.SelectedTarget,
+                         selectedTarget,
                          _package.ApprovedSensitiveCapabilities)))
         {
             startInfo.Environment[variable.Key] = variable.Value;
@@ -806,14 +922,36 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         startInfo.Environment["SUNDER_SESSION_ID"] = _package.SessionId;
         startInfo.Environment["SUNDER_PACKAGE_CONTENT_ROOT"] = Path.GetFullPath(_package.ShadowFolder);
         startInfo.Environment["SUNDER_WORKER_TEMP_ROOT"] = Path.GetFullPath(temporaryPath);
-        startInfo.Environment["SUNDER_PACKAGE_WORKSPACE_ROOT"] = Path.GetFullPath(
-            _packageData.Storage.RoleLocalWorkspace.WorkspaceRootPath);
         if (_rpcExtendedDeadlineV1)
         {
             startInfo.Environment[RpcExtendedDeadlineEnvironmentVariable] = "1";
         }
         return startInfo;
     }
+
+    private static void ValidateResolvedLaunch(
+        PreparedRuntimePackage package,
+        ResolvedExecutionRuntimeLaunch launch)
+    {
+        if (!Directory.Exists(launch.RuntimeRootPath)
+            || !File.Exists(launch.LauncherPath)
+            || package.EntryAssemblyPath is null
+            || PathsEqual(launch.LauncherPath, package.EntryAssemblyPath)
+            || launch.ArgumentTokens.Any(argument => string.Equals(
+                argument,
+                SunderExecutionRuntimeFormat.PackageEntryPointPlaceholder,
+                StringComparison.Ordinal)))
+        {
+            throw new InvalidDataException(
+                $"Package '{package.PackageId}' does not have a valid resolved execution-runtime launcher and closed argument recipe.");
+        }
+    }
+
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(
+            Path.GetFullPath(left),
+            Path.GetFullPath(right),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     private static void RestrictWorkerDirectory(string directoryPath)
     {
@@ -1132,7 +1270,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             || SunderWorkerProtocol.RequiredNonNegativeInt64(root, "protocolVersion") != SunderWorkerProtocol.Version
             || !string.Equals(SunderWorkerProtocol.RequiredString(root, "challenge", 128), _challenge, StringComparison.Ordinal)
             || !string.Equals(SunderWorkerProtocol.RequiredString(root, "packageId", 256), _package.PackageId, StringComparison.Ordinal)
-            || !string.Equals(SunderWorkerProtocol.RequiredString(root, "packageVersion", 128), _package.Version, StringComparison.Ordinal)
+            || !string.Equals(
+                SunderWorkerProtocol.RequiredString(root, "packageVersion", SemanticVersion.MaximumLength),
+                _package.Version,
+                StringComparison.Ordinal)
             || !string.Equals(SunderWorkerProtocol.RequiredString(root, "activationId", 64), _activationId.ToString("N"), StringComparison.Ordinal)
             || !string.Equals(SunderWorkerProtocol.RequiredString(root, "sessionId", 256), _package.SessionId, StringComparison.Ordinal)
             || !string.Equals(
@@ -1172,6 +1313,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     "Process Runtime worker ready envelope arrived in an invalid state.");
             }
             _state = WorkerState.Ready;
+            _package.StartupTrace?.CompleteWorkerReady("succeeded");
             _ready.TrySetResult();
         }
     }
@@ -1198,7 +1340,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         return new ProviderIdentity(
             SunderWorkerProtocol.RequiredString(value, "providerId", 256),
             SunderWorkerProtocol.RequiredString(value, "contractId", 256),
-            SunderWorkerProtocol.RequiredString(value, "contractVersion", 128),
+            SunderWorkerProtocol.RequiredString(value, "contractVersion", SemanticVersion.MaximumLength),
             ReadWorkerSha256(value, "descriptorSha256", requireLowercase: true),
             ReadWorkerSha256(value, "abiSha256", requireLowercase: true));
     }
@@ -1302,7 +1444,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
         _activated.TrySetResult();
         _logger.LogInformation(
-            "Worker V3 activation acknowledged for package {PackageId}, activation {ActivationId}, generation {SessionGeneration}",
+            "Worker V1 activation acknowledged for package {PackageId}, activation {ActivationId}, generation {SessionGeneration}",
             _package.PackageId,
             _activationId,
             envelope.SessionGeneration);
@@ -1525,11 +1667,15 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         WorkerCall call;
         lock (_stateGate)
         {
-            var admitsOrdinary = _state is WorkerState.Active or WorkerState.Activating;
-            var admitsMigrationPreparationRead = _state == WorkerState.PreparingStorageMigrations
-                                                  && IsWorkerMigrationPreparationStateRead(type);
-            var admitsMigrationPreparationControl = _state == WorkerState.PreparingStorageMigrations
-                                                     && type == "worker.payload-release";
+            var admissionState = _state == WorkerState.Stopping && !_shutdownAcknowledgementReceived
+                ? _shutdownAdmissionState
+                : _state;
+            var cancelForShutdown = _state == WorkerState.Stopping && !control && !logging;
+            var admitsOrdinary = admissionState is WorkerState.Active or WorkerState.Activating;
+            var admitsMigrationPreparationRead = admissionState == WorkerState.PreparingStorageMigrations
+                                                   && IsWorkerMigrationPreparationStateRead(type);
+            var admitsMigrationPreparationControl = admissionState == WorkerState.PreparingStorageMigrations
+                                                      && type == "worker.payload-release";
             var admitsLogging = logging
                                 && !_shutdownAcknowledgementReceived
                                 && _state is WorkerState.Ready
@@ -1585,6 +1731,12 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     CancellationTokenSource.CreateLinkedTokenSource(_forceStop.Token));
                 _workerCalls.Add(id, call);
                 _workerCallCleanup.Add(call.Completion.Task);
+                if (cancelForShutdown)
+                {
+                    call.HostCancelled = true;
+                    call.HostCancelledBeforeDispatch = true;
+                    call.CancellationCallbacks = RuntimeCancellation.Signal(call.Cancellation);
+                }
             }
         }
         var request = root.Clone();
@@ -1600,6 +1752,12 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
         catch (OperationCanceledException)
         {
+            var dispatchState = call.HostCancelledBeforeDispatch
+                ? SunderRpcDispatchState.NotDispatched
+                : SunderRpcDispatchState.PossiblyDispatched;
+            var retrySafety = call.HostCancelledBeforeDispatch
+                ? SunderRpcRetrySafety.Safe
+                : SunderRpcRetrySafety.Unsafe;
             TryQueueEnvelope(new
             {
                 type = "host.error",
@@ -1609,8 +1767,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                         SunderRpcErrorKind.Cancelled,
                         "rpc.call.cancelled",
                         "The RPC call was cancelled.",
-                        SunderRpcDispatchState.PossiblyDispatched,
-                        SunderRpcRetrySafety.Unsafe)),
+                        dispatchState,
+                        retrySafety)),
             });
         }
         catch (SunderRpcException exception)
@@ -1719,9 +1877,11 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         {
             case "worker.get-provider":
             {
-                var scope = ReadOptionalWorkerCallScope(root, "type", "id", "endpointReference");
+                var scopeId = ReadOptionalWorkerCallScopeId(root, "type", "id", "endpointReference");
                 var endpoint = new SunderRpcEndpointReference(
                     SunderWorkerProtocol.RequiredString(root, "endpointReference", 256));
+                call.Cancellation.Token.ThrowIfCancellationRequested();
+                var scope = scopeId is null ? null : GetWorkerCallScope(scopeId);
                 var provider = scope is null
                     ? await _broker.GetProviderAsync(
                         _callerStamp,
@@ -1740,7 +1900,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
             case "worker.report-invariant-violation":
             {
-                var scope = ReadOptionalWorkerCallScope(
+                var scopeId = ReadOptionalWorkerCallScopeId(
                     root,
                     "type",
                     "id",
@@ -1750,6 +1910,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     SunderWorkerProtocol.RequiredString(root, "endpointReference", 256));
                 var exception = new InvalidOperationException(
                     SunderWorkerProtocol.RequiredString(root, "exceptionMessage", 512));
+                call.Cancellation.Token.ThrowIfCancellationRequested();
+                var scope = scopeId is null ? null : GetWorkerCallScope(scopeId);
                 var accepted = scope is null
                     ? await _broker.TryReportInvariantViolationAsync(
                         _callerStamp,
@@ -1765,8 +1927,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
             case "worker.discover":
             {
-                var scope = ReadOptionalWorkerCallScope(root, "type", "id", "contractId");
+                var scopeId = ReadOptionalWorkerCallScopeId(root, "type", "id", "contractId");
                 var contractId = SunderWorkerProtocol.RequiredString(root, "contractId", 256);
+                call.Cancellation.Token.ThrowIfCancellationRequested();
+                var scope = scopeId is null ? null : GetWorkerCallScope(scopeId);
                 var snapshot = scope is null
                     ? await _broker.DiscoverAsync(
                         _callerStamp,
@@ -1785,7 +1949,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
             case "worker.watch":
             {
-                var scope = ReadOptionalWorkerCallScope(
+                var scopeId = ReadOptionalWorkerCallScopeId(
                     root,
                     "type",
                     "id",
@@ -1793,6 +1957,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     "afterSequence");
                 var afterRevision = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "afterRevision");
                 var afterSequence = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "afterSequence");
+                call.Cancellation.Token.ThrowIfCancellationRequested();
+                var scope = scopeId is null ? null : GetWorkerCallScope(scopeId);
                 var events = scope is null
                     ? _broker.WatchAsync(
                         _callerStamp,
@@ -1817,7 +1983,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
             case "worker.invoke":
             {
-                var scope = ReadOptionalWorkerCallScope(
+                var scopeId = ReadOptionalWorkerCallScopeId(
                     root,
                     "type",
                     "id",
@@ -1833,6 +1999,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 var methodId = SunderWorkerProtocol.RequiredString(root, "methodId", 128);
                 var request = SunderWorkerProtocol.RequiredValue(root, "request").Clone();
                 var options = ReadCallOptions(root);
+                call.Cancellation.Token.ThrowIfCancellationRequested();
+                var scope = scopeId is null ? null : GetWorkerCallScope(scopeId);
                 var value = scope is null
                     ? await _broker.InvokeAsync(
                         _callerStamp,
@@ -1854,7 +2022,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
             case "worker.subscribe":
             {
-                var scope = ReadOptionalWorkerCallScope(
+                var scopeId = ReadOptionalWorkerCallScopeId(
                     root,
                     "type",
                     "id",
@@ -1870,6 +2038,8 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 var methodId = SunderWorkerProtocol.RequiredString(root, "methodId", 128);
                 var request = SunderWorkerProtocol.RequiredValue(root, "request").Clone();
                 var options = ReadCallOptions(root);
+                call.Cancellation.Token.ThrowIfCancellationRequested();
+                var scope = scopeId is null ? null : GetWorkerCallScope(scopeId);
                 var events = scope is null
                     ? _broker.SubscribeAsync(
                         _callerStamp,
@@ -1901,13 +2071,15 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     "id",
                     "deadlineUtc",
                     "parentInvocationId");
+                var options = ReadCallOptions(root);
+                call.Cancellation.Token.ThrowIfCancellationRequested();
                 ISunderRpcCallScope? rpcScope = null;
                 WorkerCallScope? workerScope = null;
                 try
                 {
                     rpcScope = await _broker.CreateCallScopeAsync(
                         _callerStamp,
-                        ReadCallOptions(root),
+                        options,
                         call.Cancellation.Token).ConfigureAwait(false);
                     workerScope = AddWorkerCallScope(rpcScope);
                     rpcScope = null;
@@ -1983,20 +2155,26 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     SunderWorkerProtocol.RequiredString(root, "filePath", 4096));
                 var options = ReadContentRegistrationOptions(
                     SunderWorkerProtocol.RequiredValue(root, "options"));
-                await using var source = OpenWorkerOwnedContentFileBounded(filePath);
                 if (scoped)
                 {
-                    var scope = GetWorkerCallScope(ReadSafeId(root, "scopeId"));
+                    var scopeId = ReadSafeId(root, "scopeId");
+                    var endpoint = new SunderRpcEndpointReference(
+                        SunderWorkerProtocol.RequiredString(root, "endpointReference", 256));
+                    call.Cancellation.Token.ThrowIfCancellationRequested();
+                    var scope = GetWorkerCallScope(scopeId);
+                    await using var source = OpenWorkerOwnedContentFileBounded(filePath);
                     reference = await scope.Scope.RegisterContentAsync(
-                        new SunderRpcEndpointReference(
-                            SunderWorkerProtocol.RequiredString(root, "endpointReference", 256)),
+                        endpoint,
                         source,
                         options,
                         call.Cancellation.Token).ConfigureAwait(false);
                 }
                 else
                 {
-                    var hostCall = GetContentHostCall(root);
+                    var invocationId = ReadSafeId(root, "invocationId");
+                    call.Cancellation.Token.ThrowIfCancellationRequested();
+                    var hostCall = GetContentHostCall(invocationId);
+                    await using var source = OpenWorkerOwnedContentFileBounded(filePath);
                     reference = await hostCall.Context.RegisterContentAsync(
                         source,
                         options,
@@ -2016,7 +2194,9 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                         "id",
                         "scopeId",
                         "reference");
-                    var scope = GetWorkerCallScope(ReadSafeId(root, "scopeId"));
+                    var scopeId = ReadSafeId(root, "scopeId");
+                    call.Cancellation.Token.ThrowIfCancellationRequested();
+                    var scope = GetWorkerCallScope(scopeId);
                     ReserveMaterializedWorkerContentHandle();
                     var reservationHeld = true;
                     MaterializedWorkerContent? materialized = null;
@@ -2056,7 +2236,9 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                         "id",
                         "invocationId",
                         "reference");
-                    var hostCall = GetContentHostCall(root);
+                    var invocationId = ReadSafeId(root, "invocationId");
+                    call.Cancellation.Token.ThrowIfCancellationRequested();
+                    var hostCall = GetContentHostCall(invocationId);
                     ReserveMaterializedWorkerContentHandle();
                     var reservationHeld = true;
                     MaterializedWorkerContent? materialized = null;
@@ -2174,7 +2356,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
     }
 
-    private WorkerCallScope? ReadOptionalWorkerCallScope(
+    private static string? ReadOptionalWorkerCallScopeId(
         JsonElement root,
         params string[] unscopedProperties)
     {
@@ -2188,7 +2370,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         unscopedProperties.CopyTo(scopedProperties, 0);
         scopedProperties[^1] = "scopeId";
         SunderWorkerProtocol.RequireOnlyProperties(root, scopedProperties);
-        return GetWorkerCallScope(ReadSafeId(root, "scopeId"));
+        return ReadSafeId(root, "scopeId");
     }
 
     private WorkerCallScope AddWorkerCallScope(ISunderRpcCallScope scope)
@@ -2481,8 +2663,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     }
 
     private HostCall GetContentHostCall(JsonElement root)
+        => GetContentHostCall(ReadSafeId(root, "invocationId"));
+
+    private HostCall GetContentHostCall(string invocationId)
     {
-        var invocationId = ReadSafeId(root, "invocationId");
         lock (_callGate)
         {
             if (!_hostCalls.TryGetValue(invocationId, out var call))
@@ -2629,7 +2813,9 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         long? length = lengthValue.ValueKind switch
         {
             JsonValueKind.Null => null,
-            JsonValueKind.Number when lengthValue.TryGetInt64(out var parsed) && parsed >= 0 => parsed,
+            JsonValueKind.Number when SunderWorkerProtocol.IsCanonicalNonNegativeIntegerToken(lengthValue.GetRawText())
+                                      && lengthValue.TryGetInt64(out var parsed)
+                                      && parsed is >= 0 and <= SunderWorkerProtocol.MaximumSafeInteger => parsed,
             _ => throw new SunderWorkerProtocolException(
                 "Process worker content registration length must be a non-negative integer or null."),
         };
@@ -2878,7 +3064,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 {
                     _activationDispatched.TrySetResult();
                     _logger.LogInformation(
-                        "Worker V3 activation dispatched for package {PackageId}, activation {ActivationId}, generation {SessionGeneration}",
+                        "Worker V1 activation dispatched for package {PackageId}, activation {ActivationId}, generation {SessionGeneration}",
                         _package.PackageId,
                         _activationId,
                         _sessionGeneration);
@@ -2939,8 +3125,28 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             await process.WaitForExitAsync().ConfigureAwait(false);
             if (!IsStopping())
             {
+                int? exitCode = null;
+                try
+                {
+                    exitCode = process.ExitCode;
+                }
+                catch (Exception exception) when (exception is InvalidOperationException or Win32Exception)
+                {
+                    // An attached Unix process has no wait handle from which .NET can recover its exit code.
+                }
                 Fault(new ProcessRuntimeWorkerException(
-                    $"Process Runtime target for package '{_package.PackageId}' exited unexpectedly with code {process.ExitCode}."));
+                    exitCode is null
+                        ? $"Process Runtime target for package '{_package.PackageId}' exited unexpectedly."
+                        : $"Process Runtime target for package '{_package.PackageId}' exited unexpectedly with code {exitCode}."));
+            }
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or Win32Exception)
+        {
+            if (!IsStopping())
+            {
+                Fault(new ProcessRuntimeWorkerException(
+                    $"Process Runtime target for package '{_package.PackageId}' exited unexpectedly.",
+                    exception));
             }
         }
         catch (Exception exception)
@@ -3019,7 +3225,6 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 
     private void Fault(Exception exception, bool faultDuringStopping = false)
     {
-        Process? process;
         lock (_stateGate)
         {
             if (_state is WorkerState.Stopped or WorkerState.Faulted
@@ -3029,7 +3234,6 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
             _state = WorkerState.Faulted;
             _fault = exception;
-            process = _process;
         }
         _ready.TrySetException(exception);
         _candidateStarted.TrySetResult();
@@ -3047,7 +3251,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         _ = ObserveAsync(CloseAllWorkerCallScopesAsync());
         _writes?.Writer.TryComplete(exception);
         _ = SignalForceStop();
-        if (process is not null) KillProcessTree(process);
+        if (_containedProcess is not null)
+        {
+            _ = ObserveAsync(TerminateContainedProcessAsync());
+        }
     }
 
     private void FailOutstandingCalls(Exception exception)
@@ -3090,10 +3297,28 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         var exception = _fault ?? new ProcessRuntimeWorkerException(
             $"Process Runtime target for package '{_package.PackageId}' failed during startup.");
         Fault(exception);
-        if (_process is { } process && !process.HasExited)
+        try
         {
-            KillProcessTree(process);
-            await ObserveAsync(process.WaitForExitAsync()).ConfigureAwait(false);
+            if (_containedProcess is not null)
+            {
+                await TerminateContainedProcessAsync().ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            await ReleaseExecutionRootsAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task ReleaseExecutionRootsAsync()
+    {
+        await _runtimeLease.ReleaseAfterProcessTreeTerminationAsync(CancellationToken.None)
+            .ConfigureAwait(false);
+        var projection = Volatile.Read(ref _packageProjection);
+        if (projection is not null)
+        {
+            await projection.DisposeAsync().ConfigureAwait(false);
+            Interlocked.CompareExchange(ref _packageProjection, null, projection);
         }
     }
 
@@ -3123,6 +3348,18 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         _activated.TrySetResult();
         if (_fault is null) _generationCompletion.TrySetResult();
         _stopped.TrySetResult();
+    }
+
+    private void ResetFailedStop(Exception exception)
+    {
+        TaskCompletionSource failedStop;
+        lock (_stateGate)
+        {
+            failedStop = _stopped;
+            _stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _stopStarted = false;
+        }
+        failedStop.TrySetException(exception);
     }
 
     private void CleanupAllWorkerContentFiles()
@@ -3174,15 +3411,12 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
     }
 
-    private static void KillProcessTree(Process process)
+    private Task TerminateContainedProcessAsync()
     {
-        try
-        {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-        }
+        var containedProcess = _containedProcess;
+        return containedProcess is null
+            ? Task.CompletedTask
+            : containedProcess.TerminateAndDrainAsync(CancellationToken.None);
     }
 
     private static async Task ObserveAsync(Task task)
@@ -3511,6 +3745,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool Cancelled { get; set; }
         public bool HostCancelled { get; set; }
+        public bool HostCancelledBeforeDispatch { get; set; }
         public bool ClosesWorkerScope { get; set; }
         public int ClosingScopeContentHandles { get; set; }
         public bool ReleasesContentHandle { get; set; }
@@ -3607,7 +3842,7 @@ internal static class WorkerWire
             descriptorSha256 = provider.DescriptorSha256,
             abiSha256 = provider.AbiSha256
                         ?? throw new SunderWorkerProtocolException(
-                            "Runtime provider snapshot is missing its V2 ABI identity."),
+                            "Runtime provider snapshot is missing its ABI identity."),
             activationId = provider.ActivationId.ToString("N"),
             activationEpoch = provider.ActivationEpoch,
             sessionGeneration = provider.SessionGeneration,

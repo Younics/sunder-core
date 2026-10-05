@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Sunder.App.Services;
 using Sunder.Package.Format;
+using Sunder.Package.Projections;
 using Sunder.Runtime.Contracts;
 using Xunit;
 
@@ -160,6 +161,157 @@ public sealed class AppPackageSnapshotCacheTests
         Assert.Equal(2, Directory.EnumerateDirectories(Path.Combine(cacheRoot, "objects")).Count());
     }
 
+    [Fact]
+    public async Task MaterializeAsync_InstalledReferenceAcquiresSharedProjectionWithoutDownloadOrCopy()
+    {
+        var root = CreateTempDirectory();
+        var runtimeStateRoot = Path.Combine(root, "runtime-state");
+        var sourceRoot = Path.Combine(root, "installed-source");
+        var manifestPath = Path.Combine(sourceRoot, "manifest", "sunder-package.json");
+        var entryPointPath = Path.Combine(sourceRoot, "lib", "test.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(entryPointPath)!);
+        File.WriteAllText(
+            manifestPath,
+            RuntimeContractTestData.CreateAppManifestJson("test.package", "lib/test.dll"));
+        File.WriteAllText(entryPointPath, "assembly-placeholder");
+        var sourceIdentity = Convert.ToHexStringLower(SHA256.HashData("source-identity"u8));
+        var targetKey = $"app/{RuntimeInformation.RuntimeIdentifier}";
+        var projectionCache = new PackageProjectionCache(runtimeStateRoot);
+        PackageProjectionReference reference;
+        string projectionRoot;
+        await using (var published = await projectionCache.GetOrBuildAndLeaseAsync(
+                         new PackageProjectionRequest(
+                             sourceRoot,
+                             "test.package",
+                             sourceIdentity,
+                             PackageProjectionRole.App,
+                             PackageProjectionCache.DefaultRulesIdentity,
+                             [targetKey],
+                             [
+                                 CreateProjectionFile(sourceRoot, "manifest/sunder-package.json"),
+                                 CreateProjectionFile(sourceRoot, "lib/test.dll"),
+                             ],
+                             ["manifest/sunder-package.json", "lib/test.dll"]),
+                         new PackageProjectionOwner(
+                             "runtime-ui-snapshot",
+                             Guid.NewGuid(),
+                             "test.package",
+                             "1")))
+        {
+            reference = published.Reference;
+            projectionRoot = published.RootPath;
+        }
+        var snapshot = new PackageUiSnapshotDescriptor(
+            "test.package",
+            PackageSourceKind.Installed,
+            1,
+            RuntimeContractTestData.AppTarget(),
+            reference.CacheKey,
+            Guid.NewGuid().ToString("N"),
+            string.Empty)
+        {
+            ProjectionReference = new PackageUiProjectionReferenceDescriptor(
+                reference.FormatRevision,
+                reference.CacheKey,
+                "app",
+                reference.SourceContentIdentity,
+                reference.ProjectionRulesIdentity,
+                reference.TargetKeys),
+        };
+        var downloadCalled = false;
+        var appCache = new AppPackageSnapshotCache(
+            () => root,
+            (_, _, _) =>
+            {
+                downloadCalled = true;
+                return Task.CompletedTask;
+            },
+            Path.Combine(root, "app-cache"),
+            runtimeStateRoot,
+            Guid.NewGuid());
+
+        var prepared = await appCache.MaterializeAsync(
+            snapshot,
+            CreateGeneration(root),
+            CancellationToken.None);
+        PackageProjectionAcquisition? activationLease = null;
+        try
+        {
+            Assert.False(downloadCalled);
+            Assert.Equal(projectionRoot, prepared.Folder);
+            Assert.Equal("assembly-placeholder", File.ReadAllText(Path.Combine(prepared.Folder, "lib", "test.dll")));
+            Assert.NotNull(prepared.ProjectionLease);
+            Assert.NotEmpty(Directory.EnumerateFiles(
+                Path.Combine(projectionCache.RootPath, "leases"),
+                "*.json",
+                SearchOption.AllDirectories));
+            activationLease = Assert.IsType<PackageProjectionAcquisition>(prepared.ProjectionLease.Take());
+            await using var runtimeWork = new BackgroundProcessQueueService();
+            using var sharedAssemblies = new AppSharedAssemblyRegistry([]);
+            var unload = new AppPackageUnloadCoordinator(
+                new AppPackageViewRegistry(),
+                new AppPackageRuntimeWorkStopper(runtimeWork),
+                new AppPackageAssemblyTracker(),
+                sharedAssemblies,
+                _ => { },
+                _ => { });
+
+            var cleanup = await unload.RollBackActivationAsync(
+                "test.package",
+                packageInfo: null,
+                serviceProvider: null,
+                loadContext: null,
+                projectionLease: activationLease,
+                stopRuntimeWork: false);
+            activationLease = null;
+
+            Assert.Equal(AppPackageUiCleanupOutcome.Proven, cleanup);
+        }
+        finally
+        {
+            if (activationLease is not null)
+            {
+                await activationLease.DisposeAsync();
+            }
+            if (prepared.ProjectionLease is not null)
+            {
+                await prepared.ProjectionLease.DisposeAsync();
+            }
+        }
+        Assert.Empty(Directory.EnumerateFiles(
+            Path.Combine(projectionCache.RootPath, "leases"),
+            "*.json",
+            SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_InstalledSourceWithoutProjectionReferenceIsRejectedWithoutDownload()
+    {
+        var root = CreateTempDirectory();
+        var downloadCalled = false;
+        var cache = new AppPackageSnapshotCache(
+            () => root,
+            (_, _, _) =>
+            {
+                downloadCalled = true;
+                return Task.CompletedTask;
+            },
+            Path.Combine(root, "app-cache"),
+            Path.Combine(root, "runtime-state"));
+        var snapshot = CreateSnapshot("test.package", CreateArchive("test.package", "payload")) with
+        {
+            SourceKind = PackageSourceKind.Installed,
+        };
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => cache.MaterializeAsync(
+            snapshot,
+            CreateGeneration(root),
+            CancellationToken.None));
+
+        Assert.False(downloadCalled);
+    }
+
     private static byte[] CreateArchive(
         string packageId,
         string payload,
@@ -182,6 +334,17 @@ public sealed class AppPackageSnapshotCacheTests
         var entry = archive.CreateEntry(path, CompressionLevel.Fastest);
         using var writer = new StreamWriter(entry.Open(), Encoding.UTF8);
         writer.Write(content);
+    }
+
+    private static PackageProjectionSourceFile CreateProjectionFile(string sourceRoot, string relativePath)
+    {
+        var path = Path.Combine(sourceRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        using var stream = File.OpenRead(path);
+        return new PackageProjectionSourceFile(
+            relativePath,
+            relativePath,
+            Convert.ToHexStringLower(SHA256.HashData(stream)),
+            stream.Length);
     }
 
     private static PackageUiSnapshotDescriptor CreateSnapshot(

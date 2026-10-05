@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 
@@ -71,7 +72,7 @@ internal static class RuntimeContractTestData
                 })
                 .Cast<SunderPackageTargetManifest?>()
                 .ToArray(),
-        });
+        }, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull });
 
     public static void WriteAppProjectionManifest(string root, string packageId, string entryPoint)
     {

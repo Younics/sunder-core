@@ -84,9 +84,13 @@ internal sealed class RuntimePackageUiService(
         var resolved = new List<RuntimePackageTargetSource>(sources.Count);
         foreach (var source in sources)
         {
+            // Dependency closure includes metadata/Runtime authorities whose App
+            // code was not acquired. They remain graph dependencies, not UI loads.
+            if ((source.HostRoles & PackageHostRoles.App) == 0) continue;
             var manifest = source.Manifest
                 ?? throw new InvalidDataException($"Package source '{source.PackageId}' is missing its strict manifest.");
-            if (!SunderPackageTargetResolver.TryResolveTarget(manifest, key, out var target))
+            if (!InstalledPackageProjection.Includes(source.AcquiredTargets, key.Role, key.Rid)
+                || !SunderPackageTargetResolver.TryResolveTarget(manifest, key, out var target))
             {
                 throw new InvalidDataException(
                     $"Package '{source.PackageId}' does not declare the exact App target '{key}'. RID fallback is not supported.");

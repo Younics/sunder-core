@@ -1,18 +1,12 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
 namespace Sunder.Runtime.Host.Services;
 
 internal static class PackageStoreFileSystem
 {
     internal static IEnumerable<string> EnumerateDirectories(string path)
-    {
-        try
-        {
-            return Directory.Exists(path) ? Directory.EnumerateDirectories(path).ToArray() : [];
-        }
-        catch
-        {
-            return [];
-        }
-    }
+        => Directory.Exists(path) ? Directory.EnumerateDirectories(path).ToArray() : [];
 
     internal static void TryDeleteDirectory(string? path)
     {
@@ -49,6 +43,139 @@ internal static class PackageStoreFileSystem
             // Retried by later garbage collection.
         }
     }
+
+    internal static void CopyDirectoryDurable(string sourcePath, string destinationPath)
+    {
+        PackageStorePathGuard.EnsureNotReparsePoint(sourcePath);
+        PackageStorePathGuard.EnsureNotReparsePoint(destinationPath);
+        if (Directory.Exists(destinationPath) || File.Exists(destinationPath))
+        {
+            throw new IOException($"Durable package storage snapshot '{destinationPath}' already exists.");
+        }
+
+        var source = new DirectoryInfo(sourcePath);
+        Directory.CreateDirectory(destinationPath);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(destinationPath, File.GetUnixFileMode(sourcePath));
+        }
+        foreach (var entry in source.EnumerateFileSystemInfos())
+        {
+            var destination = Path.Combine(destinationPath, entry.Name);
+            if (entry.LinkTarget is { } linkTarget)
+            {
+                if (entry is DirectoryInfo)
+                {
+                    Directory.CreateSymbolicLink(destination, linkTarget);
+                }
+                else
+                {
+                    File.CreateSymbolicLink(destination, linkTarget);
+                }
+                continue;
+            }
+            if (entry is DirectoryInfo directory)
+            {
+                CopyDirectoryDurable(directory.FullName, destination);
+                continue;
+            }
+
+            EnsureRegularFile(entry.FullName);
+            using var sourceHandle = File.OpenHandle(
+                entry.FullName,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using var sourceStream = new FileStream(
+                sourceHandle,
+                FileAccess.Read,
+                81920,
+                isAsync: true);
+            if (!sourceStream.CanSeek)
+            {
+                throw new InvalidDataException(
+                    $"Package storage snapshot entry '{entry.FullName}' is not a regular file.");
+            }
+            using var destinationStream = new FileStream(
+                destination,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                81920,
+                FileOptions.WriteThrough);
+            sourceStream.CopyTo(destinationStream);
+            destinationStream.Flush(flushToDisk: true);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(destination, File.GetUnixFileMode(entry.FullName));
+            }
+        }
+        DurableJsonDocument.SyncDirectory(destinationPath);
+        DurableJsonDocument.SyncDirectory(Path.GetDirectoryName(destinationPath)!);
+    }
+
+    internal static void RestoreDirectorySnapshot(PackageStoreStorageSnapshot snapshot)
+    {
+        PackageStorePathGuard.EnsureNotReparsePoint(snapshot.TargetPath);
+        if (Directory.Exists(snapshot.TargetPath))
+        {
+            Directory.Delete(snapshot.TargetPath, recursive: true);
+            DurableJsonDocument.SyncDirectory(Path.GetDirectoryName(snapshot.TargetPath)!);
+        }
+        if (snapshot.Existed)
+        {
+            CopyDirectoryDurable(snapshot.SnapshotPath, snapshot.TargetPath);
+        }
+    }
+
+    internal static void EnsureRegularFile(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & (FileAttributes.Device | FileAttributes.ReparsePoint)) != 0)
+            {
+                throw new InvalidDataException(
+                    $"Package storage snapshot entry '{path}' is not a regular file.");
+            }
+            return;
+        }
+
+        var buffer = Marshal.AllocHGlobal(512);
+        try
+        {
+            if (LStat(path, buffer) != 0)
+            {
+                throw new IOException(
+                    $"Could not inspect package storage snapshot entry '{path}'.",
+                    new Win32Exception(Marshal.GetLastPInvokeError()));
+            }
+            uint mode = OperatingSystem.IsMacOS()
+                ? unchecked((ushort)Marshal.ReadInt16(buffer, 4))
+                : RuntimeInformation.ProcessArchitecture switch
+                {
+                    Architecture.X64 => unchecked((uint)Marshal.ReadInt32(buffer, 24)),
+                    Architecture.Arm64 => unchecked((uint)Marshal.ReadInt32(buffer, 16)),
+                    _ => throw new PlatformNotSupportedException(
+                        $"Package storage snapshot file-type checks do not support architecture '{RuntimeInformation.ProcessArchitecture}'."),
+                };
+            const uint fileTypeMask = 0xF000;
+            const uint regularFile = 0x8000;
+            if ((mode & fileTypeMask) != regularFile)
+            {
+                throw new InvalidDataException(
+                    $"Package storage snapshot entry '{path}' is not a regular file.");
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    [DllImport("libc", EntryPoint = "lstat", SetLastError = true)]
+    private static extern int LStat(string path, nint buffer);
 }
 
 internal sealed class PackageStoreJournalFileSystem(
@@ -487,7 +614,21 @@ internal sealed class PackageStoreJournalFileSystem(
         PackageStorePathGuard.EnsureNotReparsePoint(sourcePath);
         PackageStorePathGuard.EnsureNotReparsePoint(destinationPath);
         Hit(PackageStoreFaultPoint.DirectoryMoveBefore);
-        Directory.Move(sourcePath, destinationPath);
+        DurableJsonDocument.MoveDirectory(sourcePath, destinationPath);
+        var sourceParent = Path.GetDirectoryName(sourcePath)!;
+        var destinationParent = Path.GetDirectoryName(destinationPath)!;
+        DurableJsonDocument.SyncDirectory(sourceParent);
+        if (!string.Equals(sourceParent, destinationParent, PathComparison))
+        {
+            DurableJsonDocument.SyncDirectory(destinationParent);
+        }
+        var destinationGrandparent = Path.GetDirectoryName(destinationParent);
+        if (destinationGrandparent is not null
+            && !string.Equals(destinationGrandparent, sourceParent, PathComparison)
+            && !string.Equals(destinationGrandparent, destinationParent, PathComparison))
+        {
+            DurableJsonDocument.SyncDirectory(destinationGrandparent);
+        }
         Hit(PackageStoreFaultPoint.DirectoryMoveAfter);
     }
 
@@ -508,4 +649,7 @@ internal sealed class PackageStoreJournalFileSystem(
         new($"Package transaction '{journal.TransactionId}' has inconsistent move state for '{action.TargetPath}'.");
 
     private void Hit(PackageStoreFaultPoint point) => faultInjector?.Hit(point);
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 }

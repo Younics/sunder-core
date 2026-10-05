@@ -24,6 +24,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\tools\Sunder.ExecutionRuntime.Build\Sunder.ExecutionRuntime.Build.csproj"
+                      ReferenceOutputAssembly="false" Private="false" PrivateAssets="all" ExcludeAssets="all" BuildReference="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -39,5 +41,239 @@
     <None Include="README.md" Pack="true" PackagePath="" />
     <None Include="..\Sunder.Sdk\LICENSE" Pack="true" PackagePath="" Link="LICENSE" />
   </ItemGroup>
+
+  <!-- This private writer loads only MSBuild/BCL code, never the mutable engineering tool or its dependencies. -->
+  <UsingTask TaskName="_SunderWriteCoreStackTransportRequest" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <Task>
+      <Code Type="Class" Language="cs"><![CDATA[
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using Microsoft.Build.Framework;
+
+public sealed class _SunderWriteCoreStackTransportRequest : Microsoft.Build.Utilities.Task
+{
+    [Required] public string ProjectDirectory { get; set; }
+    [Required] public string RequestPath { get; set; }
+    [Required] public string Configuration { get; set; }
+    [Required] public string TargetFramework { get; set; }
+    [Required] public string Nullable { get; set; }
+    [Required] public string IntermediateOutputDirectory { get; set; }
+    public string ArtifactsPath { get; set; } = "";
+    public ITaskItem[] GeneratedSources { get; set; } = new ITaskItem[0];
+    public string DefineConstants { get; set; } = "";
+    [Required] public ITaskItem[] Sources { get; set; }
+    [Required] public ITaskItem[] References { get; set; }
+    [Output] public string RequestSha256 { get; set; }
+    [Output] public string RequestStamp { get; set; }
+
+    public override bool Execute()
+    {
+        try
+        {
+            var project = Normalize(ProjectDirectory);
+            var path = Normalize(RequestPath);
+            var parent = Path.Combine(project, "obj");
+            var name = Path.GetFileName(path);
+            Guid id;
+            if (Path.GetDirectoryName(path) != parent || name.Length != 63
+                || !name.StartsWith(".sunder-core-transport-", StringComparison.Ordinal)
+                || !name.EndsWith(".request", StringComparison.Ordinal)
+                || !Guid.TryParseExact(name.Substring(23, 32), "N", out id))
+                throw new InvalidDataException("Core requests must be invocation-local files directly under project obj.");
+            if (!Regex.IsMatch(Configuration, "\\A[A-Za-z0-9_-]{1,64}\\z") || TargetFramework != "net10.0"
+                || !new[] { "enable", "disable", "warnings", "annotations" }.Contains(Nullable))
+                throw new InvalidDataException("Unsupported Core compilation context.");
+            if (DefineConstants.Length > 65536) throw new InvalidDataException("Core define text exceeds its budget.");
+            var defines = DefineConstants.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries).Select(value => value.Trim()).ToArray();
+            if (Sources.Length < 1 || Sources.Length > 64 || References.Length < 1 || References.Length > 512
+                || defines.Length > 256 || defines.Any(value => !Regex.IsMatch(value, "\\A[A-Za-z_][A-Za-z0-9_]{0,127}\\z")))
+                throw new InvalidDataException("Core request source/reference/define budget or identifier is invalid.");
+            var lines = new List<string> { "sunder.core.stack-transport.request.v1" };
+            Action<string, string> add = (key, value) =>
+            {
+                if (value.Length > 6144 || value.Any(char.IsControl)) throw new InvalidDataException("Core request value exceeds its budget or contains control characters.");
+                var line = key + "=" + Convert.ToBase64String(new UTF8Encoding(false, true).GetBytes(value));
+                if (line.Length > 8192) throw new InvalidDataException("Core request line exceeds its budget.");
+                lines.Add(line);
+            };
+            add("configuration", Configuration); add("target-framework", TargetFramework); add("nullable", Nullable);
+            add("intermediate-output", Normalize(Path.Combine(project, IntermediateOutputDirectory)));
+            if (ArtifactsPath != "") add("artifacts-path", Normalize(Path.Combine(project, ArtifactsPath)));
+            if (GeneratedSources.Length > 3) throw new InvalidDataException("Core generated source inventory exceeds its budget.");
+            var sources = new HashSet<string>(Sources.Select(item => Normalize(item.GetMetadata("FullPath"))), StringComparer.Ordinal);
+            foreach (var item in GeneratedSources)
+            {
+                var generated = Normalize(item.GetMetadata("FullPath"));
+                if (sources.Contains(generated)) add("generated-source", generated);
+            }
+            foreach (var item in Sources) add("source", Normalize(item.GetMetadata("FullPath")));
+            foreach (var item in References)
+            {
+                if (item.GetMetadata("Aliases") != "" && item.GetMetadata("Aliases") != "global")
+                    throw new InvalidDataException("Core references must use the global alias.");
+                add("reference", Normalize(item.GetMetadata("FullPath")));
+                if (Path.GetFileName(item.GetMetadata("FullPath")) == "Sunder.Sdk.dll"
+                    && item.GetMetadata("MSBuildSourceProjectFile") != "")
+                {
+                    if (item.GetMetadata("ReferenceSourceTarget") != "ProjectReference")
+                        throw new InvalidDataException("Core SDK references must come from the evaluated SDK project reference.");
+                    add("sdk-project", Normalize(item.GetMetadata("MSBuildSourceProjectFile")));
+                    add("sdk-reference", Normalize(item.GetMetadata("FullPath")));
+                }
+            }
+            foreach (var define in defines) add("define", define);
+            var bytes = Encoding.UTF8.GetBytes(string.Join("\n", lines) + "\n");
+            if (bytes.Length > 1048576 || lines.Count > 1024) throw new InvalidDataException("Core request exceeds its byte/line budget.");
+            EnsureDirectory(project);
+            if (!Directory.Exists(parent)) Directory.CreateDirectory(parent);
+            EnsureDirectory(parent);
+            var parentCreated = Directory.GetCreationTimeUtc(parent);
+            DateTime created;
+            using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.WriteThrough))
+            {
+                created = File.GetCreationTimeUtc(path);
+                file.Write(bytes, 0, bytes.Length);
+                file.Flush(true);
+            }
+            EnsureDirectory(parent);
+            var info = new FileInfo(path);
+            if (Directory.GetCreationTimeUtc(parent) != parentCreated || info.CreationTimeUtc != created
+                || (info.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0
+                || info.Length != bytes.Length)
+                throw new IOException("Core request path changed during creation.");
+            var stamp = Stamp(info);
+            using (var hash = SHA256.Create())
+            using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var expected = hash.ComputeHash(bytes);
+                var actual = new byte[bytes.Length];
+                var offset = 0;
+                while (offset < actual.Length)
+                {
+                    var count = file.Read(actual, offset, actual.Length - offset);
+                    if (count == 0) throw new IOException("Core request was truncated during creation.");
+                    offset += count;
+                }
+                if (file.ReadByte() != -1 || !expected.SequenceEqual(hash.ComputeHash(actual)))
+                    throw new IOException("Core request bytes changed during creation.");
+                RequestSha256 = BitConverter.ToString(expected).Replace("-", "").ToLowerInvariant();
+            }
+            info.Refresh();
+            EnsureDirectory(parent);
+            if (Stamp(info) != stamp || (info.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0)
+                throw new IOException("Core request stamp changed during creation.");
+            RequestStamp = stamp;
+            return true;
+        }
+        catch (Exception exception) { Log.LogErrorFromException(exception, false); return false; }
+    }
+
+    private static string Stamp(FileInfo info)
+        => string.Format(CultureInfo.InvariantCulture, "{0}:{1}:{2}", info.Length, info.CreationTimeUtc.Ticks, info.LastWriteTimeUtc.Ticks);
+    private static void EnsureDirectory(string path)
+    {
+        for (var directory = new DirectoryInfo(path); directory != null; directory = directory.Parent)
+            if ((File.GetAttributes(directory.FullName) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != FileAttributes.Directory)
+                throw new IOException("Core request ancestors must be regular directories.");
+    }
+    private static string Normalize(string path)
+    {
+        var full = Path.GetFullPath(path);
+        if (full != Path.GetPathRoot(full)) full = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            foreach (var alias in new[] { "/var", "/tmp", "/etc" })
+            {
+                if (full != alias && !full.StartsWith(alias + "/", StringComparison.Ordinal)) continue;
+                // The inline compiler uses MSBuild's netstandard facade; execution uses the .NET 10 filesystem API.
+                var target = (FileSystemInfo)typeof(DirectoryInfo).GetMethod("ResolveLinkTarget", new[] { typeof(bool) })
+                    .Invoke(new DirectoryInfo(alias), new object[] { true });
+                if (target != null && target.FullName == "/private" + alias) return "/private" + full;
+            }
+        }
+        return full;
+    }
+}
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <!-- BuildReference does not gate CleanReferencedProjects. Keep the runtime SDK clean edge, not the producer graph. -->
+  <Target Name="_ExcludeCoreStackTransportProducerFromClean" BeforeTargets="CleanReferencedProjects"
+          DependsOnTargets="PrepareProjectReferences">
+    <ItemGroup>
+      <_CoreStackProducerProject Include="$(MSBuildProjectDirectory)/../../tools/Sunder.ExecutionRuntime.Build/Sunder.ExecutionRuntime.Build.csproj" />
+      <_MSBuildProjectReferenceExistent Remove="@(_CoreStackProducerProject)" MatchOnMetadata="FullPath" MatchOnMetadataOptions="PathLike" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Build-only, short-lived producer: never load the mutable engineering assembly into an MSBuild node. -->
+  <Target Name="GenerateCoreStackTransport" BeforeTargets="CoreCompile"
+          DependsOnTargets="ResolveReferences;FindReferenceAssembliesForReferences;GenerateGlobalUsings;GenerateAssemblyInfo;GenerateTargetFrameworkMonikerAttribute">
+    <PropertyGroup>
+      <_CoreStackRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../../../..'))</_CoreStackRoot>
+      <_CoreStackRequest>$(MSBuildProjectDirectory)/obj/.sunder-core-transport-$([System.Guid]::NewGuid().ToString('N')).request</_CoreStackRequest>
+    </PropertyGroup>
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../../tools/Sunder.ExecutionRuntime.Build/Sunder.ExecutionRuntime.Build.csproj"
+             Targets="BuildCoreStackTransportProducer"
+             Properties="Configuration=$(Configuration)-sunder-core-transport;BuildingSolutionFile=false"
+             RemoveProperties="TargetFramework;TargetFrameworks;BuildProjectReferences;GeneratePackageOnBuild;PackageOutputPath;RuntimeIdentifier;SelfContained;OutputPath;OutDir;BaseOutputPath;IntermediateOutputPath;BaseIntermediateOutputPath;MSBuildProjectExtensionsPath;DefineConstants;Nullable;CurrentSolutionConfigurationContents;SolutionPath;SolutionDir;SolutionName;SolutionFileName;SolutionExt">
+      <Output TaskParameter="TargetOutputs" ItemName="_CoreStackProducer" />
+    </MSBuild>
+    <ItemGroup>
+      <Compile Remove="@(_CoreStackGeneratedCompile)" />
+      <_CoreStackGeneratedCompile Remove="@(_CoreStackGeneratedCompile)" />
+    </ItemGroup>
+    <_SunderWriteCoreStackTransportRequest ProjectDirectory="$(MSBuildProjectDirectory)" RequestPath="$(_CoreStackRequest)"
+                                          Configuration="$(Configuration)" TargetFramework="$(TargetFramework)" Nullable="$(Nullable)"
+                                          IntermediateOutputDirectory="$(IntermediateOutputPath)" ArtifactsPath="$(ArtifactsPath)"
+                                          GeneratedSources="$(GeneratedGlobalUsingsFile);$(GeneratedAssemblyInfoFile);$(TargetFrameworkMonikerAssemblyAttributesPath)"
+                                          DefineConstants="$(DefineConstants)" Sources="@(Compile)" References="@(ReferencePathWithRefAssemblies)">
+      <Output TaskParameter="RequestSha256" PropertyName="_CoreStackRequestSha256" />
+      <Output TaskParameter="RequestStamp" PropertyName="_CoreStackRequestStamp" />
+    </_SunderWriteCoreStackTransportRequest>
+    <Exec Command="dotnet &quot;@(_CoreStackProducer)&quot; core-stack-transport generate --core-root &quot;$(_CoreStackRoot)&quot; --request &quot;$(_CoreStackRequest)&quot; --request-sha256 &quot;$(_CoreStackRequestSha256)&quot; --request-stamp &quot;$(_CoreStackRequestStamp)&quot;"
+          ConsoleToMSBuild="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_CoreStackGeneratedCompile" />
+    </Exec>
+    <Error Condition="'@(_CoreStackGeneratedCompile->Count())' != '1'" Text="Core transport producer must return exactly one immutable Compile path." />
+    <ItemGroup>
+      <Compile Include="@(_CoreStackGeneratedCompile)" AutoGen="true" Visible="false" />
+    </ItemGroup>
+    <!-- Immutable obj outputs are not FileWrites: Clean must not strand partial content-addressed trees. -->
+  </Target>
+
+  <!-- A Core build-only export. It is never compiled into or packed with this SDK. -->
+  <Target Name="GetCoreStackHostTransport" DependsOnTargets="GenerateCoreStackTransport"
+          Returns="@(_CoreStackHostGeneratedCompile)">
+    <PropertyGroup>
+      <_CoreStackHostRequest>$(MSBuildProjectDirectory)/obj/.sunder-core-transport-$([System.Guid]::NewGuid().ToString('N')).request</_CoreStackHostRequest>
+    </PropertyGroup>
+    <ItemGroup>
+      <_CoreStackHostSources Include="@(Compile)" />
+      <_CoreStackHostSources Remove="@(_CoreStackGeneratedCompile)" />
+    </ItemGroup>
+    <_SunderWriteCoreStackTransportRequest ProjectDirectory="$(MSBuildProjectDirectory)" RequestPath="$(_CoreStackHostRequest)"
+                                          Configuration="$(Configuration)" TargetFramework="$(TargetFramework)" Nullable="$(Nullable)"
+                                          IntermediateOutputDirectory="$(IntermediateOutputPath)" ArtifactsPath="$(ArtifactsPath)"
+                                          GeneratedSources="$(GeneratedGlobalUsingsFile);$(GeneratedAssemblyInfoFile);$(TargetFrameworkMonikerAssemblyAttributesPath)"
+                                          DefineConstants="$(DefineConstants)" Sources="@(_CoreStackHostSources)" References="@(ReferencePathWithRefAssemblies)">
+      <Output TaskParameter="RequestSha256" PropertyName="_CoreStackHostRequestSha256" />
+      <Output TaskParameter="RequestStamp" PropertyName="_CoreStackHostRequestStamp" />
+    </_SunderWriteCoreStackTransportRequest>
+    <Exec Command="dotnet &quot;@(_CoreStackProducer)&quot; core-stack-transport generate-host --core-root &quot;$(_CoreStackRoot)&quot; --request &quot;$(_CoreStackHostRequest)&quot; --request-sha256 &quot;$(_CoreStackHostRequestSha256)&quot; --request-stamp &quot;$(_CoreStackHostRequestStamp)&quot;"
+          ConsoleToMSBuild="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_CoreStackHostGeneratedCompile" />
+    </Exec>
+    <Error Condition="'@(_CoreStackHostGeneratedCompile->Count())' != '1'" Text="Core Host transport producer must return exactly one immutable source path." />
+  </Target>
 
 </Project>

@@ -12,6 +12,7 @@ internal enum RuntimeUploadKind
     Package,
     Stack,
     StackMedia,
+    ExecutionRuntime,
 }
 
 internal sealed record RuntimeUploadLease(
@@ -52,6 +53,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
     internal const long MaxPackageUploadBytes = RuntimeRequestSizeLimits.PackageUploadMaxRequestBodyBytes;
     internal const long MaxStackUploadBytes = RuntimeRequestSizeLimits.StackUploadMaxRequestBodyBytes;
     internal const long MaxMediaUploadBytes = RuntimeRequestSizeLimits.StackMediaUploadMaxRequestBodyBytes;
+    internal const long MaxExecutionRuntimeUploadBytes = RuntimeRequestSizeLimits.ExecutionRuntimeUploadMaxRequestBodyBytes;
 
     private readonly RuntimePackagePaths _paths;
     private readonly RuntimeTransportPolicyOptions _policy;
@@ -105,6 +107,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
             RuntimeUploadKind.Package => MaxPackageUploadBytes,
             RuntimeUploadKind.Stack => MaxStackUploadBytes,
             RuntimeUploadKind.StackMedia => MaxMediaUploadBytes,
+            RuntimeUploadKind.ExecutionRuntime => MaxExecutionRuntimeUploadBytes,
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
         if (contentLength is < 0 || contentLength > limit)
@@ -119,10 +122,18 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         {
             RuntimeUploadKind.Package => ".sunderpkg",
             RuntimeUploadKind.Stack => ".sunderstack",
+            RuntimeUploadKind.ExecutionRuntime => ".sunderruntime",
             _ => ".media",
         };
         var finalPath = Path.Combine(_paths.TransferRootPath, uploadId + extension);
-        var normalizedFileName = NormalizeFileName(fileName, kind == RuntimeUploadKind.Package ? "package.sunderpkg" : "content.bin");
+        var fallbackFileName = kind switch
+        {
+            RuntimeUploadKind.Package => "package.sunderpkg",
+            RuntimeUploadKind.Stack => "stack.sunderstack",
+            RuntimeUploadKind.ExecutionRuntime => "runtime.sunderruntime",
+            _ => "content.bin",
+        };
+        var normalizedFileName = NormalizeFileName(fileName, fallbackFileName);
         var normalizedContentType = NormalizeContentType(contentType);
         long length = 0;
         var buffer = ArrayPool<byte>.Shared.Rent(128 * 1024);

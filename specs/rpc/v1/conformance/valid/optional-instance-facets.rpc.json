@@ -1,0 +1,41 @@
+{
+  "descriptorVersion": 1,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "contractId": "example.rpc.v1.optionalfacets",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "example": {
+      "methods": {
+        "read": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
+          "requestSchema": { "$ref": "#/$defs/Unit" },
+          "responseSchema": { "$ref": "#/$defs/Unit" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Unit": { "type": "object", "properties": {}, "required": [], "additionalProperties": false, "maxProperties": 2000000 },
+    "Text": { "type": "string" },
+    "MinimumText": { "type": "string", "minLength": 1 },
+    "LargeTextBound": { "type": "string", "maxLength": 2000000 },
+    "Values": { "type": "array", "items": { "type": "boolean" } },
+    "StringMap": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "propertyNames": { "type": "string" }
+    },
+    "RecursiveArray": { "type": "array", "items": { "$ref": "#/$defs/RecursiveArray" } },
+    "RecursiveMap": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/RecursiveMap" },
+      "propertyNames": { "type": "string" }
+    },
+    "Bytes": { "type": "string", "contentEncoding": "base64" },
+    "BigInteger": { "type": "string", "format": "big-integer", "valueMinimum": "-1000000000000000000000000" },
+    "Decimal": { "type": "string", "format": "decimal", "valueMaximum": "1000000000000.000000001" }
+  }
+}

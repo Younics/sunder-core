@@ -10,33 +10,68 @@ await SunderWorker.RunAsync(context =>
 {
     var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(
         Path.Combine(context.ContentRootPath, "contracts", "example.rpc.json")));
-    return new SunderWorkerOptions(
-    [
-        new SunderWorkerProviderRegistration(
-            "sunder.interop.dotnet.provider",
-            descriptor.ContractId,
-            descriptor.Version,
-            descriptor.Sha256,
-            descriptor.AbiSha256!,
-            new InteropRpcHandler(descriptor)),
-    ])
+    return new SunderWorkerOptions(context.PackageId is
+        "sunder.interop.dotnet.caller" or
+        "sunder.interop.dotnet.self.caller" or
+        "sunder.interop.dotnet.runtimebacked.caller"
+        ? []
+        :
+        [
+            new SunderWorkerProviderRegistration(
+                "sunder.interop.dotnet.provider",
+                descriptor.ContractId,
+                descriptor.Version,
+                descriptor.Sha256,
+                descriptor.AbiSha256!,
+                new InteropRpcHandler(descriptor)),
+        ])
     {
         OnActivated = async (activationContext, cancellationToken) =>
         {
             if (activationContext.PackageId == "sunder.interop.dotnet.caller")
             {
-                await RunDotNetToNodeInteropAsync(activationContext, cancellationToken);
+                await RunInteropAsync(
+                    activationContext,
+                    "sunder.node.runtimebacked",
+                    "runtime-backed Node unary",
+                    ["runtime-backed Node stream 1", "runtime-backed Node stream 2"],
+                    "interop.dotnet-to-node",
+                    cancellationToken);
+            }
+            else if (activationContext.PackageId == "sunder.interop.dotnet.runtimebacked.caller")
+            {
+                await RunInteropAsync(
+                    activationContext,
+                    "sunder.node.runtimebacked",
+                    "runtime-backed Node unary",
+                    ["runtime-backed Node stream 1", "runtime-backed Node stream 2"],
+                    "interop.dotnet-to-runtime-backed-node",
+                    cancellationToken);
+            }
+            else if (activationContext.PackageId == "sunder.interop.dotnet.self.caller")
+            {
+                await RunInteropAsync(
+                    activationContext,
+                    "test.worker.interop",
+                    "native .NET unary",
+                    ["native .NET stream 1", "native .NET stream 2"],
+                    "interop.dotnet-to-dotnet",
+                    cancellationToken);
             }
         },
     };
 });
 
-static async Task RunDotNetToNodeInteropAsync(
+static async Task RunInteropAsync(
     SunderWorkerContext context,
+    string providerPackageId,
+    string expectedUnary,
+    IReadOnlyList<string> expectedStream,
+    string stateKey,
     CancellationToken cancellationToken)
 {
     var catalog = await context.Rpc.DiscoverAsync("example.messages", cancellationToken);
-    var provider = catalog.Providers.Single(candidate => candidate.PackageId == "sunder.sea.smoke");
+    var provider = catalog.Providers.Single(candidate => candidate.PackageId == providerPackageId);
     var request = JsonSerializer.SerializeToElement(new { message = ".NET to Node" });
     var unary = await context.Rpc.InvokeAsync(
         provider.Endpoint,
@@ -82,9 +117,9 @@ static async Task RunDotNetToNodeInteropAsync(
     var faultRetryable = faultDetails is { } retryDetails
         ? retryDetails.GetProperty("retryable").GetBoolean()
         : (bool?)null;
-    if (unary.GetProperty("message").GetString() != "native SEA unary"
-        || !events.SequenceEqual(["native SEA stream 1", "native SEA stream 2"])
-        || data.GetProperty("message").GetString() != "shared Worker V3 package data"
+    if (unary.GetProperty("message").GetString() != expectedUnary
+        || !events.SequenceEqual(expectedStream)
+        || data.GetProperty("message").GetString() != "shared Worker V1 package data"
         || faultCode != "example.rejected"
         || faultReason != "conformance rejection"
         || faultRetryable is not false)
@@ -92,7 +127,7 @@ static async Task RunDotNetToNodeInteropAsync(
         throw new InvalidOperationException(".NET to Node Runtime Host RPC conformance failed.");
     }
     await context.State.SetValueAsync(
-        "interop.dotnet-to-node",
+        stateKey,
         JsonSerializer.Serialize(new
         {
             unary = unary.GetProperty("message").GetString(),
@@ -143,7 +178,7 @@ sealed class InteropRpcHandler : ISunderRpcServiceHandler, ISunderRpcDeclaredErr
         }
         return ValueTask.FromResult(JsonSerializer.SerializeToElement(new
         {
-            message = methodId == "data" ? "shared Worker V3 package data" : "native .NET unary",
+            message = methodId == "data" ? "shared Worker V1 package data" : "native .NET unary",
         }));
     }
 

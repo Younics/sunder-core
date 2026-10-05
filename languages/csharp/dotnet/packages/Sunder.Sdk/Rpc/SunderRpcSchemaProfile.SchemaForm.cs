@@ -4,11 +4,8 @@ namespace Sunder.Sdk.Rpc;
 
 internal static partial class SunderRpcSchemaProfile
 {
-    private static void ValidateDefinitionsCore(
-        IReadOnlyDictionary<string, JsonElement> definitions,
-        int descriptorVersion)
+    private static void ValidateDefinitionsCore(IReadOnlyDictionary<string, JsonElement> definitions)
     {
-        var isV2 = descriptorVersion == SunderRpcProtocol.DescriptorVersionV2;
         var nodes = 0;
         foreach (var definition in definitions)
         {
@@ -19,11 +16,10 @@ internal static partial class SunderRpcSchemaProfile
                 new HashSet<string>(StringComparer.Ordinal),
                 new HashSet<string>(StringComparer.Ordinal),
                 ref nodes,
-                depth: 1,
-                isV2);
+                depth: 1);
         }
 
-        ValidateReferenceCycles(definitions, allowProductiveBoundaries: isV2);
+        ValidateReferenceCycles(definitions);
         ValidateResolvedDepth(definitions);
     }
 
@@ -34,8 +30,7 @@ internal static partial class SunderRpcSchemaProfile
         HashSet<string> referenceStack,
         HashSet<string> validatedDefinitions,
         ref int nodes,
-        int depth,
-        bool isV2)
+        int depth)
     {
         if (depth > MaximumSchemaDepth)
         {
@@ -50,21 +45,14 @@ internal static partial class SunderRpcSchemaProfile
 
         if (schema.TryGetProperty("$ref", out var referenceElement))
         {
-            if (isV2)
+            foreach (var property in schema.EnumerateObject())
             {
-                foreach (var property in schema.EnumerateObject())
+                if (property.Name != "$ref")
                 {
-                    if (property.Name != "$ref")
-                    {
-                        throw Error(
-                            $"{path} contains unsupported $ref sibling '{property.Name}'.",
-                            "schema-reference-shape");
-                    }
+                    throw Error(
+                        $"{path} contains unsupported $ref sibling '{property.Name}'.",
+                        "schema-reference-shape");
                 }
-            }
-            else
-            {
-                SunderRpcDescriptorParser.RequireOnlyProperties(schema, path, "$ref", "title", "description");
             }
             if (referenceElement.ValueKind != JsonValueKind.String
                 || !SunderRpcDescriptorParser.TryGetReferenceName(referenceElement.GetString(), out var referenceName)
@@ -72,7 +60,7 @@ internal static partial class SunderRpcSchemaProfile
             {
                 throw Error(
                     $"{path} contains a remote, malformed, or missing $ref.",
-                    isV2 ? "schema-reference-shape" : "schema-profile");
+                    "schema-reference-shape");
             }
             return;
         }
@@ -94,8 +82,7 @@ internal static partial class SunderRpcSchemaProfile
                     referenceStack,
                     validatedDefinitions,
                     ref nodes,
-                    depth + 1,
-                    isV2);
+                    depth);
             }
             else
             {
@@ -106,13 +93,12 @@ internal static partial class SunderRpcSchemaProfile
                     referenceStack,
                     validatedDefinitions,
                     ref nodes,
-                    depth + 1,
-                    isV2);
+                    depth);
             }
             return;
         }
 
-        if (isV2 && schema.EnumerateObject().All(static property =>
+        if (schema.EnumerateObject().All(static property =>
                 property.Name is "title" or "description"))
         {
             return;
@@ -120,7 +106,7 @@ internal static partial class SunderRpcSchemaProfile
 
         var typeElement = SunderRpcDescriptorParser.Required(schema, "type", path, JsonValueKind.String);
         var type = typeElement.GetString();
-        if (isV2 && schema.TryGetProperty("logicalType", out _))
+        if (schema.TryGetProperty("logicalType", out _))
         {
             ValidateLogicalSchema(schema, path, type);
             return;
@@ -128,7 +114,7 @@ internal static partial class SunderRpcSchemaProfile
         switch (type)
         {
             case "object":
-                if (isV2 && !schema.TryGetProperty("additionalProperties", out _))
+                if (!schema.TryGetProperty("additionalProperties", out _))
                 {
                     ValidateDynamicObjectSchema(schema, path);
                 }
@@ -141,8 +127,7 @@ internal static partial class SunderRpcSchemaProfile
                         referenceStack,
                         validatedDefinitions,
                         ref nodes,
-                        depth,
-                        isV2);
+                        depth);
                 }
                 break;
             case "array":
@@ -153,34 +138,26 @@ internal static partial class SunderRpcSchemaProfile
                     referenceStack,
                     validatedDefinitions,
                     ref nodes,
-                    depth,
-                    isV2);
+                    depth);
                 break;
             case "string":
-                if (isV2 && schema.TryGetProperty("contentEncoding", out _))
+                if (schema.TryGetProperty("contentEncoding", out _))
                 {
                     ValidateBase64Schema(schema, path);
                     return;
                 }
-                if (isV2 && schema.TryGetProperty("format", out _))
+                if (schema.TryGetProperty("format", out _))
                 {
                     ValidateFormattedStringSchema(schema, path);
                     return;
                 }
-                ValidateStringSchema(schema, path, isV2);
+                ValidateStringSchema(schema, path);
                 break;
             case "integer":
-                ValidateIntegerSchema(schema, path, isV2);
+                ValidateIntegerSchema(schema, path);
                 break;
             case "number":
-                if (isV2)
-                {
-                    ValidateFloatingPointSchema(schema, path);
-                }
-                else
-                {
-                    ValidateNumberSchemaV1(schema, path, type);
-                }
+                ValidateFloatingPointSchema(schema, path);
                 break;
             case "boolean":
             case "null":
@@ -197,7 +174,7 @@ internal static partial class SunderRpcSchemaProfile
                 throw Error($"{path}.type '{type}' is outside the RPC schema profile.");
         }
 
-        ValidateEnumAndConst(schema, path, type!, isV2);
+        ValidateEnumAndConst(schema, path, type!);
     }
 
     private static void ValidateObjectSchema(
@@ -207,8 +184,7 @@ internal static partial class SunderRpcSchemaProfile
         HashSet<string> referenceStack,
         HashSet<string> validatedDefinitions,
         ref int nodes,
-        int depth,
-        bool isV2)
+        int depth)
     {
         var properties = schema.TryGetProperty("properties", out var propertiesElement)
             ? propertiesElement
@@ -223,7 +199,7 @@ internal static partial class SunderRpcSchemaProfile
             throw Error($"{path}.additionalProperties must be false for records or a bounded value schema for maps.");
         }
 
-        if (isV2 && isRecord)
+        if (isRecord)
         {
             SunderRpcDescriptorParser.RequireOnlyProperties(
                 schema,
@@ -232,21 +208,6 @@ internal static partial class SunderRpcSchemaProfile
                 "properties",
                 "required",
                 "additionalProperties",
-                "minProperties",
-                "maxProperties",
-                "title",
-                "description");
-        }
-        else if (isV2)
-        {
-            SunderRpcDescriptorParser.RequireOnlyProperties(
-                schema,
-                path,
-                "type",
-                "properties",
-                "required",
-                "additionalProperties",
-                "propertyNames",
                 "minProperties",
                 "maxProperties",
                 "title",
@@ -264,12 +225,9 @@ internal static partial class SunderRpcSchemaProfile
                 "propertyNames",
                 "minProperties",
                 "maxProperties",
-                "enum",
-                "const",
                 "title",
                 "description");
         }
-
         if (isRecord)
         {
             if (!hasProperties)
@@ -317,10 +275,9 @@ internal static partial class SunderRpcSchemaProfile
                     referenceStack,
                     validatedDefinitions,
                     ref nodes,
-                    depth + 1,
-                    isV2);
+                    depth + 1);
             }
-            ValidateOptionalPropertyBounds(schema, path, propertyCount, isV2);
+            ValidateOptionalPropertyBounds(schema, path);
             if (schema.TryGetProperty("propertyNames", out _))
             {
                 throw Error($"{path}.propertyNames is only supported for bounded map schemas.");
@@ -337,12 +294,8 @@ internal static partial class SunderRpcSchemaProfile
             {
                 throw Error($"{path}.required must be absent or empty for a map schema.");
             }
-            var minimum = isV2
-                ? OptionalBound(schema, "minProperties", path, 0, MaximumSafeInteger, 0)
-                : RequiredBound(schema, "minProperties", path, 0, MaximumV1CollectionItems);
-            var maximum = isV2
-                ? OptionalBound(schema, "maxProperties", path, 0, MaximumSafeInteger, long.MaxValue)
-                : RequiredBound(schema, "maxProperties", path, 0, MaximumV1CollectionItems);
+            var minimum = OptionalBound(schema, "minProperties", path, 0, MaximumSafeInteger, 0);
+            var maximum = OptionalBound(schema, "maxProperties", path, 0, MaximumSafeInteger, long.MaxValue);
             if (minimum > maximum)
             {
                 throw Error($"{path}.minProperties must not exceed maxProperties.");
@@ -355,15 +308,12 @@ internal static partial class SunderRpcSchemaProfile
                 referenceStack,
                 validatedDefinitions,
                 ref nodes,
-                depth + 1,
-                isV2);
+                depth + 1);
             if (!propertyNames.TryGetProperty("type", out var keyType)
                 || keyType.GetString() != "string"
                 || propertyNames.TryGetProperty("logicalType", out _)
                 || propertyNames.TryGetProperty("format", out _)
-                || propertyNames.TryGetProperty("contentEncoding", out _)
-                || !isV2 && (!propertyNames.TryGetProperty("minLength", out _)
-                             || !propertyNames.TryGetProperty("maxLength", out _)))
+                || propertyNames.TryGetProperty("contentEncoding", out _))
             {
                 throw Error($"{path}.propertyNames must be an ordinary string schema.");
             }
@@ -374,8 +324,7 @@ internal static partial class SunderRpcSchemaProfile
                 referenceStack,
                 validatedDefinitions,
                 ref nodes,
-                depth + 1,
-                isV2);
+                depth + 1);
         }
     }
 
@@ -386,41 +335,19 @@ internal static partial class SunderRpcSchemaProfile
         HashSet<string> referenceStack,
         HashSet<string> validatedDefinitions,
         ref int nodes,
-        int depth,
-        bool isV2)
+        int depth)
     {
-        if (isV2)
-        {
-            SunderRpcDescriptorParser.RequireOnlyProperties(
-                schema,
-                path,
-                "type",
-                "items",
-                "minItems",
-                "maxItems",
-                "title",
-                "description");
-        }
-        else
-        {
-            SunderRpcDescriptorParser.RequireOnlyProperties(
-                schema,
-                path,
-                "type",
-                "items",
-                "minItems",
-                "maxItems",
-                "enum",
-                "const",
-                "title",
-                "description");
-        }
-        var minimum = isV2
-            ? OptionalBound(schema, "minItems", path, 0, MaximumSafeInteger, 0)
-            : RequiredBound(schema, "minItems", path, 0, MaximumV1CollectionItems);
-        var maximum = isV2
-            ? OptionalBound(schema, "maxItems", path, 0, MaximumSafeInteger, long.MaxValue)
-            : RequiredBound(schema, "maxItems", path, 0, MaximumV1CollectionItems);
+        SunderRpcDescriptorParser.RequireOnlyProperties(
+            schema,
+            path,
+            "type",
+            "items",
+            "minItems",
+            "maxItems",
+            "title",
+            "description");
+        var minimum = OptionalBound(schema, "minItems", path, 0, MaximumSafeInteger, 0);
+        var maximum = OptionalBound(schema, "maxItems", path, 0, MaximumSafeInteger, long.MaxValue);
         if (minimum > maximum)
         {
             throw Error($"{path}.minItems must not exceed maxItems.");
@@ -433,8 +360,7 @@ internal static partial class SunderRpcSchemaProfile
             referenceStack,
             validatedDefinitions,
             ref nodes,
-            depth + 1,
-            isV2);
+            depth + 1);
     }
 
     private static void ValidateDynamicObjectSchema(JsonElement schema, string path)
@@ -452,7 +378,7 @@ internal static partial class SunderRpcSchemaProfile
         }
     }
 
-    private static void ValidateStringSchema(JsonElement schema, string path, bool isV2)
+    private static void ValidateStringSchema(JsonElement schema, string path)
     {
         SunderRpcDescriptorParser.RequireOnlyProperties(
             schema,
@@ -464,12 +390,8 @@ internal static partial class SunderRpcSchemaProfile
             "const",
             "title",
             "description");
-        var minimum = isV2
-            ? OptionalBound(schema, "minLength", path, 0, MaximumSafeInteger, 0)
-            : RequiredBound(schema, "minLength", path, 0, MaximumV1StringCharacters);
-        var maximum = isV2
-            ? OptionalBound(schema, "maxLength", path, 0, MaximumSafeInteger, long.MaxValue)
-            : RequiredBound(schema, "maxLength", path, 0, MaximumV1StringCharacters);
+        var minimum = OptionalBound(schema, "minLength", path, 0, MaximumSafeInteger, 0);
+        var maximum = OptionalBound(schema, "maxLength", path, 0, MaximumSafeInteger, long.MaxValue);
         if (minimum > maximum)
         {
             throw Error($"{path}.minLength must not exceed maxLength.");
@@ -572,13 +494,8 @@ internal static partial class SunderRpcSchemaProfile
 
     }
 
-    private static void ValidateIntegerSchema(JsonElement schema, string path, bool isV2)
+    private static void ValidateIntegerSchema(JsonElement schema, string path)
     {
-        if (!isV2)
-        {
-            ValidateNumberSchemaV1(schema, path, "integer");
-            return;
-        }
         SunderRpcDescriptorParser.RequireOnlyProperties(
             schema,
             path,
@@ -646,33 +563,6 @@ internal static partial class SunderRpcSchemaProfile
         if (lower > upper)
         {
             throw Error($"{path}'s lower numeric bound must not exceed its upper bound.");
-        }
-    }
-
-    private static void ValidateNumberSchemaV1(JsonElement schema, string path, string type)
-    {
-        SunderRpcDescriptorParser.RequireOnlyProperties(
-            schema,
-            path,
-            "type",
-            "minimum",
-            "maximum",
-            "exclusiveMinimum",
-            "exclusiveMaximum",
-            "enum",
-            "const",
-            "title",
-            "description");
-        ValidateNumericBoundShape(schema, path, requireBoth: true);
-        var lower = ReadNumberBound(schema, schema.TryGetProperty("minimum", out _) ? "minimum" : "exclusiveMinimum", path);
-        var upper = ReadNumberBound(schema, schema.TryGetProperty("maximum", out _) ? "maximum" : "exclusiveMaximum", path);
-        if (lower > upper)
-        {
-            throw Error($"{path}'s lower numeric bound must not exceed its upper bound.");
-        }
-        if (type == "integer" && (decimal.Truncate(lower) != lower || decimal.Truncate(upper) != upper))
-        {
-            throw Error($"{path} integer bounds must be integers.");
         }
     }
 

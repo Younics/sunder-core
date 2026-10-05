@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sunder.dev/specs/rpc/v1/authoring/package-public-inventory.schema.json",
+  "title": "Sunder Package Public API Inventory V1",
+  "description": "The closed canonical payload authenticated by publicInventorySha256. The digest is carried by the enclosing Registry response and is not a member of this payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 6,
+  "required": [
+    "schemaVersion",
+    "packageId",
+    "packageVersion",
+    "packageContentIdentity",
+    "publicContractCount",
+    "contracts"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "packageId": {
+      "$ref": "#/$defs/packageId"
+    },
+    "packageVersion": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "packageContentIdentity": {
+      "$ref": "#/$defs/sha256"
+    },
+    "publicContractCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 128
+    },
+    "contracts": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/publicContract"
+      }
+    }
+  },
+  "$defs": {
+    "packageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:\\.[a-z0-9]+)*$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 256,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "publicContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 10,
+      "required": [
+        "contractId",
+        "contractVersion",
+        "descriptorBytes",
+        "descriptorSha256",
+        "abiSha256",
+        "artifactSource",
+        "authorityKind",
+        "authorityId",
+        "selectedAuthorityRelease",
+        "selectedAuthorityContentIdentity"
+      ],
+      "properties": {
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "descriptorBytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4194304
+        },
+        "descriptorSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "abiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "artifactSource": {
+          "enum": [
+            "owned",
+            "imported"
+          ]
+        },
+        "authorityKind": {
+          "enum": [
+            "package",
+            "platform"
+          ]
+        },
+        "authorityId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "selectedAuthorityRelease": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "selectedAuthorityContentIdentity": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "artifactSource": {
+                "const": "owned"
+              }
+            },
+            "required": [
+              "artifactSource"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authorityKind": {
+                "const": "package"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "authorityKind": {
+                "const": "platform"
+              }
+            },
+            "required": [
+              "authorityKind"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "authorityId": {
+                "const": "sunder.core"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

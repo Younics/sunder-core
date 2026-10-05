@@ -135,11 +135,52 @@ public sealed record TemporaryDirectoryScopeOptions(
 {
     public static TemporaryDirectoryScopeOptions Default { get; } = new(
         CleanupAttempts: 3,
-        static (path, _) =>
+        DeleteDefault);
+
+    private static ValueTask DeleteDefault(string path, CancellationToken _)
+    {
+        MakeTreeWritable(path);
+        Directory.Delete(path, recursive: true);
+        return ValueTask.CompletedTask;
+    }
+
+    private static void MakeTreeWritable(string root)
+    {
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.TryPop(out var directory))
         {
-            Directory.Delete(path, recursive: true);
-            return ValueTask.CompletedTask;
-        });
+            if (OperatingSystem.IsWindows())
+            {
+                File.SetAttributes(directory, File.GetAttributes(directory) & ~FileAttributes.ReadOnly);
+            }
+            else
+            {
+                File.SetUnixFileMode(
+                    directory,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    continue;
+                }
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    pending.Push(entry);
+                    continue;
+                }
+                File.SetAttributes(entry, attributes & ~FileAttributes.ReadOnly);
+                if (!OperatingSystem.IsWindows())
+                {
+                    File.SetUnixFileMode(entry, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                }
+            }
+        }
+    }
 }
 
 public sealed class TemporaryDirectoryCleanupException(

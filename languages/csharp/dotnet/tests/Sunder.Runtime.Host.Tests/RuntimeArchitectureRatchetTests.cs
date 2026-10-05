@@ -30,19 +30,20 @@ public sealed class RuntimeArchitectureRatchetTests
     }
 
     [Fact]
-    public void WorkerV3CompatibilityProfile_ClassifiesEveryPublishedSdkCapability()
+    public void WorkerV1CompatibilityProfile_ClassifiesEveryPublishedSdkCapability()
     {
         var publishedCapabilities = typeof(SunderSdkCapabilities)
             .GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(static field => field.IsLiteral && !field.IsInitOnly && field.FieldType == typeof(string))
             .Select(static field => (string)field.GetRawConstantValue()!)
-            .Append(SunderWorkerProtocol.V3Capability)
+            .Append(SunderPackageFormat.ExecutionRuntimeV1Capability)
+            .Append(SunderWorkerProtocol.V1Capability)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
         Assert.Equal(
             publishedCapabilities,
-            SunderSdkCompatibilityProfile.WorkerV3CapabilityClassification.Keys
+            SunderSdkCompatibilityProfile.WorkerV1CapabilityClassification.Keys
                 .Order(StringComparer.Ordinal));
     }
 
@@ -167,6 +168,27 @@ public sealed class RuntimeArchitectureRatchetTests
         Assert.DoesNotContain("Sunder.Runtime.Client.csproj", hostProject, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Sunder.Runtime.LocalState.csproj", hostProject, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Sunder.Runtime.LocalState.csproj", clientProject, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RuntimeHost_RefreshesExecutionRuntimePolicyOnlyAfterPackageActivationStarts()
+    {
+        var root = LocateRepositoryRoot();
+        var program = File.ReadAllText(Path.Combine(
+            root,
+            "languages",
+            "csharp",
+            "dotnet",
+            "host",
+            "Sunder.Runtime.Host",
+            "Program.cs"));
+
+        var bootstrap = program.IndexOf("RuntimeHostBootstrapRunner.StartAsync", StringComparison.Ordinal);
+        var maintenance = program.IndexOf("executionRuntimeMaintenance.RunOnceAsync", StringComparison.Ordinal);
+
+        Assert.DoesNotContain("RefreshBeforeActivationAsync", program, StringComparison.Ordinal);
+        Assert.True(bootstrap >= 0);
+        Assert.True(maintenance > bootstrap);
     }
 
     [Fact]
@@ -446,10 +468,9 @@ public sealed class RuntimeArchitectureRatchetTests
                      "RuntimePackageOperationService",
                      "PackageRuntimeOperation",
                      "PackageRuntimeStream",
-                     "sunder.worker.v1",
+                     "sunder.worker.v3",
                      "worker.content-discard",
                      "UsesStagedLifecycle",
-                     "UsesCanonicalRpcV2Identity",
                      "SUNDER_PACKAGE_CONTENT_PATH",
                      "SUNDER_PACKAGE_DATA_PATH",
                      "SUNDER_PACKAGE_STATE_PATH",

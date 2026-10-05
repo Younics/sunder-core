@@ -1,0 +1,19 @@
+{
+  "state": "clock-invalid",
+  "errorCode": "package.policy-clock-invalid",
+  "watermark": {
+    "registryOrigin": "https://registry.example",
+    "packagePolicyRevision": 42,
+    "packagePolicyFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "runtimePolicyRevision": 3,
+    "checkpointSequence": 99,
+    "checkpointDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "topologyGeneration": 1,
+    "topologyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "responseNonce": "0123456789abcdef0123456789abcdef",
+  "responseSha256": "6666666666666666666666666666666666666666666666666666666666666666",
+  "observedAtUtc": "2026-09-14T10:00:00+00:00",
+  "validUntilUtc": "2026-09-15T10:00:00+00:00",
+  "clock": null
+}

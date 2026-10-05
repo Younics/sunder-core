@@ -3,10 +3,16 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { lstat, readFile, readdir } from "node:fs/promises";
-import { basename, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { basename, dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPOSITORY_URL = "git+https://github.com/Younics/sunder-core.git";
+const PUBLIC_PACKAGE_INVENTORY = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../eng/test-oracles/core-public-packages.json",
+);
+const COMMON_PACKAGE_ENTRIES = ["package.json", "README.md", "LICENSE", "NOTICE"];
+const REQUIRED_NODE_ENGINE = ">=24.18.1 <25.0.0";
 const PRERELEASE_IDENTIFIER = "(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)";
 const SEMVER = new RegExp(`^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-${PRERELEASE_IDENTIFIER}(?:\\.${PRERELEASE_IDENTIFIER})*)?$`, "u");
 
@@ -33,6 +39,7 @@ export async function verifyNodePackageArtifacts({
   viteVersion,
   artifactDirectory,
   packReportPath,
+  packageInventoryPath = PUBLIC_PACKAGE_INVENTORY,
 }) {
   const versionMatch = SEMVER.exec(version);
   assert(versionMatch !== null, `Expected a strict SemVer release version, received '${version}'.`);
@@ -67,6 +74,21 @@ export async function verifyNodePackageArtifacts({
     throw new Error(`npm pack report is missing or invalid: ${packReportPath}`, { cause: error });
   }
   assert(Array.isArray(packReport) && packReport.length === packages.length, "npm pack must report exactly three package artifacts.");
+  let packageInventory;
+  try {
+    packageInventory = JSON.parse(await readFile(resolve(packageInventoryPath), "utf8"));
+  } catch (error) {
+    throw new Error(`Public package inventory is missing or invalid: ${packageInventoryPath}`, { cause: error });
+  }
+  assert(packageInventory?.schemaVersion === 1 && Array.isArray(packageInventory.npm), "Public package inventory must use schema version 1.");
+  assert(packageInventory.coordinatedVersion === version, `Public package inventory version is '${packageInventory.coordinatedVersion}', expected '${version}'.`);
+  const packageContracts = new Map(packageInventory.npm.map((contract) => [contract.name, contract]));
+  assert(
+    packageInventory.npm.length === packages.length
+      && packageContracts.size === packages.length
+      && packages.every((item) => packageContracts.has(item.name)),
+    "Public npm package inventory does not match the coordinated release set.",
+  );
 
   const results = [];
   const manifests = new Map();
@@ -74,11 +96,27 @@ export async function verifyNodePackageArtifacts({
     const archivePath = resolve(directory, item.archive);
     const archiveStat = await lstat(archivePath);
     assert(archiveStat.isFile() && !archiveStat.isSymbolicLink(), `npm artifact must be a regular file: ${archivePath}`);
+    const contract = packageContracts.get(item.name);
+    assert(Array.isArray(contract.requiredEntries), `${item.name} public package inventory must declare requiredEntries.`);
+    assert(
+      Number.isSafeInteger(contract.maximumBytes) && contract.maximumBytes > 0,
+      `${item.name} public package inventory must declare a positive maximumBytes.`,
+    );
+    assert(archiveStat.size <= contract.maximumBytes, `${item.archive} exceeds ${contract.maximumBytes} bytes.`);
     const entries = execFileSync(
       "tar",
       ["-tzf", archivePath],
       { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] },
     ).split("\n").filter(Boolean);
+    const verboseEntries = execFileSync(
+      "tar",
+      ["-tvzf", archivePath],
+      { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] },
+    ).split("\n").filter(Boolean);
+    assert(verboseEntries.length === entries.length, `${item.archive} has an ambiguous tar member inventory.`);
+    for (let index = 0; index < entries.length; index += 1) {
+      assert(verboseEntries[index].startsWith("-"), `${item.archive} contains non-regular member '${entries[index]}'.`);
+    }
     assert(entries.length > 0, `${item.archive} is empty.`);
     assert(new Set(entries).size === entries.length, `${item.archive} contains duplicate archive paths.`);
     assert(entries.every((entry) => {
@@ -88,18 +126,36 @@ export async function verifyNodePackageArtifacts({
         && !parts.includes("..")
         && !entry.startsWith("/");
     }), `${item.archive} contains an unsafe or non-package archive path.`);
-    for (const requiredEntry of ["package/package.json", "package/LICENSE", "package/NOTICE", "package/README.md"]) {
-      assert(entries.filter((entry) => entry === requiredEntry).length === 1, `${item.archive} must contain exactly one '${requiredEntry}'.`);
-    }
-
     const manifest = readArchiveJson(archivePath, "package/package.json");
     assert(manifest.name === item.name, `${item.archive} package identity is '${manifest.name}', expected '${item.name}'.`);
     assert(manifest.version === version, `${item.archive} package version is '${manifest.version}', expected '${version}'.`);
     assert(manifest.license === "MIT", `${item.archive} must declare the MIT license.`);
     assert(manifest.repository?.url === REPOSITORY_URL, `${item.archive} has an unexpected repository identity.`);
+    assert(manifest.engines?.node === REQUIRED_NODE_ENGINE, `${item.archive} must require Node '${REQUIRED_NODE_ENGINE}'.`);
     assert(manifest.publishConfig?.access === "public", `${item.archive} must publish with public access.`);
     assert(manifest.publishConfig?.provenance === true, `${item.archive} must require npm provenance.`);
     manifests.set(item.name, manifest);
+
+    const expectedEntries = [...COMMON_PACKAGE_ENTRIES, ...contract.requiredEntries];
+    assert(new Set(expectedEntries).size === expectedEntries.length, `${item.name} public package inventory contains duplicate entries.`);
+    const archiveEntries = entries.map((entry) => entry.slice("package/".length));
+    assertExactEntries(`${item.archive} archive`, archiveEntries, expectedEntries);
+
+    if (item.name === "create-sunder-package") {
+      for (const template of ["template", "template-react-node"]) {
+        const templateManifest = readArchiveJson(archivePath, `package/${template}/package.json`);
+        assert(templateManifest.engines?.node === REQUIRED_NODE_ENGINE,
+          `${template} must require Node '${REQUIRED_NODE_ENGINE}'.`);
+        assert(templateManifest.dependencies?.["@sunder/sdk"] === npmVersionRange,
+          `${template} must depend on @sunder/sdk '${npmVersionRange}'.`);
+        assert(templateManifest.devDependencies?.["@sunder/package-tool"] === npmVersionRange,
+          `${template} must depend on @sunder/package-tool '${npmVersionRange}'.`);
+        if (template === "template-react-node") {
+          assert(templateManifest.devDependencies?.vite === `^${viteVersion}`,
+            `${template} must depend on Vite '^${viteVersion}'.`);
+        }
+      }
+    }
 
     const bytes = await readFile(archivePath);
     const integrity = `sha512-${digest("sha512", bytes, "base64")}`;
@@ -107,6 +163,12 @@ export async function verifyNodePackageArtifacts({
     const reportMatches = packReport.filter((entry) => entry?.name === item.name && entry?.version === version);
     assert(reportMatches.length === 1, `npm pack must report exactly one '${item.name}@${version}' artifact.`);
     const report = reportMatches[0];
+    assert(Array.isArray(report.files), `npm pack did not report the file inventory for ${item.name}.`);
+    assertExactEntries(
+      `${item.name} npm pack report`,
+      report.files.map((file) => file?.path),
+      expectedEntries,
+    );
     assert(report.filename === item.archive, `npm pack reported unexpected filename '${report.filename}' for ${item.name}.`);
     assert(report.size === bytes.length, `npm pack reported the wrong byte size for ${item.archive}.`);
     assert(report.integrity === integrity, `npm pack reported the wrong SHA-512 integrity for ${item.archive}.`);
@@ -129,20 +191,23 @@ export async function verifyNodePackageArtifacts({
   assert(manifests.get("@sunder/package-tool")?.dependencies?.vite === viteVersion,
     `@sunder/package-tool must pin Vite '${viteVersion}'.`);
 
-  const createArchive = resolve(directory, `create-sunder-package-${version}.tgz`);
-  for (const template of ["template", "template-react-node"]) {
-    const manifest = readArchiveJson(createArchive, `package/${template}/package.json`);
-    assert(manifest.dependencies?.["@sunder/sdk"] === npmVersionRange,
-      `${template} must depend on @sunder/sdk '${npmVersionRange}'.`);
-    assert(manifest.devDependencies?.["@sunder/package-tool"] === npmVersionRange,
-      `${template} must depend on @sunder/package-tool '${npmVersionRange}'.`);
-    if (template === "template-react-node") {
-      assert(manifest.devDependencies?.vite === `^${viteVersion}`,
-        `${template} must depend on Vite '^${viteVersion}'.`);
-    }
-  }
-
   return results;
+}
+
+function assertExactEntries(label, actual, expected) {
+  assert(actual.every((entry) => typeof entry === "string"), `${label} contains an invalid entry path.`);
+  assert(new Set(actual).size === actual.length, `${label} contains duplicate entries.`);
+  const actualSorted = actual.slice().sort(ordinal);
+  const expectedSorted = expected.slice().sort(ordinal);
+  assert(
+    actualSorted.length === expectedSorted.length
+      && actualSorted.every((entry, index) => entry === expectedSorted[index]),
+    `${label} entry closure drifted; expected ${JSON.stringify(expectedSorted)}, found ${JSON.stringify(actualSorted)}.`,
+  );
+}
+
+function ordinal(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 async function main() {

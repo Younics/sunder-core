@@ -2,9 +2,9 @@ using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Worker;
 
-/// <summary>Provides generation-fenced read-only state access before Worker V3 storage migrations run.</summary>
+/// <summary>Provides generation-fenced read-only state access before Worker V1 storage migrations run.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StorageV1)]
-[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV3)]
+[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV1)]
 public sealed class SunderWorkerMigrationPreparationContext
 {
     private readonly Internal.WorkerRpcClient _client;

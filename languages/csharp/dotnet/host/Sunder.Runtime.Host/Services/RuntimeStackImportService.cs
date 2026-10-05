@@ -118,7 +118,7 @@ internal sealed class RuntimeStackImportService : IDisposable
                         registration,
                         callScope,
                         linked.Token).ConfigureAwait(false);
-                    var scopedClient = SunderStackContributorRpc.CreateClient(
+                    var scopedClient = new StackTransport.StackDomainClient(
                         callScope,
                         registration.Provider.Endpoint);
                     var preview = await scopedClient.PreviewImportAsync(
@@ -306,7 +306,7 @@ internal sealed class RuntimeStackImportService : IDisposable
                         registration,
                         callScope,
                         linked.Token).ConfigureAwait(false);
-                    var scopedClient = SunderStackContributorRpc.CreateClient(
+                    var scopedClient = new StackTransport.StackDomainClient(
                         callScope,
                         registration.Provider.Endpoint);
                     var result = await scopedClient.ImportAsync(

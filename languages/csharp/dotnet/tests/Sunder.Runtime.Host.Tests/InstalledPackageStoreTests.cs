@@ -24,27 +24,33 @@ public sealed class InstalledPackageStoreTests
     }
 
     [Fact]
-    public async Task ListAsync_RejectsSchemaOneWithoutRewritingCatalog()
+    public async Task OldSchema_RequiresDataSafeResetBeforeReadOrMutation()
     {
         var paths = CreateRuntimePackagePaths();
         Directory.CreateDirectory(paths.CatalogRootPath);
         var legacyState = JsonSerializer.SerializeToNode(
-            new InstalledPackageStateFile(1, [CreatePackage(paths, "legacy.package")]),
+            new InstalledPackageStateFile(5, [CreatePackage(paths, "legacy.package")]),
             TestJsonOptions)!.AsObject();
-        var legacyPackage = legacyState["packages"]!.AsArray()[0]!.AsObject();
-        legacyPackage.Remove("provenance");
         await File.WriteAllTextAsync(paths.StateFilePath, legacyState.ToJsonString(TestJsonOptions));
         var store = new InstalledPackageStore(paths);
 
         var original = await File.ReadAllTextAsync(paths.StateFilePath);
 
-        await Assert.ThrowsAsync<InvalidDataException>(() => store.ListAsync());
+        var readError = await Assert.ThrowsAsync<InvalidDataException>(() => store.ListAsync());
+        var mutationError = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            store.WriteAsync([CreatePackage(paths, "replacement.package")]));
 
+        Assert.Contains("schema version 5", readError.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("sunder runtime reset --yes", readError.Message, StringComparison.Ordinal);
+        Assert.Contains("preserves package data", readError.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("sunder runtime reset --yes", mutationError.Message, StringComparison.Ordinal);
         Assert.Equal(original, await File.ReadAllTextAsync(paths.StateFilePath));
     }
 
-    [Fact]
-    public async Task ListAsync_RejectsSchemaTwoWithoutRewritingCatalog()
+    [Theory]
+    [InlineData("executionRuntimeBindings")]
+    [InlineData("acquiredTargets")]
+    public async Task ListAsync_RejectsSchemaOneMissingAdmissionStateWithoutRewritingCatalog(string field)
     {
         var paths = CreateRuntimePackagePaths();
         Directory.CreateDirectory(paths.CatalogRootPath);
@@ -58,9 +64,11 @@ public sealed class InstalledPackageStoreTests
                 RequestedVersion: "1.0.0",
                 SourceIdentity: new string('a', 64)),
         };
-        await File.WriteAllTextAsync(
-            paths.StateFilePath,
-            JsonSerializer.Serialize(new InstalledPackageStateFile(2, [package]), TestJsonOptions));
+        var state = JsonSerializer.SerializeToNode(
+            new InstalledPackageStateFile(1, [package]),
+            TestJsonOptions)!.AsObject();
+        state["packages"]!.AsArray()[0]!.AsObject().Remove(field);
+        await File.WriteAllTextAsync(paths.StateFilePath, state.ToJsonString(TestJsonOptions));
         var store = new InstalledPackageStore(paths);
 
         var original = await File.ReadAllTextAsync(paths.StateFilePath);
@@ -71,6 +79,51 @@ public sealed class InstalledPackageStoreTests
     }
 
     [Fact]
+    public async Task AcquisitionScopeIsDetachedDurableAndPartOfCatalogBindingIdentity()
+    {
+        var paths = CreateRuntimePackagePaths();
+        var input = new List<InstalledPackageTargetRecord> { new("app", PackageTargetSelection.GetCurrentRuntimeIdentifier()) };
+        var package = CreatePackage(paths, "scope.package") with { AcquiredTargets = input };
+        input.Clear();
+        Assert.Single(package.AcquiredTargets!);
+        var store = new InstalledPackageStore(paths);
+        await store.WriteAsync([package]);
+        var restored = Assert.Single(await new InstalledPackageStore(paths).ListAsync());
+        Assert.Equal(package.AcquiredTargets, restored.AcquiredTargets);
+        Assert.Throws<NotSupportedException>(() => ((IList<InstalledPackageTargetRecord>)restored.AcquiredTargets!).Clear());
+        var differentScope = restored with { AcquiredTargets = [] };
+        Assert.Equal(restored.ContentIdentity, differentScope.ContentIdentity);
+        Assert.False(PackageStorePolicy.CatalogBindingsEqual([restored], [differentScope]));
+        Assert.False(PackageStorePolicy.CatalogBindingsEqual([restored], [restored with { AcquiredTargets = null }]));
+    }
+
+    [Theory]
+    [InlineData("duplicate")]
+    [InlineData("role")]
+    [InlineData("rid")]
+    [InlineData("null-entry")]
+    [InlineData("overflow")]
+    public async Task InvalidAcquisitionScopeCannotReplaceTheInstalledCatalog(string failure)
+    {
+        var paths = CreateRuntimePackagePaths();
+        var store = new InstalledPackageStore(paths);
+        var package = CreatePackage(paths, "scope.package");
+        await store.WriteAsync([package]);
+        var before = await File.ReadAllBytesAsync(paths.StateFilePath);
+        var key = new InstalledPackageTargetRecord("app", PackageTargetSelection.GetCurrentRuntimeIdentifier());
+        InstalledPackageTargetRecord[] invalid = failure switch
+        {
+            "duplicate" => [key, key],
+            "role" => [key with { Role = "unknown" }],
+            "rid" => [key with { Rid = "any" }],
+            "null-entry" => [null!],
+            _ => Enumerable.Repeat(key, SunderPackageFormat.MaxTargets + 1).ToArray(),
+        };
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.WriteAsync([package with { AcquiredTargets = invalid }]));
+        Assert.Equal(before, await File.ReadAllBytesAsync(paths.StateFilePath));
+    }
+
+    [Fact]
     public async Task ListAsync_WhenPersistedPathIsOutsideVersionRoot_RejectsCatalog()
     {
         var paths = CreateRuntimePackagePaths();
@@ -78,7 +131,7 @@ public sealed class InstalledPackageStoreTests
         Directory.CreateDirectory(outsidePath);
         Directory.CreateDirectory(paths.CatalogRootPath);
         await File.WriteAllTextAsync(paths.StateFilePath, JsonSerializer.Serialize(new InstalledPackageStateFile(
-            5,
+            1,
             [CreatePackage(paths, "unsafe.package") with { InstallPath = outsidePath }]), TestJsonOptions));
         var store = new InstalledPackageStore(paths);
 
@@ -167,7 +220,7 @@ public sealed class InstalledPackageStoreTests
         var descriptorBytes = System.Text.Encoding.UTF8.GetBytes("""
             {
               "$schema": "https://json-schema.org/draft/2020-12/schema",
-              "descriptorVersion": 2,
+              "descriptorVersion": 1,
               "schemaProfile": "sunder.rpc.values.v1",
               "contractId": "dev.sunder.execution",
               "version": "1.0.0",
@@ -212,10 +265,21 @@ public sealed class InstalledPackageStoreTests
             "1.0.0",
             typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
             roles: [SunderPackageFormat.RuntimeHostRole],
+            runtimeRequiredHostCapabilities:
+            [
+                "sdk-baseline-1-1.v1",
+                "core.v1",
+                "execution-runtime.v1",
+                "rpc.v1",
+                "worker-protocol.v1",
+            ],
             contractBundles:
             [
                 new SunderPackageContractBundleManifest
                 {
+                    Source = "owned",
+                    AuthorityKind = "package",
+                    AuthorityId = "test.package",
                     ContractId = "dev.sunder.execution",
                     Version = "1.0.0",
                     DescriptorPath = "contracts/execution.json",
@@ -236,6 +300,7 @@ public sealed class InstalledPackageStoreTests
                     Actions = ["discover", "invoke"],
                 },
             ]);
+        AddExecutionRuntimeRequirement(installPath);
         var descriptorPath = Path.Combine(installPath, "payload", "shared", "contracts", "execution.json");
         Directory.CreateDirectory(Path.GetDirectoryName(descriptorPath)!);
         File.WriteAllBytes(descriptorPath, descriptorBytes);
@@ -325,5 +390,22 @@ public sealed class InstalledPackageStoreTests
         var installPath = paths.GetInstalledPackagePath(packageId, version);
         Directory.CreateDirectory(installPath);
         return installPath;
+    }
+
+    private static void AddExecutionRuntimeRequirement(string installPath)
+    {
+        var manifestPath = Path.Combine(installPath, "manifest", "sunder-package.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        foreach (var target in manifest["targets"]!.AsArray().Select(static target => target!.AsObject()))
+        {
+            target["executionRuntime"] = new JsonObject
+            {
+                ["id"] = SunderExecutionRuntimeFormat.DotNetRuntimeId,
+                ["versionRange"] = ">=10.0.0 <11.0.0",
+                ["moduleAbi"] = SunderExecutionRuntimeFormat.DotNetModuleAbi,
+            };
+        }
+        File.WriteAllText(manifestPath, manifest.ToJsonString(TestJsonOptions));
+        CanonicalPackageTestBuilder.WriteContentIndex(installPath);
     }
 }

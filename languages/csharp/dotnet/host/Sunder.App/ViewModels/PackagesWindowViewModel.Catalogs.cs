@@ -234,6 +234,7 @@ public sealed partial class PackagesWindowViewModel
         ObserveSelectedMarketplacePackage(null);
         ObserveSelectedInstalledPackage(item);
         ApplySelectedPackageDetails(PackageSelectionDetails.FromInstalled(item));
+        ApplySelectedPackageExecutionRuntimeState(item.PackageId);
         RefreshSelectedPackageOperationState();
         NotifyDetailsChanged();
         NotifyCommandStateChanged();
@@ -247,6 +248,7 @@ public sealed partial class PackagesWindowViewModel
         ObserveSelectedMarketplacePackage(null);
         ObserveSelectedInstalledPackage(null);
         ApplySelectedPackageDetails(PackageSelectionDetails.NoInstalledMatch());
+        ClearSelectedPackageExecutionRuntimeState();
         RefreshSelectedPackageOperationState();
         NotifyDetailsChanged();
         NotifyCommandStateChanged();
@@ -338,6 +340,7 @@ public sealed partial class PackagesWindowViewModel
         _marketplace.ClearVersions();
         _marketplaceVersionDetailsRequest.Invalidate();
         Marketplace.ClearRpcContractUses();
+        Marketplace.ClearRuntimePreflight();
         ApplyMarketplaceProfile(null);
         ClearMarketplacePackageStats();
         ApplyMarketplaceAttributions(null, []);
@@ -427,10 +430,12 @@ public sealed partial class PackagesWindowViewModel
         {
             _marketplaceVersionDetailsRequest.Invalidate();
             Marketplace.ClearRpcContractUses();
+            Marketplace.ClearRuntimePreflight();
         }
         else
         {
             Marketplace.BeginRpcContractUseLoad();
+            Marketplace.BeginRuntimePreflightLoad();
             _tasks.Observe(
                 LoadSelectedMarketplaceVersionDetailsAsync(Marketplace.SelectedPackage, item),
                 "loading selected marketplace package version details");
@@ -478,6 +483,28 @@ public sealed partial class PackagesWindowViewModel
 
             Marketplace.CompleteRpcContractUseLoad(
                 PackageRpcAccessProjection.FromRegistry(details.UsesContracts));
+
+            if (!_registryClientProvider.TryResolve(out var registryUrl, out var registryError)
+                || registryUrl is null)
+            {
+                throw new InvalidOperationException(registryError ?? "The Registry URL is invalid.");
+            }
+            var plan = await _runtimeApiClient.ResolveRegistryPackagePlanAsync(
+                new RuntimeRegistryPackageBatchRequest(
+                    registryUrl.AbsoluteUri,
+                    [new RuntimeRegistryPackageChangeRequest(
+                        package.PackageId,
+                        version.Version,
+                        [])]),
+                request.Token);
+            var preflight = await RegistryPackageChangePreflight.CreateAsync(plan, _runtimeApiClient, request.Token);
+            if (!request.IsCurrent
+                || !ReferenceEquals(Marketplace.SelectedPackage, package)
+                || !ReferenceEquals(Marketplace.SelectedVersion, version))
+            {
+                return;
+            }
+            Marketplace.CompleteRuntimePreflightLoad(details, preflight);
             request.Complete();
             NotifyCommandStateChanged();
         }
@@ -491,11 +518,15 @@ public sealed partial class PackagesWindowViewModel
                 && ReferenceEquals(Marketplace.SelectedPackage, package)
                 && ReferenceEquals(Marketplace.SelectedVersion, version))
             {
-                Marketplace.FailRpcContractUseLoad(ex.Message);
+                if (!Marketplace.RpcAccessLoaded)
+                {
+                    Marketplace.FailRpcContractUseLoad(ex.Message);
+                }
+                Marketplace.FailRuntimePreflightLoad(ex.Message);
                 NotifyCommandStateChanged();
             }
             AppSessionLog.WriteError(
-                $"Failed to load RPC access for marketplace package '{package.PackageId}' version '{version.Version}'.",
+                $"Failed to load marketplace compatibility details for package '{package.PackageId}' version '{version.Version}'.",
                 ex);
         }
     }
@@ -512,6 +543,7 @@ public sealed partial class PackagesWindowViewModel
         _marketplace.ClearVersions();
         _marketplaceVersionDetailsRequest.Invalidate();
         Marketplace.ClearRpcContractUses();
+        Marketplace.ClearRuntimePreflight();
         ApplyMarketplaceProfile(null);
         ClearMarketplacePackageStats();
         ApplyMarketplaceAttributions(null, []);

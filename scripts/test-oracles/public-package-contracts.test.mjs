@@ -11,6 +11,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const inventoryPath = resolve(repositoryRoot, "eng/test-oracles/core-public-packages.json");
 const nodeWorkspaceRoot = resolve(repositoryRoot, "languages/typescript/node");
 const staleSentinelName = ".sunder-stale-artifact-oracle";
+const commonEntries = ["package.json", "README.md", "LICENSE", "NOTICE"];
 
 test("every public npm package has its inventoried role and deterministic artifact", async () => {
   const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
@@ -26,7 +27,7 @@ test("every public npm package has its inventoried role and deterministic artifa
       const manifest = JSON.parse(await readFile(resolve(project, "package.json"), "utf8"));
       assert.equal(manifest.name, contract.name);
       assert.equal(manifest.version, inventory.coordinatedVersion);
-      assert.equal(manifest.engines?.node, ">=24.0.0");
+      assert.equal(manifest.engines?.node, ">=24.18.1 <25.0.0");
       verifyRole(contract.role, manifest);
 
       const safeName = contract.name.replaceAll("/", "-").replaceAll("@", "");
@@ -39,9 +40,9 @@ test("every public npm package has its inventoried role and deterministic artifa
       assert.equal(first.name, contract.name);
       assert.equal(first.version, inventory.coordinatedVersion);
       assert.ok(first.size > 0 && first.size <= contract.maximumBytes, `${contract.name} exceeded ${contract.maximumBytes} bytes`);
-      const entries = new Set(first.files.map((file) => file.path));
+      const entries = first.files.map((file) => file.path);
       verifyEntries(contract, entries);
-      assert.equal(entries.has(`dist/${staleSentinelName}`), false, `${contract.name} packed stale ignored output`);
+      assert.equal(entries.includes(`dist/${staleSentinelName}`), false, `${contract.name} packed stale ignored output`);
       assert.deepEqual(first.files, second.files, `${contract.name} packed file inventory changed between runs`);
       const firstBytes = await readFile(resolve(firstDirectory, first.filename));
       const secondBytes = await readFile(resolve(secondDirectory, second.filename));
@@ -55,8 +56,15 @@ test("every public npm package has its inventoried role and deterministic artifa
 test("public npm artifact oracle rejects a seeded missing entry", async () => {
   const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
   const contract = inventory.npm[0];
-  const entries = new Set(contract.requiredEntries.slice(1));
-  assert.throws(() => verifyEntries(contract, entries), /missing required entry/u);
+  const entries = [...commonEntries, ...contract.requiredEntries.slice(1)];
+  assert.throws(() => verifyEntries(contract, entries), /tarball entry closure drifted/u);
+});
+
+test("public npm artifact oracle rejects a seeded unexpected entry", async () => {
+  const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
+  const contract = inventory.npm[0];
+  const entries = [...commonEntries, ...contract.requiredEntries, "dist/unexpected.js"];
+  assert.throws(() => verifyEntries(contract, entries), /tarball entry closure drifted/u);
 });
 
 test("public npm inventory rejects a seeded unlisted public workspace", async () => {
@@ -174,7 +182,9 @@ function verifyRole(role, manifest) {
     case "node-template-tool":
       assert.equal(manifest.bin["create-sunder-package"], "dist/cli.js");
       assert.ok(manifest.files.includes("template"));
+      assert.ok(manifest.files.includes("!template/.sunder"));
       assert.ok(manifest.files.includes("template-react-node"));
+      assert.ok(manifest.files.includes("!template-react-node/.sunder"));
       break;
     default:
       assert.fail(`Unknown public npm package role '${role}'.`);
@@ -182,13 +192,14 @@ function verifyRole(role, manifest) {
 }
 
 function verifyEntries(contract, entries) {
-  for (const required of contract.requiredEntries) {
-    assert.ok(entries.has(required), `${contract.name} is missing required entry '${required}'.`);
-  }
-  for (const common of ["package.json", "README.md", "LICENSE", "NOTICE"]) {
-    assert.ok(entries.has(common), `${contract.name} is missing required entry '${common}'.`);
-  }
-  assert.equal([...entries].some((entry) => entry.startsWith("src/") || entry.startsWith("test/")), false);
+  const expected = [...commonEntries, ...contract.requiredEntries];
+  assert.equal(new Set(expected).size, expected.length, `${contract.name} expected entry inventory contains duplicates`);
+  assert.equal(new Set(entries).size, entries.length, `${contract.name} tarball contains duplicate entries`);
+  assert.deepEqual(
+    entries.toSorted(ordinal),
+    expected.toSorted(ordinal),
+    `${contract.name} tarball entry closure drifted`,
+  );
 }
 
 function sha256(bytes) {

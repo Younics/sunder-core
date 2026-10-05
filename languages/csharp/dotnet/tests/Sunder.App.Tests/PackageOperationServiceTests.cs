@@ -80,6 +80,8 @@ public sealed class PackageOperationServiceTests
         Assert.Null(request.Version);
         Assert.True(request.Confirm);
         Assert.False(request.DryRun);
+        Assert.Equal(new string('f', 64), request.ExpectedResolutionFingerprint);
+        Assert.Equal(2, runtimeClient.SourceAdoptionRequests.Count);
         Assert.Single(lifecycleApplications);
     }
 
@@ -743,10 +745,11 @@ public sealed class PackageOperationServiceTests
 
     private static RegistryPackageInstallPlanItem CreatePlanItem(string packageId, string version)
         => new(
-            packageId,
-            CurrentVersion: null,
-            version,
-            IsUpdate: false,
+             packageId,
+             CurrentVersion: null,
+             version,
+             PackageContentIdentity: new string('a', 64),
+             ActionKind: RegistryPackageActionKinds.PackageInstall,
             DeprecatedMessage: null,
             DependsOn: [],
             Targets: [],
@@ -823,6 +826,8 @@ public sealed class PackageOperationServiceTests
 
         public RuntimeRegistrySourceAdoptionRequest? LastSourceAdoptionRequest { get; private set; }
 
+        public List<RuntimeRegistrySourceAdoptionRequest> SourceAdoptionRequests { get; } = [];
+
         public PackageUninstallPlan UninstallPlan { get; init; } = CreateUninstallPlan("agent");
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
@@ -884,8 +889,24 @@ public sealed class PackageOperationServiceTests
 
         public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken cancellationToken = default)
         {
+            SourceAdoptionRequests.Add(request);
             LastSourceAdoptionRequest = request;
-            return Task.FromResult(RegistryChangeResult([request.PackageId]));
+            var result = RegistryChangeResult([request.PackageId]);
+            if (request.DryRun)
+            {
+                result = result with
+                {
+                    RuntimeSessionApplied = false,
+                    PlanExpectations =
+                    [
+                        new RuntimeRegistryPackagePlanExpectation(
+                            request.RegistryOrigin,
+                            request.IncludePrerelease,
+                            new string('f', 64)),
+                    ],
+                };
+            }
+            return Task.FromResult(result);
         }
 
         public Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)

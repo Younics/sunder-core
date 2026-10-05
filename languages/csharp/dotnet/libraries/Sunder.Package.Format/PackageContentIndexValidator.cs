@@ -6,7 +6,8 @@ internal static class PackageContentIndexValidator
         SunderPackageContentIndex? contentIndex,
         string stagingPath,
         ICollection<string> errors,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ISunderPackageValidationIoObserver? ioObserver = null)
     {
         var actualFiles = SunderArchive.EnumerateFiles(stagingPath);
         var actualFilesByPath = actualFiles.ToDictionary(
@@ -102,7 +103,13 @@ internal static class PackageContentIndexValidator
                                && entry.Size <= SunderArchiveExtractionOptions.Default.MaxEntryUncompressedBytes
                                && PackageContentSignatureValidator.IsLowercaseSha256(entry.Sha256);
             await PackageContentSignatureValidator.ValidateAsync(
-                entry, filePath, normalizedPath, errors, validateHash, cancellationToken);
+                entry,
+                filePath,
+                normalizedPath,
+                errors,
+                validateHash,
+                cancellationToken,
+                ioObserver);
         }
 
         foreach (var actualFile in actualFiles)

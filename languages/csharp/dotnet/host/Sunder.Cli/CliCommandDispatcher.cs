@@ -23,6 +23,13 @@ internal sealed class CliCommandDispatcher(
         RuntimeStatusCommand value => new RuntimeStatusCommandHandler(RequireHost(), RequireRuntime(), output).ExecuteAsync(value, token),
         RuntimeLifecycleCommand value => new RuntimeLifecycleCommandHandler(RequireHost(), output, progress).ExecuteAsync(value, token),
         RuntimeResetCommand value => new RuntimeResetCommandHandler(RequireRuntime(), output, options.RequireRuntimeUrl()).ExecuteAsync(value, token),
+        ListExecutionRuntimesCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
+        ShowExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
+        EnsureExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
+        ImportExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
+        VerifyExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
+        RepairExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
+        GarbageCollectExecutionRuntimesCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
         ListInstalledCommand value => PackageHandler().ExecuteAsync(value, token),
         PackageStatusCommand value => PackageHandler().ExecuteAsync(value, token),
         InstallRegistryPackageCommand value => PackageHandler().ExecuteAsync(value, token),
@@ -52,12 +59,15 @@ internal sealed class CliCommandDispatcher(
         ListDistTagsCommand value => ManagementHandler().ExecuteAsync(value, token),
         SetDistTagCommand value => ManagementHandler().ExecuteAsync(value, token),
         ValidatePackageCommand value => new ValidationCommandHandler(_archives, output).ExecuteAsync(value, token),
+        RunDevPackageCommand value => DevPackageHandler().ExecuteAsync(value, token),
+        PrepareDevPackageImportsCommand value => DevPackageHandler().ExecuteAsync(value, token),
+        SmokeDevPackageCommand value => DevPackageHandler().ExecuteAsync(value, token),
         PublishPackageCommand value => PublishHandler().ExecuteAsync(value, token),
         SearchStacksCommand value => StackHandler().ExecuteAsync(value, token),
         StackInfoCommand value => StackHandler().ExecuteAsync(value, token),
         DownloadStackCommand value => StackHandler().ExecuteAsync(value, token),
         PublishStackCommand value => StackHandler().ExecuteAsync(value, token),
-        DeleteStackCommand value => StackHandler().ExecuteAsync(value, token),
+        SetStackVisibilityCommand value => StackHandler().ExecuteAsync(value, token),
         OpenStackCommand value => StackHandler().ExecuteAsync(value, token),
         ImportStackCommand value => RuntimeStackHandler().ExecuteAsync(value, token),
         ExportStackCommand value => RuntimeStackHandler().ExecuteAsync(value, token),
@@ -97,7 +107,7 @@ internal sealed class CliCommandDispatcher(
     }
 
     private PackageCommandHandler PackageHandler()
-        => new(RequireRuntime(), output, progress, options, _archives);
+        => new(RequireRuntime(), RequireRuntime(), output, progress, options, _archives);
 
     private PackageSettingsCommandHandler SettingsHandler()
         => new(RequireRuntime(), output, secretValues);
@@ -119,6 +129,12 @@ internal sealed class CliCommandDispatcher(
 
     private RuntimeStackCommandHandler RuntimeStackHandler()
         => new(RequireRuntime(), _archives, output, progress);
+
+    private ExecutionRuntimeCommandHandler ExecutionRuntimeHandler()
+        => new(RequireRuntime(), output, progress, options);
+
+    private DevPackageCommandHandler DevPackageHandler()
+        => new(RequireHost(), RequireRuntime(), output);
 
     private ICliHostClient RequireHost()
         => host ?? throw new InvalidOperationException("The selected command was not provisioned with a Host client.");

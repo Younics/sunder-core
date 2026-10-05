@@ -1,0 +1,20 @@
+{
+  "formatVersion": 1,
+  "reviewedAtUtc": "2026-08-11",
+  "profiles": {
+    "nodeModule": {
+      "maximumArchiveBytes": 8388608,
+      "maximumCurrentRidInstalledBytes": 16777216,
+      "maximumStartupMilliseconds": 30000,
+      "expectedWorkerProcessCount": 1,
+      "maximumWorkerRssBytes": 536870912
+    },
+    "dotnetWorker": {
+      "maximumArchiveBytes": 268435456,
+      "maximumCurrentRidInstalledBytes": 536870912,
+      "maximumStartupMilliseconds": 30000,
+      "expectedWorkerProcessCount": 1,
+      "maximumWorkerRssBytes": 536870912
+    }
+  }
+}

@@ -35,15 +35,8 @@ internal static class SunderRpcCSharpEmitter
             .Append("    public const int DescriptorVersion = ")
             .Append(model.DescriptorVersion.ToString(System.Globalization.CultureInfo.InvariantCulture))
             .AppendLine(";");
-        if (model.SchemaProfile is null)
-        {
-            output.AppendLine("    public const string? SchemaProfile = null;");
-        }
-        else
-        {
-            output.Append("    public const string SchemaProfile = \"")
-                .Append(SunderRpcCSharpSyntax.EscapeStringLiteral(model.SchemaProfile)).AppendLine("\";");
-        }
+        output.Append("    public const string SchemaProfile = \"")
+            .Append(SunderRpcCSharpSyntax.EscapeStringLiteral(model.SchemaProfile)).AppendLine("\";");
         output
             .Append("    public const string ContractId = \"")
             .Append(SunderRpcCSharpSyntax.EscapeStringLiteral(model.ContractId)).AppendLine("\";")
@@ -51,15 +44,8 @@ internal static class SunderRpcCSharpEmitter
             .Append(SunderRpcCSharpSyntax.EscapeStringLiteral(model.ContractVersion)).AppendLine("\";")
             .Append("    public const string DescriptorSha256 = \"")
             .Append(model.DescriptorSha256).AppendLine("\";");
-        if (model.AbiSha256 is null)
-        {
-            output.AppendLine("    public const string? AbiSha256 = null;");
-        }
-        else
-        {
-            output.Append("    public const string AbiSha256 = \"")
-                .Append(model.AbiSha256).AppendLine("\";");
-        }
+        output.Append("    public const string AbiSha256 = \"")
+            .Append(model.AbiSha256).AppendLine("\";");
         output.AppendLine("}").AppendLine();
     }
 
@@ -112,7 +98,7 @@ internal static class SunderRpcCSharpEmitter
             .AppendLine("        DefaultIgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,")
             .AppendLine("        PropertyNameCaseInsensitive = false,")
             .AppendLine("        UnmappedMemberHandling = global::System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,")
-            .AppendLine("        Converters = { new global::Sunder.Sdk.Rpc.SunderRpcV2JsonConverterFactory() },")
+            .AppendLine("        Converters = { new global::Sunder.Sdk.Rpc.SunderRpcJsonConverterFactory() },")
             .AppendLine("    };")
             .AppendLine()
             .Append("    public static global::Sunder.Sdk.Rpc.SunderRpcException Create(")
@@ -375,23 +361,12 @@ internal static class SunderRpcCSharpEmitter
                 .Append('<').Append(method.RequestTypeName).Append(", ").Append(method.OutputTypeName).Append(">(_scope, _endpoint, \"")
                 .Append(SunderRpcCSharpSyntax.EscapeStringLiteral(service.ServiceId)).Append("\", \"")
                 .Append(SunderRpcCSharpSyntax.EscapeStringLiteral(method.MethodId));
-            if (model.IsV2 || method.RequestAllowsNull || method.OutputAllowsNull)
-            {
-                output.AppendLine("\", request,")
-                    .Append("            requestAllowsNull: ").Append(method.RequestAllowsNull ? "true" : "false").AppendLine(",")
-                    .Append("            ")
-                    .Append(method.Kind == SunderRpcMethodKind.Unary ? "responseAllowsNull" : "eventAllowsNull")
-                    .Append(": ").Append(method.OutputAllowsNull ? "true" : "false").AppendLine(",");
-                if (model.IsV2)
-                {
-                    output.AppendLine("            useV2WireFormat: true,");
-                }
-                output.AppendLine("            cancellationToken: cancellationToken);");
-            }
-            else
-            {
-                output.AppendLine("\", request, cancellationToken: cancellationToken);");
-            }
+            output.AppendLine("\", request,")
+                .Append("            requestAllowsNull: ").Append(method.RequestAllowsNull ? "true" : "false").AppendLine(",")
+                .Append("            ")
+                .Append(method.Kind == SunderRpcMethodKind.Unary ? "responseAllowsNull" : "eventAllowsNull")
+                .Append(": ").Append(method.OutputAllowsNull ? "true" : "false").AppendLine(",")
+                .AppendLine("            cancellationToken: cancellationToken);");
             output.AppendLine();
         }
         output.AppendLine("}").AppendLine();
@@ -400,26 +375,17 @@ internal static class SunderRpcCSharpEmitter
     private static void EmitHandler(StringBuilder output, SunderRpcCSharpGeneratorModel model)
     {
         output.Append(model.Accessibility).Append(" sealed class ").Append(model.HandlerTypeName)
-            .Append(" : global::Sunder.Sdk.Rpc.ISunderRpcServiceHandler");
-        if (model.IsV2)
-        {
-            output.Append(", global::Sunder.Sdk.Rpc.ISunderRpcDeclaredErrorMetadata");
-        }
+            .Append(" : global::Sunder.Sdk.Rpc.ISunderRpcServiceHandler")
+            .Append(", global::Sunder.Sdk.Rpc.ISunderRpcDeclaredErrorMetadata");
         output.AppendLine().AppendLine("{");
         output.AppendLine("    private static readonly global::System.Text.Json.JsonSerializerOptions JsonOptions = new(global::System.Text.Json.JsonSerializerDefaults.Web)")
             .AppendLine("    {")
             .AppendLine("        DefaultIgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,")
             .AppendLine("        PropertyNameCaseInsensitive = false,")
-            .AppendLine("        UnmappedMemberHandling = global::System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,");
-        if (model.IsV2)
-        {
-            output.AppendLine("        Converters = { new global::Sunder.Sdk.Rpc.SunderRpcV2JsonConverterFactory() },");
-        }
-        output.AppendLine("    };");
-        if (model.IsV2)
-        {
-            EmitDeclaredErrorMetadata(output, model);
-        }
+            .AppendLine("        UnmappedMemberHandling = global::System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,")
+            .AppendLine("        Converters = { new global::Sunder.Sdk.Rpc.SunderRpcJsonConverterFactory() },")
+            .AppendLine("    };");
+        EmitDeclaredErrorMetadata(output, model);
         for (var index = 0; index < model.Services.Count; index++)
         {
             output.Append("    private readonly ").Append(model.Services[index].ProviderTypeName)
@@ -440,12 +406,9 @@ internal static class SunderRpcCSharpEmitter
         }
         output.AppendLine("    }").AppendLine();
 
-        if (model.IsV2)
-        {
-            output.AppendLine("    public global::System.Collections.Generic.IReadOnlyDictionary<string, global::System.Collections.Generic.IReadOnlyDictionary<string, global::System.Collections.Generic.IReadOnlyList<string>>> DeclaredErrors")
-                .AppendLine("        => DeclaredErrorMap;")
-                .AppendLine();
-        }
+        output.AppendLine("    public global::System.Collections.Generic.IReadOnlyDictionary<string, global::System.Collections.Generic.IReadOnlyDictionary<string, global::System.Collections.Generic.IReadOnlyList<string>>> DeclaredErrors")
+            .AppendLine("        => DeclaredErrorMap;")
+            .AppendLine();
 
         output.AppendLine("    public global::System.Threading.Tasks.ValueTask<global::System.Text.Json.JsonElement> InvokeUnaryAsync(")
             .AppendLine("        global::Sunder.Sdk.Rpc.SunderRpcInvocationContext context,")

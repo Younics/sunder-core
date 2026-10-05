@@ -1,0 +1,185 @@
+<Project>
+  <Target Name="Build" DependsOnTargets="_BuildSunderSelectedRid" Returns="@(_SunderBuiltRid)" />
+  <Target Name="Compile" DependsOnTargets="_BuildSunderSelectedRid" />
+  <Target Name="CoreCompile" DependsOnTargets="_BuildSunderSelectedRid" />
+
+  <Target Name="ComputeRunArguments" DependsOnTargets="_ValidateSunderPackageBuildFramework;_InitializeSunderPackageDispatch">
+    <Error Condition="'$(_SunderDispatchRid)' != '$(NETCoreSdkRuntimeIdentifier)'" Text="package-authoring.run-rid-invalid: Development launch requires the current native host RID." />
+    <Error Condition="!Exists('$(SunderDevOutputPath)/manifest/sunder-package.json')" Text="package-authoring.run-output-missing: Build the package before launching it with --no-build." />
+    <PropertyGroup>
+      <SunderCliPath Condition="'$(SunderCliPath)' == ''">sunder</SunderCliPath>
+      <RunCommand>$(SunderCliPath)</RunCommand>
+      <RunArguments>dev package run &quot;$(SunderDevOutputPath)&quot;</RunArguments>
+      <RunWorkingDirectory>$(MSBuildProjectDirectory)</RunWorkingDirectory>
+    </PropertyGroup>
+  </Target>
+  <Target Name="Run" DependsOnTargets="Build;ComputeRunArguments">
+    <Exec Command="&quot;$(RunCommand)&quot; $(RunArguments)" WorkingDirectory="$(RunWorkingDirectory)" />
+  </Target>
+
+  <Target Name="_InitializeSunderPackageDispatch" DependsOnTargets="_PrepareSunderPackageBuildTasks">
+    <Error Condition="'$(TargetFramework)' == ''" Text="package-authoring.framework-required: Select an evaluated target framework." />
+    <Error Condition="'$(SunderPackageUsePrebuiltLeaves)' == 'true'" Text="Single-project prebuilt operations require qualified role-input evidence and cannot rebuild signed inputs." />
+    <PropertyGroup>
+      <_SunderDispatchOutput>$([MSBuild]::EnsureTrailingSlash('$(SunderPackageComposedOutputRoot)'))</_SunderDispatchOutput>
+      <_SunderDispatchIntermediate>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', '$(Configuration)', '$(TargetFramework)'))))))</_SunderDispatchIntermediate>
+      <_SunderDispatchRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_SunderDispatchRid>
+      <_SunderDispatchRid Condition="'$(_SunderDispatchRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_SunderDispatchRid>
+      <_SunderDeclaredRids Condition="'$(RuntimeIdentifiers)' != ''">$(RuntimeIdentifiers)</_SunderDeclaredRids>
+      <_SunderDeclaredRids Condition="'$(_SunderDeclaredRids)' == '' and '$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_SunderDeclaredRids>
+      <_SunderDeclaredRids Condition="'$(_SunderDeclaredRids)' == ''">$(SunderPackageRuntimeIdentifiers)</_SunderDeclaredRids>
+      <SunderDevOutputPath>$(_SunderDispatchOutput)sunder-dev</SunderDevOutputPath>
+      <SunderDevOutputDiscoveryRoot>$(_SunderDispatchOutput)</SunderDevOutputDiscoveryRoot>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderDispatchLock Include="$(_SunderDispatchOutput)sunder-package-operation" DiscoveryRoot="$(_SunderDispatchOutput)sunder-package-operation" />
+      <_SunderDeclaredRid Include="$(_SunderDeclaredRids)" />
+      <_SunderUnsupportedDeclaredRid Include="@(_SunderDeclaredRid)" Exclude="win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64" />
+      <_SunderUnknownBuildRid Include="$(_SunderDispatchRid)" Exclude="@(_SunderDeclaredRid)" />
+    </ItemGroup>
+    <Error Condition="'@(_SunderUnsupportedDeclaredRid)' != ''" Text="package-authoring.rid-invalid: Select supported RuntimeIdentifiers." />
+  </Target>
+
+  <Target Name="_ValidateSunderPackageBuildFramework">
+    <Error Condition="'$(TargetFramework)' != 'net10.0'" Text="package-authoring.framework-unsupported: Worker V1 requires TargetFramework net10.0; select it explicitly for this package build." />
+  </Target>
+
+  <Target Name="_BuildSunderSelectedRid" DependsOnTargets="_ValidateSunderPackageBuildFramework;_InitializeSunderPackageDispatch">
+    <Error Condition="'@(_SunderUnknownBuildRid)' != ''" Text="package-authoring.rid-invalid: Build requires a declared RuntimeIdentifier." />
+    <!-- Role selection is a reference projection, not a different package build.
+         Rendezvous before taking the external lease. Preserve all other caller
+         globals, including genuine source/configuration overrides. -->
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_BuildSunderSelectedRidUnderLease" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);Platform=$(Platform);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderDispatchRid)"
+             RemoveProperties="SunderPackageReferenceRole">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderBuiltRid" />
+    </MSBuild>
+  </Target>
+
+  <Target Name="_BuildSunderSelectedRidUnderLease" DependsOnTargets="_ValidateSunderPackageBuildFramework;_InitializeSunderPackageDispatch" Returns="@(_SunderBuiltRid)">
+    <Error Condition="'@(_SunderUnknownBuildRid)' != ''" Text="package-authoring.rid-invalid: Build requires a declared RuntimeIdentifier." />
+    <ManageSunderPackageOperationLockTask Action="Acquire" ProjectDirectory="$(MSBuildProjectDirectory)" OutputDirectories="@(_SunderDispatchLock)"
+                                           WaitProject="$(MSBuildThisFileDirectory)Sunder.Package.Build.SourceLock.targets">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageDispatchLease" />
+    </ManageSunderPackageOperationLockTask>
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Build" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderDispatchRid);SunderPackageRidBuild=true;SunderPackageAuthoringOutputRoot=$(_SunderDispatchOutput);SunderPackageAuthoringIntermediateRoot=$(_SunderDispatchIntermediate);IntermediateOutputPath=$(_SunderDispatchIntermediate)sunder-analysis/$(_SunderDispatchRid)/;OutputPath=$(_SunderDispatchOutput);AppendRuntimeIdentifierToOutputPath=false"
+             RemoveProperties="OutDir;SunderPackageCompilationRole;SunderPackageInnerBuild">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderBuiltRid" />
+    </MSBuild>
+    <AggregateSunderPackageTask TargetLeaves="@(_SunderBuiltRid)" OutputPath="$(SunderDevOutputPath)" OutputDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                                ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(_SunderDispatchOutput)" ExpectedPackageVersion="$(Version)" />
+    <ManageSunderPackageOperationLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_SunderPackageDispatchLease)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageDispatchLease" />
+    </ManageSunderPackageOperationLockTask>
+    <OnError ExecuteTargets="_ReleaseSunderPackageDispatchLease" />
+  </Target>
+
+  <PropertyGroup>
+    <_SunderSelectedPackTarget>_PackSunderPackageFromSource</_SunderSelectedPackTarget>
+    <_SunderSelectedPackTarget Condition="'$(SunderPackageUsePrebuiltLeaves)' == 'true'">_PackSunderPackagePrebuilt</_SunderSelectedPackTarget>
+  </PropertyGroup>
+  <Target Name="PackSunderPackage" DependsOnTargets="$(_SunderSelectedPackTarget)" />
+  <Target Name="GetSunderPackageRoleInputs" DependsOnTargets="Build" Returns="@(_SunderBuiltRid)" />
+
+  <Target Name="_PackSunderPackageFromSource" DependsOnTargets="_ValidateSunderPackageBuildFramework;_InitializeSunderPackageDispatch">
+    <PropertyGroup>
+      <_SunderPackRids Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_SunderPackRids>
+      <_SunderPackRids Condition="'$(_SunderPackRids)' == '' and '$(_SunderPackageComposeRidsWereSpecified)' == 'true'">$(SunderPackageComposeRuntimeIdentifiers)</_SunderPackRids>
+      <_SunderPackRids Condition="'$(_SunderPackRids)' == ''">$(_SunderDeclaredRids)</_SunderPackRids>
+      <SunderPackageOutputPath Condition="'$(SunderPackageOutputPath)' == ''">$(_SunderDispatchOutput)$(AssemblyName).$(Version).sunderpkg</SunderPackageOutputPath>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderPackRid Include="$(_SunderPackRids)" />
+      <_SunderUnknownPackRid Include="@(_SunderPackRid)" Exclude="@(_SunderDeclaredRid)" />
+    </ItemGroup>
+    <Error Condition="'@(_SunderPackRid)' == '' or '@(_SunderUnknownPackRid)' != ''" Text="package-authoring.rid-invalid: Pack must select at least one declared RID." />
+    <Error Condition="'@(_SunderPackRid->Count())' != '@(_SunderPackRid->Distinct()->Count())'" Text="package-authoring.rid-invalid: Pack RID selection contains duplicates." />
+    <ManageSunderPackageOperationLockTask Action="Acquire" ProjectDirectory="$(MSBuildProjectDirectory)" OutputDirectories="@(_SunderDispatchLock)"
+                                           WaitProject="$(MSBuildThisFileDirectory)Sunder.Package.Build.SourceLock.targets">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageDispatchLease" />
+    </ManageSunderPackageOperationLockTask>
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Build;CheckSunderContracts" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=%(_SunderPackRid.Identity);SunderPackageRidBuild=true;SunderPackageAuthoringOutputRoot=$(_SunderDispatchOutput);SunderPackageAuthoringIntermediateRoot=$(_SunderDispatchIntermediate);IntermediateOutputPath=$(_SunderDispatchIntermediate)sunder-analysis/%(_SunderPackRid.Identity)/;OutputPath=$(_SunderDispatchOutput);AppendRuntimeIdentifierToOutputPath=false"
+             RemoveProperties="OutDir;SunderPackageCompilationRole;SunderPackageInnerBuild">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderPackedRid" />
+    </MSBuild>
+    <AggregateSunderPackageTask TargetLeaves="@(_SunderPackedRid)" OutputPath="$(SunderDevOutputPath)" OutputDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                                ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(_SunderDispatchOutput)" ExpectedPackageVersion="$(Version)" />
+    <PropertyGroup><_SunderPackCheckRid>$([System.String]::Copy('$(_SunderPackRids)').Split(';').GetValue(0))</_SunderPackCheckRid></PropertyGroup>
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_PackSunderPackageAggregateForRid" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderPackCheckRid);SunderPackageRidBuild=true;SunderPackageAuthoringOutputRoot=$(_SunderDispatchOutput);SunderPackageAuthoringIntermediateRoot=$(_SunderDispatchIntermediate);SunderPackageAuthoringPackInput=$(SunderDevOutputPath);SunderPackageAuthoringPackOutput=$(SunderPackageOutputPath);IntermediateOutputPath=$(_SunderDispatchIntermediate)sunder-analysis/$(_SunderPackCheckRid)/;OutputPath=$(_SunderDispatchOutput);AppendRuntimeIdentifierToOutputPath=false"
+             RemoveProperties="OutDir;SunderPackageCompilationRole;SunderPackageInnerBuild" />
+    <ManageSunderPackageOperationLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_SunderPackageDispatchLease)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageDispatchLease" />
+    </ManageSunderPackageOperationLockTask>
+    <OnError ExecuteTargets="_ReleaseSunderPackageDispatchLease" />
+  </Target>
+
+  <Target Name="GetSunderPackageAppPreviewInputs" DependsOnTargets="_ValidateSunderPackagePreviewRid;Build" Returns="@(_SunderPackagePreviewInput)">
+    <Error Condition="'%(_SunderBuiltRid.HasApp)' != 'true'" Text="package-authoring.preview-unavailable: This package has no generated App role." />
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_GetSunderPackageAppPreviewInput" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderDispatchRid);SunderPackageCompilationRole=app;SunderPackageRidBuild=true;AssemblyName=%(_SunderBuiltRid.AssemblyName);OutputType=Library;SunderPackageProject=true;IntermediateOutputPath=%(_SunderBuiltRid.AppIntermediatePath);OutputPath=%(_SunderBuiltRid.AppOutputPath);AppendRuntimeIdentifierToOutputPath=false;ProjectAssetsFile=%(_SunderBuiltRid.SnapshotRoot)/roles/app/restore/project.assets.json;MSBuildProjectExtensionsPath=%(_SunderBuiltRid.SnapshotRoot)/roles/app/restore/"
+             RemoveProperties="OutDir">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderPackagePreviewInput" />
+    </MSBuild>
+    <Error Condition="!Exists('%(_SunderPackagePreviewInput.Identity)') or !Exists('%(_SunderPackagePreviewInput.DepsFile)') or !Exists('%(_SunderPackagePreviewInput.RuntimeConfigFile)')"
+           Text="package-authoring.preview-unavailable: The generated App preview inputs are incomplete." />
+  </Target>
+  <Target Name="_ValidateSunderPackagePreviewRid" DependsOnTargets="_ValidateSunderPackageBuildFramework;_InitializeSunderPackageDispatch">
+    <Error Condition="'$(_SunderDispatchRid)' != '$(NETCoreSdkRuntimeIdentifier)'" Text="package-authoring.preview-rid-invalid: Preview requires the current native host RID." />
+  </Target>
+  <Target Name="AvaloniaFilePreview" DependsOnTargets="GetSunderPackageAppPreviewInputs">
+    <Error Condition="'%(_SunderPackagePreviewInput.PreviewerTool)' == '' or !Exists('%(_SunderPackagePreviewInput.PreviewerTool)')" Text="package-authoring.preview-unavailable: The evaluated Avalonia previewer tool is unavailable." />
+    <PropertyGroup>
+      <_SunderPreviewFile Condition="'$(APreviewFile)' != ''">$([System.IO.Path]::GetFullPath('$(APreviewFile)', '$(MSBuildProjectDirectory)'))</_SunderPreviewFile>
+      <_SunderPreviewFile Condition="'$(_SunderPreviewFile)' == ''">$([System.IO.Path]::GetFullPath('MainWindow.axaml', '$(MSBuildProjectDirectory)'))</_SunderPreviewFile>
+      <APreviewerUrl Condition="'$(APreviewerUrl)' == ''">http://127.0.0.1:6001</APreviewerUrl>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_SunderPreviewFile)')" Text="package-authoring.preview-file-invalid: Select an existing APreviewFile." />
+    <Exec Command="dotnet exec --runtimeconfig &quot;%(_SunderPackagePreviewInput.RuntimeConfigFile)&quot; --depsfile &quot;%(_SunderPackagePreviewInput.DepsFile)&quot; &quot;%(_SunderPackagePreviewInput.PreviewerTool)&quot; --method html --html-url &quot;$(APreviewerUrl)&quot; --transport &quot;$(_SunderPreviewFile)&quot; &quot;%(_SunderPackagePreviewInput.Identity)&quot;" />
+  </Target>
+
+  <Target Name="_CleanSunderPackageRoles" BeforeTargets="CoreClean" DependsOnTargets="_InitializeSunderPackageDispatch">
+    <!-- Share Clean results with later reference consumers during solution
+         Rebuild, just as Build shares its canonical request configuration. -->
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_CleanSunderPackageRolesUnderLease" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);Platform=$(Platform);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderDispatchRid)"
+             RemoveProperties="SunderPackageReferenceRole" />
+  </Target>
+  <Target Name="_CleanSunderPackageRolesUnderLease" DependsOnTargets="_InitializeSunderPackageDispatch">
+    <ManageSunderPackageOperationLockTask Action="Acquire" ProjectDirectory="$(MSBuildProjectDirectory)" OutputDirectories="@(_SunderDispatchLock)"
+                                           WaitProject="$(MSBuildThisFileDirectory)Sunder.Package.Build.SourceLock.targets">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageDispatchLease" />
+    </ManageSunderPackageOperationLockTask>
+    <ItemGroup>
+      <_SunderRoleCleanRequest Include="$(MSBuildProjectFullPath)" AdditionalProperties="RuntimeIdentifier=%(_SunderDeclaredRid.Identity);SunderPackageCompilationRole=worker;OutputType=Exe;AssemblyName=$(AssemblyName);IntermediateOutputPath=$(_SunderDispatchIntermediate)sunder-roles/worker/%(_SunderDeclaredRid.Identity)/;OutputPath=$(_SunderDispatchOutput)sunder-roles/worker/%(_SunderDeclaredRid.Identity)/" />
+      <_SunderRoleCleanRequest Include="$(MSBuildProjectFullPath)" AdditionalProperties="RuntimeIdentifier=%(_SunderDeclaredRid.Identity);SunderPackageCompilationRole=app;OutputType=Library;AssemblyName=$(AssemblyName).App;IntermediateOutputPath=$(_SunderDispatchIntermediate)sunder-roles/app/%(_SunderDeclaredRid.Identity)/;OutputPath=$(_SunderDispatchOutput)sunder-roles/app/%(_SunderDeclaredRid.Identity)/" />
+      <_SunderRidAnalysisToClean Include="$(_SunderDispatchIntermediate)sunder-analysis/%(_SunderDeclaredRid.Identity)/sunder-rpc" DiscoveryRoot="$(_SunderDispatchIntermediate)sunder-analysis/%(_SunderDeclaredRid.Identity)/" />
+    </ItemGroup>
+    <!-- The authored project's ordinary Clean already visits source references.
+         Inner role cleanup owns only its generated files, including foreign RIDs.
+         Keep the package import active so its isolation/cleanup hooks still load. -->
+    <MSBuild Projects="@(_SunderRoleCleanRequest)" Targets="Clean" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);SunderPackageRidBuild=true;SunderPackageProject=true;BuildProjectReferences=false;AppendRuntimeIdentifierToOutputPath=false"
+             RemoveProperties="OutDir;SunderPackageRolePlanPath;SunderPackageRolePlanSha256" />
+    <CleanSunderRpcGeneratedOutputTask ProjectDirectory="$(MSBuildProjectDirectory)" GeneratedDirectories="@(_SunderRidAnalysisToClean)" />
+    <CleanSunderPackageOutputTask OutputPath="$(_SunderDispatchOutput)sunder-targets/%(_SunderDeclaredRid.Identity)/sunder-dev" OutputDiscoveryRoot="$(_SunderDispatchOutput)sunder-targets/%(_SunderDeclaredRid.Identity)/"
+                                  ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(_SunderDispatchOutput)sunder-targets/%(_SunderDeclaredRid.Identity)/" />
+    <CleanSunderPackageOutputTask OutputPath="$(SunderDevOutputPath)" OutputDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)" ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(_SunderDispatchOutput)" />
+    <ManageSunderPackageOperationLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_SunderPackageDispatchLease)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageDispatchLease" />
+    </ManageSunderPackageOperationLockTask>
+    <OnError ExecuteTargets="_ReleaseSunderPackageDispatchLease" />
+  </Target>
+  <Target Name="_ReleaseSunderPackageDispatchLease" Condition="'$(_SunderPackageDispatchLease)' != ''">
+    <ManageSunderPackageOperationLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_SunderPackageDispatchLease)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageDispatchLease" />
+    </ManageSunderPackageOperationLockTask>
+  </Target>
+  <Target Name="GetSunderPackageRoleReference">
+    <Error Text="package-authoring.reference-role-invalid: Select SunderPackageReferenceRole=worker or app." />
+  </Target>
+  <Import Project="$(MSBuildThisFileDirectory)Sunder.Package.Build.Authoring.References.targets"
+          Condition="'$(SunderPackageReferenceRole)' != ''" />
+</Project>

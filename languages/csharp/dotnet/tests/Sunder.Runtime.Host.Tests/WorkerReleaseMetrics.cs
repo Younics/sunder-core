@@ -67,7 +67,7 @@ internal static class WorkerReleaseMetrics
 
     private static WorkerReleaseThresholds LoadThresholds(string profileName)
     {
-        var path = Path.Combine(FindRepositoryRoot(), "eng", "release", "worker-v3-thresholds.json");
+        var path = Path.Combine(FindRepositoryRoot(), "eng", "release", "worker-v1-thresholds.json");
         using var document = JsonDocument.Parse(File.ReadAllBytes(path));
         Assert.Equal(1, document.RootElement.GetProperty("formatVersion").GetInt32());
         var profile = document.RootElement.GetProperty("profiles").GetProperty(profileName);

@@ -6,7 +6,7 @@ internal static class GeneratedOutputPathSafety
 {
     public static void EnsureSafeAncestors(string path, bool includeLeaf, string label)
     {
-        var fullPath = Path.GetFullPath(path);
+        var fullPath = NormalizeTrustedSystemAliases(path);
         var root = Path.GetPathRoot(fullPath);
         if (string.IsNullOrWhiteSpace(root))
         {
@@ -151,7 +151,24 @@ internal static class GeneratedOutputPathSafety
         => (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
 
     private static string NormalizeDirectory(string path)
-        => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        => NormalizeTrustedSystemAliases(path);
+
+    public static string NormalizeTrustedSystemAliases(string path)
+    {
+        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        if (!OperatingSystem.IsMacOS()) return fullPath;
+        foreach (var name in new[] { "var", "tmp", "etc" })
+        {
+            var alias = Path.Combine(Path.DirectorySeparatorChar.ToString(), name);
+            if ((string.Equals(fullPath, alias, StringComparison.Ordinal)
+                 || fullPath.StartsWith(alias + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                && IsTrustedMacOsSystemAlias(alias))
+            {
+                return "/private" + fullPath;
+            }
+        }
+        return fullPath;
+    }
 
     private static bool PathsEqual(string left, string right)
         => string.Equals(left, right, PathComparison);
@@ -211,6 +228,33 @@ internal static class GeneratedOutputPathSafety
                    || new DirectoryInfo(path).LinkTarget is not null;
         }
         catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException or IOException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsTrustedMacOsSystemAlias(string path)
+    {
+        if (!OperatingSystem.IsMacOS()) return false;
+        var name = Path.GetFileName(path);
+        if (name is not ("var" or "tmp" or "etc")
+            || !string.Equals(
+                Path.TrimEndingDirectorySeparator(path),
+                Path.Combine(Path.DirectorySeparatorChar.ToString(), name),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+        try
+        {
+            var target = new DirectoryInfo(path).ResolveLinkTarget(returnFinalTarget: true);
+            return target is not null
+                   && string.Equals(
+                       Path.TrimEndingDirectorySeparator(target.FullName),
+                       Path.Combine(Path.DirectorySeparatorChar.ToString(), "private", name),
+                       StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             return false;
         }

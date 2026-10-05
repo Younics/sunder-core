@@ -22,32 +22,27 @@ internal sealed class RuntimeResetCommandHandler(
                 $"Runtime reset only supports the default local Host at '{CliOptions.DefaultRuntimeUrl}'. Remove the custom Runtime URL before resetting local state.");
         }
 
-        RuntimeResetChallengeResponse? challenge = null;
-        try
+        var challenge = await runtime.PrepareResetAsync(token).ConfigureAwait(false);
+        if (challenge.ExpiresAtUtc <= DateTimeOffset.UtcNow)
         {
-            challenge = await runtime.PrepareResetAsync(token).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (
-            (exception is HttpRequestException or InvalidOperationException)
-            && !CliErrorMapper.IsTimeout(exception))
-        {
-            output.Warning("Runtime is not reachable; attempting the same validated reset under the offline Runtime lease.");
-        }
-        if (challenge is not null)
-        {
-            if (challenge.ExpiresAtUtc <= DateTimeOffset.UtcNow)
-            {
-                throw new InvalidOperationException("The Runtime reset confirmation challenge expired before it could be used.");
-            }
-
-            await runtime.DrainForResetAsync(challenge.Challenge, token).ConfigureAwait(false);
-            output.Info("Runtime accepted the one-time reset challenge and is draining.");
+            throw new InvalidOperationException("The Runtime reset confirmation challenge expired before it could be used.");
         }
 
-        var result = await runtime.ResetLocalStateAsync(token).ConfigureAwait(false);
+        var result = command.Scope == RuntimeResetScope.StartupCache
+            ? await runtime.DrainAndResetStartupCacheAsync(challenge, token).ConfigureAwait(false)
+            : await runtime.DrainAndResetLocalStateAsync(challenge, token).ConfigureAwait(false);
+        output.Info("Runtime accepted the one-time reset challenge and returned the bound local reset result.");
         foreach (var category in result.Categories)
         {
             output.Line($"{category.Category}: {category.Status}");
+            foreach (var relativePath in category.RelativePaths ?? [])
+            {
+                output.Line($"  {relativePath}");
+            }
+        }
+        if (result.ReceiptRelativePath is not null)
+        {
+            output.Line($"receipt: {result.ReceiptRelativePath}");
         }
 
         var reset = result.Categories.Count(category => category.Status == "reset");
@@ -63,7 +58,9 @@ internal sealed class RuntimeResetCommandHandler(
             {
                 name = category.Category,
                 status = category.Status,
+                paths = category.RelativePaths ?? [],
             }).ToArray(),
+            receipt = result.ReceiptRelativePath,
         });
 
         if (!result.Success)

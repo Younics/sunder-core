@@ -20,7 +20,7 @@ public sealed partial class RuntimeManagementClient
     public Task<RuntimeRpcCatalogSnapshot> GetRpcCatalogAsync(CancellationToken token = default)
         => GetRequiredAsync<RuntimeRpcCatalogSnapshot>(
             "rpc/catalog",
-            RuntimeProtocolFeatures.SchemaFirstRpcV2,
+            RuntimeProtocolFeatures.SchemaFirstRpcV1,
             token);
 
     public Task<RuntimeRpcCatalogEventPage> GetRpcCatalogEventsAsync(
@@ -29,13 +29,13 @@ public sealed partial class RuntimeManagementClient
         CancellationToken token = default)
         => GetRequiredAsync<RuntimeRpcCatalogEventPage>(
             $"rpc/catalog/events?afterRevision={afterRevision}&afterSequence={afterSequence}",
-            RuntimeProtocolFeatures.SchemaFirstRpcV2,
+            RuntimeProtocolFeatures.SchemaFirstRpcV1,
             token);
 
     public Task<RuntimeRpcPermissionSnapshot> GetRpcPermissionsAsync(CancellationToken token = default)
         => GetRequiredAsync<RuntimeRpcPermissionSnapshot>(
             "rpc/permissions",
-            RuntimeProtocolFeatures.RpcPermissionsV2,
+            RuntimeProtocolFeatures.RpcPermissionsV1,
             token);
 
     public Task<RuntimeRpcPermissionSnapshot> GrantRpcPermissionAsync(
@@ -44,7 +44,7 @@ public sealed partial class RuntimeManagementClient
         => PostAsync<RuntimeRpcPermissionUpdateRequest, RuntimeRpcPermissionSnapshot>(
             "rpc/permissions/grant",
             new RuntimeRpcPermissionUpdateRequest(key),
-            RuntimeProtocolFeatures.RpcPermissionsV2,
+            RuntimeProtocolFeatures.RpcPermissionsV1,
             token);
 
     public Task<RuntimeRpcPermissionSnapshot> RevokeRpcPermissionAsync(
@@ -53,7 +53,7 @@ public sealed partial class RuntimeManagementClient
         => PostAsync<RuntimeRpcPermissionUpdateRequest, RuntimeRpcPermissionSnapshot>(
             "rpc/permissions/revoke",
             new RuntimeRpcPermissionUpdateRequest(key),
-            RuntimeProtocolFeatures.RpcPermissionsV2,
+            RuntimeProtocolFeatures.RpcPermissionsV1,
             token);
 
     public Task<RuntimeRpcAppSessionDescriptor> OpenAppRpcSessionAsync(
@@ -62,7 +62,7 @@ public sealed partial class RuntimeManagementClient
         => PostAsync<RuntimeRpcAppSessionOpenRequest, RuntimeRpcAppSessionDescriptor>(
             "rpc/app-sessions/open",
             request,
-            RuntimeProtocolFeatures.AppWebRpcV2,
+            RuntimeProtocolFeatures.AppWebRpcV1,
             token);
 
     public async Task CloseAppRpcSessionAsync(
@@ -118,7 +118,7 @@ public sealed partial class RuntimeManagementClient
         var response = await PostAsync<RuntimeRpcAppDiscoverRequest, RuntimeRpcAppDiscoverResponse>(
             "rpc/app/discover",
             request,
-            RuntimeProtocolFeatures.AppWebRpcV2,
+            RuntimeProtocolFeatures.AppWebRpcV1,
             token).ConfigureAwait(false);
         EnsureRpcErrorDetails(response.Error, "Runtime RPC discovery error details");
         return response;
@@ -131,7 +131,7 @@ public sealed partial class RuntimeManagementClient
         var response = await PostAsync<RuntimeRpcAppProviderRequest, RuntimeRpcAppProviderResponse>(
             "rpc/app/provider",
             request,
-            RuntimeProtocolFeatures.AppWebRpcV2,
+            RuntimeProtocolFeatures.AppWebRpcV1,
             token).ConfigureAwait(false);
         EnsureRpcErrorDetails(response.Error, "Runtime RPC provider error details");
         return response;
@@ -149,7 +149,7 @@ public sealed partial class RuntimeManagementClient
             var response = await PostAsync<RuntimeRpcAppInvariantViolationRequest, RuntimeRpcAppInvariantViolationResponse>(
             "rpc/app/invariant-violation",
             request with { ExceptionMessage = SanitizeInvariantMessage(request.ExceptionMessage) },
-            RuntimeProtocolFeatures.AppWebRpcV2,
+            RuntimeProtocolFeatures.AppWebRpcV1,
             token).ConfigureAwait(false);
             EnsureRpcErrorDetails(response.Error, "Runtime RPC invariant error details");
             return response;
@@ -206,7 +206,7 @@ public sealed partial class RuntimeManagementClient
             Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(metadata, RpcMetadataJsonOptions)));
         request.Options.Set(
             RuntimeAuthenticatedHttpMessageHandler.RequiredFeaturesKey,
-            new[] { RuntimeProtocolFeatures.AppWebRpcV2 });
+            new[] { RuntimeProtocolFeatures.AppWebRpcV1 });
         using var response = await _transport.SendAsync(request, cancellationToken: token).ConfigureAwait(false);
         var result = await _responses.ReadRequiredJsonAsync<RuntimeRpcAppContentRegisterResponse>(response, token)
             .ConfigureAwait(false);
@@ -271,7 +271,7 @@ public sealed partial class RuntimeManagementClient
         };
         request.Options.Set(
             RuntimeAuthenticatedHttpMessageHandler.RequiredFeaturesKey,
-            new[] { RuntimeProtocolFeatures.AppWebRpcV2 });
+            new[] { RuntimeProtocolFeatures.AppWebRpcV1 });
         if (payload is RuntimeRpcAppInvokeRequest invocation)
         {
             request.Options.Set(RuntimeAuthenticatedHttpMessageHandler.RpcValueKey, invocation.Request);

@@ -15,7 +15,7 @@ This repository contains the public Sunder core projects: the desktop app, local
 - `languages/csharp/dotnet/packages/Sunder.Package.Templates` -- `dotnet new sunder-package` template.
 - `languages/csharp/dotnet/libraries/Sunder.Package.Format` -- shared package archive inspection and validation used by core and private Registry code.
 - `languages/csharp/dotnet/libraries/Sunder.Registry.Contracts` -- public Registry API DTO contracts used by app, CLI, Registry web, and Registry server.
-- `languages/typescript/node` -- TypeScript SDK, Node package tooling, templates, and SEA fixtures.
+- `languages/typescript/node` -- TypeScript SDK, runtime-backed Node package tooling, templates, and Worker V1 fixtures.
 
 ## Boundaries
 
@@ -62,5 +62,24 @@ Useful targeted tests:
 - `dotnet test languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore`
 - `dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore`
 - `dotnet test languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore`
+
+Those commands run entire projects. During iteration, first filter the changed
+class/method. The existing portable lane provides the fast project-level check:
+
+```sh
+node scripts/test-oracles/run-dotnet-tests-with-results.mjs --project Sunder.Package.Build.Tests --primary-lane dotnet-linux --build
+```
+
+`dotnet-linux` is the existing OS-neutral lane and runs on supported developer OSes.
+Use `--primary-lane host-platform` for the affected process/build integration lane,
+or omit the lane for full project validation. `--list` previews selection without
+running tests or removing reports. See `docs/testing/core-test-oracles.md`.
+
+Do not run every artifact/template/native lane or workspace Build/Rebuild after each
+small edit. Run targeted integration cases for changed boundaries, then one full
+affected suite at an integration checkpoint. Preserve full CI/release requirements.
+Prefer one meaningful regression at the owning layer over repeated end-to-end setup.
+Standard Roslyn/MSBuild/Avalonia integration is supported; per-IDE acceptance is not
+a prerequisite for ordinary CLI builds, template work or package migration.
 
 If a running app/runtime locks normal build outputs on Windows, build the affected project to alternate output and intermediate paths.

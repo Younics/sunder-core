@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.Sdk.Worker.Internal;
@@ -42,7 +43,10 @@ internal sealed partial class SunderWorkerRuntime
             "callDepth",
             "provider");
         var callerPackageId = WorkerJson.RequiredString(contextValue, "callerPackageId", 256);
-        var callerPackageVersion = WorkerJson.RequiredString(contextValue, "callerPackageVersion", 128);
+        var callerPackageVersion = WorkerJson.RequiredString(
+            contextValue,
+            "callerPackageVersion",
+            SemanticVersion.MaximumLength);
         var deadlineUtc = WorkerJson.RequiredUtcTimestamp(contextValue, "deadlineUtc");
         var callDepthValue = WorkerJson.RequiredNonNegativeInt64(contextValue, "callDepth");
         if (callDepthValue is < 1 or > int.MaxValue)

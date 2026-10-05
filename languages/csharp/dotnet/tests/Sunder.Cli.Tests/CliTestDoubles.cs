@@ -25,12 +25,22 @@ internal sealed class FakeHostClient : ICliHostClient
         = (request, _) => Task.FromResult(Submission(request, HostOperationKinds.RuntimeRestart));
     public Func<HostOperationDescriptor, CancellationToken, Task<HostOperationDescriptor>> Wait { get; set; }
         = (operation, _) => Task.FromResult(operation with { State = HostOperationState.Succeeded, Message = "Completed." });
+    public Func<CancellationToken, Task<HostRuntimeStatus>> EnsureReady { get; set; }
+        = _ => Task.FromResult(new HostRuntimeStatus(
+            HostRuntimeDesiredState.Running,
+            HostRuntimeState.Ready,
+            1,
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            null,
+            null,
+            null));
 
     public Task<HostRuntimeStatus> GetStatusAsync(CancellationToken token) => Status(token);
     public Task<HostLifecycleSubmission> SubmitStartRuntimeAsync(HostLifecycleRequest request, CancellationToken token) => Start(request, token);
     public Task<HostLifecycleSubmission> SubmitStopRuntimeAsync(HostLifecycleRequest request, CancellationToken token) => Stop(request, token);
     public Task<HostLifecycleSubmission> SubmitRestartRuntimeAsync(HostLifecycleRequest request, CancellationToken token) => Restart(request, token);
     public Task<HostOperationDescriptor> WaitForOperationAsync(HostOperationDescriptor operation, CancellationToken token) => Wait(operation, token);
+    public Task<HostRuntimeStatus> EnsureRuntimeReadyAsync(CancellationToken token) => EnsureReady(token);
     public void Dispose() { }
 
     private static HostLifecycleSubmission Submission(HostLifecycleRequest request, string kind)
@@ -51,20 +61,43 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
     public Func<CancellationToken, Task<SystemStatusResponse>> SystemStatus { get; set; }
         = _ => Task.FromResult(new SystemStatusResponse("Sunder Runtime", "1.0.0", true, DateTimeOffset.UnixEpoch));
     public Func<CancellationToken, Task<RuntimeResetChallengeResponse>> ResetPrepare { get; set; }
-        = _ => Task.FromResult(new RuntimeResetChallengeResponse("test-challenge", DateTimeOffset.UtcNow.AddMinutes(1)));
-    public Func<string, CancellationToken, Task<RuntimeResetDrainResponse>> ResetDrain { get; set; }
-        = (_, _) => Task.FromResult(new RuntimeResetDrainResponse([]));
-    public Func<CancellationToken, Task<RuntimeV1ResetResult>> LocalReset { get; set; }
-        = _ => Task.FromResult(new RuntimeV1ResetResult([
-            new("package-catalog-and-payloads", "already-empty"),
-            new("package-state-files-secrets-and-logs", "already-empty"),
+        = _ => Task.FromResult(new RuntimeResetChallengeResponse(
+            "test-challenge",
+            DateTimeOffset.UtcNow.AddMinutes(1))
+        {
+            SupportsBoundStateRoot = true,
+        });
+    public Func<RuntimeResetChallengeResponse, CancellationToken, Task<RuntimeV1ResetResult>> LocalReset { get; set; }
+        = (_, _) => Task.FromResult(new RuntimeV1ResetResult([
+            new("installed-catalog-and-payloads", "already-empty"),
+            new("package-transactions-and-derived-state", "already-empty"),
             new("uploads-and-snapshots", "already-empty"),
-            new("registry-credentials", "already-empty"),
             new("runtime-connection", "already-empty"),
-            new("runtime-v1-root", "already-empty"),
+        ]));
+    public Func<RuntimeResetChallengeResponse, CancellationToken, Task<RuntimeV1ResetResult>> StartupCacheReset { get; set; }
+        = (_, _) => Task.FromResult(new RuntimeV1ResetResult([
+            new("startup-cache", "already-empty"),
         ]));
     public Func<CancellationToken, Task<IReadOnlyList<InstalledPackageDescriptor>>> Installed { get; set; }
         = _ => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([]);
+    public Func<CancellationToken, Task<IReadOnlyList<InstalledExecutionRuntimeSummary>>> ExecutionRuntimes { get; set; }
+        = _ => Task.FromResult<IReadOnlyList<InstalledExecutionRuntimeSummary>>([]);
+    public Func<RuntimeExecutionRuntimeIdentity, CancellationToken, Task<InstalledExecutionRuntimeSummary>> ExecutionRuntime { get; set; }
+        = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimeIdentity, CancellationToken, Task<IReadOnlyList<RuntimeExecutionRuntimePackageReference>>> ExecutionRuntimeReferences { get; set; }
+        = (_, _) => Task.FromResult<IReadOnlyList<RuntimeExecutionRuntimePackageReference>>([]);
+    public Func<RuntimeExecutionRuntimeEnsureRequest, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>> EnsureExecutionRuntime { get; set; }
+        = (_, _) => throw new NotSupportedException();
+    public Func<string, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>> ImportExecutionRuntime { get; set; }
+        = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimeIdentity, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>> VerifyExecutionRuntime { get; set; }
+        = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimeIdentity, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>> RepairExecutionRuntime { get; set; }
+        = (_, _) => throw new NotSupportedException();
+    public Func<CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>> GarbageCollectExecutionRuntimes { get; set; }
+        = _ => throw new NotSupportedException();
+    public Func<Action<string, Exception>?, IDevPackageOwnerSession> DevPackageOwnerSession { get; set; }
+        = _ => throw new NotSupportedException();
     public Func<CancellationToken, Task<RuntimePackageSnapshot>> PackageSnapshot { get; set; }
         = _ => Task.FromResult(new RuntimePackageSnapshot(
             Guid.Parse("11111111-1111-1111-1111-111111111111"),
@@ -86,7 +119,8 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
     public Func<RuntimeRegistryPackageRequest, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> InstallRegistry { get; set; }
         = (_, _) => throw new NotSupportedException();
     public Func<RuntimeRegistryPackageBatchRequest, CancellationToken, Task<RuntimeRegistryResolveInstallPlanResponse>> ResolveRegistry { get; set; }
-        = (_, _) => throw new NotSupportedException();
+        = (_, _) => Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(
+            true, [], [], [], [], [], ResolutionFingerprint: new string('f', 64)));
     public Func<RuntimeRegistryUpdateRequest, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> UpdateRegistry { get; set; }
         = (_, _) => throw new NotSupportedException();
     public Func<RuntimeRegistrySourceAdoptionRequest, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> AdoptRegistrySource { get; set; }
@@ -113,7 +147,7 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
         = (_, _) => throw new NotSupportedException();
     public Func<RuntimeRegistryDistTagRequest, CancellationToken, Task<RegistryPackageManagementOperationResponse>> DistTag { get; set; }
         = (_, _) => throw new NotSupportedException();
-    public Func<RuntimeRegistryDeleteStackRequest, CancellationToken, Task<RegistryStackManagementOperationResponse>> DeleteStack { get; set; }
+    public Func<RuntimeRegistryStackVisibilityRequest, CancellationToken, Task<RegistryStackManagementOperationResponse>> DeleteStack { get; set; }
         = (_, _) => throw new NotSupportedException();
     public Func<CancellationToken, Task<IReadOnlyList<PackageSettingsSchemaDescriptor>>> SettingsSchemas { get; set; }
         = _ => Task.FromResult<IReadOnlyList<PackageSettingsSchemaDescriptor>>([]);
@@ -150,9 +184,27 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
 
     public Task<SystemStatusResponse> GetSystemStatusAsync(CancellationToken token) => SystemStatus(token);
     public Task<RuntimeResetChallengeResponse> PrepareResetAsync(CancellationToken token) => ResetPrepare(token);
-    public Task<RuntimeResetDrainResponse> DrainForResetAsync(string challenge, CancellationToken token) => ResetDrain(challenge, token);
-    public Task<RuntimeV1ResetResult> ResetLocalStateAsync(CancellationToken token) => LocalReset(token);
+    public Task<RuntimeV1ResetResult> DrainAndResetLocalStateAsync(
+        RuntimeResetChallengeResponse challenge,
+        CancellationToken token) => LocalReset(challenge, token);
+    public Task<RuntimeV1ResetResult> DrainAndResetStartupCacheAsync(
+        RuntimeResetChallengeResponse challenge,
+        CancellationToken token) => StartupCacheReset(challenge, token);
     public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken token) => Installed(token);
+    public Task<IReadOnlyList<InstalledExecutionRuntimeSummary>> GetExecutionRuntimesAsync(CancellationToken token) => ExecutionRuntimes(token);
+    public Task<InstalledExecutionRuntimeSummary> GetExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => ExecutionRuntime(identity, token);
+    public Task<IReadOnlyList<RuntimeExecutionRuntimePackageReference>> GetExecutionRuntimeReferencesAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => ExecutionRuntimeReferences(identity, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> EnsureExecutionRuntimeAsync(RuntimeExecutionRuntimeEnsureRequest request, CancellationToken token) => EnsureExecutionRuntime(request, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> ImportExecutionRuntimeAsync(string filePath, CancellationToken token) => ImportExecutionRuntime(filePath, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> VerifyExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => VerifyExecutionRuntime(identity, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> RepairExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => RepairExecutionRuntime(identity, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> CollectExecutionRuntimeGarbageAsync(CancellationToken token) => GarbageCollectExecutionRuntimes(token);
+    public IDevPackageOwnerSession CreateDevPackageOwnerSession(Action<string, Exception>? reportFault = null)
+        => DevPackageOwnerSession(reportFault);
+    public Func<RuntimePrepareDevPackageImportsRequest, CancellationToken, Task<RuntimeDevPackageImportsPrepared>> PrepareDevImports { get; set; }
+        = (_, _) => throw new NotSupportedException();
+    public Task<RuntimeDevPackageImportsPrepared> PrepareDevPackageImportsAsync(RuntimePrepareDevPackageImportsRequest request, CancellationToken token)
+        => PrepareDevImports(request, token);
     public Task<RuntimePackageSnapshot> GetPackageSnapshotAsync(CancellationToken token) => PackageSnapshot(token);
     public Task<RuntimeRegistryAuthStartResponse> StartRegistryAuthAsync(RuntimeRegistryAuthStartRequest request, CancellationToken token) => AuthStart(request, token);
     public Task<RuntimeRegistryAuthSessionStatus?> GetRegistryAuthSessionAsync(string sessionId, CancellationToken token) => AuthSession(sessionId, token);
@@ -175,7 +227,7 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
     public Task<RegistryPackageManagementOperationResponse> SetYankAsync(RuntimeRegistryYankRequest request, CancellationToken token) => Yank(request, token);
     public Task<RegistryPackageManagementOperationResponse> SetDeprecationAsync(RuntimeRegistryDeprecateRequest request, CancellationToken token) => Deprecate(request, token);
     public Task<RegistryPackageManagementOperationResponse> SetDistTagAsync(RuntimeRegistryDistTagRequest request, CancellationToken token) => DistTag(request, token);
-    public Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken token) => DeleteStack(request, token);
+    public Task<RegistryStackManagementOperationResponse> SetRegistryStackVisibilityAsync(RuntimeRegistryStackVisibilityRequest request, CancellationToken token) => DeleteStack(request, token);
     public Task<IReadOnlyList<PackageSettingsSchemaDescriptor>> GetPackageSettingsSchemasAsync(CancellationToken token) => SettingsSchemas(token);
     public Task<PackageSettingsValuesResponse?> GetPackageSettingsValuesAsync(string packageId, CancellationToken token) => SettingsValues(packageId, token);
     public Task<PackageSettingValueResponse> GetPackageSettingValueAsync(string packageId, string key, CancellationToken token) => SettingValue(packageId, key, token);

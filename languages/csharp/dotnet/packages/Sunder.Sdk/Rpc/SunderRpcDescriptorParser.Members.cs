@@ -39,8 +39,7 @@ internal static partial class SunderRpcDescriptorParser
                 detailsSchemaReference = ReadSchemaReference(
                     detailsSchema,
                     path + ".detailsSchema",
-                    definitions,
-                    SunderRpcProtocol.DescriptorVersionV2);
+                    definitions);
             }
             errors.Add(
                 declaration.Name,
@@ -55,37 +54,19 @@ internal static partial class SunderRpcDescriptorParser
     private static IReadOnlyList<SunderRpcServiceDescriptor> ParseServices(
         JsonElement element,
         IReadOnlyDictionary<string, JsonElement> definitions,
-        IReadOnlySet<string> declaredErrors,
-        int descriptorVersion)
+        IReadOnlySet<string> declaredErrors)
     {
         var services = new List<SunderRpcServiceDescriptor>();
         var serviceIds = new HashSet<string>(StringComparer.Ordinal);
         var methodCount = 0;
-        if (element.ValueKind == JsonValueKind.Array)
+        foreach (var service in element.EnumerateObject())
         {
-            foreach (var service in element.EnumerateArray())
-            {
-                services.Add(ParseService(
-                    service,
-                    null,
-                    definitions,
-                    declaredErrors,
-                    descriptorVersion,
-                    ref methodCount));
-            }
-        }
-        else
-        {
-            foreach (var service in element.EnumerateObject())
-            {
-                services.Add(ParseService(
-                    service.Value,
-                    service.Name,
-                    definitions,
-                    declaredErrors,
-                    descriptorVersion,
-                    ref methodCount));
-            }
+            services.Add(ParseService(
+                service.Value,
+                service.Name,
+                definitions,
+                declaredErrors,
+                ref methodCount));
         }
 
         if (services.Count == 0 || services.Count > MaximumServices)
@@ -104,66 +85,29 @@ internal static partial class SunderRpcDescriptorParser
 
     private static SunderRpcServiceDescriptor ParseService(
         JsonElement element,
-        string? keyedServiceId,
+        string serviceId,
         IReadOnlyDictionary<string, JsonElement> definitions,
         IReadOnlySet<string> declaredErrors,
-        int descriptorVersion,
         ref int totalMethodCount)
     {
-        var isV2 = descriptorVersion == SunderRpcProtocol.DescriptorVersionV2;
-        var path = keyedServiceId is null ? "$.services[]" : $"$.services.{keyedServiceId}";
+        var path = $"$.services.{serviceId}";
         RequireKind(element, JsonValueKind.Object, path, "an object");
-        if (isV2)
-        {
-            RequireOnlyProperties(element, path, "methods");
-        }
-        else
-        {
-            RequireOnlyProperties(element, path, "serviceId", "methods");
-        }
-        var serviceId = keyedServiceId ?? RequiredString(element, "serviceId", path, 128);
-        if (element.TryGetProperty("serviceId", out var declaredServiceId))
-        {
-            RequireKind(declaredServiceId, JsonValueKind.String, path + ".serviceId", "a string");
-            if (!string.Equals(serviceId, declaredServiceId.GetString(), StringComparison.Ordinal))
-            {
-                throw Error($"{path}.serviceId must match its services object key.");
-            }
-        }
+        RequireOnlyProperties(element, path, "methods");
         if (!IsMemberId(serviceId))
         {
             throw Error($"{path}.serviceId is not a stable lowercase ASCII identifier.");
         }
 
-        var methodsElement = isV2
-            ? Required(element, "methods", path, JsonValueKind.Object)
-            : Required(element, "methods", path, JsonValueKind.Array, JsonValueKind.Object);
+        var methodsElement = Required(element, "methods", path, JsonValueKind.Object);
         var methods = new List<SunderRpcMethodDescriptor>();
-        if (methodsElement.ValueKind == JsonValueKind.Array)
+        foreach (var method in methodsElement.EnumerateObject())
         {
-            foreach (var method in methodsElement.EnumerateArray())
-            {
-                methods.Add(ParseMethod(
-                    method,
-                    null,
-                    path + ".methods[]",
-                    definitions,
-                    declaredErrors,
-                    descriptorVersion));
-            }
-        }
-        else
-        {
-            foreach (var method in methodsElement.EnumerateObject())
-            {
-                methods.Add(ParseMethod(
-                    method.Value,
-                    method.Name,
-                    path + ".methods." + method.Name,
-                    definitions,
-                    declaredErrors,
-                    descriptorVersion));
-            }
+            methods.Add(ParseMethod(
+                method.Value,
+                method.Name,
+                path + ".methods." + method.Name,
+                definitions,
+                declaredErrors));
         }
 
         if (methods.Count == 0)
@@ -188,46 +132,21 @@ internal static partial class SunderRpcDescriptorParser
 
     private static SunderRpcMethodDescriptor ParseMethod(
         JsonElement element,
-        string? keyedMethodId,
+        string methodId,
         string path,
         IReadOnlyDictionary<string, JsonElement> definitions,
-        IReadOnlySet<string> declaredErrors,
-        int descriptorVersion)
+        IReadOnlySet<string> declaredErrors)
     {
-        var isV2 = descriptorVersion == SunderRpcProtocol.DescriptorVersionV2;
         RequireKind(element, JsonValueKind.Object, path, "an object");
-        if (isV2)
-        {
-            RequireOnlyProperties(
-                element,
-                path,
-                "kind",
-                "idempotency",
-                "errors",
-                "requestSchema",
-                "responseSchema",
-                "eventSchema");
-        }
-        else
-        {
-            RequireOnlyProperties(
-                element,
-                path,
-                "methodId",
-                "kind",
-                "requestSchema",
-                "responseSchema",
-                "eventSchema");
-        }
-        var methodId = keyedMethodId ?? RequiredString(element, "methodId", path, 128);
-        if (element.TryGetProperty("methodId", out var declaredMethodId))
-        {
-            RequireKind(declaredMethodId, JsonValueKind.String, path + ".methodId", "a string");
-            if (!string.Equals(methodId, declaredMethodId.GetString(), StringComparison.Ordinal))
-            {
-                throw Error($"{path}.methodId must match its methods object key.");
-            }
-        }
+        RequireOnlyProperties(
+            element,
+            path,
+            "kind",
+            "idempotency",
+            "errors",
+            "requestSchema",
+            "responseSchema",
+            "eventSchema");
         if (!IsMemberId(methodId))
         {
             throw Error($"{path}.methodId is not a stable lowercase ASCII identifier.");
@@ -240,27 +159,21 @@ internal static partial class SunderRpcDescriptorParser
             "server-stream" => SunderRpcMethodKind.ServerStream,
             _ => throw Error($"{path}.kind must be 'unary' or 'server-stream'."),
         };
-        var idempotency = SunderRpcMethodIdempotency.None;
-        IReadOnlyList<string> errors = [];
-        if (isV2)
+        var idempotency = RequiredString(element, "idempotency", path, 32) switch
         {
-            idempotency = RequiredString(element, "idempotency", path, 32) switch
-            {
-                "none" => SunderRpcMethodIdempotency.None,
-                "idempotent" => SunderRpcMethodIdempotency.Idempotent,
-                _ => throw Error($"{path}.idempotency must be 'none' or 'idempotent'."),
-            };
-            errors = ParseMethodErrors(
-                Required(element, "errors", path, JsonValueKind.Array),
-                path + ".errors",
-                declaredErrors);
-        }
+            "none" => SunderRpcMethodIdempotency.None,
+            "idempotent" => SunderRpcMethodIdempotency.Idempotent,
+            _ => throw Error($"{path}.idempotency must be 'none' or 'idempotent'."),
+        };
+        var errors = ParseMethodErrors(
+            Required(element, "errors", path, JsonValueKind.Array),
+            path + ".errors",
+            declaredErrors);
 
         var requestReference = ReadSchemaReference(
             Required(element, "requestSchema", path),
             path + ".requestSchema",
-            definitions,
-            descriptorVersion);
+            definitions);
         var outputProperty = kind == SunderRpcMethodKind.Unary ? "responseSchema" : "eventSchema";
         var unexpectedProperty = kind == SunderRpcMethodKind.Unary ? "eventSchema" : "responseSchema";
         if (element.TryGetProperty(unexpectedProperty, out _))
@@ -272,8 +185,7 @@ internal static partial class SunderRpcDescriptorParser
         var outputReference = ReadSchemaReference(
             Required(element, outputProperty, path),
             path + "." + outputProperty,
-            definitions,
-            descriptorVersion);
+            definitions);
         return new SunderRpcMethodDescriptor(methodId, kind, requestReference, outputReference, idempotency, errors);
     }
 
@@ -312,38 +224,29 @@ internal static partial class SunderRpcDescriptorParser
     internal static string ReadSchemaReference(
         JsonElement element,
         string path,
-        IReadOnlyDictionary<string, JsonElement> definitions,
-        int descriptorVersion)
+        IReadOnlyDictionary<string, JsonElement> definitions)
     {
-        string? reference;
-        if (descriptorVersion == SunderRpcProtocol.DescriptorVersionV1 && element.ValueKind == JsonValueKind.String)
+        if (element.ValueKind != JsonValueKind.Object)
         {
-            reference = element.GetString();
+            throw Error($"{path} must be a local $ref object.", "schema-reference-shape");
         }
-        else
+        foreach (var property in element.EnumerateObject())
         {
-            if (element.ValueKind != JsonValueKind.Object)
+            if (property.Name != "$ref")
             {
-                throw Error($"{path} must be a local $ref object.", "schema-reference-shape");
+                throw Error(
+                    $"{path} contains unsupported property '{property.Name}'.",
+                    "schema-reference-shape");
             }
-            foreach (var property in element.EnumerateObject())
-            {
-                if (property.Name != "$ref")
-                {
-                    throw Error(
-                        $"{path} contains unsupported property '{property.Name}'.",
-                        "schema-reference-shape");
-                }
-            }
-            if (!element.TryGetProperty("$ref", out var referenceElement)
-                || referenceElement.ValueKind != JsonValueKind.String
-                || string.IsNullOrEmpty(referenceElement.GetString())
-                || referenceElement.GetString()!.Length > 256)
-            {
-                throw Error($"{path} must contain one string $ref.", "schema-reference-shape");
-            }
-            reference = referenceElement.GetString();
         }
+        if (!element.TryGetProperty("$ref", out var referenceElement)
+            || referenceElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrEmpty(referenceElement.GetString())
+            || referenceElement.GetString()!.Length > 256)
+        {
+            throw Error($"{path} must contain one string $ref.", "schema-reference-shape");
+        }
+        var reference = referenceElement.GetString();
 
         if (!TryGetReferenceName(reference, out var definitionName)
             || !definitions.ContainsKey(definitionName))

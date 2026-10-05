@@ -1,0 +1,104 @@
+name: Sunder Execution Runtime Validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/sunder-execution-runtime-validation.yml"
+      - ".github/workflows/sunder-execution-runtime-native-release.yml"
+      - ".github/workflows/sunder-execution-runtime-publication.yml"
+      - ".github/workflows/sunder-production-acceptance.yml"
+      - "eng/execution-runtimes/**"
+      - "scripts/execution-runtimes/**"
+      - "scripts/release/upload-execution-runtime-release-evidence*.sh"
+      - "scripts/release/*release*.py"
+      - "scripts/release/test_release_handoffs.py"
+      - "scripts/release/upload-github-release-assets.sh"
+      - "scripts/release/verify-release-promotion-workflows.test.mjs"
+      - "languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/**"
+      - "languages/csharp/dotnet/tests/Sunder.ExecutionRuntime.Build.Tests/**"
+      - "languages/csharp/dotnet/libraries/Sunder.Package.Format/**"
+      - "languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/sunder-execution-runtime-validation.yml"
+      - ".github/workflows/sunder-execution-runtime-native-release.yml"
+      - ".github/workflows/sunder-execution-runtime-publication.yml"
+      - ".github/workflows/sunder-production-acceptance.yml"
+      - "eng/execution-runtimes/**"
+      - "scripts/execution-runtimes/**"
+      - "scripts/release/upload-execution-runtime-release-evidence*.sh"
+      - "scripts/release/*release*.py"
+      - "scripts/release/test_release_handoffs.py"
+      - "scripts/release/upload-github-release-assets.sh"
+      - "scripts/release/verify-release-promotion-workflows.test.mjs"
+      - "languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/**"
+      - "languages/csharp/dotnet/tests/Sunder.ExecutionRuntime.Build.Tests/**"
+      - "languages/csharp/dotnet/libraries/Sunder.Package.Format/**"
+      - "languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/**"
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_VERSION: "10.0.100"
+
+jobs:
+  validate:
+    name: Credential-free lock/build validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - windows-2022
+          - macos-14
+    steps:
+      - name: Checkout repository without persisted credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore focused execution-runtime tests
+        run: dotnet restore languages/csharp/dotnet/tests/Sunder.ExecutionRuntime.Build.Tests/Sunder.ExecutionRuntime.Build.Tests.csproj --locked-mode
+
+      - name: Restore package-format tests
+        run: dotnet restore languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --locked-mode
+
+      - name: Validate synthetic fixture lock without credentials
+        shell: bash
+        run: bash scripts/execution-runtimes/validate-lock.sh eng/execution-runtimes/test-fixtures.lock.json test-fixture
+
+      - name: Run deterministic build validation tests
+        run: dotnet test languages/csharp/dotnet/tests/Sunder.ExecutionRuntime.Build.Tests/Sunder.ExecutionRuntime.Build.Tests.csproj --configuration Release --no-restore -p:GeneratePackageOnBuild=false
+
+      - name: Run package-format archive validation tests
+        run: dotnet test languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --configuration Release --no-restore -p:GeneratePackageOnBuild=false
+
+      - name: Validate credential-free Registry publication planning
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/execution-runtimes/publication-dry-run.fixture.sh
+
+      - name: Validate immutable execution-runtime evidence upload recovery
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/release/upload-execution-runtime-release-evidence.fixture.sh
+
+      - name: Validate release workflow shell and trust contracts
+        if: runner.os == 'Linux'
+        run: node --test scripts/release/verify-release-promotion-workflows.test.mjs
+
+      - name: Validate exact source and retained handoff boundaries without publication
+        if: runner.os == 'Linux'
+        run: python3 -B -m unittest discover -s scripts/release -p test_release_handoffs.py -v

@@ -4,11 +4,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\..\..\..\..\specs\worker\v3\conformance\corpus.json"
-          Link="WorkerV3Conformance\corpus.json"
+    <None Include="..\..\..\..\..\specs\worker\v1\conformance\corpus.json"
+          Link="WorkerV1Conformance\corpus.json"
           CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\specs\worker\v3\conformance\transport-vectors.json"
-          Link="WorkerV3Conformance\transport-vectors.json"
+    <None Include="..\..\..\..\..\specs\worker\v1\conformance\transport-vectors.json"
+          Link="WorkerV1Conformance\transport-vectors.json"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,81 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:controls="using:Sunder.App.Views.Controls"
+        xmlns:vm="using:Sunder.App.ViewModels"
+        x:Class="Sunder.App.Views.ExecutionRuntimeRepairConfirmationWindow"
+        x:DataType="vm:ExecutionRuntimeRepairConfirmationViewModel"
+        mc:Ignorable="d"
+        Width="560"
+        Height="460"
+        MinWidth="520"
+        MinHeight="420"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="Confirm Shared Runtime Repair"
+        Icon="avares://Sunder.App/Assets/Images/app.ico"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        ShowInTaskbar="False"
+        Classes="secondary-window">
+  <Grid RowDefinitions="52,*,Auto"
+        Background="{DynamicResource Sunder.Brush.Background.App}">
+    <controls:WindowTitleBar Grid.Row="0">
+      <controls:WindowTitleBar.LeadingContent>
+        <TextBlock Classes="section-title"
+                   VerticalAlignment="Center"
+                   Text="Confirm Shared Runtime Repair" />
+      </controls:WindowTitleBar.LeadingContent>
+    </controls:WindowTitleBar>
+
+    <ScrollViewer Grid.Row="1"
+                  Margin="20,16,20,10"
+                  HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Spacing="14">
+        <Border Classes="settings-note-card">
+          <StackPanel Spacing="6">
+            <TextBlock FontWeight="SemiBold" Text="This runtime is shared" />
+            <TextBlock Classes="muted"
+                       Text="{Binding PackageReferenceText}"
+                       TextWrapping="Wrap" />
+            <TextBlock Classes="muted"
+                       Text="Sunder will restore or repair only the exact bound runtime, then reload all affected packages as one generation."
+                       TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <TextBlock Classes="section-title" Text="Affected packages" />
+        <ItemsControl ItemsSource="{Binding ImpactedPackageIds}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Classes="card-surface" Margin="0,0,0,8">
+                <TextBlock FontWeight="SemiBold" Text="{Binding}" TextWrapping="Wrap" />
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+    </ScrollViewer>
+
+    <Border Grid.Row="2"
+            Padding="20,14"
+            BorderThickness="0,1,0,0"
+            BorderBrush="{DynamicResource Sunder.Brush.Border.Subtle}">
+      <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+        <TextBlock Classes="caption"
+                   VerticalAlignment="Center"
+                   Text="No package or runtime version will be changed."
+                   TextWrapping="Wrap" />
+        <Button Grid.Column="1"
+                Classes="secondary-action"
+                Content="Cancel"
+                Click="CancelButton_OnClick" />
+        <Button Grid.Column="2"
+                Classes="primary-action"
+                Content="Repair and Reload"
+                Click="ApproveButton_OnClick" />
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

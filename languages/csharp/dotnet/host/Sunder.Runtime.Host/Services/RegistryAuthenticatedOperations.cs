@@ -57,16 +57,21 @@ internal sealed class RegistryAuthenticatedOperations
             () => new RegistryStackStarResponse(false, null, null, ["Registry authorization was denied."]) { Forbidden = true },
             cancellationToken);
 
-    public Task<RegistryStackManagementOperationResponse> DeleteStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken cancellationToken)
+    public Task<RegistryStackManagementOperationResponse> SetStackVisibilityAsync(RuntimeRegistryStackVisibilityRequest request, CancellationToken cancellationToken)
         => SendAsync(
             request.RegistryOrigin,
-            HttpMethod.Delete,
-            RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.Stack(request.StackId)),
+            HttpMethod.Put,
+            RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.StackVisibility(request.StackId)),
             null,
-            response => ReadAsync(response, error => new RegistryStackManagementOperationResponse(false, null, [error]), cancellationToken),
+            async response =>
+            {
+                if (!response.IsSuccessStatusCode) return new RegistryStackManagementOperationResponse(false, null, [await _registryClient.ReadErrorAsync(response, cancellationToken)]);
+                var policy = await _registryClient.ReadJsonAsync<RegistryStackPolicySnapshot>(response, cancellationToken);
+                return new RegistryStackManagementOperationResponse(policy is not null, "Stack visibility updated.", policy is null ? ["Stack policy was missing."] : []);
+            },
             () => new RegistryStackManagementOperationResponse(false, null, ["Registry sign-in is required."]) { Forbidden = true },
             () => new RegistryStackManagementOperationResponse(false, null, ["Registry authorization was denied."]) { Forbidden = true },
-            cancellationToken);
+            cancellationToken, stackVisibility: request, alreadyVisible: () => new RegistryStackManagementOperationResponse(true, "Stack already has the requested visibility.", []));
 
     public Task<RegistryPackageManagementOperationResponse> SetYankAsync(RuntimeRegistryYankRequest request, CancellationToken cancellationToken)
         => SendAsync(
@@ -78,7 +83,7 @@ internal sealed class RegistryAuthenticatedOperations
             response => ReadAsync(response, error => new RegistryPackageManagementOperationResponse(false, null, [error]), cancellationToken),
             AuthenticationRequiredPackageManagement,
             ForbiddenPackageManagement,
-            cancellationToken);
+            cancellationToken, packagePolicyPackageId: request.PackageId);
 
     public Task<RegistryPackageManagementOperationResponse> SetDeprecationAsync(RuntimeRegistryDeprecateRequest request, CancellationToken cancellationToken)
         => SendAsync(
@@ -90,7 +95,7 @@ internal sealed class RegistryAuthenticatedOperations
             response => ReadAsync(response, error => new RegistryPackageManagementOperationResponse(false, null, [error]), cancellationToken),
             AuthenticationRequiredPackageManagement,
             ForbiddenPackageManagement,
-            cancellationToken);
+            cancellationToken, packagePolicyPackageId: request.PackageId);
 
     public Task<RegistryPackageManagementOperationResponse> SetDistTagAsync(RuntimeRegistryDistTagRequest request, CancellationToken cancellationToken)
         => SendAsync(
@@ -102,7 +107,7 @@ internal sealed class RegistryAuthenticatedOperations
             response => ReadAsync(response, error => new RegistryPackageManagementOperationResponse(false, null, [error]), cancellationToken),
             AuthenticationRequiredPackageManagement,
             ForbiddenPackageManagement,
-            cancellationToken);
+            cancellationToken, packagePolicyPackageId: request.PackageId);
 
     public Task<RegistryPublishPackageResponse> PublishPackageAsync(RuntimeRegistryPublishRequest request, CancellationToken cancellationToken)
         => PublishAsync(
@@ -165,7 +170,7 @@ internal sealed class RegistryAuthenticatedOperations
                 response => read(response, cancellationToken),
                 authenticationRequired,
                 forbidden,
-                cancellationToken);
+                cancellationToken, authorityPolicy: uploadKind == RuntimeUploadKind.Stack);
         }
         finally
         {
@@ -181,7 +186,8 @@ internal sealed class RegistryAuthenticatedOperations
         Func<HttpResponseMessage, Task<T>> read,
         Func<T> authenticationRequired,
         Func<T> forbidden,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? packagePolicyPackageId = null, bool authorityPolicy = false,
+        RuntimeRegistryStackVisibilityRequest? stackVisibility = null, Func<T>? alreadyVisible = null)
     {
         var origin = RegistryOrigin.Normalize(registryOriginValue);
         var snapshot = await _credentialStore.GetSnapshotAsync(origin, cancellationToken);
@@ -198,6 +204,37 @@ internal sealed class RegistryAuthenticatedOperations
         var credential = snapshot.Credential;
         using var request = new HttpRequestMessage(method, new Uri(origin, path)) { Content = content };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
+        if (packagePolicyPackageId is not null || authorityPolicy || stackVisibility is not null)
+        {
+            using var policyRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(origin,
+                RegistryApiRoutes.ToHttpClientRelativePath(stackVisibility is not null ? RegistryApiRoutes.StackPolicy(stackVisibility.StackId)
+                    : authorityPolicy ? RegistryApiRoutes.PublicationAuthorityPolicy : RegistryApiRoutes.PackageDistTags(packagePolicyPackageId!))));
+            policyRequest.Headers.Authorization = request.Headers.Authorization;
+            using var policyResponse = await _registryClient.SendAsync(policyRequest, cancellationToken);
+            if (policyResponse.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                await _credentialStore.TryDeleteAsync(origin, snapshot, cancellationToken);
+                return authenticationRequired();
+            }
+            if (policyResponse.StatusCode == HttpStatusCode.Forbidden) return forbidden();
+            if (!policyResponse.IsSuccessStatusCode) return await read(policyResponse);
+            var key = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
+            RegistryPolicyIdentity? policy;
+            if (stackVisibility is not null)
+            {
+                var state = await _registryClient.ReadJsonAsync<RegistryStackPolicySnapshot>(policyResponse, cancellationToken) ?? throw new InvalidDataException("Verified Stack policy is required.");
+                var visibility = stackVisibility.Listed ? "Listed" : "Unlisted";
+                if (state.Visibility == visibility) return alreadyVisible!();
+                policy = state.PublicationAuthorityPolicy;
+                request.Content = JsonContent.Create(new RegistryStackVisibilityRequest(key, policy.Revision, state.Visibility, visibility));
+            }
+            else policy = authorityPolicy ? await _registryClient.ReadJsonAsync<RegistryPolicyIdentity>(policyResponse, cancellationToken)
+                : (await _registryClient.ReadJsonAsync<RegistryPackageDistTagsResponse>(policyResponse, cancellationToken))?.PackagePolicy;
+            if (policy is not { Revision: > 0 }) throw new InvalidDataException("Verified policy is required before Registry mutation.");
+            request.Headers.Add(RegistryPolicyMutationHeaders.IdempotencyKey, key);
+            request.Headers.Add(authorityPolicy || stackVisibility is not null ? RegistryPolicyMutationHeaders.PublicationAuthorityRevision : RegistryPolicyMutationHeaders.PackagePolicyRevision,
+                policy.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
         using var response = await _registryClient.SendAsync(request, cancellationToken);
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {

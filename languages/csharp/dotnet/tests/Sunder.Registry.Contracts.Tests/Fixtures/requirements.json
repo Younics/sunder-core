@@ -33,26 +33,51 @@
           "kind": "runtime",
           "rid": "win-x64"
         }
+      ],
+      "packageContentIdentity": "package-content-base-150",
+      "runtimeBindings": [
+        {
+          "role": "runtime",
+          "rid": "win-x64",
+          "requirement": {
+            "runtimeId": "sunder.runtime.dotnet",
+            "versionRange": "\u003E=10.0.0 \u003C11.0.0",
+            "moduleAbi": "sunder.dotnet-worker-module.v1"
+          },
+          "runtime": {
+            "runtimeId": "sunder.runtime.dotnet",
+            "version": "10.0.0",
+            "packagingRevision": 1,
+            "rid": "win-x64",
+            "moduleAbi": "sunder.dotnet-worker-module.v1"
+          }
+        }
       ]
     }
   ],
   "compatibility": {
     "manifestVersions": [
-      3
+      1
     ],
     "runtimeTargetKinds": [
       "worker"
     ],
-    "workerProtocol": "worker-protocol.v3",
+    "workerProtocol": "worker-protocol.v1",
     "workerCapabilities": [
       "core.v1",
-      "rpc.v2",
+      "execution-runtime.v1",
+      "rpc.v1",
       "sdk-baseline-1-1.v1",
-      "worker-protocol.v3"
+      "worker-protocol.v1"
     ],
     "sdkBaseline": "sdk-baseline-1-1.v1",
     "rid": "win-x64"
   },
+  "runtimeTrust": {
+    "profileId": "sunder.runtime-trust.v1",
+    "generation": 2
+  },
+  "expectedResolutionFingerprint": "previous-fingerprint-001",
   "includePrerelease": true,
   "allowDowngrade": false,
   "reinstall": false

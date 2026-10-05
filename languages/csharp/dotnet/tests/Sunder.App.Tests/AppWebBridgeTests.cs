@@ -297,6 +297,56 @@ public sealed class AppWebBridgeTests
         }
     }
 
+    [Theory]
+    [InlineData("sunder.bridge.unknown", AppWebBridge.ProtocolVersion)]
+    [InlineData(AppWebBridge.Protocol, 99)]
+    public async Task Admission_RejectsUnknownProtocolIdentityOrVersionWithoutFallback(
+        string protocol,
+        int version)
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var webView = new TestWebView();
+            await using var bridge = new AppWebBridge(
+                webView,
+                server,
+                UnavailableAppWebRpcClient.Instance,
+                EmptyCatalog(root),
+                new ExternalBrowserService(),
+                _ => { });
+            var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+            await bridge.EstablishAsync(server.BaseUri);
+            webView.ClearScripts();
+
+            await bridge.HandleMessageAsync(JsonSerializer.Serialize(new
+            {
+                protocol,
+                version,
+                nonce = bridge.SessionNonce,
+                origin,
+                requestId = "b_unknown_protocol",
+                method = "navigation.getState",
+                deadlineUtc = (string?)null,
+                payload = new { },
+            }));
+
+            var rejection = ReadResponse(Assert.Single(webView.Scripts));
+            Assert.Equal(AppWebBridge.Protocol, rejection.GetProperty("protocol").GetString());
+            Assert.Equal(AppWebBridge.ProtocolVersion, rejection.GetProperty("version").GetInt32());
+            Assert.Equal(
+                "rpc.bridge.request-envelope",
+                rejection.GetProperty("error").GetProperty("code").GetString());
+            Assert.Equal(0, bridge.PendingRequestCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task BrowserDeadline_IsCarriedForEveryCallAndCompletesAsAuthenticatedDeadlineExceeded()
     {
@@ -772,7 +822,7 @@ public sealed class AppWebBridgeTests
               ["protocol", "version", "nonce", "origin", "requestId", "method", "deadlineUtc", "payload"],
               `${label} native request`,
             );
-            invariant(body.protocol === "sunder.bridge.v2" && body.version === 2, `${label} request protocol drifted.`);
+            invariant(body.protocol === "sunder.bridge.v1" && body.version === 1, `${label} request protocol drifted.`);
             invariant(body.origin === configuration.origin, `${label} request origin drifted.`);
             const expectedNonce = label === "second" ? configuration.secondNonce : configuration.firstNonce;
             invariant(body.nonce === expectedNonce, `${label} request nonce drifted.`);
@@ -959,10 +1009,14 @@ public sealed class AppWebBridgeTests
             root,
             new SunderPackageManifest
             {
+                Id = "caller.package",
                 ContractBundles =
                 [
                     new SunderPackageContractBundleManifest
                     {
+                        Source = "owned",
+                        AuthorityKind = "package",
+                        AuthorityId = "caller.package",
                         ContractId = descriptor.ContractId,
                         Version = descriptor.Version,
                         DescriptorPath = descriptorPath,
@@ -1046,7 +1100,7 @@ public sealed class AppWebBridgeTests
         => Encoding.UTF8.GetBytes("""
             {
               "$schema": "https://json-schema.org/draft/2020-12/schema",
-              "descriptorVersion": 2,
+              "descriptorVersion": 1,
               "schemaProfile": "sunder.rpc.values.v1",
               "contractId": "example.rpc",
               "version": "1.0.0",

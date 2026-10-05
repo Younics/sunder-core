@@ -6,7 +6,7 @@ using Sunder.Sdk.Rpc;
 namespace Sunder.Sdk.Worker;
 
 /// <summary>Binds one manifest-declared provider identity to its activation-scoped RPC handler.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
 public sealed class SunderWorkerProviderRegistration
 {
     private readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>> _declaredErrors;
@@ -31,7 +31,7 @@ public sealed class SunderWorkerProviderRegistration
         {
             throw new ArgumentException("The contract id must be a canonical package-style identifier.", nameof(contractId));
         }
-        if (contractVersion.Length > 128 || !SemanticVersion.TryParse(contractVersion, out _))
+        if (contractVersion.Length > SemanticVersion.MaximumLength || !SemanticVersion.TryParse(contractVersion, out _))
         {
             throw new ArgumentException("The contract version must be a bounded strict semantic version.", nameof(contractVersion));
         }

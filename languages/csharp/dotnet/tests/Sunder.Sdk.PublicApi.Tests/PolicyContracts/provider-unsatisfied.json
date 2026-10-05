@@ -1,0 +1,18 @@
+{
+  "predicates": [
+    {
+      "consumerPackageId": "example.consumer",
+      "consumerRole": "runtime",
+      "contract": {
+        "contractId": "example.agent.tools",
+        "contractVersion": "1.0.0",
+        "descriptorSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "abiSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "actions": [
+        "discover",
+        "invoke"
+      ]
+    }
+  ]
+}

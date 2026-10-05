@@ -13,5 +13,11 @@
       "message": "Selected package version does not satisfy the Stack requirement."
     }
   ],
-  "trustedArtifactOrigins": []
+  "trustedArtifactOrigins": [],
+  "resolutionFingerprint": "",
+  "runtimePolicyRevision": 0,
+  "expiresAtUtc": "0001-01-01T00:00:00+00:00",
+  "compatibilityConflicts": [],
+  "runtimeArtifacts": [],
+  "runtimeConflicts": []
 }

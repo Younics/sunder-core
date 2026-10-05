@@ -1,0 +1,5 @@
+<Project>
+  <ItemGroup>
+    <PackageReference Include="Sunder.Sdk.Avalonia" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" SunderPackageAssetRole="app" />
+  </ItemGroup>
+</Project>

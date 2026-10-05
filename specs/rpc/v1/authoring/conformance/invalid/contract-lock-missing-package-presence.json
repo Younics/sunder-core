@@ -1,0 +1,12 @@
+{
+  "lockVersion": 1,
+  "packageArtifacts": {},
+  "packageImports": {
+    "example.dependency": {
+      "localName": "dependency",
+      "requiredContracts": []
+    }
+  },
+  "providerImports": {},
+  "platformImports": {}
+}

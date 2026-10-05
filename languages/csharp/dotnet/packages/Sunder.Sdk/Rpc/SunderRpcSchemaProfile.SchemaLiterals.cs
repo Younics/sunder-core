@@ -5,7 +5,7 @@ namespace Sunder.Sdk.Rpc;
 
 internal static partial class SunderRpcSchemaProfile
 {
-    private static void ValidateEnumAndConst(JsonElement schema, string path, string type, bool isV2)
+    private static void ValidateEnumAndConst(JsonElement schema, string path, string type)
     {
         var hasEnum = schema.TryGetProperty("enum", out var enumElement);
         var hasConst = schema.TryGetProperty("const", out var constElement);
@@ -23,12 +23,9 @@ internal static partial class SunderRpcSchemaProfile
             var values = new HashSet<string>(StringComparer.Ordinal);
             foreach (var item in enumElement.EnumerateArray())
             {
-                ValidateLiteralType(item, type, path + ".enum", isV2, schema);
-                if (isV2)
-                {
-                    ValidateDescriptorLiteralConstraints(schema, item, path + ".enum", type, isV2);
-                }
-                if (!values.Add(isV2 ? GetPrimitiveLiteralKey(item, schema) : item.GetRawText()))
+                ValidateLiteralType(item, type, path + ".enum", schema);
+                ValidateDescriptorLiteralConstraints(schema, item, path + ".enum", type);
+                if (!values.Add(GetPrimitiveLiteralKey(item, schema)))
                 {
                     throw Error($"{path}.enum contains a duplicate value.");
                 }
@@ -36,11 +33,8 @@ internal static partial class SunderRpcSchemaProfile
         }
         if (hasConst)
         {
-            ValidateLiteralType(constElement, type, path + ".const", isV2, schema);
-            if (isV2)
-            {
-                ValidateDescriptorLiteralConstraints(schema, constElement, path + ".const", type, isV2);
-            }
+            ValidateLiteralType(constElement, type, path + ".const", schema);
+            ValidateDescriptorLiteralConstraints(schema, constElement, path + ".const", type);
         }
     }
 
@@ -66,16 +60,14 @@ internal static partial class SunderRpcSchemaProfile
         JsonElement value,
         string type,
         string path,
-        bool isV2,
         JsonElement schema)
     {
         var valid = type switch
         {
             "string" => value.ValueKind == JsonValueKind.String,
-            "integer" => value.ValueKind == JsonValueKind.Number
-                         && (!isV2 ? value.TryGetInt64(out _) : TryGetSafeInteger(value, out _)),
+            "integer" => value.ValueKind == JsonValueKind.Number && TryGetSafeInteger(value, out _),
             "number" => value.ValueKind == JsonValueKind.Number
-                        && (!isV2 || TryGetFormattedFloat(schema, value, out _)),
+                        && TryGetFormattedFloat(schema, value, out _),
             "boolean" => value.ValueKind is JsonValueKind.True or JsonValueKind.False,
             "null" => value.ValueKind == JsonValueKind.Null,
             _ => false,
@@ -90,8 +82,7 @@ internal static partial class SunderRpcSchemaProfile
         JsonElement schema,
         JsonElement value,
         string path,
-        string type,
-        bool isV2)
+        string type)
     {
         if (type == "string")
         {
@@ -107,28 +98,25 @@ internal static partial class SunderRpcSchemaProfile
         }
         if (type is not ("integer" or "number")) return;
 
-        if (isV2 && type == "integer")
+        if (type == "integer")
         {
             _ = TryGetSafeInteger(value, out var integer);
-            if (schema.TryGetProperty("minimum", out var minimum) && integer < ReadSafeInteger(minimum, path)
-                || schema.TryGetProperty("exclusiveMinimum", out var exclusiveMinimum) && integer <= ReadSafeInteger(exclusiveMinimum, path)
-                || schema.TryGetProperty("maximum", out var maximum) && integer > ReadSafeInteger(maximum, path)
-                || schema.TryGetProperty("exclusiveMaximum", out var exclusiveMaximum) && integer >= ReadSafeInteger(exclusiveMaximum, path))
+            if (schema.TryGetProperty("minimum", out var integerMinimum) && integer < ReadSafeInteger(integerMinimum, path)
+                || schema.TryGetProperty("exclusiveMinimum", out var integerExclusiveMinimum) && integer <= ReadSafeInteger(integerExclusiveMinimum, path)
+                || schema.TryGetProperty("maximum", out var integerMaximum) && integer > ReadSafeInteger(integerMaximum, path)
+                || schema.TryGetProperty("exclusiveMaximum", out var integerExclusiveMaximum) && integer >= ReadSafeInteger(integerExclusiveMaximum, path))
             {
                 throw Error($"{path} is outside the schema's integer bounds.");
             }
             return;
         }
-        if (isV2)
+        _ = TryGetFormattedFloat(schema, value, out var number);
+        if (schema.TryGetProperty("minimum", out var floatMinimum) && number < ReadFormattedFloat(schema, floatMinimum, path)
+            || schema.TryGetProperty("exclusiveMinimum", out var floatExclusiveMinimum) && number <= ReadFormattedFloat(schema, floatExclusiveMinimum, path)
+            || schema.TryGetProperty("maximum", out var floatMaximum) && number > ReadFormattedFloat(schema, floatMaximum, path)
+            || schema.TryGetProperty("exclusiveMaximum", out var floatExclusiveMaximum) && number >= ReadFormattedFloat(schema, floatExclusiveMaximum, path))
         {
-            _ = TryGetFormattedFloat(schema, value, out var number);
-            if (schema.TryGetProperty("minimum", out var minimum) && number < ReadFormattedFloat(schema, minimum, path)
-                || schema.TryGetProperty("exclusiveMinimum", out var exclusiveMinimum) && number <= ReadFormattedFloat(schema, exclusiveMinimum, path)
-                || schema.TryGetProperty("maximum", out var maximum) && number > ReadFormattedFloat(schema, maximum, path)
-                || schema.TryGetProperty("exclusiveMaximum", out var exclusiveMaximum) && number >= ReadFormattedFloat(schema, exclusiveMaximum, path))
-            {
-                throw Error($"{path} is outside the schema's floating-point bounds.");
-            }
+            throw Error($"{path} is outside the schema's floating-point bounds.");
         }
     }
 
@@ -147,20 +135,17 @@ internal static partial class SunderRpcSchemaProfile
 
     private static void ValidateOptionalPropertyBounds(
         JsonElement schema,
-        string path,
-        int propertyCount,
-        bool isV2)
+        string path)
     {
-        var maximumAllowed = isV2 ? MaximumSafeInteger : MaximumProperties;
-        var minimum = OptionalBound(schema, "minProperties", path, 0, maximumAllowed, 0);
+        var minimum = OptionalBound(schema, "minProperties", path, 0, MaximumSafeInteger, 0);
         var maximum = OptionalBound(
             schema,
             "maxProperties",
             path,
             0,
-            maximumAllowed,
-            isV2 ? long.MaxValue : propertyCount);
-        if (minimum > maximum || !isV2 && maximum > propertyCount)
+            MaximumSafeInteger,
+            long.MaxValue);
+        if (minimum > maximum)
         {
             throw Error($"{path}'s object property bounds are inconsistent with its closed properties.");
         }
@@ -236,15 +221,17 @@ internal static partial class SunderRpcSchemaProfile
         if (format == "float32")
         {
             if (value.ValueKind != JsonValueKind.Number
-                || !float.TryParse(
+                || !double.TryParse(
                     value.GetRawText(),
                     NumberStyles.Float,
                     CultureInfo.InvariantCulture,
-                    out var binary32)
-                || !float.IsFinite(binary32))
+                    out var binary64)
+                || !double.IsFinite(binary64))
             {
                 return false;
             }
+            var binary32 = (float)binary64;
+            if (!float.IsFinite(binary32)) return false;
             result = binary32;
             return true;
         }
@@ -253,11 +240,8 @@ internal static partial class SunderRpcSchemaProfile
 
     private static int CanonicalFloat32Bits(JsonElement value)
     {
-        _ = float.TryParse(
-            value.GetRawText(),
-            NumberStyles.Float,
-            CultureInfo.InvariantCulture,
-            out var result);
+        _ = TryGetFormattedFloat("float32", value, out var formatted);
+        var result = (float)formatted;
         return result == 0 ? 0 : BitConverter.SingleToInt32Bits(result);
     }
 
@@ -426,16 +410,6 @@ internal static partial class SunderRpcSchemaProfile
             if (comparison != 0) return comparison;
         }
         return 0;
-    }
-
-    private static decimal ReadNumberBound(JsonElement schema, string name, string path)
-    {
-        var value = SunderRpcDescriptorParser.Required(schema, name, path, JsonValueKind.Number);
-        if (!value.TryGetDecimal(out var result))
-        {
-            throw Error($"{path}.{name} is outside the supported numeric range.");
-        }
-        return result;
     }
 
     private static void RequireObject(JsonElement schema, string path)

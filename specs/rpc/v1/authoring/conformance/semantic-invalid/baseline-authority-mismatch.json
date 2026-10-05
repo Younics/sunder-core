@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "authorityKind": "package",
+  "authorityId": "example.other",
+  "packageId": "example.owner",
+  "contracts": {}
+}

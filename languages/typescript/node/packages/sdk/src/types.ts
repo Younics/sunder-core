@@ -4,8 +4,8 @@ import type { PackageStorageKeyMigration } from "./storage";
 
 export type { JsonObject, JsonPrimitive, JsonValue, RpcCallOptions, RpcInvoker } from "./core";
 
-export const SUNDER_WORKER_PROTOCOL = "sunder.worker.v3" as const;
-export const SUNDER_WORKER_PROTOCOL_VERSION = 3 as const;
+export const SUNDER_WORKER_PROTOCOL = "sunder.worker.v1" as const;
+export const SUNDER_WORKER_PROTOCOL_VERSION = 1 as const;
 
 export interface WorkerLimits {
   maxFrameBytes: number;
@@ -13,6 +13,8 @@ export interface WorkerLimits {
   maxMessageDepth: number;
   maxRpcValueBytes: number;
   maxValueDepth: number;
+  maxValueNodes: number;
+  maxObjectMembers: number;
   maxEnvelopeReserveBytes: number;
   maxInboundCalls: number;
   maxOutboundCalls: number;
@@ -40,6 +42,8 @@ export const SUNDER_WORKER_LIMITS: Readonly<WorkerLimits> = Object.freeze({
   maxMessageDepth: 72,
   maxRpcValueBytes: 32 * 1024 * 1024,
   maxValueDepth: 64,
+  maxValueNodes: 524_288,
+  maxObjectMembers: 4_096,
   maxEnvelopeReserveBytes: 64 * 1024,
   maxInboundCalls: 64,
   maxOutboundCalls: 32,
@@ -77,71 +81,47 @@ export interface RpcSchemaReference {
   readonly $ref: string;
 }
 
-export interface RpcMethodDescriptorV1 {
-  readonly methodId: string;
-  readonly kind: RpcMethodKind;
-  readonly requestSchema: string | RpcSchemaReference;
-  readonly responseSchema?: string | RpcSchemaReference;
-  readonly eventSchema?: string | RpcSchemaReference;
-}
-
-export interface RpcServiceDescriptorV1 {
-  readonly serviceId: string;
-  readonly methods: readonly RpcMethodDescriptorV1[] | Readonly<Record<string, RpcMethodDescriptorV1>>;
-}
-
-export interface RpcContractDescriptorV1 {
-  readonly $schema?: "https://json-schema.org/draft/2020-12/schema";
-  readonly descriptorVersion: 1;
-  readonly contractId: string;
-  readonly version: string;
-  readonly services: readonly RpcServiceDescriptorV1[] | Readonly<Record<string, RpcServiceDescriptorV1>>;
-  readonly $defs: Readonly<Record<string, JsonSchema>>;
-}
-
-export interface RpcErrorDescriptorV2 {
+export interface RpcErrorDescriptorV1 {
   readonly description?: string;
   readonly detailsSchema?: RpcSchemaReference;
 }
 
-export interface RpcMethodDescriptorV2Base {
+export interface RpcMethodDescriptorV1Base {
   readonly idempotency: RpcMethodIdempotency;
   readonly errors: readonly string[];
   readonly requestSchema: RpcSchemaReference;
 }
 
-export type RpcMethodDescriptorV2 =
-  | (RpcMethodDescriptorV2Base & {
+export type RpcMethodDescriptorV1 =
+  | (RpcMethodDescriptorV1Base & {
     readonly kind: "unary";
     readonly responseSchema: RpcSchemaReference;
     readonly eventSchema?: never;
   })
-  | (RpcMethodDescriptorV2Base & {
+  | (RpcMethodDescriptorV1Base & {
     readonly kind: "server-stream";
     readonly eventSchema: RpcSchemaReference;
     readonly responseSchema?: never;
   });
 
-export interface RpcServiceDescriptorV2 {
-  readonly methods: Readonly<Record<string, RpcMethodDescriptorV2>>;
+export interface RpcServiceDescriptorV1 {
+  readonly methods: Readonly<Record<string, RpcMethodDescriptorV1>>;
 }
 
-export interface RpcContractDescriptorV2 {
+export interface RpcContractDescriptorV1 {
   readonly $schema?: "https://json-schema.org/draft/2020-12/schema";
-  readonly descriptorVersion: 2;
+  readonly descriptorVersion: 1;
   readonly schemaProfile: "sunder.rpc.values.v1";
   readonly contractId: string;
   readonly version: string;
-  readonly errors: Readonly<Record<string, RpcErrorDescriptorV2>>;
-  readonly services: Readonly<Record<string, RpcServiceDescriptorV2>>;
+  readonly errors: Readonly<Record<string, RpcErrorDescriptorV1>>;
+  readonly services: Readonly<Record<string, RpcServiceDescriptorV1>>;
   readonly $defs: Readonly<Record<string, JsonSchema>>;
 }
 
-// Keep the unversioned nested aliases on their shipped V1 shapes. V2 map values
-// intentionally omit repeated IDs and are available through the explicit V2 types.
 export type RpcMethodDescriptor = RpcMethodDescriptorV1;
 export type RpcServiceDescriptor = RpcServiceDescriptorV1;
-export type RpcContractDescriptor = RpcContractDescriptorV1 | RpcContractDescriptorV2;
+export type RpcContractDescriptor = RpcContractDescriptorV1;
 export type JsonSchema = Readonly<Record<string, JsonValue>>;
 
 export type RpcErrorKind =
@@ -339,12 +319,6 @@ export interface RpcProviderIdentity {
 }
 
 export interface RpcContractIdentity {
-  readonly contractId: string;
-  readonly contractVersion: string;
-  readonly contractSha256: string;
-}
-
-export interface RpcContractIdentityV2 {
   readonly contractId: string;
   readonly contractVersion: string;
   readonly descriptorSha256: string;
@@ -669,11 +643,11 @@ export interface WorkerStorageMigrationPlanWire {
 }
 
 export type HostEnvelope =
-  | Readonly<{ type: "host.hello"; protocol: typeof SUNDER_WORKER_PROTOCOL; protocolVersion: 3; challenge: string; packageId: string; packageVersion: string; activationId: string; sessionId: string; providers: readonly ProviderWireIdentity[]; resourceProfile: WorkerResourceProfile; resourceProfileHash: string }>
+  | Readonly<{ type: "host.hello"; protocol: typeof SUNDER_WORKER_PROTOCOL; protocolVersion: 1; challenge: string; packageId: string; packageVersion: string; activationId: string; sessionId: string; providers: readonly ProviderWireIdentity[]; resourceProfile: WorkerResourceProfile; resourceProfileHash: string }>
   | Readonly<{ type: "host.start-candidate" }>
   | Readonly<{ type: "host.commit-generation"; activationId: string; sessionGeneration: number }>
   | Readonly<{ type: "host.prepare-storage-migrations"; activationId: string; sessionGeneration: number }>
-  | Readonly<{ type: "host.activate"; sessionGeneration: number }>
+  | Readonly<{ type: "host.activate"; sessionGeneration: number; workspaceRootPath: string }>
   | Readonly<{ type: "host.invoke"; id: string; kind: RpcMethodKind; providerId: string; serviceId: string; methodId: string; request: JsonValue; context: Omit<RpcInvocationContext, "signal" | "content"> }>
   | Readonly<{ type: "host.cancel"; id: string }>
   | Readonly<{ type: "host.result"; id: string; value: JsonValue }>

@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
-  "candidateId": "sunder-core-v1-final-freeze",
-  "status": "immutable-sunder-1.0-compatibility-freeze",
+  "candidateId": "sunder-core-v1-pre-implementation-first-migration",
+  "status": "phase-0-reopened-migration-oracle",
   "generatedBy": "scripts/compatibility/generate-core-compatibility-candidate.mjs",
-  "generatorSha256": "42a6ecc7839b3fd14afb8bc1acb624abe5805da75dd8f0c3d91d460e3a4c34d9",
+  "generatorSha256": "abfb909728b22a1616f46cd4d02fbe98b628c28d89b6f06375d0a9a4f45dac53",
   "decisions": {
     "retained": [
       {
         "surface": "RPC descriptor V1",
-        "classification": "standalone compatibility utility only",
-        "deployableInManifestV3": false,
+        "classification": "current canonical C# deployable schema",
+        "deployableInManifestV1": true,
         "evidence": [
-          "specs/rpc/v2/README.md",
+          "specs/rpc/v1/README.md",
           "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/SunderRpcContractDescriptorTests.cs",
-          "languages/typescript/node/packages/package-tool/test/rpc-bindings.test.ts"
+          "languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/PackageBuildManifestTests.cs"
         ]
       },
       {
@@ -37,7 +37,12 @@
         "effect": "Sunder.Sdk.Stacks no longer references or packages Sunder.Sdk.Worker."
       }
     ],
-    "rationale": "The approved cleanup removes the unshipped Worker-specific Stack convenience while retaining transport-neutral Stack contracts and handlers."
+    "pendingCutovers": [
+      "implementation-first-csharp-and-node-rpc-authoring",
+      "protocol-project-package-and-authored-descriptor-retirement",
+      "source-derived-signed-platform-contract-catalog"
+    ],
+    "rationale": "The technical V1 reset remains evidence while implementation-first RPC authoring replaces descriptor-first Protocol projects without changing immutable semantic contract tuples."
   },
   "publicArtifacts": {
     "coordinatedVersion": "1.1.0",
@@ -50,7 +55,7 @@
         "project": "languages/csharp/dotnet/packages/Sunder.Sdk/Sunder.Sdk.csproj",
         "projectSha256": "d00840baa7ae95c520b871df304b66333d3c7658440544cd91104d17da8c43f1",
         "publicApiBaseline": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Sdk.txt",
-        "publicApiSha256": "a7e53ecf5430f3a5618e336dca8451bcd80370833d334a5bff188a5c88537652",
+        "publicApiSha256": "c56d79d93b6b479b6bb7e95096325923361487736dd61d778309d5a4fb71a111",
         "packagingBehavior": "lib/ref contract assembly"
       },
       {
@@ -70,7 +75,7 @@
         "project": "languages/csharp/dotnet/packages/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj",
         "projectSha256": "0c6a2e3544a6db968d3aec280424ce0dbe43173e9cf76f07ae0dcf2284c21328",
         "publicApiBaseline": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Sdk.Stacks.txt",
-        "publicApiSha256": "5e7a037e1d1a1fb711df935a413d51bd696850f93bb622a4009a233c20e8a3d0",
+        "publicApiSha256": "320e4173dfab2dff22f3177c830c365819a8174dd04580c75f7a0756c2de9fef",
         "packagingBehavior": "lib/ref contract assembly"
       },
       {
@@ -78,9 +83,9 @@
         "version": "1.1.0",
         "artifact": "Sunder.Sdk.Worker.1.1.0.nupkg",
         "project": "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Sunder.Sdk.Worker.csproj",
-        "projectSha256": "b1d8d5854fd516aa27b8428c78988a4bf38c2c3b181824c3ed88760f46a582eb",
+        "projectSha256": "471f253166d595e4ae95225db42e91e54b1eda478262ffd835e846a2aeb44d2d",
         "publicApiBaseline": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Sdk.Worker.txt",
-        "publicApiSha256": "73729c9286550a75fe1f600c1a9c26b05855ec2a026132d6bd07323fbdaf5da6",
+        "publicApiSha256": "bee7a50d5ebb0375f6a2a4a7fd99ca73a6252c183b662dce22365f8be9774fdc",
         "packagingBehavior": "lib/ref contract assembly"
       },
       {
@@ -88,9 +93,9 @@
         "version": "1.1.0",
         "artifact": "Sunder.Package.Build.1.1.0.nupkg",
         "project": "languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj",
-        "projectSha256": "19555cc5be491d70668495ec6079eadc66496deee46c1f0cb630ad93b892221d",
+        "projectSha256": "c50284bcfb0324c06438ec3d2232e08cdbab0f45d85a6c921507c38fcb3751d8",
         "publicApiBaseline": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Package.Build.txt",
-        "publicApiSha256": "6e31599493d76fa27ab307c205a177d536998bf4de13e0d6785418f1b253dc9d",
+        "publicApiSha256": "4c2213ec1ecf5e23f2ab9b8c561fa12e08700d04fab61af3a78062381b093009",
         "packagingBehavior": "buildTransitive target plus tasks/net10.0"
       },
       {
@@ -108,32 +113,32 @@
       {
         "assembly": "Sunder.Host.Contracts",
         "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Host.Contracts.txt",
-        "sha256": "70c5a2cea36a44b3451ab2fe22ad6bf0d1a342b60b40eb8296dd091eacd00dfa",
+        "sha256": "52b532b76c58be65ea201861b34e5f8604a974d9b4eddfc3dffdd2e6d00e1b20",
         "bytes": 9748
       },
       {
         "assembly": "Sunder.Package.Build",
         "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Package.Build.txt",
-        "sha256": "6e31599493d76fa27ab307c205a177d536998bf4de13e0d6785418f1b253dc9d",
-        "bytes": 5953
+        "sha256": "4c2213ec1ecf5e23f2ab9b8c561fa12e08700d04fab61af3a78062381b093009",
+        "bytes": 6008
       },
       {
         "assembly": "Sunder.Package.Format",
         "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Package.Format.txt",
-        "sha256": "916835d64bd3d74fa922fd60ef91d033081ef786ee18a47aa8f22eae5461dfd6",
-        "bytes": 36385
+        "sha256": "6f7d63c8d3a306dfe61c42bb387993047b165ef1f88579c4664a4657adf88fe0",
+        "bytes": 58534
       },
       {
         "assembly": "Sunder.Registry.Contracts",
         "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Registry.Contracts.txt",
-        "sha256": "602bd5af2651780ad561401bdabb4be4f2d64da90b1c95a4ade0c4709481be97",
-        "bytes": 123081
+        "sha256": "f5626b2067690373308d2b0f682c4410439053d68b67f722be673fbd4e696353",
+        "bytes": 173583
       },
       {
         "assembly": "Sunder.Runtime.Contracts",
         "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Runtime.Contracts.txt",
-        "sha256": "abc08d246286a5de822bae8c9bafaac3bb5cc0c7a459c5a2f9d141a02adf96d5",
-        "bytes": 199878
+        "sha256": "d959c559dd08d10464208f78f32c36ccbba21f3f70dea8e77e7256a75378d06d",
+        "bytes": 241096
       },
       {
         "assembly": "Sunder.Sdk.Avalonia",
@@ -144,56 +149,56 @@
       {
         "assembly": "Sunder.Sdk.Stacks",
         "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Sdk.Stacks.txt",
-        "sha256": "5e7a037e1d1a1fb711df935a413d51bd696850f93bb622a4009a233c20e8a3d0",
+        "sha256": "320e4173dfab2dff22f3177c830c365819a8174dd04580c75f7a0756c2de9fef",
         "bytes": 45178
       },
       {
         "assembly": "Sunder.Sdk.Worker",
         "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Sdk.Worker.txt",
-        "sha256": "73729c9286550a75fe1f600c1a9c26b05855ec2a026132d6bd07323fbdaf5da6",
+        "sha256": "bee7a50d5ebb0375f6a2a4a7fd99ca73a6252c183b662dce22365f8be9774fdc",
         "bytes": 9457
       },
       {
         "assembly": "Sunder.Sdk",
         "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Sdk.txt",
-        "sha256": "a7e53ecf5430f3a5618e336dca8451bcd80370833d334a5bff188a5c88537652",
-        "bytes": 91631
+        "sha256": "c56d79d93b6b479b6bb7e95096325923361487736dd61d778309d5a4fb71a111",
+        "bytes": 91393
       }
     ],
     "hostContracts": {
       "assembly": "Sunder.Host.Contracts",
       "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Host.Contracts.txt",
-      "sha256": "70c5a2cea36a44b3451ab2fe22ad6bf0d1a342b60b40eb8296dd091eacd00dfa",
+      "sha256": "52b532b76c58be65ea201861b34e5f8604a974d9b4eddfc3dffdd2e6d00e1b20",
       "bytes": 9748
     },
     "runtimeContracts": {
       "assembly": "Sunder.Runtime.Contracts",
       "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Runtime.Contracts.txt",
-      "sha256": "abc08d246286a5de822bae8c9bafaac3bb5cc0c7a459c5a2f9d141a02adf96d5",
-      "bytes": 199878
+      "sha256": "d959c559dd08d10464208f78f32c36ccbba21f3f70dea8e77e7256a75378d06d",
+      "bytes": 241096
     },
     "registryContracts": {
       "assembly": "Sunder.Registry.Contracts",
       "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Registry.Contracts.txt",
-      "sha256": "602bd5af2651780ad561401bdabb4be4f2d64da90b1c95a4ade0c4709481be97",
-      "bytes": 123081
+      "sha256": "f5626b2067690373308d2b0f682c4410439053d68b67f722be673fbd4e696353",
+      "bytes": 173583
     },
     "packageBuildMsbuild": {
       "targetsFile": {
         "path": "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.targets",
-        "sha256": "7eac8a4b4fdc26cfdf42df84610027e6c3572589b36e0c754c24069714738436",
-        "bytes": 32585
+        "sha256": "236a21f7a5eb267205401ce009b6edf3e3b901364e09893457bf59682326580c",
+        "bytes": 67086
       },
       "taskAssemblyApi": {
         "assembly": "Sunder.Package.Build",
         "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Package.Build.txt",
-        "sha256": "6e31599493d76fa27ab307c205a177d536998bf4de13e0d6785418f1b253dc9d",
-        "bytes": 5953
+        "sha256": "4c2213ec1ecf5e23f2ab9b8c561fa12e08700d04fab61af3a78062381b093009",
+        "bytes": 6008
       },
       "taskAssemblyApiFidelity": {
         "path": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/ApiFidelity/Sunder.Package.Build.txt",
-        "sha256": "a2893a560b6f6f05ac2721abf06d9227a3d09917ab1902e7fdb4c05c78244d24",
-        "bytes": 7428
+        "sha256": "9b48ef38a1e80c94fe0c561b9132b6d83f5e1532b29ea690ab3d3a41fe14a1b9",
+        "bytes": 7497
       },
       "tasks": [
         "Sunder.Package.Build.Tasks.AggregateSunderPackageTask",
@@ -202,7 +207,8 @@
         "Sunder.Package.Build.Tasks.GenerateSunderPackageManifestTask",
         "Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask",
         "Sunder.Package.Build.Tasks.PackSunderPackageTask",
-        "Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask"
+        "Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask",
+        "_SunderStagePackageBuildTaskSet"
       ],
       "targets": [
         {
@@ -265,9 +271,15 @@
         "SunderPackageAssetsDirectory",
         "SunderPackageBuildProject",
         "SunderPackageBuildTaskAssembly",
+        "SunderPackageBuildTaskBootstrapConfiguration",
+        "SunderPackageBuildTaskContractKey",
+        "SunderPackageBuildTaskHostArchitecture",
         "SunderPackageBuildTaskShadowAssembly",
         "SunderPackageBuildTaskShadowDirectory",
+        "SunderPackageBuildTaskShadowRoot",
         "SunderPackageBuildTaskShadowStamp",
+        "SunderPackageBuildTaskSourceIsImmutable",
+        "SunderPackageBuildTaskSourceLockPath",
         "SunderPackageComposeRuntimeIdentifiers",
         "SunderPackageComposedOutputPath",
         "SunderPackageComposedOutputRoot",
@@ -320,26 +332,31 @@
       "bindingGeneratorSources": [
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Build/Tasks/GenerateSunderRpcBindingsTask.cs",
-          "sha256": "ca283a101b114a6566afe7091ae5154e070e913ca3b683b2802dde43c6a9b58e",
-          "bytes": 27071
+          "sha256": "d69f4137ae6dc35549e9af162547487d15cc70adc88c3a7a149f1c392a71a5c6",
+          "bytes": 27068
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcCSharpGenerator.cs",
-          "sha256": "1b8211dc9a5e3d7c3fbffbf813d10711e55ab0dd4854d0839bcdf8445da2e17e",
+          "sha256": "b616addb289c8ea132d5659768dde259d0814beb94a72e556077613300215fef",
           "bytes": 2471
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcCSharpEmitter.cs",
-          "sha256": "c21986caa2ad89d19b99c79710cc4eafb7f2983a271146d4b71b95477cd230de",
-          "bytes": 34271
+          "sha256": "1197c4b285bc5b8f72a58f262c3be4fde15242c79b523f0265ac9265891a160e",
+          "bytes": 33282
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcCSharpGeneratorModel.cs",
-          "sha256": "5fff147f3ecf45a079ffcb34a1bb90bc096b69fc7f3c1fdd410e2c96227b7a92",
-          "bytes": 41295
+          "sha256": "c7add6562b643a132a5559706786ab40f6d334bcd41f1e99b71cbd107267531e",
+          "bytes": 40660
         }
       ],
       "outputs": [
+        {
+          "taskParameter": "Fingerprint",
+          "property": "SunderPackageBuildTaskShadowFingerprint",
+          "item": null
+        },
         {
           "taskParameter": "WorkerEntryPointRelativePath",
           "property": "SunderPackageWorkerEntryPointRelativePath",
@@ -390,19 +407,19 @@
           "sunder-rpc-gen": "dist/generator-cli.js"
         },
         "engines": {
-          "node": ">=24.0.0"
+          "node": ">=24.18.1 <25.0.0"
         },
         "dependencies": {},
         "manifest": {
           "path": "languages/typescript/node/packages/sdk/package.json",
-          "sha256": "706e769eefd5375e1b002e9e1ef8255b321756acea64f4d1c324dbe6cfb7e055",
-          "bytes": 1477
+          "sha256": "b573faa74a657484b0761cbb15d9fcfc03eb7f4e5562b5ea4411cc68c7298e7d",
+          "bytes": 1660
         },
         "declarations": [
           {
             "path": "languages/typescript/node/packages/sdk/dist/browser.d.ts",
-            "sha256": "13dc89ac0a3e762ad2731828ac13c9d7a50d01f666f50d9e63f1fe63451a6eb9",
-            "bytes": 4441
+            "sha256": "9d2b151ab6d1b4f4f8b801be7aa7ce737d117e58d8a9bc0967ab9ef254193cc3",
+            "bytes": 4369
           },
           {
             "path": "languages/typescript/node/packages/sdk/dist/core.d.ts",
@@ -410,9 +427,9 @@
             "bytes": 727
           },
           {
-            "path": "languages/typescript/node/packages/sdk/dist/descriptor-v2.d.ts",
-            "sha256": "a12b06b868bd63342b7520159418a63784de4ebc5c2826088aed13d00d79d7c3",
-            "bytes": 954
+            "path": "languages/typescript/node/packages/sdk/dist/descriptor-v1.d.ts",
+            "sha256": "5bf57b6b037338f1f1955a7ef44180f6bd34fdf5cf31a3c4ae561415971b4b58",
+            "bytes": 923
           },
           {
             "path": "languages/typescript/node/packages/sdk/dist/descriptor.d.ts",
@@ -421,8 +438,8 @@
           },
           {
             "path": "languages/typescript/node/packages/sdk/dist/framing.d.ts",
-            "sha256": "f00cc823fe37b0040b0488afd0dd5ea00ef0c175fc1668f6ddbcf958f13d80cb",
-            "bytes": 924
+            "sha256": "b10f2a79f9ed1f8822f7ea28632a5bf9107d09c75ba5f3fdef4eae0a7001e6f4",
+            "bytes": 1097
           },
           {
             "path": "languages/typescript/node/packages/sdk/dist/generator-cli.d.ts",
@@ -436,8 +453,8 @@
           },
           {
             "path": "languages/typescript/node/packages/sdk/dist/index.d.ts",
-            "sha256": "42e2d8de48b0ea030a3855c6ab889572d82049c8b6c0a121dc0d3efd7e6d3e99",
-            "bytes": 673
+            "sha256": "f646e098e6670305bc61b5e33ec4d58fca02ff00144c2857687e2c024d541d35",
+            "bytes": 810
           },
           {
             "path": "languages/typescript/node/packages/sdk/dist/resource-profile.d.ts",
@@ -461,8 +478,8 @@
           },
           {
             "path": "languages/typescript/node/packages/sdk/dist/types.d.ts",
-            "sha256": "c3542e6dc8af464b6aefd98d0ec0e276fa72945c6967edb02001295127a72e2a",
-            "bytes": 22936
+            "sha256": "ba5abc46c7ddec988c36530327b33c391572ea641d79d35268c9c361befbb949",
+            "bytes": 22004
           },
           {
             "path": "languages/typescript/node/packages/sdk/dist/validation.d.ts",
@@ -475,12 +492,12 @@
             "bytes": 202
           }
         ],
-        "declarationSetSha256": "758cfd088ce296538ad0a342f3de92ff2bceee1ae9fefbd73aa5bcdc965a749e",
+        "declarationSetSha256": "3ec6016f89f891d26e328b222bcd621fc463df5315ff2d145c3084355732a32b",
         "declarationInputs": [
           {
             "path": "languages/typescript/node/packages/sdk/src/browser.ts",
-            "sha256": "3feae5db86e45cb185b32569cbb5ec4df60473cd99549ad45dcc459440a95d67",
-            "bytes": 8462
+            "sha256": "3fe8afdff8cddcfcfe44d06d9605abeaf93e4f968fa39ff2f559d77e8e0a8f2b",
+            "bytes": 8384
           },
           {
             "path": "languages/typescript/node/packages/sdk/src/core.ts",
@@ -488,34 +505,34 @@
             "bytes": 766
           },
           {
-            "path": "languages/typescript/node/packages/sdk/src/descriptor-v2.ts",
-            "sha256": "493f3095f22e29dbc6fbd2963dea4c2b57247df64002d1016f015d3a3931747c",
-            "bytes": 40197
+            "path": "languages/typescript/node/packages/sdk/src/descriptor-v1.ts",
+            "sha256": "3a9f660a07bc58c8ae6436d2c13a7b5565faf1b899fb565954b2484e9dbe3bbf",
+            "bytes": 40330
           },
           {
             "path": "languages/typescript/node/packages/sdk/src/descriptor.ts",
-            "sha256": "d440424aa9d95e19f666d85c387b9db388957a768d0777222e787c171ee1461f",
-            "bytes": 61557
+            "sha256": "fe58b6054e8fbc8bc99dee115dc28aaef70adb9c8676c985a7b6913c50f5e6e1",
+            "bytes": 57158
           },
           {
             "path": "languages/typescript/node/packages/sdk/src/framing.ts",
-            "sha256": "63d74d6bc9caf33fbe71c3575d8b6821497a9eaac9b5035d79356fa53b254d9e",
-            "bytes": 12084
+            "sha256": "329749cb500f0638e8cfbd65b2f1ef0df4007bed2e6e14ba4406b09dfa74c890",
+            "bytes": 19423
           },
           {
             "path": "languages/typescript/node/packages/sdk/src/generator-cli.ts",
-            "sha256": "78efb7b962d88c1e66548821666f02259e0f331d739d546f3e561c836fca4d63",
-            "bytes": 7760
+            "sha256": "651cc781fb179c6989d332c1ea44f16883b6f4be7b671187ff4abbc2d6614548",
+            "bytes": 7680
           },
           {
             "path": "languages/typescript/node/packages/sdk/src/generator.ts",
-            "sha256": "cd5023b348ce71c850ec2b13dd4cc265afe7ed1ed8c8e2b44a6f500bf5dceaeb",
-            "bytes": 41311
+            "sha256": "e8c81328defa836aab20a1edfdb3afbfaf4276f4e18966a4a0f98f3c4ff7ab57",
+            "bytes": 39805
           },
           {
             "path": "languages/typescript/node/packages/sdk/src/index.ts",
-            "sha256": "059d443fed735d5053cee4a1a37c3a88d4f278bdcfe4c50269cb53e1cc4662e2",
-            "bytes": 697
+            "sha256": "5a1789db6333d06972b4661503f4b10dea4c601447a799e0c80ad9b05f163c28",
+            "bytes": 844
           },
           {
             "path": "languages/typescript/node/packages/sdk/src/resource-profile.ts",
@@ -539,8 +556,8 @@
           },
           {
             "path": "languages/typescript/node/packages/sdk/src/types.ts",
-            "sha256": "3a370d2e312c00c00fb8b4399a83b8c1eef23f8b31500134c782f1c6cb444083",
-            "bytes": 25148
+            "sha256": "cb3a6f06bd6df774b841d3c7f0dc17e978a20608d4f24145abfd324f385f4031",
+            "bytes": 24124
           },
           {
             "path": "languages/typescript/node/packages/sdk/src/validation.ts",
@@ -549,11 +566,11 @@
           },
           {
             "path": "languages/typescript/node/packages/sdk/src/worker.ts",
-            "sha256": "dd7cf645be2ebbf5339b51be26fbddb9d64e327a02f82162035d720086898b8b",
-            "bytes": 170086
+            "sha256": "370e8a7bf7453bba329090acb52bb5b1e60224584ff69940092e5a140bfd1896",
+            "bytes": 173368
           }
         ],
-        "declarationInputSetSha256": "f8620b3ebee5e24d74727d447510498d8339b11b12b817f8a6639670dd4be4b1"
+        "declarationInputSetSha256": "b51e4562462a289833a9c5a67182f904f95abbdb06b804278ea7172adb430fbc"
       },
       {
         "name": "@sunder/package-tool",
@@ -566,18 +583,17 @@
           "sunder-package": "dist/cli.js"
         },
         "engines": {
-          "node": ">=24.0.0"
+          "node": ">=24.18.1 <25.0.0"
         },
         "dependencies": {
           "@sunder/sdk": ">=1.1.0 <1.2.0",
           "esbuild": "0.28.1",
-          "postject": "1.0.0-alpha.6",
           "vite": "8.2.0"
         },
         "manifest": {
           "path": "languages/typescript/node/packages/package-tool/package.json",
-          "sha256": "26fe2525bcd391a0eaa81d9c391a4bd78657c9ac6bc7ebdc2ffc0b917c6a88ab",
-          "bytes": 1251
+          "sha256": "8131692d88b6d021d9847e5ba50d58ebf72646ee033e14b8d223a00aa275b9e2",
+          "bytes": 1359
         },
         "declarations": [
           {
@@ -596,24 +612,24 @@
             "bytes": 111
           },
           {
-            "path": "languages/typescript/node/packages/package-tool/dist/download.d.ts",
-            "sha256": "0a596767c9c7e1b74dd95e16093b67a61e2ecd82c83c7a8af139b00c7fa554c7",
-            "bytes": 429
-          },
-          {
             "path": "languages/typescript/node/packages/package-tool/dist/index.d.ts",
-            "sha256": "6399137442b098e55067a3d3bfc76f471f971564d115eaac8eb54d09ab32a5ab",
-            "bytes": 396
+            "sha256": "c5018e3748c0e3d7bf24fe4493eacb5586eb7990424b87784f08873088a8862d",
+            "bytes": 375
           },
           {
             "path": "languages/typescript/node/packages/package-tool/dist/model.d.ts",
-            "sha256": "5e819bd3d4feddcd7e59db5e596c81ee9da56a61ce9e496497e18980fbaed55e",
-            "bytes": 3637
+            "sha256": "547b4616386244d2b06311bfdbe522dcceefa04feb5ee83116b4675c4eb4edc4",
+            "bytes": 3841
           },
           {
-            "path": "languages/typescript/node/packages/package-tool/dist/node-cache.d.ts",
-            "sha256": "d81bad0243563cafd8426726726325d68247488ee66d738cddd223ae019d4dd7",
-            "bytes": 871
+            "path": "languages/typescript/node/packages/package-tool/dist/module.d.ts",
+            "sha256": "06ad90db910616f53d2cc0c86dfffbfa446ee33ca6698fdff065e43e6011f5af",
+            "bytes": 376
+          },
+          {
+            "path": "languages/typescript/node/packages/package-tool/dist/native-binary.d.ts",
+            "sha256": "3884aa6ea4169a0480580b1d30d1f6fc9f4e96912c7a5af1708aafb2567fd3ad",
+            "bytes": 686
           },
           {
             "path": "languages/typescript/node/packages/package-tool/dist/notices.d.ts",
@@ -627,31 +643,26 @@
           },
           {
             "path": "languages/typescript/node/packages/package-tool/dist/package.d.ts",
-            "sha256": "ebd8c693cb81535dc144ad35ddce51a11fd359f31d225a88361800a107a24682",
-            "bytes": 1748
+            "sha256": "f23c6c1842e0ba774ee1a85d25bbdf2e8f25d84812d3e29f0386267b0af92394",
+            "bytes": 1808
           },
           {
             "path": "languages/typescript/node/packages/package-tool/dist/registry.d.ts",
-            "sha256": "8b144435ca1136a37a9f61885dab54c331cc6359cb2df9da95b41e2f661ff59a",
-            "bytes": 1379
+            "sha256": "4436028b2c7dd58d6b1fcd88e344534e6dda18e5c90433f0ff7f95f2f26c2862",
+            "bytes": 1375
           },
           {
             "path": "languages/typescript/node/packages/package-tool/dist/rpc-bindings.d.ts",
             "sha256": "bb039154324b767757a806e8b67ea2265535609d7e63778e117fd70fc506acfe",
             "bytes": 525
-          },
-          {
-            "path": "languages/typescript/node/packages/package-tool/dist/sea.d.ts",
-            "sha256": "b07294121492224009c13448a85d4e15bf305d7579a2459ad55a4e4b9968f20e",
-            "bytes": 499
           }
         ],
-        "declarationSetSha256": "3ac2307bae4f365179fda03638c4ee4b6dfeb1475aa120ee0abe276dd6f3aea2",
+        "declarationSetSha256": "75b4a4cdcab431caad8d6019fb8dd134f05bb40178617dad308cab3fbe5a791b",
         "declarationInputs": [
           {
             "path": "languages/typescript/node/packages/package-tool/src/cli.ts",
-            "sha256": "f01318f1263fc811c043a2396ae6eba2c18d2511878e454f21e1343e65087c02",
-            "bytes": 4409
+            "sha256": "41949282fd60da0e1c377eb5266a6741591117110064d583b7f562d2b91724af",
+            "bytes": 4351
           },
           {
             "path": "languages/typescript/node/packages/package-tool/src/compatibility.ts",
@@ -664,24 +675,24 @@
             "bytes": 3833
           },
           {
-            "path": "languages/typescript/node/packages/package-tool/src/download.ts",
-            "sha256": "8165f68778517ac263ea9cb9636edb3d058b342a02fa878b2edf3998452637b6",
-            "bytes": 4605
-          },
-          {
             "path": "languages/typescript/node/packages/package-tool/src/index.ts",
-            "sha256": "a95da975961f1c771ec5969c5865e7801efd1c81397cad29b78f3f0ff13d9f27",
-            "bytes": 420
+            "sha256": "f664b5ebca91045dc3651c8d640de2e0fbc0edba5e25532298549c1c9021bebf",
+            "bytes": 397
           },
           {
             "path": "languages/typescript/node/packages/package-tool/src/model.ts",
-            "sha256": "3de868c94b07160600972ca2534af47f8b501323284925ecd08a45f50560e3fe",
-            "bytes": 21675
+            "sha256": "45a4002aafaa61053b37f927e73136e54c3164dab72f250ca7bafc88cc85b53f",
+            "bytes": 27082
           },
           {
-            "path": "languages/typescript/node/packages/package-tool/src/node-cache.ts",
-            "sha256": "5c064ce4a8112af24108ffd901e3d6b3d8f11cf64e9e83e7567391947298e947",
-            "bytes": 3223
+            "path": "languages/typescript/node/packages/package-tool/src/module.ts",
+            "sha256": "040379874f53192a458a8db9dd14c39a5918be063403eff7a30cfee2553270ed",
+            "bytes": 3895
+          },
+          {
+            "path": "languages/typescript/node/packages/package-tool/src/native-binary.ts",
+            "sha256": "c95e67750d27f797b597dc892dff797cb4de2b9a039dc13ee38929279d294793",
+            "bytes": 21964
           },
           {
             "path": "languages/typescript/node/packages/package-tool/src/notices.ts",
@@ -695,26 +706,21 @@
           },
           {
             "path": "languages/typescript/node/packages/package-tool/src/package.ts",
-            "sha256": "c0a496fa0653df101bffebc38b7c50ed5c9be40e8b20f7d69ad47c28edfe2264",
-            "bytes": 77041
+            "sha256": "0c62979cd1f5f074a299d40d0132e5b3390dc35e688418a3ab53711258aafc2f",
+            "bytes": 94138
           },
           {
             "path": "languages/typescript/node/packages/package-tool/src/registry.ts",
-            "sha256": "0f4ef07c544650bc134f5e56cdf80fa34a89c414a91ac8b5cfe9c6251c9870fc",
-            "bytes": 10302
+            "sha256": "33ed13109240c170f860bc7a100c9bce5c268a8dcfd4d0972f7b14a61d01cf7a",
+            "bytes": 10173
           },
           {
             "path": "languages/typescript/node/packages/package-tool/src/rpc-bindings.ts",
-            "sha256": "c79e28440fcdd35b5d3ffd90ddc74cf864c31ca914610b1883ee5c776970c02e",
-            "bytes": 8678
-          },
-          {
-            "path": "languages/typescript/node/packages/package-tool/src/sea.ts",
-            "sha256": "77b01b960cf2607bab0dd418f0992194866def2cc162561909a1c033295231b1",
-            "bytes": 23538
+            "sha256": "e41e5c2f4bf2dcc6d5049ade81c86a46e476790e5db82cd476e41cdc26ccb60a",
+            "bytes": 8553
           }
         ],
-        "declarationInputSetSha256": "1c94f3612044d461616ae3c55f1506cf408b77839111f229d8f92eb04e5410d5"
+        "declarationInputSetSha256": "889355df142b755261cc8782e1c6c0aa920aa90d166efbeccf48f8d4c4e2570d"
       },
       {
         "name": "create-sunder-package",
@@ -727,15 +733,15 @@
           "create-sunder-package": "dist/cli.js"
         },
         "engines": {
-          "node": ">=24.0.0"
+          "node": ">=24.18.1 <25.0.0"
         },
         "dependencies": {
           "@sunder/sdk": ">=1.1.0 <1.2.0"
         },
         "manifest": {
           "path": "languages/typescript/node/packages/create-sunder-package/package.json",
-          "sha256": "040558b838b21f740c18236cef21bcf4afc2075ae0cb418b173343f93ef41871",
-          "bytes": 1169
+          "sha256": "d60b588634e1b4f945007b32a348afb31eb619d23511669e834501fc51a5f15c",
+          "bytes": 1420
         },
         "declarations": [],
         "declarationSetSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -749,6 +755,28 @@
         "declarationInputSetSha256": "8a948e063efa8a2853d387118d59118981954c48ae31729c24211e2d86f9b189"
       }
     ],
+    "npmReleaseContract": {
+      "workspaceManifest": {
+        "path": "languages/typescript/node/package.json",
+        "sha256": "32bc80b631309591459f99812275dca5b5a18c0a74563fbd4ce40e80af77d251",
+        "bytes": 2061
+      },
+      "lockfile": {
+        "path": "languages/typescript/node/package-lock.json",
+        "sha256": "e4284d6ade2634c8313fae3e2aab4866f69000387426cbce71eb00bd71f121ee",
+        "bytes": 48566
+      },
+      "inventory": {
+        "path": "eng/test-oracles/core-public-packages.json",
+        "sha256": "e2288af7e2a876f10599d96441bcb78f0d0c56045cf0ee98d3299c3ff4ba5a4e",
+        "bytes": 9391
+      },
+      "verifier": {
+        "path": "scripts/release/verify-node-package-artifacts.mjs",
+        "sha256": "3bd8cffb7c8676afeb0e1ec3c94f0a28ddf2397480a9990d3bb6d491e3091da3",
+        "bytes": 12020
+      }
+    },
     "cli": {
       "assembly": "sunder.dll",
       "commands": [
@@ -792,11 +820,25 @@
         },
         {
           "path": "dev package",
-          "helpSha256": "a04a564c16d4a16dc4daeeb8310f2bb8689b697b492216cc78034857cd52160d",
-          "helpUtf8Bytes": 561,
+          "helpSha256": "3b3e9b47603564400ad9e178787be4d815209ba2eca94dd65c3bb82c380a965d",
+          "helpUtf8Bytes": 735,
           "subcommands": [
+            "run",
+            "smoke",
             "validate"
           ]
+        },
+        {
+          "path": "dev package run",
+          "helpSha256": "bf2b9c9412b1d6e41cb7dccbb370cad2e65abfc43e8e84d964a962a8e2c6f625",
+          "helpUtf8Bytes": 681,
+          "subcommands": []
+        },
+        {
+          "path": "dev package smoke",
+          "helpSha256": "aa8b3c7995e13071dd35081b4c9ed228b8f321c1d063aef35e66ef8c71f6ec81",
+          "helpUtf8Bytes": 591,
+          "subcommands": []
         },
         {
           "path": "dev package validate",
@@ -965,8 +1007,8 @@
         },
         {
           "path": "package install",
-          "helpSha256": "34b2aa02ebcb44c5429f59581dad56e92fd580c298ec0c98f36b591602428e03",
-          "helpUtf8Bytes": 1107,
+          "helpSha256": "a529f45ef6105e506bc97ea31fb6adc92a166071f1d38f59e400f9db56cb9a20",
+          "helpUtf8Bytes": 1313,
           "subcommands": []
         },
         {
@@ -1037,8 +1079,8 @@
         },
         {
           "path": "package update",
-          "helpSha256": "8e44483c1438798120ad72ce389faf092b34a5084ee41cc5b4d1ec04074660da",
-          "helpUtf8Bytes": 948,
+          "helpSha256": "c1e94be67f4de34ece440456d3d3fb06ff180506012c4e952cc4749e6ba1eea5",
+          "helpUtf8Bytes": 1135,
           "subcommands": []
         },
         {
@@ -1173,20 +1215,63 @@
         },
         {
           "path": "runtime",
-          "helpSha256": "bc8530d08e138076b51b85cf024fd61fcd6b9ee9782d7f621e7fcd5756d7b7b2",
-          "helpUtf8Bytes": 792,
+          "helpSha256": "7ee9472290315d5de4d45a45500345a05535adfaaf1e8ac0411b5b3602fc6015",
+          "helpUtf8Bytes": 2020,
           "subcommands": [
+            "ensure",
+            "gc",
+            "import",
+            "info",
+            "list",
+            "repair",
             "reset",
             "restart",
             "start",
             "status",
-            "stop"
+            "stop",
+            "verify"
           ]
         },
         {
+          "path": "runtime ensure",
+          "helpSha256": "8c8b158e4d490e51a7c8a41761a8ac54ceb74eee0448934a6944bd7709601e5a",
+          "helpUtf8Bytes": 839,
+          "subcommands": []
+        },
+        {
+          "path": "runtime gc",
+          "helpSha256": "49e37a50607d9019226721f5a036823eeb4605aac22ebf1a5c40167febdcc72c",
+          "helpUtf8Bytes": 495,
+          "subcommands": []
+        },
+        {
+          "path": "runtime import",
+          "helpSha256": "0f6f4496c4ccde5deedfdffe673d65a05b82911e320d18bdd4ad4df9ebb23cbe",
+          "helpUtf8Bytes": 545,
+          "subcommands": []
+        },
+        {
+          "path": "runtime info",
+          "helpSha256": "7ed2187c19c7b5a1956928d5a3996581c6b5ccf36fc76a42fd9ed185547dbf09",
+          "helpUtf8Bytes": 844,
+          "subcommands": []
+        },
+        {
+          "path": "runtime list",
+          "helpSha256": "6edb601a254545a87731365e66d40272b8b3bac438ea0498a23026e01ac01e72",
+          "helpUtf8Bytes": 502,
+          "subcommands": []
+        },
+        {
+          "path": "runtime repair",
+          "helpSha256": "be938f6012c2204bff8493c97b9e1b383d03dc24e12f16b556651f3e5606d103",
+          "helpUtf8Bytes": 942,
+          "subcommands": []
+        },
+        {
           "path": "runtime reset",
-          "helpSha256": "f43bb81f9b5ef5317e153cbbe531307e5d1c9265d1e6d018eff018edb78d7e2e",
-          "helpUtf8Bytes": 561,
+          "helpSha256": "ca510d0bd655db012f10d883559c4b08d90122c00928130031b47da9cebab92b",
+          "helpUtf8Bytes": 658,
           "subcommands": []
         },
         {
@@ -1211,6 +1296,12 @@
           "path": "runtime stop",
           "helpSha256": "28a658c2c01a32d6467bd8d9fa236a9f44a42e1354bd46be76a03a56e1b93236",
           "helpUtf8Bytes": 488,
+          "subcommands": []
+        },
+        {
+          "path": "runtime verify",
+          "helpSha256": "935476d2b4bc5ab733b14a40c96a31039358ef7b9ebcbbfde0d938a03b49b43e",
+          "helpUtf8Bytes": 828,
           "subcommands": []
         },
         {
@@ -1406,18 +1497,18 @@
       "source": [
         {
           "path": "languages/csharp/dotnet/host/Sunder.Cli/CliCommandParser.cs",
-          "sha256": "c5e3a0bd568ba50bcc298289a1e54be2a6595f76ec90139433e6842fc605c87b",
-          "bytes": 24443
+          "sha256": "93b459742854bac8d1089945c661b7d49ba4b17d4b24e8f4ab78f87ca1634709",
+          "bytes": 24249
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Cli/CliCommandParser.OrdinaryUser.cs",
-          "sha256": "8d1ca044a1b107d4df0a176e6b05ec973c4161207d22ec32af8a7cb8b5c4f0d4",
-          "bytes": 12114
+          "sha256": "ac5bf7b89fd5b3f453f8120b8361796a658f98d7db22a1d4e5edb0795b194195",
+          "bytes": 20303
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Cli/CliCommandParser.Symbols.cs",
-          "sha256": "038aa43ead278e732f6567125360448c3c2624e42f68a20cfba68ccc6314699a",
-          "bytes": 8531
+          "sha256": "36ab50ad52b30735f566d1b8bef6255edcfa847fe4bfebaa5f99ea9d884c913f",
+          "bytes": 8701
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Cli/CliOutput.cs",
@@ -1426,53 +1517,51 @@
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Cli/CliErrors.cs",
-          "sha256": "e62aea071451e3aaf921b92de60eab0a2dd8896fc1b9cf2fcb5b5f8379d9d459",
-          "bytes": 6792
+          "sha256": "e79845384d09f856a78faedfc6213d20bfb81399410d2b94fa7bc433e708d555",
+          "bytes": 6861
         }
       ]
     }
   },
   "protocols": {
     "rpcDescriptor": {
-      "current": 2,
-      "standaloneCompatibility": [
-        1
-      ],
-      "unversionedConstantSelects": 2,
+      "current": 1,
+      "standaloneCompatibility": [],
+      "unversionedConstantSelects": 1,
       "valueProfile": "sunder.rpc.values.v1",
-      "manifestV3RequiresDescriptor": 2
+      "packageManifestV1RequiresDescriptor": 1
     },
     "runtime": {
       "baseline": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Runtime.Contracts.txt",
       "values": {
-        "CurrentRevision": 8,
+        "CurrentRevision": 1,
         "Identity": "dev.sunder.runtime",
-        "MaximumSupportedRevision": 8,
-        "MinimumSupportedRevision": 8
+        "MaximumSupportedRevision": 1,
+        "MinimumSupportedRevision": 1
       }
     },
     "host": {
       "baseline": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/PublicApi/Sunder.Host.Contracts.txt",
       "values": {
-        "CurrentRevision": 2,
+        "CurrentRevision": 1,
         "Identity": "dev.sunder.host",
-        "MaximumSupportedRevision": 2,
-        "MinimumSupportedRevision": 2
+        "MaximumSupportedRevision": 1,
+        "MinimumSupportedRevision": 1
       }
     },
     "browserBridge": {
-      "identity": "sunder.bridge.v2",
-      "version": 2,
+      "identity": "sunder.bridge.v1",
+      "version": 1,
       "resourceProfileDeclaration": {
         "path": "languages/typescript/node/packages/sdk/src/browser.ts",
-        "sha256": "3feae5db86e45cb185b32569cbb5ec4df60473cd99549ad45dcc459440a95d67",
-        "bytes": 8462
+        "sha256": "3fe8afdff8cddcfcfe44d06d9605abeaf93e4f968fa39ff2f559d77e8e0a8f2b",
+        "bytes": 8384
       },
       "injectedImplementationSources": [
         {
           "path": "languages/csharp/dotnet/host/Sunder.App/Services/AppWebBridge.cs",
-          "sha256": "86f9a6e3341e783985585dc89b4dab2a8b0204dce9337535d0a21c271b417f00",
-          "bytes": 42231
+          "sha256": "ff8be1650630560144e12fd78306dea519e5fae183a937a191411576f3557fc3",
+          "bytes": 42724
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.App/Services/AppWebBootstrapScriptGenerator.cs",
@@ -1490,7 +1579,24 @@
           "bytes": 3957
         }
       ]
-    }
+    },
+    "workerConformance": [
+      {
+        "path": "specs/worker/v1/conformance/README.md",
+        "sha256": "4a998373121cd3b15128d9aebf419c78195ac2ec538835ecb0c0210ef21af1ce",
+        "bytes": 1051
+      },
+      {
+        "path": "specs/worker/v1/conformance/corpus.json",
+        "sha256": "a48359fee043c17d12f495fca6a999e240033745632bf1d2f6f0922fa72c59ba",
+        "bytes": 9282
+      },
+      {
+        "path": "specs/worker/v1/conformance/transport-vectors.json",
+        "sha256": "eb91fb56dfb9c6d3e69d72bb31f4c1fba0099ba88bd37829312c32dcb02bb525",
+        "bytes": 2070
+      }
+    ]
   },
   "http": {
     "runtime": {
@@ -1531,6 +1637,27 @@
           "auth": "bearer",
           "rateLimit": "none",
           "metadataSource": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/ContentTransferEndpoints.cs"
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/execution-runtimes/ensure",
+          "auth": "bearer",
+          "rateLimit": "none",
+          "metadataSource": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/ExecutionRuntimeEndpoints.cs"
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/execution-runtimes/gc",
+          "auth": "bearer",
+          "rateLimit": "none",
+          "metadataSource": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/ExecutionRuntimeEndpoints.cs"
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/execution-runtimes/import",
+          "auth": "bearer",
+          "rateLimit": "none",
+          "metadataSource": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/ExecutionRuntimeEndpoints.cs"
         },
         {
           "method": "GET",
@@ -1825,6 +1952,13 @@
           "auth": "bearer",
           "rateLimit": "none",
           "metadataSource": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/InstalledPackageEndpoints.cs"
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/packages/{packageId}/execution-runtime-bindings",
+          "auth": "bearer",
+          "rateLimit": "none",
+          "metadataSource": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/ExecutionRuntimeEndpoints.cs"
         },
         {
           "method": "GET",
@@ -2185,6 +2319,13 @@
         },
         {
           "method": "POST",
+          "path": "/api/v1/uploads/execution-runtimes",
+          "auth": "bearer",
+          "rateLimit": "none",
+          "metadataSource": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/ContentTransferEndpoints.cs"
+        },
+        {
+          "method": "POST",
           "path": "/api/v1/uploads/packages",
           "auth": "bearer",
           "rateLimit": "none",
@@ -2216,13 +2357,18 @@
       "metadataSources": [
         {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/ContentTransferEndpoints.cs",
-          "sha256": "5e53008773747646257deadf53644a5f08aa27ae89599b0d8c869683f20bfba8",
-          "bytes": 3248
+          "sha256": "6fec935d297eb6f31de67e69ab6d346f45999e30bed5524dfcd469c91ed4963e",
+          "bytes": 3619
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/DevPackageOwnerEndpoints.cs",
           "sha256": "3fc52bb7bec140f83f011d48dd0fcb94e9f9d9cb27d4e6a20bfd2b4fa07b9881",
           "bytes": 1524
+        },
+        {
+          "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/ExecutionRuntimeEndpoints.cs",
+          "sha256": "66045337284cde2421981d8289009d3637046ad136ba4c38c7229b87f2faedb1",
+          "bytes": 4936
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/InstalledPackageEndpoints.cs",
@@ -2286,13 +2432,13 @@
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Endpoints/SystemEndpoints.cs",
-          "sha256": "16d6bc69dbd5cfa85349b6f5ee7dded237e69daf40a5c28951348ff719e23a4e",
-          "bytes": 2574
+          "sha256": "93a1bb2a8bbe5169f5ad95c725e55b761d74a4d61b4efbd3400c267952b4fa42",
+          "bytes": 3399
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Program.cs",
-          "sha256": "278615b6052ac1977e6f5106c1bc704b5e2b140408b963b1f6ef2d11716c673d",
-          "bytes": 11299
+          "sha256": "ce960ab9b39c6353c0167d14d6977afd2cd3c5e52a6133f82e2a73a653a9e378",
+          "bytes": 13260
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/RuntimeBearerAuthenticationMiddleware.cs",
@@ -2477,8 +2623,8 @@
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/HostLifecycleStore.cs",
-          "sha256": "5600841e0ae88d5b07ddca795b1123d1177cac95084999289854185d7b4820d9",
-          "bytes": 9367
+          "sha256": "b57e3f78c124a98c76b3234601e181ad4ddab1e9d66916130a9f982361b512fb",
+          "bytes": 9955
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/HostLifecycleTransitions.cs",
@@ -2496,14 +2642,19 @@
           "bytes": 1250
         },
         {
+          "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/HostRuntimeStatePathValidator.cs",
+          "sha256": "9d306bc988c271003516cb61468391fd282c4e0f80a1a01a073c8c2db13b253c",
+          "bytes": 2292
+        },
+        {
           "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/HostStartupOptions.cs",
           "sha256": "62602cc67d82bdf1caba2b76475855a800acf7da307fcae6785ac796110be704",
           "bytes": 5771
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/Program.cs",
-          "sha256": "0be7d5d737033816d2ba51e74a3d1a7f03a1575f91ff219c37cc5e07829456cf",
-          "bytes": 11682
+          "sha256": "ee57ef996f81214e6cbc8a9d027b9cbd3a96286e956063b010d2358c395a3cc2",
+          "bytes": 13259
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/Properties/AssemblyInfo.cs",
@@ -2512,8 +2663,8 @@
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/RuntimeGateway.cs",
-          "sha256": "5c02681754456e09cb8a35075a2178330be71cf19e3fe4b5af3eb2e91a8fd5c9",
-          "bytes": 13561
+          "sha256": "b918c1f9b247407f8db18958a6e1625bbb91a6fd6a4344982958b4cbd9074761",
+          "bytes": 13775
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/RuntimeResourcePolicyLaunchResolver.cs",
@@ -2527,8 +2678,8 @@
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/RuntimeWorkerCoordinator.cs",
-          "sha256": "e16c9cbbaee58a9e0ef401bd3dc36e96db920ab0769c47b8924746e291818802",
-          "bytes": 44413
+          "sha256": "9f464465f35d0c1336161eab590f4141ac3b0fe2511f7428b37e897a9a158ac2",
+          "bytes": 48765
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/RuntimeWorkerEndpointLease.cs",
@@ -2818,6 +2969,11 @@
           "bytes": 6734
         },
         {
+          "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/RegistryExecutionRuntimeBindingPreparer.cs",
+          "sha256": "19c3885f66544d4338d7b8428059d96c8e8fc1167d24eed232e89552e3344190",
+          "bytes": 42448
+        },
+        {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/RegistryHttpClient.cs",
           "sha256": "0d09c82dadffe24aec2b75473821aeac9a74861a6814a56919f4ecebc5ffa5f3",
           "bytes": 12264
@@ -2829,18 +2985,18 @@
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/RegistryPackageArtifactDownloader.cs",
-          "sha256": "40917b11af8445cd3119ef1d735b5b29903366c2932e6946db55a478960d1824",
-          "bytes": 27031
+          "sha256": "23504346e9fdb684e3ad0076839230779ea17c81d8215d380a5a2506c0cf03b3",
+          "bytes": 27664
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/RegistryPackageChangeOrchestrator.cs",
-          "sha256": "a6a0bf062a76e2eda65d9b382db6096404fb340c81501849fbde99db18d97546",
-          "bytes": 37275
+          "sha256": "0b733c883c52185f2a992d42f55424f394426b75a61393fdda10a14bc48a3760",
+          "bytes": 75777
         },
         {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/RegistryPackagePlanResolver.cs",
-          "sha256": "386aa705368b5f6751f849820e84de86537992d8d9013478dea5af5f4b323d49",
-          "bytes": 4680
+          "sha256": "d2a35613c11081a0d6c143d410bc04ab21bfb4ba595020cac32d013fcfbab38d",
+          "bytes": 8445
         }
       ]
     }
@@ -2906,6 +3062,7 @@
       "host.operation-active",
       "host.operation-not-found",
       "host.runtime-lease-timeout",
+      "host.runtime-reset-required",
       "host.runtime-unavailable",
       "host.worker-active",
       "host.worker-crash-loop",
@@ -2959,8 +3116,8 @@
       ],
       "mappingSource": {
         "path": "languages/csharp/dotnet/host/Sunder.Cli/CliErrors.cs",
-        "sha256": "e62aea071451e3aaf921b92de60eab0a2dd8896fc1b9cf2fcb5b5f8379d9d459",
-        "bytes": 6792
+        "sha256": "e79845384d09f856a78faedfc6213d20bfb81399410d2b94fa7bc433e708d555",
+        "bytes": 6861
       }
     },
     "runtimeRpcValidationClassification": {
@@ -2968,33 +3125,33 @@
       "sources": [
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcSchemaProfile.cs",
-          "sha256": "29210e2a4146fbfcf512de94762abd88c646408458e51dd154ba2ef5e81c92e8",
-          "bytes": 2114
+          "sha256": "5f18271c8ab7bca1f9fec19f76a0eb33566412f6c1ef51bd277686e53ac57c90",
+          "bytes": 1934
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcSchemaProfile.InstanceValidation.cs",
-          "sha256": "b0e0091ccd9b64303197dcce0763671821afdee766b43d41849c20ef77e39bd5",
-          "bytes": 19917
+          "sha256": "8b8c93b0ab2f65ac17a454bc405a598964abf8cd75b6d2277cbcf36af0f29d97",
+          "bytes": 19811
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcSchemaProfile.SchemaForm.cs",
-          "sha256": "25ffd4d39b1cc0b17f802a26412b2ffac996732b98036432699fdcde68e2d6e1",
-          "bytes": 25958
+          "sha256": "fc59281b750926e1d2677bfb3ab10e72c18f4d1f6eb04f1847527382ce4f483b",
+          "bytes": 22061
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcSchemaProfile.SchemaGraph.cs",
-          "sha256": "b20f99dbddc2c181cbd15d70c7a2eac51bb153aa69509617a65721d992744784",
-          "bytes": 15268
+          "sha256": "5cc9ed2b02edde1f55642093ac14b8826e661a5435e317976012d3fd5a399c8f",
+          "bytes": 14932
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcSchemaProfile.SchemaLiterals.cs",
-          "sha256": "afa6f292e35a41d91db48a8c2177cd552ad190d8764228bcd4478cfcd8845e0f",
-          "bytes": 18703
+          "sha256": "b664c7e4ed222d6f9a6ebed7bdc0b2f4921c12edf8d0e8786e0cf7118e7311a3",
+          "bytes": 17929
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcSchemaProfile.ValueValidation.cs",
-          "sha256": "9d51d987e1effa8483fdf80bf20805f373a47def92555a4824adba5acf356ac1",
-          "bytes": 25497
+          "sha256": "d10a6eb9af34cd205162fc88e5b43d930cd6d415fb2380622bbf6e260718e1c8",
+          "bytes": 24694
         }
       ]
     }
@@ -3113,14 +3270,44 @@
           "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ProcessRuntimeWorker.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Internal/WorkerEnvironment.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/README.md",
-          "languages/typescript/node/packages/package-tool/src/sea.ts",
           "languages/typescript/node/packages/sdk/src/worker.ts"
+        ]
+      },
+      {
+        "name": "SUNDER_ADDITIONAL_RELEASE_ASSETS",
+        "sources": [
+          "scripts/release/verify-github-release-assets.sh",
+          "scripts/release/verify-release-promotion.sh"
+        ]
+      },
+      {
+        "name": "SUNDER_ALLOW_PRODUCTION_ACCEPTANCE_ASSETS",
+        "sources": [
+          "scripts/release/verify-release-promotion.sh"
         ]
       },
       {
         "name": "SUNDER_APPLE_TEAM_ID",
         "sources": [
           "scripts/install/install.sh"
+        ]
+      },
+      {
+        "name": "SUNDER_APP_STARTUP_TRACE_PATH",
+        "sources": [
+          "languages/csharp/dotnet/host/Sunder.App/Services/AppStartupTrace.cs"
+        ]
+      },
+      {
+        "name": "SUNDER_APP_STATE_ROOT",
+        "sources": [
+          "languages/csharp/dotnet/host/Sunder.App/Services/AppLocalState.cs"
+        ]
+      },
+      {
+        "name": "SUNDER_CLI",
+        "sources": [
+          "languages/typescript/node/packages/package-tool/src/module.ts"
         ]
       },
       {
@@ -3148,6 +3335,12 @@
         "sources": [
           "languages/csharp/dotnet/host/Sunder.App/Services/SunderAppSettings.cs",
           "languages/csharp/dotnet/host/Sunder.Cli/CliOptions.cs"
+        ]
+      },
+      {
+        "name": "SUNDER_EXECUTION_RUNTIME_DEVELOPMENT_STATE_ROOT",
+        "sources": [
+          "languages/csharp/dotnet/host/Sunder.App/Services/RuntimeHostStartInfoFactory.cs"
         ]
       },
       {
@@ -3200,24 +3393,6 @@
         ]
       },
       {
-        "name": "SUNDER_MACOS_ENTITLEMENTS",
-        "sources": [
-          "languages/typescript/node/packages/package-tool/src/sea.ts"
-        ]
-      },
-      {
-        "name": "SUNDER_MACOS_SIGN_IDENTITY",
-        "sources": [
-          "languages/typescript/node/packages/package-tool/src/sea.ts"
-        ]
-      },
-      {
-        "name": "SUNDER_NODE_CACHE",
-        "sources": [
-          "languages/typescript/node/packages/package-tool/src/sea.ts"
-        ]
-      },
-      {
         "name": "SUNDER_NPM_PACKAGE_NAME_JSON__",
         "sources": [
           "languages/typescript/node/packages/create-sunder-package/src/cli.ts",
@@ -3236,7 +3411,6 @@
         "sources": [
           "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ProcessRuntimeWorker.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Internal/WorkerEnvironment.cs",
-          "languages/typescript/node/packages/package-tool/src/sea.ts",
           "languages/typescript/node/packages/sdk/src/worker.ts"
         ]
       },
@@ -3247,7 +3421,6 @@
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Internal/WorkerEnvironment.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/README.md",
           "languages/typescript/node/packages/create-sunder-package/src/cli.ts",
-          "languages/typescript/node/packages/package-tool/src/sea.ts",
           "languages/typescript/node/packages/sdk/src/worker.ts"
         ]
       },
@@ -3329,22 +3502,36 @@
         ]
       },
       {
+        "name": "SUNDER_PACKAGE_PREPARATION_CONCURRENCY",
+        "sources": [
+          "languages/csharp/dotnet/host/Sunder.Runtime.Host/RuntimeHostStartupOptions.cs"
+        ]
+      },
+      {
         "name": "SUNDER_PACKAGE_VERSION",
         "sources": [
           "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ProcessRuntimeWorker.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Internal/WorkerEnvironment.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/README.md",
-          "languages/typescript/node/packages/package-tool/src/sea.ts",
           "languages/typescript/node/packages/sdk/src/worker.ts"
         ]
       },
       {
-        "name": "SUNDER_PACKAGE_WORKSPACE_ROOT",
+        "name": "SUNDER_PACKAGE_WORKER_STARTUP_CONCURRENCY",
         "sources": [
-          "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ProcessRuntimeWorker.cs",
-          "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Internal/WorkerEnvironment.cs",
-          "languages/typescript/node/packages/package-tool/src/sea.ts",
-          "languages/typescript/node/packages/sdk/src/worker.ts"
+          "languages/csharp/dotnet/host/Sunder.Runtime.Host/RuntimeHostStartupOptions.cs"
+        ]
+      },
+      {
+        "name": "SUNDER_PRODUCTION_ACCEPTANCE_CANDIDATE_ONLY",
+        "sources": [
+          "scripts/release/verify-production-acceptance.sh"
+        ]
+      },
+      {
+        "name": "SUNDER_PRODUCTION_ACCEPTANCE_COORDINATOR_SHA256",
+        "sources": [
+          "scripts/release/verify-production-acceptance.sh"
         ]
       },
       {
@@ -3384,13 +3571,13 @@
         ]
       },
       {
-        "name": "SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR",
+        "name": "SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR",
         "sources": [
           "languages/typescript/node/packages/package-tool/src/package.ts",
           "languages/typescript/node/packages/package-tool/src/registry.ts",
           "languages/typescript/node/packages/package-tool/src/rpc-bindings.ts",
           "languages/typescript/node/packages/sdk/src/browser.ts",
-          "languages/typescript/node/packages/sdk/src/descriptor-v2.ts",
+          "languages/typescript/node/packages/sdk/src/descriptor-v1.ts",
           "languages/typescript/node/packages/sdk/src/generator-cli.ts",
           "languages/typescript/node/packages/sdk/src/generator.ts",
           "languages/typescript/node/packages/sdk/src/index.ts"
@@ -3419,6 +3606,38 @@
           "languages/csharp/dotnet/host/Sunder.Host.Supervisor/Program.cs",
           "languages/csharp/dotnet/host/Sunder.Host.Supervisor/RuntimeWorkerLaunchProbe.cs",
           "languages/csharp/dotnet/host/Sunder.Runtime.Host/Program.cs"
+        ]
+      },
+      {
+        "name": "SUNDER_RUNTIME_DEVELOPMENT_ALLOW_INSECURE_LOOPBACK_REGISTRY",
+        "sources": [
+          "languages/csharp/dotnet/host/Sunder.App/Services/RuntimeHostStartInfoFactory.cs",
+          "languages/csharp/dotnet/host/Sunder.App/Services/RuntimePersistentLauncher.cs",
+          "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ExecutionRuntimeDevelopmentConfiguration.cs"
+        ]
+      },
+      {
+        "name": "SUNDER_RUNTIME_DEVELOPMENT_RELEASE_KEY_ID",
+        "sources": [
+          "languages/csharp/dotnet/host/Sunder.App/Services/RuntimeHostStartInfoFactory.cs",
+          "languages/csharp/dotnet/host/Sunder.App/Services/RuntimePersistentLauncher.cs",
+          "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ExecutionRuntimeDevelopmentConfiguration.cs"
+        ]
+      },
+      {
+        "name": "SUNDER_RUNTIME_DEVELOPMENT_RELEASE_PUBLIC_KEY_BASE64",
+        "sources": [
+          "languages/csharp/dotnet/host/Sunder.App/Services/RuntimeHostStartInfoFactory.cs",
+          "languages/csharp/dotnet/host/Sunder.App/Services/RuntimePersistentLauncher.cs",
+          "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ExecutionRuntimeDevelopmentConfiguration.cs"
+        ]
+      },
+      {
+        "name": "SUNDER_RUNTIME_DEVELOPMENT_TRUST_GENERATION",
+        "sources": [
+          "languages/csharp/dotnet/host/Sunder.App/Services/RuntimeHostStartInfoFactory.cs",
+          "languages/csharp/dotnet/host/Sunder.App/Services/RuntimePersistentLauncher.cs",
+          "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ExecutionRuntimeDevelopmentConfiguration.cs"
         ]
       },
       {
@@ -3470,6 +3689,12 @@
         ]
       },
       {
+        "name": "SUNDER_RUNTIME_TRACE_PATH",
+        "sources": [
+          "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/PackageSessionStartupTrace.cs"
+        ]
+      },
+      {
         "name": "SUNDER_RUNTIME_URL",
         "sources": [
           "languages/csharp/dotnet/host/Sunder.App/Services/AppStartupOptionsParser.cs",
@@ -3482,8 +3707,25 @@
           "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ProcessRuntimeWorker.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Internal/WorkerEnvironment.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/README.md",
-          "languages/typescript/node/packages/package-tool/src/sea.ts",
           "languages/typescript/node/packages/sdk/src/worker.ts"
+        ]
+      },
+      {
+        "name": "SUNDER_SOURCE_LOCK_ACQUIRED",
+        "sources": [
+          "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.SourceLock.targets"
+        ]
+      },
+      {
+        "name": "SUNDER_SOURCE_LOCK_RELEASED",
+        "sources": [
+          "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.SourceLock.targets"
+        ]
+      },
+      {
+        "name": "SUNDER_SOURCE_LOCK_WAITING",
+        "sources": [
+          "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.SourceLock.targets"
         ]
       },
       {
@@ -3523,12 +3765,6 @@
         ]
       },
       {
-        "name": "SUNDER_WINDOWS_SIGN_SCRIPT",
-        "sources": [
-          "languages/typescript/node/packages/package-tool/src/sea.ts"
-        ]
-      },
-      {
         "name": "SUNDER_WITH_AVALONIA",
         "sources": [
           "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/.template.config/template.json"
@@ -3553,7 +3789,6 @@
           "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ProcessRuntimeWorker.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Internal/WorkerEnvironment.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/README.md",
-          "languages/typescript/node/packages/package-tool/src/sea.ts",
           "languages/typescript/node/packages/sdk/src/types.ts",
           "languages/typescript/node/packages/sdk/src/worker.ts"
         ]
@@ -3561,7 +3796,6 @@
       {
         "name": "SUNDER_WORKER_PROTOCOL_VERSION",
         "sources": [
-          "languages/typescript/node/packages/package-tool/src/sea.ts",
           "languages/typescript/node/packages/sdk/src/types.ts",
           "languages/typescript/node/packages/sdk/src/worker.ts"
         ]
@@ -3569,7 +3803,6 @@
       {
         "name": "SUNDER_WORKER_STANDARD_RESOURCE_PROFILE",
         "sources": [
-          "languages/typescript/node/packages/package-tool/src/sea.ts",
           "languages/typescript/node/packages/sdk/src/resource-profile.ts"
         ]
       },
@@ -3578,7 +3811,6 @@
         "sources": [
           "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ProcessRuntimeWorker.cs",
           "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Internal/WorkerEnvironment.cs",
-          "languages/typescript/node/packages/package-tool/src/sea.ts",
           "languages/typescript/node/packages/sdk/src/worker.ts"
         ]
       }
@@ -3618,8 +3850,8 @@
         "incompatibleRootPolicy": "reject; do not infer or migrate legacy state",
         "source": {
           "path": "languages/csharp/dotnet/host/Sunder.Runtime.LocalState/RuntimeLocalState.cs",
-          "sha256": "cb8198b3d8bf3eee5a8c46401960a2defd3ad9fd5cffb5146bb711be5766f1ce",
-          "bytes": 6686
+          "sha256": "ae444f5b415c0a5c7834bb85d81a932b54182ff51a0f08d4df2508582e888206",
+          "bytes": 6784
         }
       },
       {
@@ -3629,8 +3861,8 @@
         "incompatibleRootPolicy": "reject; do not infer or migrate legacy state",
         "source": {
           "path": "languages/csharp/dotnet/host/Sunder.App/Services/AppLocalState.cs",
-          "sha256": "0c543c7f39633c48a64b26a201bc436d31620c0946874284a1bd4a5cf1af686a",
-          "bytes": 3366
+          "sha256": "7772f7ec8e742dfb3c5516127962c49f455c29c2f191eb87e672dec0d47d3663",
+          "bytes": 3684
         }
       }
     ],
@@ -3689,19 +3921,19 @@
           "runtime/v1/catalog/installed-packages.json"
         ],
         "versions": {
-          "schema": 5
+          "schema": 1
         },
         "readFailurePolicy": "reject malformed, old, future, incomplete, or inconsistent catalogs",
         "sources": [
           {
             "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/InstalledPackageStore.cs",
-            "sha256": "7d2866e1bd751bd99da567a4fbc2c169647985b069015073698796a056e16bce",
-            "bytes": 15616
+            "sha256": "5e10bbde494e913f144f6dda31b96f9f02202bbcb0ee9564162d52762077288e",
+            "bytes": 24686
           },
           {
             "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/InstalledPackageModels.cs",
-            "sha256": "42818dd3fbde872d35310c8337c00e082a8f627edcf96f5e2f73a5622691e7fc",
-            "bytes": 4127
+            "sha256": "8fc0fdbde5683eab437412d18a3be33dab2126a233756bef1d6a949a384afae9",
+            "bytes": 6257
           }
         ]
       },
@@ -3728,19 +3960,19 @@
           "runtime/v1/transactions/<transaction>/journal.json"
         ],
         "versions": {
-          "schema": 2
+          "schema": 4
         },
         "readFailurePolicy": "fail closed during recovery when journal identity, phase, paths, or catalogs are invalid",
         "sources": [
           {
             "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/PackageStoreRecovery.cs",
-            "sha256": "59600ca0569ba5b0827770894c4a4e32139f35b6a6297df969d85a99d3f6b4f3",
-            "bytes": 11701
+            "sha256": "5fa884c639188136bcca22ca2812a1bcb7baa30b8c0983ebaa69774f783a2a72",
+            "bytes": 23261
           },
           {
             "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/PackageStoreTransactionManager.cs",
-            "sha256": "1fdfcde34b105065c04022254fbad6496cb10babb02334085d78ae604f612507",
-            "bytes": 10251
+            "sha256": "d590907961f75d2af93e8b78db54eb89a36b9c5d12ba996be9ff5aa62af4d48b",
+            "bytes": 30781
           }
         ]
       },
@@ -3821,8 +4053,8 @@
         "sources": [
           {
             "path": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Infrastructure/Storage/PackageStorageMigrationJournal.cs",
-            "sha256": "18e4722371fcb2b087a0021241176ac6d415af01e3b3ee82bf5dab2f88f3ad4b",
-            "bytes": 10382
+            "sha256": "0f4bdf1b2f866f34526c5171790bb324b82a59cd88a41802416730954be5854d",
+            "bytes": 10515
           }
         ]
       },
@@ -3901,14 +4133,14 @@
           "host/runtime/v1/lifecycle.json"
         ],
         "versions": {
-          "format": 1
+          "format": 2
         },
         "readFailurePolicy": "reject malformed, old/future, or semantically invalid lifecycle state",
         "sources": [
           {
             "path": "languages/csharp/dotnet/host/Sunder.Host.Supervisor/HostLifecycleStore.cs",
-            "sha256": "5600841e0ae88d5b07ddca795b1123d1177cac95084999289854185d7b4820d9",
-            "bytes": 9367
+            "sha256": "b57e3f78c124a98c76b3234601e181ad4ddab1e9d66916130a9f982361b512fb",
+            "bytes": 9955
           }
         ]
       },
@@ -3966,6 +4198,11 @@
     "instrumentationSourcesDetected": [],
     "loggingEvents": [
       {
+        "id": 1701,
+        "name": "ExecutionRuntimePhase",
+        "source": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/ExecutionRuntimePhaseTelemetry.cs"
+      },
+      {
         "id": 2401,
         "name": "RuntimeRpcProviderFault",
         "source": "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/RuntimeSessionOwner.cs"
@@ -3975,7 +4212,7 @@
   },
   "schemas": {
     "packageArchive": 1,
-    "packageManifest": 3,
+    "packageManifest": 1,
     "packageContentIndex": 1,
     "projection": 1,
     "projectionContentIndex": 1,
@@ -4030,8 +4267,8 @@
       "files": [
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/.template.config/template.json",
-          "sha256": "f6513581fd555698034ee73bed41b6b37e251627ee48ad3d8f2fb1ff24ad4a5e",
-          "bytes": 6652
+          "sha256": "5e41af824422c30dc572978daaaa511fa4c6be23f64aafa5dbda5269fab91345",
+          "bytes": 6662
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Assets/icon.png",
@@ -4050,8 +4287,8 @@
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/README.md",
-          "sha256": "058e830fdacd50d2819b05bb8050c097faa29d820bc079cc072fcf8d4a141b6c",
-          "bytes": 3035
+          "sha256": "281c7d7601447b3d37bad7499a552ab73c9cfbaaacbe422c6411eca96ebe027f",
+          "bytes": 3291
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.App/PackageModule.no-view.cs",
@@ -4085,7 +4322,7 @@
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.Protocol/Contracts/sample.rpc.json",
-          "sha256": "e4d166b9d74836800a7097b3873c6c3fd7224923e691742208f30e6ccc7a224a",
+          "sha256": "c76c703b68f16c31ee6f1361bd806e4950cb0a348043bbb5854e7858a50fccc0",
           "bytes": 1094
         },
         {
@@ -4100,13 +4337,13 @@
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.Worker/Program.cs",
-          "sha256": "5f82359f718d063b8b43da33c3ce70c9e298706000907eee81a6dd77bdb5352b",
-          "bytes": 970
+          "sha256": "5e21a45db62bc912aac626141e33c0dfb63cdf2e90cf62bcb22c4d3caef820be",
+          "bytes": 886
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.Worker/SampleRpcProvider.cs",
-          "sha256": "3cffef2d8aadd515234f04527e557a381cb4b70513f5b5a0bfcb73fcdc3d798d",
-          "bytes": 2137
+          "sha256": "53e9a9edef619f4e75ffa12c08bedd867cadac1d2ba2d25fc763348660fe232c",
+          "bytes": 2135
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.Worker/StackSupport.cs",
@@ -4120,8 +4357,8 @@
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.csproj",
-          "sha256": "1031eb4d7a1fba6da73d88d4080fcf40f4777a44a13e95de2cd24f703effc5b4",
-          "bytes": 3222
+          "sha256": "8c9c54961139e052dcdfb26bf4e9c2152dde9ab7c2e35d5643e5d7f6d7df9e83",
+          "bytes": 3099
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.props",
@@ -4192,15 +4429,15 @@
         ]
       },
       "roles": {
-        "runtime": "canonical unsuffixed self-contained Worker V3 executable",
+        "runtime": "canonical unsuffixed framework-dependent Worker V1 project with a managed module entry point",
         "app": "optional role-isolated Avalonia App project",
         "protocol": "package-local non-package contract project"
       },
       "roleMetadataSources": [
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.csproj",
-          "sha256": "1031eb4d7a1fba6da73d88d4080fcf40f4777a44a13e95de2cd24f703effc5b4",
-          "bytes": 3222
+          "sha256": "8c9c54961139e052dcdfb26bf4e9c2152dde9ab7c2e35d5643e5d7f6d7df9e83",
+          "bytes": 3099
         },
         {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/PackageMetadata.no-host.cs",
@@ -4220,23 +4457,13 @@
         "root": "languages/typescript/node/packages/create-sunder-package/template",
         "files": [
           {
-            "path": "languages/typescript/node/packages/create-sunder-package/template/.sunder/generated/rpc.sunder-generated-output",
-            "sha256": "329d0c001148bc15042043bf2966cc0eba6fb18db0f0c0c60b41577454cdf03b",
-            "bytes": 51
-          },
-          {
-            "path": "languages/typescript/node/packages/create-sunder-package/template/.sunder/generated/rpc/example-messages.g.ts",
-            "sha256": "893dbc14a31a41ced5817febbeaa98dd4fcd0f95ac6a8d883de9ddd0ec951fd8",
-            "bytes": 4763
-          },
-          {
             "path": "languages/typescript/node/packages/create-sunder-package/template/README.md",
-            "sha256": "05ca484b0cdc1bd4ff6181ae377250d8ea36506b0bcdd06d4da734b761969026",
-            "bytes": 1804
+            "sha256": "cc26b7bce9008a47c59bdc3b2763281bd59e003e23eb510f44ec600a3dd96aea",
+            "bytes": 1817
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template/contracts/example.rpc.json",
-            "sha256": "3993df596ef52b5b4663a73f772d97e3387275d77f059357ade9be3990d00a5b",
+            "sha256": "7fa3a90696528cbb64f268a1e5cf55c6c2be77e2feee1465a2b317a4c065f95a",
             "bytes": 1148
           },
           {
@@ -4246,8 +4473,8 @@
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template/package.json",
-            "sha256": "39a0bbf1a0bf72aba74a76bc5feef5a0a52b21cfd5129ff1dbb94acb8ff28cea",
-            "bytes": 675
+            "sha256": "ed2090e06750418aab6e2795d5dbf24c92b95ca25e78217f2c1fffbeb8382259",
+            "bytes": 759
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template/src/worker.ts",
@@ -4256,12 +4483,12 @@
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template/sunder.package.json",
-            "sha256": "e8a043786de6c04db8d41a1122efa2c3aacb32b1ed5a906c8f2cb9760de677dd",
-            "bytes": 800
+            "sha256": "d22fc4f781c8d9563297a83ec6cadc47e90f98e65c29d2bfc2d3ad8d23d900da",
+            "bytes": 768
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template/test/package.test.cjs",
-            "sha256": "08bbca8480a17b4a984ba8e252c66b4b3593f7640a6990e9379153ad85167cc5",
+            "sha256": "a5378e736d13d1061f369fc33622f17fcfee326c914ca795355cde65e59b1bda",
             "bytes": 1659
           },
           {
@@ -4274,7 +4501,7 @@
           "schemaVersion": 2,
           "id": "sunderpackageidscaffoldtoken",
           "name": "__SUNDER_PACKAGE_NAME_JSON__",
-          "summary": "A TypeScript Worker V3 Runtime package for Sunder.",
+          "summary": "A runtime-backed TypeScript Worker V1 package for Sunder.",
           "version": "1.0.0",
           "entry": "src/worker.ts",
           "workerCapabilities": [],
@@ -4300,7 +4527,6 @@
             }
           ],
           "usesContracts": [],
-          "maximumExecutableBytes": 167772160,
           "maximumPackageBytes": 536870912
         },
         "packedBehaviorGate": "create-sunder-package test plus root templates:typecheck"
@@ -4309,19 +4535,9 @@
         "root": "languages/typescript/node/packages/create-sunder-package/template-react-node",
         "files": [
           {
-            "path": "languages/typescript/node/packages/create-sunder-package/template-react-node/.sunder/generated/rpc.sunder-generated-output",
-            "sha256": "329d0c001148bc15042043bf2966cc0eba6fb18db0f0c0c60b41577454cdf03b",
-            "bytes": 51
-          },
-          {
-            "path": "languages/typescript/node/packages/create-sunder-package/template-react-node/.sunder/generated/rpc/example-messages.g.ts",
-            "sha256": "893dbc14a31a41ced5817febbeaa98dd4fcd0f95ac6a8d883de9ddd0ec951fd8",
-            "bytes": 4763
-          },
-          {
             "path": "languages/typescript/node/packages/create-sunder-package/template-react-node/README.md",
-            "sha256": "c2e5df61449387d1349078cc5ae7a65c56ae5f9814b6e1ea839c4c6d5788c68a",
-            "bytes": 1887
+            "sha256": "e56defc00d9bd9453296c83c62971b4f9d31ac63cc775531965612dd9883181a",
+            "bytes": 1879
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template-react-node/app/index.html",
@@ -4355,7 +4571,7 @@
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template-react-node/contracts/example.rpc.json",
-            "sha256": "3993df596ef52b5b4663a73f772d97e3387275d77f059357ade9be3990d00a5b",
+            "sha256": "7fa3a90696528cbb64f268a1e5cf55c6c2be77e2feee1465a2b317a4c065f95a",
             "bytes": 1148
           },
           {
@@ -4365,8 +4581,8 @@
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template-react-node/package.json",
-            "sha256": "6713866240c0cb5dac9ee8501b2ca7756bcbd9899e405ece41f1cf85f814a34c",
-            "bytes": 919
+            "sha256": "4be329e583d154b308a634ba77c254ac025b7f9e6f678de327f764d830ad4239",
+            "bytes": 1003
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template-react-node/src/worker.ts",
@@ -4375,12 +4591,12 @@
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template-react-node/sunder.package.json",
-            "sha256": "7224e120f816c5f128dbf49a5c0c1788212079b4ede6a171c82045bff873a6aa",
-            "bytes": 1291
+            "sha256": "1fc3e86496c07c239aa6d261d3559c8b64f7757e261dfa9e02cd2b8b336297b6",
+            "bytes": 1259
           },
           {
             "path": "languages/typescript/node/packages/create-sunder-package/template-react-node/test/package.test.cjs",
-            "sha256": "374a39e01dc631f156cc837348da5dc601a1c8944232094a96ba712ff29cea99",
+            "sha256": "21dbc46500c0a2c1abb9ca3a21874f4f973a50dcdd3897f55ae7b41d225e99e6",
             "bytes": 1944
           },
           {
@@ -4398,7 +4614,7 @@
           "schemaVersion": 2,
           "id": "sunderpackageidscaffoldtoken",
           "name": "__SUNDER_PACKAGE_NAME_JSON__",
-          "summary": "A React App and TypeScript Worker V3 Runtime package for Sunder.",
+          "summary": "A React App and runtime-backed TypeScript Worker V1 package for Sunder.",
           "version": "1.0.0",
           "entry": "src/worker.ts",
           "workerCapabilities": [],
@@ -4448,7 +4664,6 @@
               ]
             }
           ],
-          "maximumExecutableBytes": 167772160,
           "maximumPackageBytes": 536870912
         },
         "packedBehaviorGate": "create-sunder-package test plus root templates:typecheck"
@@ -4488,11 +4703,16 @@
       "host/v<semver>",
       "sdk/v<semver>"
     ],
+    "workerV1Thresholds": {
+      "path": "eng/release/worker-v1-thresholds.json",
+      "sha256": "1a1548e1d7b738097d7240a9324777683e23eccfa1ce96500b184fdfe2a3b75a",
+      "bytes": 561
+    },
     "workflows": [
       {
         "path": ".github/workflows/sunder-app-packaging-ci.yml",
-        "sha256": "f13de910b8e138c8fc0e5f843cbbb1042274e77720f54ee0bf07a5e00c81957e",
-        "bytes": 14703
+        "sha256": "4a28c4ca3b6aa1e235fcd426328823acaa30ae7058d0ff158e721a28643690d6",
+        "bytes": 14914
       },
       {
         "path": ".github/workflows/sunder-app-release.yml",
@@ -4505,34 +4725,44 @@
         "bytes": 16238
       },
       {
+        "path": ".github/workflows/sunder-execution-runtime-native-release.yml",
+        "sha256": "2c2e97c18ad56f7f0d6a4b228a4ae987b78aa2eef662746ed76f783f048cb8ec",
+        "bytes": 29348
+      },
+      {
+        "path": ".github/workflows/sunder-execution-runtime-validation.yml",
+        "sha256": "385bd15ccc6faa232ec1c8ac1ed8cb60783f2ab6ae610d448fbbc33ad02447ed",
+        "bytes": 4128
+      },
+      {
         "path": ".github/workflows/sunder-host-release.yml",
         "sha256": "f80897c7d098a599307b807c925263cb83be894c67d1176de67216a7b6e78432",
         "bytes": 15214
       },
       {
         "path": ".github/workflows/sunder-host-validation.yml",
-        "sha256": "31915ff73ca38ec930e792d4bf6a1e1751dcff43dfdbb97ad86127921da425e5",
-        "bytes": 3877
+        "sha256": "4aaa54b3f0d3a3a4cac8a24f1337092ee2d1759e8ef13204eae162b47979fa72",
+        "bytes": 4698
       },
       {
-        "path": ".github/workflows/sunder-node-sea-ci.yml",
-        "sha256": "b1923535cbb25c703564693d1f5b615fd284ba98f375d0fb882834b6b5e96ce1",
-        "bytes": 15619
+        "path": ".github/workflows/sunder-node-ci.yml",
+        "sha256": "27fccaee15806531782e0d1f14c4aaf37c21e24c559b1e28c63eee9fb25f64fe",
+        "bytes": 19127
       },
       {
         "path": ".github/workflows/sunder-release-promotion.yml",
-        "sha256": "7bed80c2ca60692cb06608996b05eaa777f5ed6560d8d8df3fb4716c9754d7cc",
-        "bytes": 20726
+        "sha256": "9ab40dfcff9eebd61a732808b325287ee6e02b9bc81dbca6cdb112a14e4f026c",
+        "bytes": 20134
       },
       {
         "path": ".github/workflows/sunder-sdk-ci.yml",
-        "sha256": "d6c44d58bf66c63c565cb4c31b010a294553c37c53962e365d9937d94d6ece8f",
-        "bytes": 11324
+        "sha256": "50350a228f469340f123ec557e2d983d5c670bce9d722491a9062ba7e696482f",
+        "bytes": 15196
       },
       {
         "path": ".github/workflows/sunder-sdk-release.yml",
-        "sha256": "4b983e24e068b477f1d0e99c378e6213c0c4acfa86921e8e35f3ecb5cfba73f1",
-        "bytes": 57712
+        "sha256": "91655b33676e901fe69c6df76d2af90059bf33c1d701496d9e000c2a13cd6d72",
+        "bytes": 57778
       }
     ]
   },
@@ -4550,7 +4780,7 @@
     },
     "runtimeTarget": {
       "kind": "worker",
-      "protocol": "sunder.worker.v3"
+      "protocol": "sunder.worker.v1"
     },
     "supportedRids": [
       "win-x64",
@@ -4577,8 +4807,8 @@
         },
         "runtimePackage": {
           "path": "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.targets",
-          "sha256": "7eac8a4b4fdc26cfdf42df84610027e6c3572589b36e0c754c24069714738436",
-          "bytes": 32585
+          "sha256": "236a21f7a5eb267205401ce009b6edf3e3b901364e09893457bf59682326580c",
+          "bytes": 67086
         },
         "releaseVerification": {
           "path": "scripts/release/verify-nuget-package-set.py",
@@ -4594,7 +4824,7 @@
     "cloudFront": "not present in Core source or configuration"
   },
   "phase2Deltas": [
-    "Added explicit RPC DescriptorVersionV1 and made unversioned DescriptorVersion select current V2.",
+    "Reset RPC descriptor semantics to one DescriptorVersion V1 selected by the unversioned DescriptorVersion constant.",
     "Added Sunder.Host.Contracts and Sunder.Package.Build to the existing .NET API baseline gate.",
     "Aligned @sunder/sdk/browser resourceProfile declarations with the injected bridge object.",
     "Replaced Runtime message-based RPC validation classification with structured validator metadata.",
@@ -4606,22 +4836,9 @@
     "Removed the public Stack Worker registration convenience surface and the Sunder.Sdk.Stacks dependency on Sunder.Sdk.Worker."
   ],
   "allowedFutureDeltas": [
-    {
-      "phase": 1,
-      "surface": "Runtime Stack failure classification",
-      "change": "Replace RuntimeEndpointErrors Stack failure message matching with typed internal failure categories while retaining the reviewed public Runtime status/error-code inventory.",
-      "expectedLedgerEffect": "Runtime endpoint behavior is keyed by failure category rather than diagnostic text; no route, DTO, or public error-code addition.",
-      "acceptance": "Focused tests vary diagnostic text independently of category, every category maps to the reviewed status/code pair, and Runtime endpoint plus compatibility-candidate checks pass.",
-      "implementationStatus": "implemented"
-    },
-    {
-      "phase": 5,
-      "surface": "Sunder.Sdk.Stacks Worker registration convenience API",
-      "change": "Remove CreateWorkerProviderRegistration and the Sunder.Sdk.Worker project/package dependency from Sunder.Sdk.Stacks; construct Worker registration in first-party templates and consumers.",
-      "expectedLedgerEffect": "The Sunder.Sdk.Stacks public API baseline and NuGet dependency graph lose the Worker-specific surface; Stack format and RPC contracts remain unchanged.",
-      "acceptance": "Public API and packed NuGet dependency tests prove removal, templates and external consumers build, and App/Runtime receive no transitive Worker dependency through Stacks.",
-      "implementationStatus": "implemented"
-    }
+    "implementation-first-csharp-and-node-rpc-authoring",
+    "protocol-project-package-and-authored-descriptor-retirement",
+    "source-derived-signed-platform-contract-catalog"
   ],
   "verificationGates": [
     "node scripts/compatibility/generate-core-compatibility-candidate.mjs --check",

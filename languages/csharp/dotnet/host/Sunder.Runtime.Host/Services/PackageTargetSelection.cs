@@ -17,11 +17,12 @@ internal static class PackageTargetSelection
         return rid;
     }
 
-    public static PackageHostRoles GetHostRoles(SunderPackageManifest manifest)
+    public static PackageHostRoles GetHostRoles(SunderPackageManifest manifest, IReadOnlyList<SunderPackageTargetKey>? acquiredTargets = null)
     {
         var roles = PackageHostRoles.None;
         foreach (var key in SunderPackageTargetResolver.EnumerateTargets(manifest))
         {
+            if (acquiredTargets is not null && !acquiredTargets.Contains(key)) continue;
             roles |= key.Role switch
             {
                 SunderPackageFormat.AppHostRole => PackageHostRoles.App,

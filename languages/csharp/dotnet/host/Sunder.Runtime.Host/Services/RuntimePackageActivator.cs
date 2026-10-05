@@ -12,17 +12,27 @@ internal sealed class RuntimePackageActivator(
     RuntimeRpcBroker? rpcBroker = null,
     RuntimeProcessPolicyOptions? processPolicy = null,
     CancellationToken hostStopping = default,
-    PackageSessionState? packageSessionState = null)
+    PackageSessionState? packageSessionState = null,
+    IExecutionRuntimeLaunchResolver? executionRuntimeLaunchResolver = null,
+    ExecutionRuntimePhaseTelemetry? telemetry = null)
 {
-    public Task<PackageActivationResult> ActivateAsync(
+    private readonly IExecutionRuntimeLaunchResolver _executionRuntimeLaunchResolver =
+        executionRuntimeLaunchResolver ?? UnavailableExecutionRuntimeLaunchResolver.Instance;
+    private readonly ExecutionRuntimePhaseTelemetry _telemetry =
+        telemetry ?? ExecutionRuntimePhaseTelemetry.Disabled;
+
+    public async Task<PackageActivationResult> ActivateAsync(
         PreparedRuntimePackage package,
         ICollection<string> warnings,
         ICollection<string> errors,
         CancellationToken cancellationToken)
     {
+        ResolvedExecutionRuntimeLaunch? launch = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            PackageManifestAdmissionPolicy.EnsureSupported(
+                package.Source.Manifest ?? throw new InvalidDataException("Package source is missing its manifest."));
             if (package.SelectedTargetKey is not { } targetKey
                 || package.SelectedTarget is not { } target
                 || package.EntryAssemblyPath is null)
@@ -46,30 +56,56 @@ internal sealed class RuntimePackageActivator(
             if (packageSessionState is null)
             {
                 throw new InvalidOperationException(
-                    $"Package '{package.PackageId}' V3 worker Runtime target requires active-session authority.");
+                    $"Package '{package.PackageId}' V1 worker Runtime target requires active-session authority.");
             }
-            var loadedPackage = CreateLoadedPackage(package, rpcBroker, packageSessionState);
+            var activationId = Guid.NewGuid();
+            await rpcBroker.RequirePackagePolicyAsync(package, cancellationToken).ConfigureAwait(false);
+            package.StartupTrace?.BindActivation(activationId);
+            package.StartupTrace?.BeginRuntimeBinding();
+            launch = await _executionRuntimeLaunchResolver.ResolveAsync(
+                    package,
+                    activationId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            package.StartupTrace?.CompleteRuntimeBinding(package.ExecutionRuntimeBinding, "succeeded");
+            var loadedPackage = CreateLoadedPackage(
+                package,
+                launch,
+                activationId,
+                rpcBroker,
+                packageSessionState);
+            AddWarning(warnings, launch.ActivationWarning);
+            launch = null;
             var providers = loadedPackage.RpcProviders;
             if (providers.Count == 0)
             {
                 warnings.Add($"Package '{package.PackageId}' worker Runtime target loaded without any declared RPC providers.");
             }
-            return Task.FromResult(new PackageActivationResult(
+            return new PackageActivationResult(
                 true,
                 loadedPackage,
-                BuildSessionDescriptor(package.Activation, true, PackageReadinessState.Ready, packageViews: [])));
+                BuildSessionDescriptor(package.Activation, true, PackageReadinessState.Ready, packageViews: []));
         }
         catch (Exception exception)
         {
+            package.StartupTrace?.CompleteRuntimeBinding(
+                package.ExecutionRuntimeBinding,
+                exception is OperationCanceledException ? "canceled" : "failed");
+            if (launch is not null)
+            {
+                await launch.DisposeAsync().ConfigureAwait(false);
+            }
             if (exception is OperationCanceledException && cancellationToken.IsCancellationRequested) throw;
             logger.LogError(exception, "Failed to activate package {PackageId}", package.PackageId);
             errors.Add($"Failed to activate package '{package.PackageId}': {exception.Message}");
-            return Task.FromResult(Failed(package, exception.Message));
+            return Failed(package, exception.Message);
         }
     }
 
     private ActiveLoadedPackage CreateLoadedPackage(
         PreparedRuntimePackage package,
+        ResolvedExecutionRuntimeLaunch launch,
+        Guid activationId,
         RuntimeRpcBroker rpcBroker,
         PackageSessionState packageSessionState)
     {
@@ -77,7 +113,6 @@ internal sealed class RuntimePackageActivator(
         ProcessRuntimeWorker? worker = null;
         try
         {
-            var activationId = Guid.NewGuid();
             packageData = new RuntimePackageDataResources(
                 package.PackageId,
                 package.Version,
@@ -88,9 +123,12 @@ internal sealed class RuntimePackageActivator(
                 packageData,
                 activationId,
                 rpcBroker,
+                launch,
                 processPolicy,
                 hostStopping,
-                packageSessionState);
+                packageSessionState,
+                _telemetry);
+            var recoveryPackage = package with { StartupTrace = null };
             var loadedPackage = new ActiveLoadedPackage(
                 BuildDescriptor(package.Activation, true, PackageReadinessState.Ready, []),
                 package.Source,
@@ -111,7 +149,11 @@ internal sealed class RuntimePackageActivator(
                     .ToArray(),
                 RpcManifestSha256 = package.ManifestSha256 ?? string.Empty,
                 MigrationJournal = packageData.MigrationJournal,
-                RecoveryFactory = () => CreateLoadedPackage(package, rpcBroker, packageSessionState),
+                ExecutionRuntimeBinding = package.ExecutionRuntimeBinding,
+                RecoveryFactory = () => CreateRecoveryLoadedPackage(
+                    recoveryPackage,
+                    rpcBroker,
+                    packageSessionState),
             };
             packageData = null;
             worker = null;
@@ -121,12 +163,48 @@ internal sealed class RuntimePackageActivator(
         {
             if (worker is not null)
             {
-                _ = worker.DisposeAsync();
+                worker.DisposeAsync().AsTask().GetAwaiter().GetResult();
             }
             else
             {
                 packageData?.Dispose();
             }
+            throw;
+        }
+    }
+
+    private ActiveLoadedPackage CreateRecoveryLoadedPackage(
+        PreparedRuntimePackage package,
+        RuntimeRpcBroker rpcBroker,
+        PackageSessionState packageSessionState)
+    {
+        var activationId = Guid.NewGuid();
+        var recoveryProjectionLease = package.PackageProjectionLease?.Reacquire(activationId.ToString("N"));
+        var recoveryPackage = package with
+        {
+            PackageProjectionLease = recoveryProjectionLease,
+        };
+        ResolvedExecutionRuntimeLaunch? launch = null;
+        try
+        {
+            rpcBroker.RequirePackagePolicy(package.Source, package.ExecutionRuntimeBinding);
+            launch = _executionRuntimeLaunchResolver.ResolveAsync(
+                    recoveryPackage,
+                    activationId,
+                    CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            return CreateLoadedPackage(
+                recoveryPackage,
+                launch,
+                activationId,
+                rpcBroker,
+                packageSessionState);
+        }
+        catch
+        {
+            launch?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            recoveryProjectionLease?.DisposeAsync().AsTask().GetAwaiter().GetResult();
             throw;
         }
     }
@@ -158,7 +236,7 @@ internal sealed class RuntimePackageActivator(
             if (!contracts.TryGetValue(
                     PackageSessionPreparer.ContractKey(declaration.ContractId!, declaration.ContractVersion!),
                     out var contract)
-                || contract.DescriptorVersion != SunderRpcProtocol.DescriptorVersionV2
+                || contract.DescriptorVersion != SunderRpcProtocol.DescriptorVersion
                 || !string.Equals(contract.ContractId, declaration.ContractId, StringComparison.Ordinal)
                 || !string.Equals(contract.Version, declaration.ContractVersion, StringComparison.Ordinal)
                 || !string.Equals(contract.Sha256, declaration.DescriptorSha256, StringComparison.Ordinal)
@@ -184,6 +262,15 @@ internal sealed class RuntimePackageActivator(
             }
         }
         return registrations;
+    }
+
+    private static void AddWarning(ICollection<string> warnings, string? warning)
+    {
+        if (warning is null || warnings.Any(existing => string.Equals(existing, warning, StringComparison.Ordinal)))
+        {
+            return;
+        }
+        warnings.Add(warning);
     }
 
 }

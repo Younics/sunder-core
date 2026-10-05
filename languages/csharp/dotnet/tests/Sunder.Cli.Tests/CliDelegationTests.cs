@@ -46,13 +46,14 @@ public sealed class CliDelegationTests
             },
         };
         var result = await CliTestHost.RunAsync(
-            ["package", "install", "demo", "--version", "1.2.3", "--allow-downgrade", "--reinstall"], runtime);
+            ["package", "install", "demo", "--version", "1.2.3", "--allow-downgrade", "--reinstall", "--yes"], runtime);
         Assert.Equal(CliExitCodes.Success, result.ExitCode);
         Assert.Equal("demo", captured?.PackageId);
         Assert.Equal("1.2.3", captured?.Version);
         Assert.Null(captured?.Tag);
         Assert.True(captured?.AllowDowngrade);
         Assert.True(captured?.Reinstall);
+        Assert.Equal(ResolutionFingerprint, captured?.ExpectedResolutionFingerprint);
     }
 
     [Fact]
@@ -72,7 +73,14 @@ public sealed class CliDelegationTests
                 preflightCalls++;
                 Assert.Equal("demo", Assert.Single(request.Packages).PackageId);
                 return Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(
-                    true, [], [], [], [], [], [consent]));
+                    true,
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [consent],
+                    ResolutionFingerprint: ResolutionFingerprint));
             },
             InstallRegistry = (request, _) =>
             {
@@ -82,12 +90,13 @@ public sealed class CliDelegationTests
         };
 
         var result = await CliTestHost.RunAsync([
-            "package", "install", "demo", "--version", "1.2.3", "--approve-sensitive-capabilities",
+            "package", "install", "demo", "--version", "1.2.3", "--yes", "--approve-sensitive-capabilities",
         ], runtime);
 
         Assert.Equal(CliExitCodes.Success, result.ExitCode);
         Assert.Equal(1, preflightCalls);
         Assert.Equal([consent], captured?.CapabilityConsents);
+        Assert.Equal(ResolutionFingerprint, captured?.ExpectedResolutionFingerprint);
         Assert.Contains("Approved sensitive capability fences", result.Output, StringComparison.Ordinal);
         Assert.Contains(consent.ManifestSha256, result.Output, StringComparison.Ordinal);
     }
@@ -101,32 +110,33 @@ public sealed class CliDelegationTests
             new string('b', 64),
             ["docker-environment.v1"]);
         RuntimeRegistryPackageRequest? captured = null;
+        var installCalls = 0;
         var runtime = new FakeRuntimeClient
         {
-            ResolveRegistry = (_, _) => throw new InvalidOperationException("Preflight requires explicit approval."),
+            ResolveRegistry = (_, _) => Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(
+                true,
+                [],
+                [],
+                [],
+                [],
+                [],
+                [consent],
+                ResolutionFingerprint: ResolutionFingerprint)),
             InstallRegistry = (request, _) =>
             {
+                installCalls++;
                 captured = request;
-                return Task.FromResult(new RuntimeRegistryPackageChangeResult(
-                    false,
-                    RuntimeRegistryErrorCode.ConsentRequired,
-                    "Sensitive capability consent is required.",
-                    false,
-                    false,
-                    [],
-                    ["Sensitive capability consent is required."],
-                    [],
-                    [],
-                    [consent]));
+                throw new InvalidOperationException("Unapproved preflight must not be applied.");
             },
         };
 
         var result = await CliTestHost.RunAsync([
-            "package", "install", "demo", "--version", "1.2.3",
+            "package", "install", "demo", "--version", "1.2.3", "--yes",
         ], runtime);
 
         Assert.Equal(CliExitCodes.Conflict, result.ExitCode);
-        Assert.Null(captured?.CapabilityConsents);
+        Assert.Equal(0, installCalls);
+        Assert.Null(captured);
         Assert.Contains("Required sensitive capability consent", result.Output, StringComparison.Ordinal);
         Assert.Contains("--approve-sensitive-capabilities", result.Output, StringComparison.Ordinal);
     }
@@ -223,15 +233,20 @@ public sealed class CliDelegationTests
         {
             UpdateRegistry = (request, _) =>
             {
+                if (request.DryRun) return Task.FromResult(UpdatePreview(includePrerelease: true));
                 captured = request;
                 return Task.FromResult(Success("Updated."));
             },
         };
-        var result = await CliTestHost.RunAsync(["package", "update", "demo", "--include-prerelease"], runtime);
+        var result = await CliTestHost.RunAsync(["package", "update", "demo", "--include-prerelease", "--yes"], runtime);
         Assert.Equal(CliExitCodes.Success, result.ExitCode);
         Assert.Equal("demo", captured?.PackageId);
         Assert.True(captured?.IncludePrerelease);
         Assert.Null(captured?.RegistryOrigin);
+        var expectedPlan = Assert.Single(captured!.ExpectedPlans);
+        Assert.Equal("https://registry.test/", expectedPlan.RegistryOrigin);
+        Assert.True(expectedPlan.IncludePrerelease);
+        Assert.Equal(ResolutionFingerprint, expectedPlan.ExpectedResolutionFingerprint);
     }
 
     [Fact]
@@ -242,16 +257,18 @@ public sealed class CliDelegationTests
         {
             UpdateRegistry = (request, _) =>
             {
+                if (request.DryRun) return Task.FromResult(UpdatePreview());
                 captured = request;
                 return Task.FromResult(Success("Updated."));
             },
         };
 
-        var result = await CliTestHost.RunAsync(["package", "update", "--all"], runtime);
+        var result = await CliTestHost.RunAsync(["package", "update", "--all", "--yes"], runtime);
 
         Assert.Equal(CliExitCodes.Success, result.ExitCode);
         Assert.Null(captured?.PackageId);
         Assert.Null(captured?.RegistryOrigin);
+        Assert.Equal(ResolutionFingerprint, Assert.Single(captured!.ExpectedPlans).ExpectedResolutionFingerprint);
     }
 
     [Fact]
@@ -262,17 +279,19 @@ public sealed class CliDelegationTests
         {
             UpdateRegistry = (request, _) =>
             {
+                if (request.DryRun) return Task.FromResult(UpdatePreview("https://other.example/"));
                 captured = request;
                 return Task.FromResult(Success("Updated."));
             },
         };
 
         var result = await CliTestHost.RunAsync([
-            "package", "update", "demo", "--registry-origin", "https://other.example/",
+            "package", "update", "demo", "--registry-origin", "https://other.example/", "--yes",
         ], runtime);
 
         Assert.Equal(CliExitCodes.Success, result.ExitCode);
         Assert.Equal("https://other.example/", captured?.RegistryOrigin);
+        Assert.Equal("https://other.example/", Assert.Single(captured!.ExpectedPlans).RegistryOrigin);
     }
 
     [Fact]
@@ -281,11 +300,13 @@ public sealed class CliDelegationTests
         CliConfigurationRequirements? requirements = null;
         var runtime = new FakeRuntimeClient
         {
-            UpdateRegistry = (_, _) => Task.FromResult(Success("Updated.")),
+            UpdateRegistry = (request, _) => Task.FromResult(request.DryRun
+                ? UpdatePreview()
+                : Success("Updated.")),
         };
 
         var result = await CliTestHost.RunAsync(
-            ["package", "update", "--all"],
+            ["package", "update", "--all", "--yes"],
             runtime,
             optionsFactory: (_, selectedRequirements) =>
             {
@@ -307,12 +328,29 @@ public sealed class CliDelegationTests
     public async Task Package_source_adoption_is_delegated_with_explicit_policy_and_safety_mode(bool dryRun)
     {
         RuntimeRegistrySourceAdoptionRequest? captured = null;
+        var requests = new List<RuntimeRegistrySourceAdoptionRequest>();
         var runtime = new FakeRuntimeClient
         {
             AdoptRegistrySource = (request, _) =>
             {
+                requests.Add(request);
                 captured = request;
-                return Task.FromResult(Success(dryRun ? "Previewed." : "Adopted."));
+                var result = Success(request.DryRun ? "Previewed." : "Adopted.");
+                if (request.DryRun)
+                {
+                    result = result with
+                    {
+                        RuntimeSessionApplied = false,
+                        PlanExpectations =
+                        [
+                            new RuntimeRegistryPackagePlanExpectation(
+                                "https://other.example/",
+                                true,
+                                ResolutionFingerprint),
+                        ],
+                    };
+                }
+                return Task.FromResult(result);
             },
         };
         var mode = dryRun ? "--dry-run" : "--yes";
@@ -335,6 +373,11 @@ public sealed class CliDelegationTests
         Assert.True(captured?.AllowDowngrade);
         Assert.Equal(dryRun, captured?.DryRun);
         Assert.Equal(!dryRun, captured?.Confirm);
+        Assert.Equal(dryRun ? 1 : 2, requests.Count);
+        Assert.Null(requests[0].ExpectedResolutionFingerprint);
+        Assert.Equal(
+            dryRun ? null : ResolutionFingerprint,
+            captured?.ExpectedResolutionFingerprint);
     }
 
     [Theory]
@@ -426,7 +469,7 @@ public sealed class CliDelegationTests
     [Fact]
     public async Task Registry_stack_delete_is_delegated_through_runtime_authentication()
     {
-        RuntimeRegistryDeleteStackRequest? captured = null;
+        RuntimeRegistryStackVisibilityRequest? captured = null;
         var runtime = new FakeRuntimeClient
         {
             DeleteStack = (request, _) =>
@@ -436,7 +479,7 @@ public sealed class CliDelegationTests
             },
         };
 
-        var result = await CliTestHost.RunAsync(["registry", "stack", "delete", "demo"], runtime);
+        var result = await CliTestHost.RunAsync(["registry", "stack", "unlist", "demo"], runtime);
 
         Assert.Equal(CliExitCodes.Success, result.ExitCode);
         Assert.Equal("demo", captured?.StackId);
@@ -565,6 +608,40 @@ public sealed class CliDelegationTests
     private static RuntimeRegistryPackageChangeResult Success(string message)
         => new(true, RuntimeRegistryErrorCode.None, message, true, false, [], [], ["demo"], []);
 
+    private static RuntimeRegistryPackageChangeResult UpdatePreview(
+        string registryOrigin = "https://registry.test/",
+        bool includePrerelease = false)
+        => new RuntimeRegistryPackageChangeResult(
+            true,
+            RuntimeRegistryErrorCode.None,
+            "Previewed.",
+            false,
+            false,
+            [],
+            [],
+            [],
+            [new RuntimeRegistryPackageInstallPlanItem(
+                "demo",
+                "1.0.0",
+                "2.0.0",
+                new string('f', 64),
+                RegistryPackageActionKinds.PackageUpdate,
+                null,
+                [],
+                [],
+                [])])
+        {
+            PlanExpectations =
+            [
+                new RuntimeRegistryPackagePlanExpectation(
+                    registryOrigin,
+                    includePrerelease,
+                    ResolutionFingerprint),
+            ],
+        };
+
+    private static string ResolutionFingerprint => new('f', 64);
+
     private static PackageOperationResult PackageSuccess(string message)
         => new(true, message, true, false, [], []);
 
@@ -593,11 +670,30 @@ public sealed class CliDelegationTests
         var source = Path.Combine(root, "source");
         var manifestDirectory = Path.Combine(source, "manifest");
         var rid = RuntimeInformation.RuntimeIdentifier;
-        var executableName = rid.StartsWith("win-", StringComparison.Ordinal) ? "worker.exe" : "worker";
+        const string executableName = "worker.dll";
         var payloadDirectory = Path.Combine(source, "payload", "runtime", rid, "lib");
         Directory.CreateDirectory(manifestDirectory);
         Directory.CreateDirectory(payloadDirectory);
         File.WriteAllBytes(Path.Combine(payloadDirectory, executableName), [0x53, 0x55, 0x4e, 0x44, 0x45, 0x52]);
+        File.WriteAllText(
+            Path.Combine(payloadDirectory, "worker.runtimeconfig.json"),
+            JsonSerializer.Serialize(new
+            {
+                runtimeOptions = new
+                {
+                    tfm = "net10.0",
+                    framework = new { name = "Microsoft.NETCore.App", version = "10.0.0" },
+                },
+            }));
+        var runtimeTarget = $".NETCoreApp,Version=v10.0/{rid}";
+        File.WriteAllText(
+            Path.Combine(payloadDirectory, "worker.deps.json"),
+            JsonSerializer.Serialize(new
+            {
+                runtimeTarget = new { name = runtimeTarget },
+                targets = new Dictionary<string, object> { [runtimeTarget] = new { } },
+                libraries = new { },
+            }));
         var manifest = new SunderPackageManifest
         {
             ArchiveFormatVersion = SunderPackageFormat.CurrentArchiveFormatVersion,
@@ -609,6 +705,10 @@ public sealed class CliDelegationTests
             ContractBundles = [],
             UsesContracts = [],
             Provides = [],
+            PackageArtifactImports = [],
+            PackageApiImports = [],
+            ProviderImports = [],
+            PlatformImports = [],
             Targets =
             [
                 new SunderPackageTargetManifest
@@ -619,13 +719,20 @@ public sealed class CliDelegationTests
                     EntryPoint = $"lib/{executableName}",
                     TargetFramework = "net10.0",
                     SdkVersion = "1.1.0",
+                    ExecutionRuntime = new SunderPackageExecutionRuntimeManifest
+                    {
+                        Id = SunderExecutionRuntimeFormat.DotNetRuntimeId,
+                        VersionRange = ">=10.0.0 <11.0.0",
+                        ModuleAbi = SunderExecutionRuntimeFormat.DotNetModuleAbi,
+                    },
                     RequiredHostCapabilities =
                     [
                         "sdk-baseline-1-1.v1",
                         "core.v1",
                         SunderSdkCapabilities.DockerEnvironmentV1,
-                        "rpc.v2",
-                        "worker-protocol.v3",
+                        "execution-runtime.v1",
+                        "rpc.v1",
+                        "worker-protocol.v1",
                     ],
                 },
             ],

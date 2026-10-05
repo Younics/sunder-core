@@ -126,6 +126,15 @@ public sealed partial class RuntimeManagementClient
         long maxBytes,
         CancellationToken token = default)
     {
+        if (snapshot.SourceKind == PackageSourceKind.Installed || snapshot.ProjectionReference is not null)
+        {
+            throw new InvalidOperationException(
+                "Installed package UI projections are acquired from the shared Runtime cache and cannot be downloaded.");
+        }
+        if (string.IsNullOrWhiteSpace(snapshot.SnapshotUri))
+        {
+            throw new InvalidDataException("Development package UI snapshot has no transfer URI.");
+        }
         using var response = await _transport.GetAsync(
             CreateUri(snapshot.SnapshotUri),
             HttpCompletionOption.ResponseHeadersRead,

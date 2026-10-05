@@ -245,6 +245,26 @@ public sealed class PackageStorageServicesTests
     }
 
     [Fact]
+    public async Task PackageStorageMigrationJournal_AllowsStorePrefixWithMaximumPackageVersion()
+    {
+        var directory = CreateTempDirectory();
+        var journal = new PackageStorageMigrationJournal(Path.Combine(directory, "storage-migrations.json"));
+        var packageVersion = "1.0.0+" + new string('a', 250);
+        var maximum = new PackageStorageMigrationPlanIdentity(
+            "secrets",
+            $"secrets:{packageVersion}",
+            new string('a', 64));
+        Assert.Equal(264, maximum.MigrationId.Length);
+
+        await journal.CommitAsync([maximum]);
+
+        Assert.True(await journal.IsCompletedAsync(maximum));
+        await Assert.ThrowsAsync<ArgumentException>(() => journal.CommitAsync([
+            maximum with { MigrationId = maximum.MigrationId + "a" },
+        ]));
+    }
+
+    [Fact]
     public async Task PackageStorageMigrationJournal_RejectsChangedPlanForCompletedMigrationId()
     {
         var journal = new PackageStorageMigrationJournal(

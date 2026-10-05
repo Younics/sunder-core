@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Runtime.LocalState;
@@ -16,6 +17,7 @@ public sealed class RuntimeHostCompositionTests
         {
             var paths = new RuntimePackagePaths(root);
             var services = new ServiceCollection();
+            services.AddSingleton<IHostApplicationLifetime>(new TestApplicationLifetime());
             services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
 
             await using var provider = services.BuildServiceProvider(new ServiceProviderOptions
@@ -42,9 +44,26 @@ public sealed class RuntimeHostCompositionTests
             Assert.NotNull(provider.GetRequiredService<PackageCallbackServer>());
             Assert.NotNull(provider.GetRequiredService<RegistryCredentialStore>());
             Assert.NotNull(provider.GetRequiredService<RegistryAuthCoordinator>());
+            Assert.NotNull(provider.GetRequiredService<ExecutionRuntimeArtifactDownloader>());
+            Assert.NotNull(provider.GetRequiredService<ExecutionRuntimeManagementService>());
+            Assert.NotNull(provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>());
+            Assert.NotNull(provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyRefresher>());
+            Assert.NotNull(provider.GetRequiredService<ExecutionRuntimeStartupMaintenance>());
+            Assert.NotNull(provider.GetRequiredService<RegistryExecutionRuntimeBindingPreparer>());
             Assert.NotNull(provider.GetRequiredService<RegistryPackagePlanResolver>());
             Assert.NotNull(provider.GetRequiredService<RegistryPackageChangeOrchestrator>());
             Assert.NotNull(provider.GetRequiredService<RegistryAuthenticatedOperations>());
+            var runtimeTrust = provider.GetRequiredService<ExecutionRuntimeHostTrustService>();
+            var runtimeLayout = provider.GetRequiredService<ExecutionRuntimeStoreLayout>();
+            var runtimeStore = provider.GetRequiredService<ExecutionRuntimeStore>();
+            Assert.Equal(RuntimeRegistryContractMapper.RuntimeTrustProfile.ProfileId, runtimeTrust.ProfileId);
+            Assert.Equal(RuntimeRegistryContractMapper.RuntimeTrustProfile.Generation, runtimeTrust.Generation);
+            Assert.False(runtimeTrust.DevelopmentTrustEnabled);
+            Assert.Equal(paths.ExecutionRuntimeStoreRootPath, runtimeLayout.RootPath);
+            Assert.IsType<ExecutionRuntimeLaunchResolver>(
+                provider.GetRequiredService<IExecutionRuntimeLaunchResolver>());
+            await runtimeStore.InitializeAsync();
+            Assert.All(runtimeLayout.DurableRootPaths, path => Assert.True(Directory.Exists(path)));
 
             Assert.Same(
                 provider.GetRequiredService<RuntimeSessionOwner>().State,
@@ -154,6 +173,7 @@ public sealed class RuntimeHostCompositionTests
             Assert.Equal(72, httpJson.SerializerOptions.MaxDepth);
             Assert.Contains(RuntimeProtocolFeatures.RuntimeResourcePolicyV1, handshake.SupportedFeatures);
             Assert.Contains(RuntimeProtocolFeatures.PackageRuntimeRecoveryV1, handshake.SupportedFeatures);
+            Assert.Contains(RuntimeProtocolFeatures.ExecutionRuntimeManagementV1, handshake.SupportedFeatures);
             Assert.Equal(
                 RuntimeResourcePolicyContract.GetEffectiveProfileHash(policy),
                 handshake.ResourceProfile?.EffectiveProfileHash);
@@ -213,5 +233,18 @@ public sealed class RuntimeHostCompositionTests
         var path = Path.Combine(Path.GetTempPath(), "SunderRuntimeCompositionTests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private sealed class TestApplicationLifetime : IHostApplicationLifetime
+    {
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+
+        public void StopApplication()
+        {
+        }
     }
 }

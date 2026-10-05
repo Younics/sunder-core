@@ -1,20 +1,20 @@
 # Activation, DI, And Disposal
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V3, .NET 10, and Runtime protocol revision 8.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
 Activation is generation-based. Sunder prepares a complete candidate package graph, publishes it atomically, and retires the previous generation only after in-flight leased work drains.
 
 ## Runtime Activation
 
-Runtime validates the package, current-RID projection, Worker V3 capability set, dependencies, and executable entry point before starting package code. It resolves dependencies in topological order; a missing, incompatible, cyclic, or failed dependency prevents its dependents from starting.
+Runtime validates the package, current-RID projection, Worker V1 capability set, dependencies, and executable entry point before starting package code. It resolves dependencies in topological order; a missing, incompatible, cyclic, or failed dependency prevents its dependents from starting.
 
-The Host selects `sunder.worker.v3` before launch and starts the declared exact-RID executable as a supervised child process. The entry point calls the context-configured `SunderWorker.RunAsync` overload; its configuration callback runs once and returns `SunderWorkerOptions`, whose provider registrations and optional settings schema form the immutable contribution catalog advertised during composition. Runtime does not load an `ISunderRuntimePackageModule`, create a package load context, or build package-owned Runtime DI.
+The Host selects `sunder.worker.v1` before launch and starts the declared exact-RID executable as a supervised child process. The entry point calls the context-configured `SunderWorker.RunAsync` overload; its configuration callback runs once and returns `SunderWorkerOptions`, whose provider registrations and optional settings schema form the immutable contribution catalog advertised during composition. Runtime does not load an `ISunderRuntimePackageModule`, create a package load context, or build package-owned Runtime DI.
 
-Runtime does not inherit the Host environment into a worker. It constructs a minimal OS-specific baseline containing process discovery (`PATH`, plus Windows `PATHEXT`/`ComSpec`), the user home (`HOME` or `USERPROFILE`), locale values, `SystemRoot` on Windows, and package-local temp variables. It then adds only the documented `SUNDER_*` activation values. Tokens, cloud credentials, profiler/startup-hook variables, arbitrary parent variables, and Host bootstrap `SUNDER_*` values are absent.
+Runtime does not inherit the Host environment into a worker. It constructs a closed OS-specific baseline containing activation-owned `TMPDIR`, `TMP`, and `TEMP` values on every platform, `SystemRoot`/`WINDIR` on Windows, and `__CF_USER_TEXT_ENCODING` on macOS; Linux inherits no OS values. Runtime then adds only the documented `SUNDER_*` activation values. `PATH`, home, locale, .NET/Node selectors, tokens, cloud credentials, profiler/startup-hook variables, arbitrary parent variables, and Host bootstrap `SUNDER_*` values are absent. The absolute execution-runtime launcher and closed argument recipe come from the verified installed runtime receipt; package code cannot select or override either one.
 
 A worker that intentionally relies on a parent Docker CLI connection declares `<SunderSdkCapability Include="docker-environment.v1" />`. Install/update is the consent boundary for that manifest requirement. Only `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, and `DOCKER_TLS_VERIFY` may then flow; Docker auth JSON, passphrases, and other Docker variables remain excluded. Local Docker and MCP child processes otherwise use the standard baseline.
 
-The Host first invokes non-destructive candidate preparation, then commits the exact Host-assigned generation, prepares and runs storage migrations, and awaits activation before publication. `SunderWorkerOptions` exposes those barriers as `OnCandidateStarted`, `OnGenerationCommitted`, `OnBeforeStorageMigrations`, `OnActivated`, and `OnShutdown`. Worker V3 never falls back to Worker V1 after launch.
+The Host first invokes non-destructive candidate preparation, then commits the exact Host-assigned generation, prepares and runs storage migrations, and awaits activation before publication. `SunderWorkerOptions` exposes those barriers as `OnCandidateStarted`, `OnGenerationCommitted`, `OnBeforeStorageMigrations`, `OnActivated`, and `OnShutdown`. Worker V1 never falls back to Worker V3 after launch.
 
 ## App Activation
 
@@ -51,7 +51,7 @@ public void RegisterAppContributions(
 
 Do not build a nested provider in `ConfigureAppServices`. Resolve contribution instances from the provider supplied to `RegisterAppContributions`.
 
-Worker V3 owns its process-local object composition. It receives Host-mediated services through `SunderWorkerContext` and supplies handlers through immutable `SunderWorkerProviderRegistration` entries rather than a managed contribution registry.
+Worker V1 owns its process-local object composition. It receives Host-mediated services through `SunderWorkerContext` and supplies handlers through immutable `SunderWorkerProviderRegistration` entries rather than a managed contribution registry.
 
 App packages cannot replace reserved host capabilities. These include `IPackageContext`, logging, callback/RPC clients, shell/settings/notification services, and App background processes. Registering a reserved service fails activation.
 
@@ -59,7 +59,7 @@ Worker code receives Host-mediated Runtime capabilities through `SunderWorkerCon
 
 ## Publication Availability
 
-Treat both `ConfigureAppServices` and `RegisterAppContributions` as side-effect-free composition phases. The Worker V3 configuration callback is the equivalent side-effect-free composition boundary; defer work to its staged lifecycle callbacks.
+Treat both `ConfigureAppServices` and `RegisterAppContributions` as side-effect-free composition phases. The Worker V1 configuration callback is the equivalent side-effect-free composition boundary; defer work to its staged lifecycle callbacks.
 
 Before an App generation is published:
 
@@ -68,11 +68,11 @@ Before an App generation is published:
 - Notifications and App background-process enqueues are buffered and published only if the generation commits.
 - Read access may still contact Runtime, but activation should not depend on network or durable side effects.
 
-Start work from view navigation/warmup, a user action, an App background process, or a Worker V3 lifecycle callback instead. Handle RPC unavailability and check `IPackageCallbackClient.IsAvailable` where the same service can run in different contexts.
+Start work from view navigation/warmup, a user action, an App background process, or a Worker V1 lifecycle callback instead. Handle RPC unavailability and check `IPackageCallbackClient.IsAvailable` where the same service can run in different contexts.
 
 ## Worker Lifecycle
 
-Use `OnCandidateStarted`, `OnGenerationCommitted`, `OnBeforeStorageMigrations`, `OnActivated`, and `OnShutdown` for single-callback staged Worker V3 lifecycle work. For package-owned DI and multiple ordered services, supply a `SunderWorkerComposition` containing `ISunderWorkerLifecycleService` instances.
+Use `OnCandidateStarted`, `OnGenerationCommitted`, `OnBeforeStorageMigrations`, `OnActivated`, and `OnShutdown` for single-callback staged Worker V1 lifecycle work. For package-owned DI and multiple ordered services, supply a `SunderWorkerComposition` containing `ISunderWorkerLifecycleService` instances.
 
 The canonical order is:
 
@@ -84,7 +84,7 @@ The canonical order is:
 
 Pre-migration work may read only Host-mediated state through its dedicated context; normal package data, mutation, secrets, files, and RPC remain unavailable. Externally visible loops start only from activation and must stop promptly during shutdown. Every callback receives cancellation and is bounded by Host deadlines.
 
-After an active Worker V3 generation faults, Runtime can rebuild only that exact package from its prepared recovery factory. Recovery creates a fresh activation id, preserves healthy sibling workers and endpoints, keeps old endpoints stale, and uses a storage transaction across startup, migration, activation, and publication. Runtime never starts a replacement until the failed activation and its package-owned/RPC leases are proven retired. Recovery uses bounded backoff and is suspended after repeated failures; package authors do not need to implement a restart loop or publish recovery notifications.
+After an active Worker V1 generation faults, Runtime can rebuild only that exact package from its prepared recovery factory. Recovery creates a fresh activation id, preserves healthy sibling workers and endpoints, keeps old endpoints stale, and uses a storage transaction across startup, migration, activation, and publication. Runtime never starts a replacement until the failed activation and its package-owned/RPC leases are proven retired. Recovery uses bounded backoff and is suspended after repeated failures; package authors do not need to implement a restart loop or publish recovery notifications.
 
 ## Generation Leases
 
@@ -121,7 +121,7 @@ Package services must:
 
 ## Cross-Package Contributions
 
-Sunder does not expose a generic CLR extension catalog or share arbitrary package contract assemblies. App contributions are limited to Host-defined registrations such as views and settings views. Runtime packages expose cross-package behavior through schema-first RPC providers declared in their manifests. Worker V3 targets supply immutable `SunderWorkerProviderRegistration` entries in the options returned to the context-configured `SunderWorker.RunAsync` overload.
+Sunder does not expose a generic CLR extension catalog or share arbitrary package contract assemblies. App contributions are limited to Host-defined registrations such as views and settings views. Runtime packages expose cross-package behavior through schema-first RPC providers declared in their manifests. Worker V1 targets supply immutable `SunderWorkerProviderRegistration` entries in the options returned to the context-configured `SunderWorker.RunAsync` overload.
 
 RPC discovery returns Host-stamped owner and activation metadata. Endpoint references bind to one exact provider activation and never retarget a same-id replacement. Invocations and subscriptions hold provider leases, link cancellation to caller and generation retirement, and prevent provider disposal while work remains active.
 

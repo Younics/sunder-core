@@ -27,7 +27,7 @@ public sealed class StackContributorRpcDescriptorTests
         var abiProjection = Assert.IsType<byte[]>(descriptor.GetCanonicalAbiProjectionUtf8());
         Assert.Equal(
             descriptor.AbiSha256,
-            Convert.ToHexString(SHA256.HashData([.. "sunder.rpc.abi.v2\0"u8, .. abiProjection]))
+            Convert.ToHexString(SHA256.HashData([.. "sunder.rpc.abi.v1\0"u8, .. abiProjection]))
                 .ToLowerInvariant());
         Assert.Equal(
             "The contributor does not implement the requested optional Stack operation.",
@@ -51,7 +51,7 @@ public sealed class StackContributorRpcDescriptorTests
     }
 
     [Fact]
-    public void Descriptor_GeneratesCompilableV2Bindings()
+    public void Descriptor_GeneratesCompilableV1Bindings()
     {
         var descriptor = SunderStackContributorRpc.Descriptor;
         var source = SunderRpcCSharpGenerator.Generate(descriptor, "Sunder.Stacks.Generated");
@@ -75,7 +75,7 @@ public sealed class StackContributorRpcDescriptorTests
             result.Success,
             string.Join(Environment.NewLine, result.Diagnostics.Select(static diagnostic => diagnostic.ToString())));
         Assert.True(
-            string.Equals("afba64ffe12464db28ecffd2a95d9eb19d2ea1c8ec09ce6a6a6ce518e2643fc4", sourceHash, StringComparison.Ordinal),
+            string.Equals("f3611c367b6e12f324ba849eebe877e1e57f51c8acdbf9d251babf82d48b7d16", sourceHash, StringComparison.Ordinal),
             $"Stack generator golden changed to {sourceHash}.");
         Assert.Contains(
             $"public const string AbiSha256 = \"{SunderStackContributorRpc.AbiSha256}\";",
@@ -121,6 +121,9 @@ public sealed class StackContributorRpcDescriptorTests
             typeof(SunderStackContributorRpc).GetMethod(nameof(SunderStackContributorRpc.CreateHandler))!
                 .GetParameters()[0].ParameterType);
         Assert.Null(typeof(SunderStackContributorRpc).GetMethod("CreateWorkerProviderRegistration"));
+        Assert.Null(typeof(SunderStackContributorRpc).GetMethod("CreateClient"));
+        Assert.Null(typeof(IPackageStackContributor).Assembly.GetType("Sunder.Sdk.Stacks.StackContributorRpcClient"));
+        Assert.DoesNotContain(typeof(IPackageStackContributor).Assembly.GetTypes(), type => type.Namespace == "Sunder.Runtime.Host.StackTransport");
         Assert.DoesNotContain(
             typeof(SunderStackContributorRpc).Assembly.GetReferencedAssemblies(),
             assembly => string.Equals(assembly.Name, "Sunder.Sdk.Worker", StringComparison.Ordinal));

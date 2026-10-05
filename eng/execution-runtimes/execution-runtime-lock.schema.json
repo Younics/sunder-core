@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sunder.dev/eng/execution-runtimes/lock-v1.schema.json",
+  "title": "Sunder curated execution-runtime lock V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schemaVersion", "lockKind", "coverage", "entries"],
+  "properties": {
+    "$schema": {
+      "const": "https://sunder.dev/eng/execution-runtimes/lock-v1.schema.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "lockKind": {
+      "enum": ["production", "test-fixture"]
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtimes", "rids"],
+      "properties": {
+        "runtimes": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "major"],
+              "properties": {
+                "id": { "const": "sunder.runtime.dotnet" },
+                "major": { "const": 10 }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "major"],
+              "properties": {
+                "id": { "const": "sunder.runtime.node" },
+                "major": { "const": 24 }
+              }
+            }
+          ],
+          "items": false
+        },
+        "rids": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "prefixItems": [
+            { "const": "win-x64" },
+            { "const": "win-arm64" },
+            { "const": "linux-x64" },
+            { "const": "linux-arm64" },
+            { "const": "osx-x64" },
+            { "const": "osx-arm64" }
+          ],
+          "items": false
+        }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "lockKind": { "const": "test-fixture" } },
+        "required": ["lockKind"]
+      },
+      "then": {
+        "properties": {
+          "entries": {
+            "items": {
+              "allOf": [
+                { "$ref": "#/$defs/entry" },
+                {
+                  "properties": {
+                    "source": {
+                      "properties": { "archiveFormat": { "const": "fixture-json" } }
+                    },
+                    "trust": {
+                      "properties": {
+                        "scope": { "const": "test-only" },
+                        "sourceApproval": {
+                          "properties": { "status": { "const": "synthetic-fixture" } }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "lockKind": { "const": "production" } },
+        "required": ["lockKind"]
+      },
+      "then": {
+        "properties": {
+          "entries": {
+            "items": {
+              "allOf": [
+                { "$ref": "#/$defs/entry" },
+                {
+                  "properties": {
+                    "source": {
+                      "properties": { "archiveFormat": { "enum": ["zip", "tar.gz"] } }
+                    },
+                    "trust": {
+                      "properties": {
+                        "scope": { "const": "production" },
+                        "sourceApproval": {
+                          "properties": { "status": { "const": "approved" } }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[!-~]+$"
+    },
+    "sourceRoot": {
+      "anyOf": [
+        { "const": "." },
+        { "$ref": "#/$defs/relativePath" }
+      ]
+    },
+    "stableSemver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "sourceApproval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reference", "approvedBy"],
+      "properties": {
+        "status": { "enum": ["approved", "synthetic-fixture"] },
+        "reference": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "approvedBy": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "publisher", "uri", "sha256", "archiveFormat", "sourceRoot"],
+      "properties": {
+        "name": { "enum": ["dotnet", "node"] },
+        "publisher": { "enum": ["microsoft-dotnet", "openjs-node"] },
+        "uri": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "maxLength": 2048
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "archiveFormat": { "enum": ["zip", "tar.gz", "fixture-json"] },
+        "sourceRoot": { "$ref": "#/$defs/sourceRoot" }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx", "files"],
+      "properties": {
+        "spdx": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9.+-]+$"
+          },
+          "uniqueItems": true
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": { "$ref": "#/$defs/relativePath" },
+              "sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "moduleAbi", "workerProtocol", "launchExecutable", "launchArguments"],
+      "properties": {
+        "name": { "enum": ["dotnet-worker-v1", "node-worker-v1"] },
+        "moduleAbi": {
+          "enum": ["sunder.dotnet-worker-module.v1", "sunder.node-worker-module.v1"]
+        },
+        "workerProtocol": { "const": "sunder.worker.v1" },
+        "launchExecutable": { "$ref": "#/$defs/relativePath" },
+        "launchArguments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "enum": ["dotnet-sdk", "node-build"] },
+        "version": { "$ref": "#/$defs/stableSemver" }
+      }
+    },
+    "recipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "payloadRoot", "launcherSource", "excludedSourcePaths", "toolchain", "smokeArguments"],
+      "properties": {
+        "name": { "const": "repackage-upstream-tree-v1" },
+        "payloadRoot": { "const": "payload/runtime" },
+        "launcherSource": { "$ref": "#/$defs/relativePath" },
+        "excludedSourcePaths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/relativePath" },
+          "uniqueItems": true
+        },
+        "toolchain": { "$ref": "#/$defs/toolchain" },
+        "smokeArguments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      }
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "sourceApproval",
+        "releaseSigningKeyId",
+        "attestationSigningKeyId",
+        "attestationWorkflow",
+        "nativeRunner",
+        "platformSignature",
+        "notarization"
+      ],
+      "properties": {
+        "scope": { "enum": ["production", "test-only"] },
+        "sourceApproval": { "$ref": "#/$defs/sourceApproval" },
+        "releaseSigningKeyId": { "$ref": "#/$defs/identifier" },
+        "attestationSigningKeyId": { "$ref": "#/$defs/identifier" },
+        "attestationWorkflow": { "$ref": "#/$defs/identifier" },
+        "nativeRunner": { "$ref": "#/$defs/identifier" },
+        "platformSignature": { "enum": ["required", "not-applicable"] },
+        "notarization": { "enum": ["required", "not-applicable"] }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "packagingRevision",
+        "minimumHostTrustGeneration",
+        "supportLine",
+        "defaultStatus",
+        "rid",
+        "source",
+        "license",
+        "profile",
+        "recipe",
+        "trust"
+      ],
+      "properties": {
+        "id": { "enum": ["sunder.runtime.dotnet", "sunder.runtime.node"] },
+        "version": { "$ref": "#/$defs/stableSemver" },
+        "packagingRevision": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "minimumHostTrustGeneration": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "supportLine": { "const": "lts" },
+        "defaultStatus": { "const": "supported" },
+        "rid": {
+          "enum": ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"]
+        },
+        "source": { "$ref": "#/$defs/source" },
+        "license": { "$ref": "#/$defs/license" },
+        "profile": { "$ref": "#/$defs/profile" },
+        "recipe": { "$ref": "#/$defs/recipe" },
+        "trust": { "$ref": "#/$defs/trust" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "id": { "const": "sunder.runtime.dotnet" } },
+            "required": ["id"]
+          },
+          "then": {
+            "properties": {
+              "version": { "pattern": "^10\\." },
+              "source": {
+                "properties": {
+                  "name": { "const": "dotnet" },
+                  "publisher": { "const": "microsoft-dotnet" }
+                }
+              },
+              "profile": {
+                "properties": {
+                  "name": { "const": "dotnet-worker-v1" },
+                  "moduleAbi": { "const": "sunder.dotnet-worker-module.v1" }
+                }
+              },
+              "recipe": {
+                "properties": {
+                  "toolchain": { "properties": { "name": { "const": "dotnet-sdk" } } }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "id": { "const": "sunder.runtime.node" } },
+            "required": ["id"]
+          },
+          "then": {
+            "properties": {
+              "version": { "pattern": "^24\\." },
+              "source": {
+                "properties": {
+                  "name": { "const": "node" },
+                  "publisher": { "const": "openjs-node" }
+                }
+              },
+              "profile": {
+                "properties": {
+                  "name": { "const": "node-worker-v1" },
+                  "moduleAbi": { "const": "sunder.node-worker-module.v1" }
+                }
+              },
+              "recipe": {
+                "properties": {
+                  "toolchain": { "properties": { "name": { "const": "node-build" } } }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

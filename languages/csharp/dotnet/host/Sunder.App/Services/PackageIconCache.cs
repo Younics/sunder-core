@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia.Media;
 using Sunder.Runtime.Contracts;
 
@@ -40,7 +41,12 @@ internal sealed class PackageIconCache : IDisposable
             {
                 var iconSnapshot = icons.ToArray();
                 prewarm = new Lazy<Task<PackageIconGeneration>>(
-                    () => PrepareGenerationAsync(stamp, iconSnapshot, _getPackageContentRoot, CancellationToken.None),
+                    () => PrepareGenerationAsync(
+                        stamp,
+                        iconSnapshot,
+                        _getPackageContentRoot,
+                        appGenerationId: null,
+                        cancellationToken: CancellationToken.None),
                     LazyThreadSafetyMode.ExecutionAndPublication);
                 _prewarms.Add(stamp, prewarm);
             }
@@ -81,6 +87,21 @@ internal sealed class PackageIconCache : IDisposable
             ValidateStamp(runtimeInstanceId, generation),
             icons,
             getPackageContentRoot,
+            appGenerationId: null,
+            cancellationToken);
+
+    internal Task<PackageIconGeneration> PrepareGenerationAsync(
+        Guid runtimeInstanceId,
+        long generation,
+        IEnumerable<(string PackageId, PackageIconDescriptor? Icon)> icons,
+        Func<string, string?> getPackageContentRoot,
+        Guid appGenerationId,
+        CancellationToken cancellationToken)
+        => PrepareGenerationAsync(
+            ValidateStamp(runtimeInstanceId, generation),
+            icons,
+            getPackageContentRoot,
+            appGenerationId,
             cancellationToken);
 
     internal PackageIconGeneration Publish(PackageIconGeneration generation)
@@ -147,14 +168,18 @@ internal sealed class PackageIconCache : IDisposable
         PackageIconGenerationStamp stamp,
         IEnumerable<(string PackageId, PackageIconDescriptor? Icon)> icons,
         Func<string, string?> getPackageContentRoot,
+        Guid? appGenerationId,
         CancellationToken cancellationToken)
     {
         var results = new Dictionary<PackageIconKey, PackageIconImageLoadResult>();
         try
         {
-            foreach (var item in icons
-                         .Where(item => !string.IsNullOrWhiteSpace(item.Icon?.AssetPath))
-                         .DistinctBy(item => new PackageIconKey(item.PackageId, item.Icon!.AssetPath!)))
+            var queuedTimestamp = Stopwatch.GetTimestamp();
+            var iconSnapshot = icons
+                .Where(item => !string.IsNullOrWhiteSpace(item.Icon?.AssetPath))
+                .DistinctBy(item => new PackageIconKey(item.PackageId, item.Icon!.AssetPath!))
+                .ToArray();
+            foreach (var item in iconSnapshot)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var key = new PackageIconKey(item.PackageId, item.Icon!.AssetPath!);
@@ -164,6 +189,9 @@ internal sealed class PackageIconCache : IDisposable
                         item.PackageId,
                         item.Icon.AssetPath!,
                         getPackageContentRoot,
+                        stamp,
+                        appGenerationId,
+                        queuedTimestamp,
                         cancellationToken).ConfigureAwait(false));
             }
 
@@ -183,25 +211,66 @@ internal sealed class PackageIconCache : IDisposable
         string packageId,
         string assetPath,
         Func<string, string?> getPackageContentRoot,
+        PackageIconGenerationStamp stamp,
+        Guid? appGenerationId,
+        long queuedTimestamp,
         CancellationToken cancellationToken)
     {
-        var contentRoot = getPackageContentRoot(packageId);
-        if (string.IsNullOrWhiteSpace(contentRoot))
+        var startupTrace = AppStartupTrace.BeginPackageIconMaterialization(
+            packageId,
+            assetPath,
+            appGenerationId,
+            stamp.RuntimeInstanceId,
+            stamp.Generation,
+            queuedTimestamp);
+        try
         {
-            return PackageIconImageLoadResult.Failed($"Package icon content is unavailable for '{packageId}'.");
+            var contentRoot = getPackageContentRoot(packageId);
+            if (string.IsNullOrWhiteSpace(contentRoot))
+            {
+                return Complete(PackageIconImageLoadResult.Failed(
+                    $"Package icon content is unavailable for '{packageId}'."));
+            }
+
+            var root = Path.GetFullPath(contentRoot) + Path.DirectorySeparatorChar;
+            var iconPath = Path.GetFullPath(Path.Combine(contentRoot, assetPath.Replace('/', Path.DirectorySeparatorChar)));
+            if (!iconPath.StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+                || !File.Exists(iconPath))
+            {
+                var error = $"Package icon asset '{assetPath}' is unavailable for '{packageId}'.";
+                AppSessionLog.WriteError(error);
+                return Complete(PackageIconImageLoadResult.Failed(error));
+            }
+
+            long? bytesRead = null;
+            if (startupTrace is not null)
+            {
+                try
+                {
+                    bytesRead = new FileInfo(iconPath).Length;
+                }
+                catch
+                {
+                    // Byte accounting is diagnostic and must not affect icon loading.
+                }
+            }
+            return Complete(
+                await _loadImageAsync(iconPath, cancellationToken).ConfigureAwait(false),
+                bytesRead);
+        }
+        catch (Exception exception)
+        {
+            startupTrace?.Fail(exception);
+            throw;
         }
 
-        var root = Path.GetFullPath(contentRoot) + Path.DirectorySeparatorChar;
-        var iconPath = Path.GetFullPath(Path.Combine(contentRoot, assetPath.Replace('/', Path.DirectorySeparatorChar)));
-        if (!iconPath.StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
-            || !File.Exists(iconPath))
+        PackageIconImageLoadResult Complete(PackageIconImageLoadResult result, long? bytesRead = null)
         {
-            var error = $"Package icon asset '{assetPath}' is unavailable for '{packageId}'.";
-            AppSessionLog.WriteError(error);
-            return PackageIconImageLoadResult.Failed(error);
+            startupTrace?.Complete(
+                result.Error is null ? "succeeded" : "fallback",
+                bytesRead: bytesRead);
+            return result;
         }
-
-        return await _loadImageAsync(iconPath, cancellationToken).ConfigureAwait(false);
     }
 
     private static PackageIconGenerationStamp ValidateStamp(Guid runtimeInstanceId, long generation)

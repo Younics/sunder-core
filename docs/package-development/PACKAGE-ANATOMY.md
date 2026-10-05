@@ -1,6 +1,12 @@
 # Package Anatomy
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V3, .NET 10, and Runtime protocol revision 8.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
+
+> **RPC authoring transition:** The Protocol-project topology below describes
+> current pre-cutover source. The accepted final topology derives RPC from
+> ordinary package implementation in place; see
+> [Implementation-First RPC Authoring](IMPLEMENTATION-FIRST-RPC.md). That compiler
+> and migration are not implemented yet.
 
 A Sunder package is published as one versioned universal unit containing shared content and zero or more exact App/Runtime RID targets. Registry and local-file installation derive a strict shared-plus-current-RID installed projection while retaining package-wide metadata and canonical source provenance. App and Runtime run in separate processes and never share package object instances.
 
@@ -8,10 +14,10 @@ A Sunder package is published as one versioned universal unit containing shared 
 
 | Role | Activation | Owns |
 | --- | --- | --- |
-| Runtime | Exact-RID Worker V3 executable | Headless work, settings schemas, callbacks/auth, owner/public RPC providers, and persistent Runtime data. |
+| Runtime | Exact-RID Worker V1 module launched by an exact execution runtime | Headless work, settings schemas, callbacks/auth, owner/public RPC providers, and persistent Runtime data. |
 | App | `ISunderAppPackageModule` | Avalonia views/settings views, shell integration, notifications, and App background processes. |
 
-Each App entry assembly contains at most one top-level public, non-abstract, non-generic module with a public parameterless constructor. Build tooling infers App targets from that compiled metadata. Each Runtime leaf explicitly declares one exact-RID `worker` target and packages a complete self-contained executable closure. A shared-only package contains RPC descriptor bundles and no executable target.
+Each App entry assembly contains at most one top-level public, non-abstract, non-generic module with a public parameterless constructor. Build tooling infers App targets from that compiled metadata. Each Runtime leaf explicitly declares one exact-RID `worker` target and packages only its framework-dependent module plus package-owned dependencies and native assets. The exact language runtime is installed and trusted separately. A shared-only package contains RPC descriptor bundles and no executable target.
 
 The worker owns its process-local object graph and lifecycle; Sunder does not load a Runtime package assembly or construct package-owned Runtime DI. Never use static state to communicate between App and Runtime.
 
@@ -23,7 +29,7 @@ Package App role
        |
        | authenticated owner RPC and package data APIs
        v
-Package Worker V3 Runtime role
+Package Worker V1 Runtime role
   runs as a supervised child process
 ```
 

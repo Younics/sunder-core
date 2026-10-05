@@ -180,6 +180,8 @@ jobs:
           bash -n scripts/release/resolve-github-release.fixture.sh
           bash -n scripts/release/upload-github-release-assets.sh
           bash -n scripts/release/upload-github-release-assets.fixture.sh
+          bash -n scripts/release/upload-production-acceptance.sh
+          bash -n scripts/release/upload-production-acceptance.fixture.sh
           bash -n scripts/release/verify-github-release-assets.sh
           bash -n scripts/release/verify-github-release-assets.fixture.sh
           bash -n scripts/release/verify-nuget-package.sh
@@ -229,6 +231,7 @@ jobs:
           set -euo pipefail
           bash scripts/release/resolve-github-release.fixture.sh
           bash scripts/release/upload-github-release-assets.fixture.sh
+          bash scripts/release/upload-production-acceptance.fixture.sh
           bash scripts/release/verify-github-release-assets.fixture.sh
           bash scripts/release/verify-release-tag.fixture.sh
           bash scripts/release/verify-release-promotion.fixture.sh

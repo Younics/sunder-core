@@ -5,9 +5,9 @@ using Sunder.Sdk.Rpc;
 
 namespace Sunder.Sdk.Worker;
 
-/// <summary>Provides Host-mediated services for one V3 worker activation.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
-[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV3)]
+/// <summary>Provides Host-mediated services for one V1 worker activation.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV1)]
 public sealed class SunderWorkerContext : IPackageContext
 {
     internal SunderWorkerContext(Internal.WorkerRpcClient client)
@@ -19,7 +19,7 @@ public sealed class SunderWorkerContext : IPackageContext
         TemporaryRootPath = environment.PackageDataPath;
         Rpc = client;
         Settings = new Internal.WorkerPackageSettings(client);
-        Storage = new Internal.WorkerPackageStorageContext(client, environment);
+        Storage = new Internal.WorkerPackageStorageContext(client);
         Secrets = new Internal.WorkerPackageSecrets(client);
         Logging = new Internal.WorkerPackageLogging(client);
     }
@@ -56,7 +56,7 @@ public sealed class SunderWorkerContext : IPackageContext
     [SunderSdkCapability(SunderSdkCapabilities.StorageV1)]
     public IPackageFileStore Files => Storage.Files;
 
-    /// <summary>Gets the persistent role-local workspace for path-based package facilities.</summary>
+    /// <summary>Gets the persistent role-local workspace bound when this worker enters activation.</summary>
     [SunderSdkCapability(SunderSdkCapabilities.RoleLocalWorkspaceV1)]
     public IPackageRoleLocalWorkspace RoleLocalWorkspace => Storage.RoleLocalWorkspace;
 

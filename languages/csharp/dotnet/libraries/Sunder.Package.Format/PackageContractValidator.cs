@@ -11,16 +11,30 @@ internal static class PackageContractValidator
         ICollection<string> errors,
         bool validateDescriptorPayload = true)
     {
+        if (manifest is null)
+        {
+            errors.Add("Package manifest is null.");
+            return;
+        }
+        PackageRpcImportValidator.Validate(manifest, errors);
         var localContracts = ValidateBundles(
             manifest.ContractBundles,
             physicalFiles,
             errors,
             validateDescriptorPayload);
         var targetRoles = (manifest.Targets ?? [])
+            .Take(SunderPackageFormat.MaxTargets)
             .Where(static target => target is not null && SunderPackageTargetKey.TryCreate(target.Role, target.Rid, out _))
             .Select(static target => target!.Role!)
             .ToHashSet(StringComparer.Ordinal);
-        ValidateUses(manifest.UsesContracts, localContracts, targetRoles, errors);
+        var packageApiUses = (manifest.PackageApiImports ?? []).Take(SunderPackageFormat.MaxContractUses)
+            .Where(static import => import is not null)
+            .SelectMany(static import => (import!.UseRefs ?? []).Take(SunderPackageFormat.MaxContractUses))
+            .OfType<SunderPackageContractUseReferenceManifest>()
+            .Select(static reference => RoleKey(reference.Role ?? string.Empty,
+                ContractKey(reference.ContractId ?? string.Empty, reference.ContractVersion ?? string.Empty)))
+            .ToHashSet(StringComparer.Ordinal);
+        ValidateUses(manifest.UsesContracts, localContracts, targetRoles, packageApiUses, errors);
         ValidateProviders(manifest.Provides, localContracts, targetRoles, errors);
     }
 
@@ -69,6 +83,7 @@ internal static class PackageContractValidator
                 errors.Add($"Contract bundle '{bundle.ContractId ?? "unknown"}' declares invalid exposure '{bundle.Exposure}'.");
             }
 
+            IReadOnlyList<string>? applicableActions = null;
             if (PackageArchivePathValidator.TryParse(
                     bundle.DescriptorPath,
                     $"contract '{bundle.ContractId ?? "unknown"}' descriptorPath",
@@ -88,7 +103,7 @@ internal static class PackageContractValidator
 
                 if (validateDescriptorPayload)
                 {
-                    ValidateDescriptor(bundle, logical, physicalFiles, errors);
+                    applicableActions = ValidateDescriptor(bundle, logical, physicalFiles, errors);
                 }
             }
 
@@ -109,14 +124,15 @@ internal static class PackageContractValidator
                     new LocalContract(
                         bundle.DescriptorSha256 ?? string.Empty,
                         bundle.AbiSha256 ?? string.Empty,
-                        bundle.Exposure ?? string.Empty));
+                        bundle.Exposure ?? string.Empty,
+                        applicableActions));
             }
         }
 
         return contracts;
     }
 
-    private static void ValidateDescriptor(
+    private static IReadOnlyList<string>? ValidateDescriptor(
         SunderPackageContractBundleManifest bundle,
         string logicalPath,
         IReadOnlyDictionary<string, string> physicalFiles,
@@ -126,33 +142,35 @@ internal static class PackageContractValidator
         if (!physicalFiles.TryGetValue(physicalPath, out var filePath))
         {
             errors.Add($"Contract descriptor '{logicalPath}' must exist physically at '{physicalPath}'.");
-            return;
-        }
-
-        var length = new FileInfo(filePath).Length;
-        if (length <= 0 || length > SunderPackageFormat.MaxContractDescriptorBytes)
-        {
-            errors.Add($"Contract descriptor '{logicalPath}' must be non-empty and {SunderPackageFormat.MaxContractDescriptorBytes} bytes or smaller.");
-            return;
+            return null;
         }
 
         SunderRpcContractDescriptor descriptor;
         try
         {
-            descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(filePath));
+            using var stream = File.OpenRead(filePath);
+            var length = stream.Length;
+            if (length <= 0 || length > SunderPackageFormat.MaxContractDescriptorBytes)
+            {
+                errors.Add($"Contract descriptor '{logicalPath}' must be non-empty and {SunderPackageFormat.MaxContractDescriptorBytes} bytes or smaller.");
+                return null;
+            }
+            var bytes = new byte[(int)length];
+            stream.ReadExactly(bytes);
+            if (stream.ReadByte() != -1)
+            {
+                errors.Add($"Contract descriptor '{logicalPath}' changed size while being read.");
+                return null;
+            }
+            descriptor = SunderRpcContractDescriptor.Parse(bytes);
         }
         catch (Exception exception) when (exception is SunderRpcDescriptorException
                                                or IOException
-                                               or UnauthorizedAccessException)
+                                               or UnauthorizedAccessException
+                                               or ArgumentException)
         {
             errors.Add($"Contract descriptor '{logicalPath}' is invalid: {exception.Message}");
-            return;
-        }
-        if (descriptor.DescriptorVersion != SunderRpcProtocol.DescriptorVersionV2)
-        {
-            errors.Add(
-                $"Contract descriptor '{logicalPath}' uses descriptorVersion {descriptor.DescriptorVersion}; package manifest V{SunderPackageFormat.CurrentManifestVersion} supports only descriptorVersion {SunderRpcProtocol.DescriptorVersionV2}.");
-            return;
+            return null;
         }
         if (!string.Equals(descriptor.ContractId, bundle.ContractId, StringComparison.Ordinal))
         {
@@ -174,12 +192,23 @@ internal static class PackageContractValidator
         {
             errors.Add($"Contract descriptor '{logicalPath}' abiSha256 mismatch.");
         }
+        var actions = new List<string> { SunderPackageFormat.DiscoverContractAction };
+        if (descriptor.Services.Any(static service => service.Methods.Any(static method => method.Kind == SunderRpcMethodKind.Unary)))
+        {
+            actions.Add(SunderPackageFormat.InvokeContractAction);
+        }
+        if (descriptor.Services.Any(static service => service.Methods.Any(static method => method.Kind == SunderRpcMethodKind.ServerStream)))
+        {
+            actions.Add(SunderPackageFormat.SubscribeContractAction);
+        }
+        return actions;
     }
 
     private static void ValidateUses(
         IReadOnlyList<SunderPackageContractUseManifest?>? uses,
         IReadOnlyDictionary<string, LocalContract> localContracts,
         IReadOnlySet<string> targetRoles,
+        IReadOnlySet<string> packageApiUses,
         ICollection<string> errors)
     {
         if (uses is { Count: > SunderPackageFormat.MaxContractUses })
@@ -244,6 +273,19 @@ internal static class PackageContractValidator
                 {
                     errors.Add($"Contract use '{use.ContractId}' abiSha256 does not match its local contract bundle.");
                 }
+                else if (localContract.ApplicableActions is { } applicableActions && use.Actions is { Count: <= 3 } declaredActions)
+                {
+                    var actions = declaredActions.Take(3).ToArray();
+                    if (actions.Any(action => action is not null && !applicableActions.Contains(action, StringComparer.Ordinal)))
+                    {
+                        errors.Add($"Contract use '{use.ContractId}' actions are not applicable to its descriptor method kinds.");
+                    }
+                    if (packageApiUses.Contains(RoleKey(use.Role ?? string.Empty, ContractKey(use.ContractId!, use.ContractVersion!)))
+                        && !actions.SequenceEqual(applicableActions, StringComparer.Ordinal))
+                    {
+                        errors.Add($"Package API contract use '{use.ContractId}' must declare exactly the descriptor-applicable actions.");
+                    }
+                }
             }
         }
     }
@@ -261,6 +303,7 @@ internal static class PackageContractValidator
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var previousAction = -1;
         foreach (var action in use.Actions.Take(3))
         {
             if (!SunderPackageFormat.IsContractAction(action))
@@ -270,6 +313,15 @@ internal static class PackageContractValidator
             else if (!seen.Add(action!))
             {
                 errors.Add($"Contract use '{use.ContractId ?? "unknown"}' declares action '{action}' more than once.");
+            }
+            var actionIndex = action switch { "discover" => 0, "invoke" => 1, "subscribe" => 2, _ => -1 };
+            if (actionIndex >= 0)
+            {
+                if (actionIndex < previousAction)
+                {
+                    errors.Add($"Contract use '{use.ContractId ?? "unknown"}' actions must follow discover, invoke, subscribe order.");
+                }
+                previousAction = actionIndex;
             }
         }
     }
@@ -378,5 +430,6 @@ internal static class PackageContractValidator
     private sealed record LocalContract(
         string DescriptorSha256,
         string AbiSha256,
-        string Exposure);
+        string Exposure,
+        IReadOnlyList<string>? ApplicableActions);
 }

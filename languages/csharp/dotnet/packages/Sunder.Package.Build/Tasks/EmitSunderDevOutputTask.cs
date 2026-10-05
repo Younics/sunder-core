@@ -37,6 +37,7 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
     public ITaskItem[] AssetFiles { get; set; } = [];
 
     public ITaskItem[] ContractFiles { get; set; } = [];
+    public ITaskItem[] RoleContentFiles { get; set; } = [];
 
     public override bool Execute()
     {
@@ -69,7 +70,7 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
             stagingPath = outputPath + ".stage-" + Guid.NewGuid().ToString("N");
             stagingMarkerPath = markerPath + ".stage-" + Guid.NewGuid().ToString("N");
             Directory.CreateDirectory(stagingPath);
-            var manifest = JsonSerializer.Deserialize<SunderPackageManifest>(File.ReadAllText(ManifestPath), JsonOptions)
+            var manifest = StrictJsonSerializer.Deserialize<SunderPackageManifest>(File.ReadAllText(ManifestPath), JsonOptions)
                            ?? throw new InvalidDataException("Generated Sunder package manifest is empty.");
             var targetKeys = SunderPackageTargetResolver.EnumerateTargets(manifest);
             var destinations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -95,11 +96,10 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                     || target.EntryPoint.Length == "lib/".Length)
                 {
                     throw new InvalidDataException(
-                        $"C# worker target '{target.Role}/{target.Rid}' must declare its apphost directly under lib/.");
+                        $"C# worker target '{target.Role}/{target.Rid}' must declare its managed module directly under lib/.");
                 }
                 var expectedEntryPointRelativePath = target.EntryPoint["lib/".Length..];
-                var entryPointMatches = 0;
-                foreach (var item in WorkerFiles)
+                var workerFiles = WorkerFiles.Select(item =>
                 {
                     var configuredRelative = item.GetMetadata("RelativePath");
                     var relative = string.IsNullOrWhiteSpace(configuredRelative)
@@ -108,12 +108,50 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                             PackageAssetDiscovery.NormalizePath(configuredRelative),
                             SunderPackageFormat.MaxLogicalPathLength,
                             SunderPackageFormat.MaxLogicalPathDepth).ToString();
+                    return (Item: item, RelativePath: relative);
+                }).ToArray();
+                var workerPaths = workerFiles
+                    .Select(static file => file.RelativePath)
+                    .ToHashSet(StringComparer.Ordinal);
+                var entryPointMatches = 0;
+                foreach (var file in workerFiles)
+                {
+                    var item = file.Item;
+                    var relative = file.RelativePath;
+                    if (DotNetWorkerPackagePolicy.IsSymbolFile(relative)
+                        || relative.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
+                        && workerPaths.Contains(relative[..^".xml".Length] + ".dll"))
+                    {
+                        continue;
+                    }
+                    var packageId = item.GetMetadata("NuGetPackageId");
+                    if (DotNetWorkerPackagePolicy.IsRuntimePackPackageId(packageId))
+                    {
+                        throw new InvalidDataException(
+                            $"C# worker publish output '{relative}' comes from forbidden runtime pack '{packageId}'.");
+                    }
+                    if (DotNetWorkerPackagePolicy.IsToolchainPackageId(packageId)
+                        || string.Equals(item.GetMetadata("AssetType"), "compile", StringComparison.OrdinalIgnoreCase)
+                        || DotNetWorkerPackagePolicy.IsBuildTimePath(relative))
+                    {
+                        throw new InvalidDataException(
+                            $"C# worker publish output contains build-time/toolchain file '{relative}'.");
+                    }
+                    if (DotNetWorkerPackagePolicy.IsAppHostForEntryPoint(relative, expectedEntryPointRelativePath))
+                    {
+                        throw new InvalidDataException($"C# worker publish output contains apphost '{relative}'.");
+                    }
+                    if (DotNetWorkerPackagePolicy.IsForbiddenRuntimeFile(relative))
+                    {
+                        throw new InvalidDataException(
+                            $"C# worker publish output contains forbidden .NET runtime file '{relative}'.");
+                    }
                     if (string.Equals(relative, expectedEntryPointRelativePath, StringComparison.Ordinal))
                     {
                         entryPointMatches++;
                     }
                     Copy(
-                        item.ItemSpec,
+                        file.Item.ItemSpec,
                         $"payload/{SunderPackageFormat.RuntimeHostRole}/{target.Rid}/lib/{relative}",
                         destinations,
                         stagingPath);
@@ -121,7 +159,7 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                 if (entryPointMatches != 1)
                 {
                     throw new InvalidDataException(
-                        $"C# worker publish output must contain exactly one official apphost '{expectedEntryPointRelativePath}'.");
+                        $"C# worker publish output must contain exactly one official managed module '{expectedEntryPointRelativePath}'.");
                 }
             }
             else
@@ -135,6 +173,16 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                         continue;
                     }
                     Copy(item.ItemSpec, SunderPackageFormat.SharedPayloadRoot + "lib/" + relative, destinations, stagingPath);
+                }
+                foreach (var item in RoleContentFiles)
+                {
+                    var relative = item.GetMetadata("TargetPath");
+                    if (relative.Length == 0) relative = item.GetMetadata("Link");
+                    relative = ArchiveRelativePath.Parse(PackageAssetDiscovery.NormalizePath(relative), SunderPackageFormat.MaxLogicalPathLength,
+                        SunderPackageFormat.MaxLogicalPathDepth).ToString();
+                    var source = Sunder.Package.Build.Authoring.SunderPackageResourcePlanner.Copies(item.GetMetadata("CopyToOutputDirectory"))
+                        ? Path.Combine(TargetDirectory, relative) : item.ItemSpec;
+                    Copy(source, SunderPackageFormat.SharedPayloadRoot + "lib/" + relative, destinations, stagingPath);
                 }
             }
 

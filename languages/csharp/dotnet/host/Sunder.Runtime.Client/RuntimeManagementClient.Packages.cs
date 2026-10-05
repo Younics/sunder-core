@@ -56,7 +56,12 @@ public sealed partial class RuntimeManagementClient
         return await CommitPackageStageAsync(stage.StageId, stage.OperationResult, token).ConfigureAwait(false);
     }
 
-    private async Task<ContentUploadDescriptor> UploadAsync(string filePath, string endpoint, string contentType, CancellationToken token)
+    private async Task<ContentUploadDescriptor> UploadAsync(
+        string filePath,
+        string endpoint,
+        string contentType,
+        CancellationToken token,
+        string? requiredFeature = null)
     {
         await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, token).ConfigureAwait(false)).ToLowerInvariant();
@@ -66,7 +71,14 @@ public sealed partial class RuntimeManagementClient
         content.Headers.ContentLength = stream.Length;
         content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment") { FileNameStar = Path.GetFileName(filePath) };
         content.Headers.Add("X-Content-SHA256", hash);
-        using var response = await _transport.PostAsync(CreateUri(endpoint), content, token).ConfigureAwait(false);
+        using var request = new HttpRequestMessage(HttpMethod.Post, CreateUri(endpoint)) { Content = content };
+        if (requiredFeature is not null)
+        {
+            request.Options.Set(
+                RuntimeAuthenticatedHttpMessageHandler.RequiredFeaturesKey,
+                new[] { requiredFeature });
+        }
+        using var response = await _transport.SendAsync(request, cancellationToken: token).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<ContentUploadDescriptor>(response, token).ConfigureAwait(false);
     }
 

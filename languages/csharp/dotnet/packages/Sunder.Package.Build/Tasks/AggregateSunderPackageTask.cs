@@ -1,5 +1,7 @@
+using System.Reflection.PortableExecutable;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
@@ -7,7 +9,7 @@ using Sunder.Package.Format;
 
 namespace Sunder.Package.Build.Tasks;
 
-/// <summary>Aggregates validated exact-target Manifest V3 leaves into one canonical package tree.</summary>
+/// <summary>Aggregates validated exact-target Manifest V1 leaves into one canonical package tree.</summary>
 public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
 {
     public const string MarkerFileSuffix = ".sunder-aggregate-generated-output";
@@ -41,12 +43,16 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
     [Output]
     public string NormalizedOutputPath { get; private set; } = string.Empty;
 
+    internal bool InputsAlreadyLeased { get; set; }
+    internal CancellationToken CancellationToken { get; set; }
+
     public override bool Execute()
     {
         string? temporaryPath = null;
         string? temporaryMarkerPath = null;
         try
         {
+            CancellationToken.ThrowIfCancellationRequested();
             if (TargetLeaves.Length == 0)
             {
                 Log.LogError("AggregateSunderPackageTask requires at least one SunderPackageTargetLeaf.");
@@ -82,9 +88,11 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             var discoveryKeys = leafInputs
                 .Select(input => GeneratedOutputLock.TargetLeafDiscoveryKey(input.DiscoveryRoot, input.LeafRoot))
                 .Append(GeneratedOutputLock.TargetLeafDiscoveryKey(OutputDiscoveryRoot, output));
-            using var outputLock = GeneratedOutputLock.Acquire(discoveryKeys, leafRoots.Append(output));
+            using var outputLock = InputsAlreadyLeased
+                ? GeneratedOutputLock.Acquire([GeneratedOutputLock.TargetLeafDiscoveryKey(OutputDiscoveryRoot, output)], [output], cancellationToken: CancellationToken)
+                : GeneratedOutputLock.Acquire(discoveryKeys, leafRoots.Append(output), cancellationToken: CancellationToken);
             GeneratedOutputTransaction.RecoverAndCleanup(output, markerPath);
-            foreach (var leafRoot in leafRoots)
+            foreach (var leafRoot in InputsAlreadyLeased ? [] : leafRoots)
             {
                 GeneratedOutputTransaction.RecoverAndCleanup(
                     leafRoot,
@@ -121,8 +129,8 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
                 return false;
             }
 
-            VerifyMetadataAgreement(leaves);
-            if (Log.HasLoggedErrors)
+            var packageManifest = VerifyMetadataAgreement(leaves);
+            if (packageManifest is null || Log.HasLoggedErrors)
             {
                 return false;
             }
@@ -131,7 +139,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             {
                 return false;
             }
-            var stampedTargetManifests = PackageTargetBuilder.StampRpcV2Capabilities(
+            var stampedTargetManifests = PackageTargetBuilder.StampRpcCapabilities(
                 targets.Select(static target => target.Manifest).ToArray(),
                 roleContracts.RpcRoles,
                 Log);
@@ -151,14 +159,14 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             Directory.CreateDirectory(temporaryPath);
             WriteAggregate(
                 temporaryPath,
-                leaves[0].Manifest,
+                packageManifest,
                 targets,
                 roleContracts.Uses,
                 roleContracts.Providers);
 
             PackageContentIndexer.Write(temporaryPath);
             var validation = SunderPackageArchiveInspector
-                .ValidateExtractedPackageAsync(temporaryPath)
+                .ValidateExtractedPackageAsync(temporaryPath, CancellationToken)
                 .GetAwaiter()
                 .GetResult();
             foreach (var warning in validation.Warnings)
@@ -175,6 +183,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             }
 
             File.WriteAllText(temporaryMarkerPath, "Sunder.Package.Build aggregate generated output v1\n");
+            CancellationToken.ThrowIfCancellationRequested();
             GeneratedOutputTransaction.Commit(
                 new GeneratedOutputTransaction.StagedOutput(output, temporaryPath),
                 new GeneratedOutputTransaction.StagedOutput(markerPath, temporaryMarkerPath));
@@ -208,7 +217,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
                 continue;
             }
             var validation = SunderPackageArchiveInspector
-                .ValidateExtractedPackageAsync(root)
+                .ValidateExtractedPackageAsync(root, CancellationToken)
                 .GetAwaiter()
                 .GetResult();
             if (!validation.Success)
@@ -287,21 +296,87 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
         }
     }
 
-    private void VerifyMetadataAgreement(IReadOnlyList<Leaf> leaves)
+    private SunderPackageManifest? VerifyMetadataAgreement(IReadOnlyList<Leaf> leaves)
     {
-        var expected = MetadataFingerprint(leaves[0].Manifest);
-        foreach (var leaf in leaves.Skip(1))
+        try
         {
-            if (!expected.AsSpan().SequenceEqual(MetadataFingerprint(leaf.Manifest)))
+            // Every RID of one role has the same complete declarations. Different
+            // roles may contribute imports; no role may silently truncate an API.
+            foreach (var role in leaves.SelectMany(leaf => leaf.Targets).Select(target => target.Key.Role).Distinct(StringComparer.Ordinal))
             {
-                Log.LogError(
-                    $"Target leaf '{leaf.RootPath}' package-wide manifest metadata does not agree with '{leaves[0].RootPath}'.");
+                var roleLeaves = leaves.Where(leaf => leaf.Targets.Any(target => target.Key.Role == role)).ToArray();
+                var expected = MetadataFingerprint(roleLeaves[0].Manifest);
+                if (roleLeaves.Skip(1).Any(leaf => !expected.AsSpan().SequenceEqual(MetadataFingerprint(leaf.Manifest))))
+                    throw new InvalidDataException($"Target leaves disagree on package-wide manifest metadata/import evidence across RIDs of role '{role}'.");
             }
+            var documents = leaves.Select(leaf => JsonSerializer.SerializeToNode(CloneManifest(leaf.Manifest, [], [], []), JsonOptions)!.AsObject()).ToArray();
+            string[] groups = ["dependsOn", "contractBundles", "packageArtifactImports", "packageApiImports", "providerImports", "platformImports"];
+            JsonObject Identity(JsonObject value)
+            {
+                var clone = value.DeepClone().AsObject(); foreach (var group in groups) clone.Remove(group); return clone;
+            }
+            var identity = Identity(documents[0]);
+            if (documents.Skip(1).Any(value => !JsonNode.DeepEquals(identity, Identity(value))))
+                throw new InvalidDataException("Target leaves disagree on package-wide manifest metadata (identity).");
+            var owned = Owned(documents[0]);
+            if (documents.Skip(1).Any(value => !JsonNode.DeepEquals(owned, Owned(value))))
+                throw new InvalidDataException("Target leaves disagree on package-wide manifest metadata: every role must retain the complete identical owned-contract projection.");
+            var merged = documents[0].DeepClone().AsObject();
+            merged["contractBundles"] = Merge("contractBundles", value => Text(value, "contractId") + "\0" + Text(value, "version"));
+            merged["packageArtifactImports"] = Merge("packageArtifactImports", value => Text(value, "packageId"));
+            merged["packageApiImports"] = Merge("packageApiImports", value => Text(value, "packageId"), "useRefs");
+            merged["providerImports"] = Merge("providerImports", value => Text(value, "key"), "providerRefs");
+            merged["platformImports"] = Merge("platformImports", value => Text(value, "key"), "providerRefs");
+            var dependencies = new SortedDictionary<string, JsonObject>(StringComparer.Ordinal);
+            foreach (var item in documents.SelectMany(value => Items(value, "dependsOn")))
+            {
+                var id = Text(item, "packageId");
+                if (!dependencies.TryGetValue(id, out var previous)) dependencies.Add(id, item.DeepClone().AsObject());
+                else
+                {
+                    if (Text(previous, "versionRange") != Text(item, "versionRange")) throw new InvalidDataException($"Dependency '{id}' has conflicting reviewed ranges across roles.");
+                    if (Text(item, "presence") == "required") previous["presence"] = "required";
+                }
+            }
+            merged["dependsOn"] = new JsonArray(dependencies.Values.Select(value => (JsonNode)value).ToArray());
+            return merged.Deserialize<SunderPackageManifest>(JsonOptions)!;
+
+            JsonArray Merge(string group, Func<JsonObject, string> key, string? roleRefs = null)
+            {
+                var values = new SortedDictionary<string, JsonObject>(StringComparer.Ordinal);
+                foreach (var item in documents.SelectMany(value => Items(value, group)))
+                {
+                    var id = key(item);
+                    if (!values.TryGetValue(id, out var previous)) { values.Add(id, item.DeepClone().AsObject()); continue; }
+                    var left = previous.DeepClone().AsObject(); var right = item.DeepClone().AsObject();
+                    if (roleRefs is not null) { left.Remove(roleRefs); right.Remove(roleRefs); }
+                    if (!JsonNode.DeepEquals(left, right)) throw new InvalidDataException($"Target leaves have conflicting '{group}' evidence for '{id}'.");
+                    if (roleRefs is not null)
+                    {
+                        var references = Items(previous, roleRefs).Concat(Items(item, roleRefs)).GroupBy(value => value.ToJsonString(), StringComparer.Ordinal)
+                            .OrderBy(group => group.Key, StringComparer.Ordinal).Select(group => group.First().DeepClone()).ToArray();
+                        previous[roleRefs] = new JsonArray(references);
+                    }
+                }
+                return new JsonArray(values.Values.Select(value => (JsonNode)value).ToArray());
+            }
+            static IEnumerable<JsonObject> Items(JsonObject value, string field) => value[field] is JsonArray values ? values.Select(item => item!.AsObject()) : [];
+            static string Text(JsonObject value, string field) => value[field]!.GetValue<string>();
+            static JsonArray Owned(JsonObject value) => new(Items(value, "contractBundles").Where(item => Text(item, "source") == "owned")
+                .OrderBy(item => Text(item, "contractId"), StringComparer.Ordinal).ThenBy(item => Text(item, "version"), StringComparer.Ordinal).Select(item => item.DeepClone()).ToArray());
         }
+        catch (InvalidDataException error) { Log.LogError(error.Message); return null; }
     }
 
     private static byte[] MetadataFingerprint(SunderPackageManifest source)
-        => JsonSerializer.SerializeToUtf8Bytes(CloneManifest(source, [], [], []), JsonOptions);
+    {
+        var value = JsonSerializer.SerializeToNode(CloneManifest(source, [], [], []), JsonOptions)!.AsObject();
+        value["dependsOn"] = JsonSerializer.SerializeToNode((source.DependsOn ?? [])
+            .OrderBy(static dependency => dependency.PackageId, StringComparer.Ordinal), JsonOptions);
+        value["contractBundles"] = JsonSerializer.SerializeToNode((source.ContractBundles ?? [])
+            .OrderBy(static bundle => bundle!.ContractId, StringComparer.Ordinal).ThenBy(static bundle => bundle!.Version, StringComparer.Ordinal), JsonOptions);
+        return JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
+    }
 
     private RoleScopedContracts? MergeRoleScopedContracts(IReadOnlyList<Leaf> leaves)
     {
@@ -406,7 +481,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             .Select(static provider => provider.ProviderId!)
             .ToHashSet(StringComparer.Ordinal);
 
-    private static void WriteAggregate(
+    private void WriteAggregate(
         string outputPath,
         SunderPackageManifest sourceManifest,
         IReadOnlyList<TargetLeaf> targets,
@@ -427,7 +502,15 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             var occurrences = orderedTargets
                 .Where(target => target.Files.ContainsKey(logicalPath))
                 .ToArray();
-            if (occurrences.Any(target =>
+            if (sourceManifest.ContractBundles?.Any(bundle => bundle!.DescriptorPath == logicalPath) == true)
+            {
+                if (!HaveIdenticalFile(occurrences, logicalPath))
+                    throw new InvalidDataException($"Aggregate contract descriptor '{logicalPath}' differs between target leaves.");
+                Copy(occurrences[0].Files[logicalPath], SunderPackageFormat.SharedPayloadRoot + logicalPath, outputPath, destinations);
+                continue;
+            }
+            if (IsExactRidNativeAsset(logicalPath, occurrences)
+                || occurrences.Any(target =>
                     target.Manifest.Kind == SunderPackageFormat.WorkerTargetKind
                     && string.Equals(target.Manifest.EntryPoint, logicalPath, StringComparison.Ordinal)))
             {
@@ -490,7 +573,96 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             && string.Equals(target.Files[logicalPath].Sha256, expected.Sha256, StringComparison.Ordinal));
     }
 
-    private static void Copy(
+    private static bool IsExactRidNativeAsset(
+        string logicalPath,
+        IReadOnlyList<TargetLeaf> occurrences)
+    {
+        var segments = logicalPath.Split('/');
+        if (segments.Length >= 5
+            && string.Equals(segments[0], "lib", StringComparison.Ordinal)
+            && string.Equals(segments[1], "runtimes", StringComparison.Ordinal)
+            && string.Equals(segments[3], "native", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var fileName = Path.GetFileName(logicalPath);
+        if (fileName.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".node", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
+            || fileName.Contains(".so.", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (!fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            return !Path.HasExtension(fileName)
+                   && occurrences.Any(target => HasNativeExecutableHeader(target.Files[logicalPath].FullPath));
+        }
+
+        return occurrences.Any(target => !HasManagedMetadata(target.Files[logicalPath].FullPath));
+    }
+
+    private static bool HasNativeExecutableHeader(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            Span<byte> header = stackalloc byte[4];
+            if (stream.Read(header) != header.Length)
+            {
+                return false;
+            }
+
+            if (header[0] == 0x7f && header[1] == (byte)'E' && header[2] == (byte)'L' && header[3] == (byte)'F')
+            {
+                return true;
+            }
+            if (IsMachOHeader(header))
+            {
+                return true;
+            }
+            return header[0] == (byte)'M'
+                   && header[1] == (byte)'Z'
+                   && !HasManagedMetadata(path);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsMachOHeader(ReadOnlySpan<byte> header)
+        => header is
+            [0xfe, 0xed, 0xfa, 0xce]
+            or [0xce, 0xfa, 0xed, 0xfe]
+            or [0xfe, 0xed, 0xfa, 0xcf]
+            or [0xcf, 0xfa, 0xed, 0xfe]
+            or [0xca, 0xfe, 0xba, 0xbe]
+            or [0xbe, 0xba, 0xfe, 0xca]
+            or [0xca, 0xfe, 0xba, 0xbf]
+            or [0xbf, 0xba, 0xfe, 0xca];
+
+    private static bool HasManagedMetadata(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new PEReader(stream);
+            return reader.HasMetadata;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+    }
+
+    private void Copy(
         LeafFile source,
         string archivePath,
         string outputPath,
@@ -506,7 +678,19 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
         }
         var destination = path.ToPlatformPath(outputPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        File.Copy(source.FullPath, destination, overwrite: false);
+        CancellationToken.ThrowIfCancellationRequested();
+        using var input = File.OpenRead(source.FullPath);
+        using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        var buffer = new byte[65536]; long size = 0; int count;
+        while ((count = input.Read(buffer)) != 0)
+        {
+            CancellationToken.ThrowIfCancellationRequested();
+            if ((size += count) > source.Size) throw new InvalidDataException("Aggregate input grew while copying its validated bytes.");
+            hash.AppendData(buffer, 0, count); output.Write(buffer, 0, count);
+        }
+        if (size != source.Size || Convert.ToHexStringLower(hash.GetHashAndReset()) != source.Sha256)
+            throw new InvalidDataException("Aggregate input bytes changed while copying their validated content identity.");
     }
 
     private static SunderPackageManifest CloneManifest(
@@ -528,6 +712,10 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             ContractBundles = source.ContractBundles,
             UsesContracts = uses,
             Provides = providers,
+            PackageArtifactImports = source.PackageArtifactImports,
+            PackageApiImports = source.PackageApiImports,
+            ProviderImports = source.ProviderImports,
+            PlatformImports = source.PlatformImports,
         };
 
     private static bool UsesAreIdentical(

@@ -15,6 +15,7 @@ public sealed record RegistryCliTokenRequest(
     string Code,
     string CodeVerifier);
 
+/// <summary>Credential exchange result whose UserId, when present, is the Registry-issued opaque principal ID.</summary>
 public sealed record RegistryCliTokenResponse(
     bool Success,
     string? Token,

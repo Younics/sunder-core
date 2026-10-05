@@ -1,0 +1,37 @@
+{
+  "lockVersion": 1,
+  "packageArtifacts": {
+    "example.dependency": {
+      "requestedVersionRange": ">=1.0.0 <2.0.0",
+      "includePrerelease": false,
+      "selectedPackageVersion": "1.2.3",
+      "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+      "registryOrigin": "https://registry.example/",
+      "publicContractCount": 1,
+      "publicInventorySha256": "aad59a4a18b4d2e4052698580bc863fc2de8c2aabe2a8343216fae3ba82b64a7",
+      "contracts": {
+        "sunder.stack.contributor": {
+          "artifactSource": "imported",
+          "authorityKind": "platform",
+          "authorityId": "sunder.core",
+          "selectedAuthorityRelease": "1.1.0",
+          "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930",
+          "resolvedContractVersion": "2.0.0",
+          "descriptorBytes": 489,
+          "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+          "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+          "etag": "\"6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567\""
+        }
+      }
+    }
+  },
+  "packageImports": {
+    "example.dependency": {
+      "localName": "dependency",
+      "presence": "optional",
+      "requiredContracts": []
+    }
+  },
+  "providerImports": {},
+  "platformImports": {}
+}

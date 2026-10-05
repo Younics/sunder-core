@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "producer": {
+    "name": "Sunder.Package.Build",
+    "version": "1.0.0",
+    "language": "csharp"
+  },
+  "projectIdentity": "Example.Package",
+  "configuration": "Release",
+  "targetFramework": "net10.0",
+  "inputFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "lockSha256": "48300c172fe8e323956ee95aa7cde02e30ca9ebd330179e328e3209fe31ead5a",
+  "contracts": []
+}

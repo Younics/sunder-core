@@ -224,6 +224,149 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task InstalledPackageDetails_ProjectExecutionRuntimeCompatibilityAndMissingWarnings()
+    {
+        var healthyBinding = CreateExecutionRuntimeBinding("dotnet", "8.0.1", "linux-x64");
+        var missingBinding = CreateExecutionRuntimeBinding("node", "22.1.0", "linux-x64");
+        var runtimeClient = new FakeRuntimeApiClient([
+            CreateInstalledPackage(
+                "agent",
+                isEnabled: true,
+                executionRuntimeBindings: [healthyBinding, missingBinding]),
+        ])
+        {
+            ExecutionRuntimes = [CreateExecutionRuntimeSummary(healthyBinding, healthy: true)],
+        };
+        using var viewModel = CreateViewModel(runtimeClient);
+
+        await viewModel.InitializeAsync();
+
+        Assert.True(viewModel.HasSelectedPackageExecutionRuntimes);
+        Assert.Equal(2, viewModel.SelectedPackageExecutionRuntimes.Count);
+        Assert.Contains("1 of 2", viewModel.SelectedPackageExecutionRuntimeSummary, StringComparison.Ordinal);
+        var healthy = Assert.Single(viewModel.SelectedPackageExecutionRuntimes, runtime => runtime.Title.StartsWith("dotnet", StringComparison.Ordinal));
+        var missing = Assert.Single(viewModel.SelectedPackageExecutionRuntimes, runtime => runtime.Title.StartsWith("node", StringComparison.Ordinal));
+        Assert.Equal("Compatible", healthy.StatusText);
+        Assert.False(healthy.ShowWarning);
+        Assert.Equal("Missing", missing.StatusText);
+        Assert.True(missing.ShowWarning);
+        Assert.True(missing.CanRepair);
+        Assert.Equal("Restore", missing.ActionText);
+    }
+
+    [Fact]
+    public async Task RepairExecutionRuntimeCommand_DelegatesExactIdentityAndRefreshesCompatibility()
+    {
+        var binding = CreateExecutionRuntimeBinding("dotnet", "8.0.1", "linux-x64");
+        RuntimeExecutionRuntimeIdentity? repairedIdentity = null;
+        var runtimeClient = new FakeRuntimeApiClient([
+            CreateInstalledPackage(
+                "agent",
+                isEnabled: true,
+                executionRuntimeBindings: [binding]),
+        ])
+        {
+            ExecutionRuntimes = [CreateExecutionRuntimeSummary(binding, healthy: false)],
+        };
+        runtimeClient.RepairRuntime = (identity, _) =>
+        {
+            repairedIdentity = identity;
+            var healthy = CreateExecutionRuntimeSummary(binding, healthy: true);
+            runtimeClient.ExecutionRuntimes = [healthy];
+            return Task.FromResult(new RuntimeExecutionRuntimeOperationResult(
+                true,
+                null,
+                "Execution runtime repaired.",
+                RuntimeExecutionRuntimeOperationActions.Repair,
+                healthy,
+                AlreadyPresent: false));
+        };
+        using var viewModel = CreateViewModel(runtimeClient);
+        await viewModel.InitializeAsync();
+        var runtime = Assert.Single(viewModel.SelectedPackageExecutionRuntimes);
+        Assert.True(runtime.CanRepair);
+        Assert.True(viewModel.RepairExecutionRuntimeCommand.CanExecute(runtime));
+
+        await viewModel.RepairExecutionRuntimeCommand.ExecuteAsync(runtime);
+
+        Assert.Equal(binding.Runtime, repairedIdentity);
+        Assert.Same(runtimeClient.RuntimeImpact, runtimeClient.LastRepairImpact);
+        Assert.Equal("Compatible", Assert.Single(viewModel.SelectedPackageExecutionRuntimes).StatusText);
+        Assert.Equal("Execution runtime repaired.", viewModel.Operations.StatusText);
+    }
+
+    [Fact]
+    public async Task RepairExecutionRuntimeCommand_RestoredRuntimeRefreshesAfterReloadFailure()
+    {
+        var binding = CreateExecutionRuntimeBinding("dotnet", "8.0.1", "linux-x64");
+        var runtimeClient = new FakeRuntimeApiClient([
+            CreateInstalledPackage(
+                "agent",
+                isEnabled: true,
+                executionRuntimeBindings: [binding]),
+        ]);
+        runtimeClient.RepairRuntime = (_, _) =>
+        {
+            var healthy = CreateExecutionRuntimeSummary(binding, healthy: true);
+            runtimeClient.ExecutionRuntimes = [healthy];
+            return Task.FromResult(new RuntimeExecutionRuntimeOperationResult(
+                false,
+                ExecutionRuntimeErrorCodes.InstallFailed,
+                "Runtime restored, but package reload failed.",
+                RuntimeExecutionRuntimeOperationActions.Repair,
+                healthy,
+                AlreadyPresent: false,
+                runtimeClient.RuntimeImpact));
+        };
+        using var viewModel = CreateViewModel(runtimeClient);
+        await viewModel.InitializeAsync();
+        var missing = Assert.Single(viewModel.SelectedPackageExecutionRuntimes);
+        Assert.Equal("Missing", missing.StatusText);
+
+        await viewModel.RepairExecutionRuntimeCommand.ExecuteAsync(missing);
+
+        Assert.Equal("Compatible", Assert.Single(viewModel.SelectedPackageExecutionRuntimes).StatusText);
+        Assert.Equal("Runtime restored, but package reload failed.", viewModel.Operations.StatusText);
+    }
+
+    [Fact]
+    public async Task RepairExecutionRuntimeCommand_RequiresConfirmationForSharedImpact()
+    {
+        var binding = CreateExecutionRuntimeBinding("dotnet", "8.0.1", "linux-x64");
+        var impact = new RuntimeExecutionRuntimeImpact(
+            2,
+            ["agent", "tools"],
+            new string('e', 64));
+        var runtimeClient = new FakeRuntimeApiClient([
+            CreateInstalledPackage(
+                "agent",
+                isEnabled: true,
+                executionRuntimeBindings: [binding]),
+        ])
+        {
+            ExecutionRuntimes = [CreateExecutionRuntimeSummary(binding, healthy: false)],
+            RuntimeImpact = impact,
+            RepairRuntime = (_, _) => throw new InvalidOperationException("Repair must not run without confirmation."),
+        };
+        RuntimeExecutionRuntimeImpact? confirmedImpact = null;
+        using var viewModel = CreateViewModel(
+            runtimeClient,
+            confirmSharedRuntimeRepair: (candidate, _) =>
+            {
+                confirmedImpact = candidate;
+                return Task.FromResult(false);
+            });
+        await viewModel.InitializeAsync();
+
+        await viewModel.RepairExecutionRuntimeCommand.ExecuteAsync(
+            Assert.Single(viewModel.SelectedPackageExecutionRuntimes));
+
+        Assert.Same(impact, confirmedImpact);
+        Assert.Null(runtimeClient.LastRepairImpact);
+        Assert.Equal("Execution runtime repair cancelled.", viewModel.Operations.StatusText);
+    }
+
+    [Fact]
     public async Task RefreshInstalledPackages_PreservesUnchangedRowsAndReplacesChangedRows()
     {
         var runtimeClient = new FakeRuntimeApiClient(
@@ -694,6 +837,59 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task MarketplaceVersionSelection_ShowsCurrentRidRuntimeLifecycleAndInstalledReuse()
+    {
+        var rid = AppPackageTargetEnvironment.CurrentRid;
+        var requirement = new RegistryExecutionRuntimeRequirement(
+            "sunder.runtime.dotnet",
+            ">=10.0.0 <11.0.0",
+            "sunder.dotnet-worker-module.v1");
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            VersionDetails = (packageId, version, _) => Task.FromResult<RegistryPackageVersionDetails?>(
+                CreateRegistryPackageVersionDetails(
+                    packageId,
+                    version,
+                    targets: [new RegistryPackageTarget(
+                        SunderPackageFormat.RuntimeHostRole,
+                        rid,
+                        SunderPackageFormat.WorkerTargetKind,
+                        "lib/Agent.dll",
+                        "net10.0",
+                        "1.1.0",
+                        ["execution-runtime.v1", "rpc.v1", "worker-protocol.v1", "sdk-baseline-1-1.v1"],
+                        ExecutionRuntime: requirement)])),
+        };
+        var runtimeArtifact = CreateResolvedRuntimeArtifact(rid, ExecutionRuntimeLifecycleStates.Deprecated);
+        var runtimeClient = new FakeRuntimeApiClient([])
+        {
+            RegistryPlanResult = CreateRuntimePlan(requirement, runtimeArtifact),
+            ExecutionRuntimes = [CreateInstalledRuntime(runtimeArtifact)],
+        };
+        using var viewModel = CreateViewModel(
+            runtimeClient,
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40));
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        await WaitForConditionAsync(() => viewModel.Marketplace.RuntimePreflightLoaded);
+
+        Assert.Equal(rid, viewModel.Marketplace.CurrentRid);
+        Assert.Equal("8 MB", viewModel.Marketplace.PackageDownloadText);
+        Assert.Equal("0 bytes (already installed)", viewModel.Marketplace.SharedRuntimeDownloadText);
+        Assert.Contains("lifecycle warning", viewModel.Marketplace.RuntimeCompatibilitySummary, StringComparison.OrdinalIgnoreCase);
+        var runtime = Assert.Single(viewModel.Marketplace.ExecutionRuntimeRequirements);
+        Assert.Equal("sunder.runtime.dotnet", runtime.RuntimeId);
+        Assert.Equal(">=10.0.0 <11.0.0", runtime.VersionRange);
+        Assert.Equal("10.0.1 r2", runtime.ResolvedRuntime);
+        Assert.Equal("Deprecated", runtime.Lifecycle);
+        Assert.Contains("already installed", runtime.Availability, StringComparison.OrdinalIgnoreCase);
+        Assert.True(viewModel.CanInstallSelectedMarketplacePackage);
+    }
+
+    [Fact]
     public async Task MarketplaceVersionAccess_WhileLoadingOrUnavailable_DisablesInstallWithoutClaimingNoAccess()
     {
         var requestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -969,7 +1165,8 @@ public sealed class PackagesWindowViewModelTests
         TimeSpan? marketplaceSearchThrottleDelay = null,
         Func<Uri, object?>? tokenProvider = null,
         TimeSpan? marketplaceDetailSpinnerDelay = null,
-        FakePackageOperationExecutor? operationExecutor = null
+        FakePackageOperationExecutor? operationExecutor = null,
+        Func<RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? confirmSharedRuntimeRepair = null
     )
     {
         var viewModel = new PackagesWindowViewModel(
@@ -978,7 +1175,8 @@ public sealed class PackagesWindowViewModelTests
             operationExecutor ?? new FakePackageOperationExecutor(),
             registryClientFactory: registryClientFactory,
             marketplaceSearchThrottleDelay: marketplaceSearchThrottleDelay,
-            marketplaceDetailSpinnerDelay: marketplaceDetailSpinnerDelay
+            marketplaceDetailSpinnerDelay: marketplaceDetailSpinnerDelay,
+            confirmSharedRuntimeRepair: confirmSharedRuntimeRepair
         )
         {
             Mode = PackageWindowMode.Installed,
@@ -996,7 +1194,8 @@ public sealed class PackagesWindowViewModelTests
         bool isEnabled,
         PackageIconDescriptor? icon = null,
         IReadOnlyList<PackageRpcContractUseDescriptor>? rpcContractUses = null,
-        bool isRegistryManaged = false
+        bool isRegistryManaged = false,
+        IReadOnlyList<PackageTargetExecutionRuntimeBinding>? executionRuntimeBindings = null
     ) =>
         new(
             packageId,
@@ -1019,7 +1218,68 @@ public sealed class PackagesWindowViewModelTests
                     RequestedTag: "latest",
                     SourceIdentity: new string('a', 64))
                 : null
+            ,
+            ExecutionRuntimeBindings: executionRuntimeBindings
         );
+
+    private static PackageTargetExecutionRuntimeBinding CreateExecutionRuntimeBinding(
+        string runtimeId,
+        string version,
+        string rid)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var moduleAbi = runtimeId == "node" ? "node-worker-v1" : "dotnet-worker-v1";
+        return new PackageTargetExecutionRuntimeBinding(
+            SunderPackageFormat.RuntimeHostRole,
+            rid,
+            new RuntimeExecutionRuntimeRequirement(runtimeId, $"[{version},{version}]", moduleAbi),
+            new RuntimeExecutionRuntimeIdentity(
+                runtimeId,
+                version,
+                1,
+                rid,
+                moduleAbi,
+                new string(runtimeId == "node" ? 'c' : 'a', 64),
+                new string(runtimeId == "node" ? 'd' : 'b', 64)),
+            1024,
+            "https://registry.example/",
+            RuntimeExecutionRuntimeAcquisitionSources.Registry,
+            "release-key",
+            1,
+            new RuntimeExecutionRuntimeLifecycle(
+                ExecutionRuntimeLifecycleStates.Supported,
+                now,
+                null,
+                null,
+                null,
+                null,
+                null,
+                1,
+                now),
+            now);
+    }
+
+    private static InstalledExecutionRuntimeSummary CreateExecutionRuntimeSummary(
+        PackageTargetExecutionRuntimeBinding binding,
+        bool healthy)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new InstalledExecutionRuntimeSummary(
+            binding.Runtime,
+            healthy ? RuntimeExecutionRuntimeStatuses.Ready : RuntimeExecutionRuntimeStatuses.Unhealthy,
+            binding.ArtifactSize,
+            1,
+            binding.AcquisitionSource,
+            binding.SigningKeyId,
+            binding.TrustGeneration,
+            new RuntimeExecutionRuntimeHealth(
+                healthy ? RuntimeExecutionRuntimeStatuses.Ready : RuntimeExecutionRuntimeStatuses.Unhealthy,
+                now,
+                RepairRecommended: !healthy,
+                healthy ? null : "Integrity verification failed."),
+            binding.Lifecycle,
+            now);
+    }
 
     private static SessionPackageDescriptor CreateSessionPackage(
         string packageId,
@@ -1070,7 +1330,8 @@ public sealed class PackagesWindowViewModelTests
     private static RegistryPackageVersionDetails CreateRegistryPackageVersionDetails(
         string packageId,
         string version,
-        IReadOnlyList<RegistryPackageContractUse>? usesContracts = null)
+        IReadOnlyList<RegistryPackageContractUse>? usesContracts = null,
+        IReadOnlyList<RegistryPackageTarget>? targets = null)
         => new(
             PackageId: packageId,
             Name: ToDisplayName(packageId),
@@ -1080,8 +1341,8 @@ public sealed class PackagesWindowViewModelTests
             IsYanked: false,
             DeprecatedMessage: null,
             DependsOn: [],
-            CanonicalArtifact: new RegistryPackageCanonicalArtifact("", 0, ""),
-            Targets: [],
+            CanonicalArtifact: new RegistryPackageCanonicalArtifact("", 8L * 1024L * 1024L, ""),
+            Targets: targets ?? [],
             Projections: [],
             ContractBundles: [],
             UsesContracts: usesContracts ?? [],
@@ -1091,12 +1352,122 @@ public sealed class PackagesWindowViewModelTests
             PublishedAtUtc: DateTimeOffset.UtcNow,
             TrustedArtifactOrigins: []);
 
+    private static RuntimeRegistryResolveInstallPlanResponse CreateRuntimePlan(
+        RegistryExecutionRuntimeRequirement requirement,
+        RuntimeRegistryResolvedExecutionRuntimeArtifact runtimeArtifact)
+    {
+        var runtimeRequirement = new RuntimeRegistryExecutionRuntimeRequirement(
+            requirement.RuntimeId,
+            requirement.VersionRange,
+            requirement.ModuleAbi);
+        var binding = new RuntimeRegistryPackageTargetRuntimeBinding(
+            SunderPackageFormat.RuntimeHostRole,
+            runtimeArtifact.Identity.Rid,
+            runtimeRequirement,
+            runtimeArtifact.Identity);
+        return new RuntimeRegistryResolveInstallPlanResponse(
+            true,
+            [new RuntimeRegistryPackageInstallPlanItem(
+                "sunder.package.agent",
+                null,
+                "1.0.0",
+                new string('a', 64),
+                RegistryPackageActionKinds.PackageInstall,
+                null,
+                [],
+                [new RuntimeRegistryPackageTarget(
+                    SunderPackageFormat.RuntimeHostRole,
+                    runtimeArtifact.Identity.Rid,
+                    SunderPackageFormat.WorkerTargetKind,
+                    "lib/Agent.dll",
+                    "net10.0",
+                    "1.1.0",
+                    ["execution-runtime.v1"],
+                    ExecutionRuntime: runtimeRequirement)],
+                [new RuntimeRegistryPackageProjectionArtifact(
+                    "runtime",
+                    runtimeArtifact.Identity.Rid,
+                    new string('b', 64),
+                    8L * 1024L * 1024L,
+                    "/package",
+                    new string('c', 64),
+                    new string('d', 64),
+                    new string('e', 64),
+                    1)],
+                [binding])],
+            ["The selected execution runtime is deprecated."],
+            [],
+            [],
+            [],
+            RuntimeArtifacts: [runtimeArtifact]);
+    }
+
+    private static RuntimeRegistryResolvedExecutionRuntimeArtifact CreateResolvedRuntimeArtifact(
+        string rid,
+        string lifecycleState)
+        => new(
+            new RuntimeRegistryExecutionRuntimeIdentity(
+                "sunder.runtime.dotnet",
+                "10.0.1",
+                2,
+                rid,
+                "sunder.dotnet-worker-module.v1"),
+            new string('1', 64),
+            new string('2', 64),
+            50L * 1024L * 1024L,
+            "release-key",
+            1,
+            new string('3', 64),
+            "native-key",
+            new RuntimeRegistryExecutionRuntimeLifecycle(
+                lifecycleState,
+                DateTimeOffset.UtcNow.AddDays(-2),
+                DateTimeOffset.UtcNow.AddDays(-1),
+                lifecycleState == ExecutionRuntimeLifecycleStates.Deprecated ? DateTimeOffset.UtcNow : null,
+                null,
+                null,
+                null,
+                lifecycleState == ExecutionRuntimeLifecycleStates.Deprecated ? "Upgrade before the support window closes." : null),
+            1,
+            "/runtime");
+
+    private static InstalledExecutionRuntimeSummary CreateInstalledRuntime(
+        RuntimeRegistryResolvedExecutionRuntimeArtifact artifact)
+        => new(
+            new RuntimeExecutionRuntimeIdentity(
+                artifact.Identity.RuntimeId,
+                artifact.Identity.Version,
+                artifact.Identity.PackagingRevision,
+                artifact.Identity.Rid,
+                artifact.Identity.ModuleAbi,
+                artifact.ManifestSha256,
+                artifact.ArtifactSha256),
+            RuntimeExecutionRuntimeStatuses.Ready,
+            artifact.ArtifactSize,
+            1,
+            RuntimeExecutionRuntimeAcquisitionSources.Registry,
+            artifact.SigningKeyId,
+            1,
+            new RuntimeExecutionRuntimeHealth(RuntimeExecutionRuntimeStatuses.Ready, DateTimeOffset.UtcNow, false, null),
+            new RuntimeExecutionRuntimeLifecycle(
+                artifact.Lifecycle.State,
+                artifact.Lifecycle.SupportedFromUtc,
+                artifact.Lifecycle.DeprecatedAtUtc,
+                artifact.Lifecycle.InstallBlockedAtUtc,
+                artifact.Lifecycle.ActivationBlockedAtUtc,
+                artifact.Lifecycle.RevokedAtUtc,
+                artifact.Lifecycle.Message,
+                artifact.ObservedRuntimePolicyRevision,
+                DateTimeOffset.UtcNow),
+            DateTimeOffset.UtcNow);
+
     private static RegistryPackageInstallPlanItem CreatePlanItem(string packageId, string version)
         => new(
-            packageId,
-            CurrentVersion: null,
-            version,
-            IsUpdate: false,
+             packageId,
+             CurrentVersion: null,
+             version,
+             PackageContentIdentity: new string('a', 64),
+             ActionKind: RegistryPackageActionKinds.PackageInstall,
             DeprecatedMessage: null,
             DependsOn: [],
             Targets: [],
@@ -1388,14 +1759,28 @@ public sealed class PackagesWindowViewModelTests
 
         public IReadOnlyList<SessionPackageDescriptor> SessionPackages { get; init; } = [];
 
+        public IReadOnlyList<InstalledExecutionRuntimeSummary> ExecutionRuntimes { get; set; } = [];
+
+        public RuntimeExecutionRuntimeImpact RuntimeImpact { get; set; } = new(
+            1,
+            ["agent"],
+            new string('f', 64));
+
+        public RuntimeExecutionRuntimeImpact? LastRepairImpact { get; private set; }
+
+        public RuntimeRegistryResolveInstallPlanResponse? RegistryPlanResult { get; init; }
+
+        public Func<RuntimeExecutionRuntimeIdentity, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>>? RepairRuntime { get; set; }
+
         public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(
+            => Task.FromResult(RegistryPlanResult ?? new RuntimeRegistryResolveInstallPlanResponse(
                 true,
                 RegistryUpdates.Select(update => new RuntimeRegistryPackageInstallPlanItem(
                     update.PackageId,
                     update.CurrentVersion,
                     update.AvailableVersion,
-                    true,
+                    new string('a', 64),
+                    RegistryPackageActionKinds.PackageUpdate,
                     update.DeprecatedMessage,
                     [],
                     [],
@@ -1477,6 +1862,25 @@ public sealed class PackagesWindowViewModelTests
             return Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>(
                 _installedPackages.ToArray()
             );
+        }
+
+        public Task<IReadOnlyList<InstalledExecutionRuntimeSummary>> GetExecutionRuntimesAsync(
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(ExecutionRuntimes);
+
+        public Task<RuntimeExecutionRuntimeImpact> GetExecutionRuntimeImpactAsync(
+            RuntimeExecutionRuntimeIdentity identity,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(RuntimeImpact);
+
+        public Task<RuntimeExecutionRuntimeOperationResult> RepairExecutionRuntimeAsync(
+            RuntimeExecutionRuntimeIdentity identity,
+            RuntimeExecutionRuntimeImpact impact,
+            CancellationToken cancellationToken = default)
+        {
+            LastRepairImpact = impact;
+            return RepairRuntime?.Invoke(identity, cancellationToken)
+                   ?? Task.FromException<RuntimeExecutionRuntimeOperationResult>(new NotSupportedException());
         }
 
         public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(

@@ -1,0 +1,11 @@
+{
+  "consumerPackageId": "example.consumer",
+  "packageId": "example.agent",
+  "disposition": "included",
+  "selectedPackage": {
+    "packageId": "example.agent",
+    "version": "2.0.0",
+    "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "errorCode": null
+}

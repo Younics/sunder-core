@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using Sunder.Host.Client;
 using Sunder.Host.Contracts;
+using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Cli.Tests;
@@ -135,6 +136,7 @@ public sealed class RuntimeAndPackageStatusCommandTests
     [Fact]
     public async Task Package_status_combines_installed_provenance_and_atomic_session_snapshot()
     {
+        var binding = Binding();
         var runtime = new FakeRuntimeClient
         {
             Installed = _ => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([
@@ -153,7 +155,11 @@ public sealed class RuntimeAndPackageStatusCommandTests
                         InstalledPackageSourceKind.Registry,
                         InstalledPackageVersionPolicy.FollowTag,
                         "https://registry.test/",
-                        RequestedTag: "latest")),
+                        RequestedTag: "latest"),
+                    ExecutionRuntimeBindings: [binding]),
+            ]),
+            ExecutionRuntimes = _ => Task.FromResult<IReadOnlyList<InstalledExecutionRuntimeSummary>>([
+                RuntimeSummary(binding),
             ]),
             PackageSnapshot = _ => Task.FromResult(new RuntimePackageSnapshot(
                 Guid.Parse("22222222-2222-2222-2222-222222222222"),
@@ -188,10 +194,163 @@ public sealed class RuntimeAndPackageStatusCommandTests
         Assert.Equal("ready", data.GetProperty("session").GetProperty("readiness").GetString());
         Assert.True(data.GetProperty("session").GetProperty("active").GetBoolean());
         Assert.Equal(4, data.GetProperty("runtime").GetProperty("sessionGeneration").GetInt64());
+        var executionRuntime = Assert.Single(data.GetProperty("executionRuntimes").EnumerateArray());
+        Assert.Equal("sunder.runtime.dotnet", executionRuntime.GetProperty("binding").GetProperty("runtimeId").GetString());
+        Assert.Equal("10.0.1", executionRuntime.GetProperty("binding").GetProperty("version").GetString());
+        Assert.Equal(2, executionRuntime.GetProperty("binding").GetProperty("packagingRevision").GetInt32());
+        Assert.Equal("win-x64", executionRuntime.GetProperty("binding").GetProperty("rid").GetString());
+        Assert.Equal("sunder.dotnet-worker-module.v1", executionRuntime.GetProperty("binding").GetProperty("moduleAbi").GetString());
+        Assert.Equal("ready", executionRuntime.GetProperty("health").GetProperty("status").GetString());
+        Assert.Equal("supported", executionRuntime.GetProperty("lifecycle").GetProperty("state").GetString());
+        Assert.False(executionRuntime.GetProperty("actions").GetProperty("repairRequired").GetBoolean());
+        Assert.False(executionRuntime.GetProperty("actions").GetProperty("rebindRequired").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Package_status_reports_missing_binding_ensure_rebind_and_shared_package_impact()
+    {
+        var binding = Binding();
+        var runtime = new FakeRuntimeClient
+        {
+            Installed = _ => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([
+                Installed("demo", binding),
+                Installed("dependent", binding),
+            ]),
+            ExecutionRuntimes = _ => Task.FromResult<IReadOnlyList<InstalledExecutionRuntimeSummary>>([]),
+        };
+
+        var json = await CliTestHost.RunAsync(["package", "status", "demo", "--json"], runtime);
+        var text = await CliTestHost.RunAsync(["package", "status", "demo"], runtime);
+
+        Assert.Equal(CliExitCodes.Success, json.ExitCode);
+        using var document = JsonDocument.Parse(json.Output);
+        var status = Assert.Single(document.RootElement.GetProperty("data").GetProperty("executionRuntimes").EnumerateArray());
+        var actions = status.GetProperty("actions");
+        Assert.True(actions.GetProperty("ensureRequired").GetBoolean());
+        Assert.True(actions.GetProperty("rebindRequired").GetBoolean());
+        Assert.Equal(
+            "sunder runtime ensure sunder.runtime.dotnet \">=10.0.0 <11.0.0\" sunder.dotnet-worker-module.v1",
+            actions.GetProperty("ensureCommand").GetString());
+        Assert.Equal(
+            new[] { "demo", "dependent" },
+            actions.GetProperty("impactedPackageIds").EnumerateArray().Select(item => item.GetString()!).ToArray());
+        Assert.Equal("package-binding", status.GetProperty("lifecycle").GetProperty("source").GetString());
+        Assert.Contains("Package impact: demo, dependent", text.Output, StringComparison.Ordinal);
+        Assert.Contains("sunder package update demo --dry-run", text.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Package_status_reports_repair_command_and_all_workers_affected_by_exact_runtime()
+    {
+        var binding = Binding();
+        var unhealthy = RuntimeSummary(binding) with
+        {
+            Status = RuntimeExecutionRuntimeStatuses.Unhealthy,
+            Health = new RuntimeExecutionRuntimeHealth(
+                RuntimeExecutionRuntimeStatuses.Unhealthy,
+                DateTimeOffset.UnixEpoch,
+                RepairRecommended: true,
+                "Integrity verification failed."),
+        };
+        var runtime = new FakeRuntimeClient
+        {
+            Installed = _ => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([
+                Installed("demo", binding),
+                Installed("dependent", binding),
+            ]),
+            ExecutionRuntimes = _ => Task.FromResult<IReadOnlyList<InstalledExecutionRuntimeSummary>>([unhealthy]),
+        };
+
+        var result = await CliTestHost.RunAsync(["package", "status", "demo", "--json"], runtime);
+
+        Assert.Equal(CliExitCodes.Success, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Output);
+        var actions = Assert.Single(document.RootElement.GetProperty("data").GetProperty("executionRuntimes").EnumerateArray())
+            .GetProperty("actions");
+        Assert.True(actions.GetProperty("repairRequired").GetBoolean());
+        Assert.Equal(
+            "sunder runtime repair sunder.runtime.dotnet 10.0.1 2 win-x64 sunder.dotnet-worker-module.v1 --yes",
+            actions.GetProperty("repairCommand").GetString());
+        Assert.Contains("2 package(s)", actions.GetProperty("message").GetString(), StringComparison.Ordinal);
     }
 
     private static HttpResponseMessage Json<T>(T value)
         => new(HttpStatusCode.OK) { Content = JsonContent.Create(value) };
+
+    private static InstalledPackageDescriptor Installed(
+        string packageId,
+        PackageTargetExecutionRuntimeBinding binding)
+        => new(
+            packageId,
+            packageId,
+            "1.2.3",
+            PackageHostRoles.Runtime,
+            null,
+            null,
+            true,
+            [],
+            DateTimeOffset.UnixEpoch,
+            null,
+            Provenance: new InstalledPackageProvenance(
+                InstalledPackageSourceKind.Registry,
+                InstalledPackageVersionPolicy.FollowTag,
+                "https://registry.test/",
+                RequestedTag: "latest"),
+            ExecutionRuntimeBindings: [binding]);
+
+    private static PackageTargetExecutionRuntimeBinding Binding()
+    {
+        var now = DateTimeOffset.UnixEpoch;
+        return new PackageTargetExecutionRuntimeBinding(
+            "runtime",
+            "win-x64",
+            new RuntimeExecutionRuntimeRequirement(
+                "sunder.runtime.dotnet",
+                ">=10.0.0 <11.0.0",
+                "sunder.dotnet-worker-module.v1"),
+            new RuntimeExecutionRuntimeIdentity(
+                "sunder.runtime.dotnet",
+                "10.0.1",
+                2,
+                "win-x64",
+                "sunder.dotnet-worker-module.v1",
+                new string('a', 64),
+                new string('b', 64)),
+            32L * 1024L * 1024L,
+            "https://registry.test/",
+            RuntimeExecutionRuntimeAcquisitionSources.Registry,
+            "release-key",
+            1,
+            new RuntimeExecutionRuntimeLifecycle(
+                ExecutionRuntimeLifecycleStates.Supported,
+                now,
+                null,
+                null,
+                null,
+                null,
+                null,
+                1,
+                now),
+            now);
+    }
+
+    private static InstalledExecutionRuntimeSummary RuntimeSummary(
+        PackageTargetExecutionRuntimeBinding binding)
+        => new(
+            binding.Runtime,
+            RuntimeExecutionRuntimeStatuses.Ready,
+            binding.ArtifactSize,
+            1,
+            binding.AcquisitionSource,
+            binding.SigningKeyId,
+            binding.TrustGeneration,
+            new RuntimeExecutionRuntimeHealth(
+                RuntimeExecutionRuntimeStatuses.Ready,
+                DateTimeOffset.UnixEpoch,
+                false,
+                null),
+            binding.Lifecycle,
+            DateTimeOffset.UnixEpoch);
 
     private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
     {

@@ -5,8 +5,8 @@ using Sunder.Sdk.Compatibility;
 namespace Sunder.Sdk.Rpc;
 
 /// <summary>Preserves one validated RPC <c>date-time</c> value without losing fractional precision or offset text.</summary>
-[JsonConverter(typeof(SunderRpcV2JsonConverterFactory))]
-[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+[JsonConverter(typeof(SunderRpcJsonConverterFactory))]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
 public readonly record struct SunderRpcOffsetDateTime
 {
     /// <summary>Creates an exact offset date-time from canonical RPC wire text.</summary>
@@ -49,8 +49,8 @@ public readonly record struct SunderRpcOffsetDateTime
 }
 
 /// <summary>Preserves one validated canonical non-negative RPC duration.</summary>
-[JsonConverter(typeof(SunderRpcV2JsonConverterFactory))]
-[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+[JsonConverter(typeof(SunderRpcJsonConverterFactory))]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
 public readonly record struct SunderRpcDuration
 {
     /// <summary>Creates a duration from canonical RPC wire text.</summary>
@@ -89,8 +89,8 @@ public readonly record struct SunderRpcDuration
 }
 
 /// <summary>Preserves one validated absolute RPC URI without applying URI normalization.</summary>
-[JsonConverter(typeof(SunderRpcV2JsonConverterFactory))]
-[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+[JsonConverter(typeof(SunderRpcJsonConverterFactory))]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
 public readonly record struct SunderRpcUri
 {
     /// <summary>Creates an exact URI from validated RPC wire text.</summary>
@@ -129,8 +129,8 @@ public readonly record struct SunderRpcUri
 }
 
 /// <summary>Represents an arbitrary-precision canonical RPC decimal without <see cref="decimal"/> range limits.</summary>
-[JsonConverter(typeof(SunderRpcV2JsonConverterFactory))]
-[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+[JsonConverter(typeof(SunderRpcJsonConverterFactory))]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
 public readonly record struct SunderRpcDecimal
 {
     /// <summary>Creates an exact decimal from canonical RPC wire text.</summary>
@@ -302,28 +302,7 @@ internal static class SunderRpcValueText
     }
 
     public static bool IsAbsoluteUri(string value)
-    {
-        if (value.Length == 0
-            || value.Any(static character => character >= 0x7f || character <= 0x20 || character == '\\'))
-        {
-            return false;
-        }
-        var colon = value.IndexOf(':');
-        if (colon <= 0
-            || value[0] is not (>= 'A' and <= 'Z' or >= 'a' and <= 'z')
-            || value.AsSpan(1, colon - 1).IndexOfAnyExcept(
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-.".AsSpan()) >= 0)
-        {
-            return false;
-        }
-        for (var index = 0; index < value.Length; index++)
-        {
-            if (value[index] != '%') continue;
-            if (index + 2 >= value.Length || !IsHex(value[index + 1]) || !IsHex(value[index + 2])) return false;
-            index += 2;
-        }
-        return Uri.TryCreate(value, UriKind.Absolute, out _);
-    }
+        => SunderRpcSchemaProfile.IsAbsoluteUri(value);
 
     public static bool IsCanonicalBigInteger(string value)
         => IsCanonicalExactNumber(value, allowFraction: false);

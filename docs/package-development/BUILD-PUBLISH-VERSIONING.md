@@ -1,23 +1,26 @@
 # Build, Validate, Publish, And Version
 
-> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V3, .NET 10, and Runtime protocol revision 8. Use the matching `sdk/v*` tag for released build behavior.
+> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 1. Use the matching `sdk/v*` tag for released build behavior.
+
+Use [single-project authoring](SINGLE-PROJECT-AUTHORING.md) and
+[implementation-first RPC](IMPLEMENTATION-FIRST-RPC.md). Manifest and archive
+outputs are generated; service/view declarations are the authored inputs.
 
 `Sunder.Package.Build` turns compiled package metadata into generated development output and immutable distributable archives. Package authors own C# metadata and normal MSBuild version properties; they do not maintain `sunder-package.json`.
 
-## Worker Leaf Baseline
+## Authored Project Baseline
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <OutputType>Exe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Version>1.2.3</Version>
-    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
-    <SelfContained>true</SelfContained>
-    <UseAppHost>true</UseAppHost>
-    <PublishSingleFile>false</PublishSingleFile>
+    <RuntimeIdentifiers>linux-x64;linux-arm64;win-x64;win-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <SunderPackageProject>true</SunderPackageProject>
+    <EnableRuntimePackDownload>false</EnableRuntimePackDownload>
+    <EnableAppHostPackDownload>false</EnableAppHostPackDownload>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
@@ -26,15 +29,15 @@
     <PackageReference Include="Sunder.Package.Build"
                       Version="[1.1.0,1.2.0)"
                       PrivateAssets="all" />
-    <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)"
-                         Role="runtime"
-                         Rid="$(RuntimeIdentifier)"
-                         Kind="worker" />
   </ItemGroup>
 </Project>
 ```
 
-Use one Worker build per supported exact RID and aggregate the leaves for a universal package. Set `SunderPackagePrimaryProject=true` on the canonical Worker/package csproj so it can perform this fan-out directly; do not add a self `ProjectReference` or a separate Aggregate wrapper. A C# Runtime leaf always uses the official apphost name derived from the project target name: `.exe` for a Windows RID and the extensionless apphost for Linux/macOS. Custom C# worker entry-point names, managed `.dll` entry points, and an apphost stored in a shared layer are rejected. App projects reference `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, and the Avalonia packages they use directly. Add `Sunder.Sdk.Stacks` to a Worker only when used. `Sunder.Package.Build` has no consumer compile/runtime asset and must remain private build tooling.
+Sunder builds internal Worker/App roles from the same project. Add `Sunder.Sdk.Avalonia`
+for UI source and `Sunder.Sdk.Stacks` when implementing that extension. No App project,
+explicit generated target, self-reference or aggregate wrapper is authored. A C# Worker
+uses its official managed assembly name under `lib/`; runtime/apphost/tooling binaries
+are not package payload. `Sunder.Package.Build` remains private build tooling.
 
 Declare identity and display metadata in the target assemblies. Composed leaves must compile the same metadata:
 
@@ -50,7 +53,8 @@ using Sunder.Sdk.Packaging;
 
 `Version` is separate assembly/package build metadata. Runtime dependencies use `[assembly: SunderPackageDependency(...)]`; NuGet `PackageReference` items are compile/build dependencies and do not create installed-package dependencies.
 
-The generated family imports `Sunder.Package.props` from every real project. Edit its single `<Version>` value; do not duplicate versions across the canonical, App, or Protocol projects. A standalone custom project may keep the same single `Version` property in its project or a shared imported props file.
+Keep one normal MSBuild `<Version>` in the authored project (or an intentionally shared
+props file). Internal role builds inherit it; there are no separately versioned role projects.
 
 ## Build Output
 
@@ -76,15 +80,17 @@ bin/Debug/net10.0/sunder-dev/
       <rid>/
 ```
 
-The canonical Worker itself remains an exact current-RID leaf at `bin/Debug/net10.0/<rid>/sunder-dev`. `Sunder.Package.Build` composes that leaf with the optional build-only `SunderPackageAppProject` into the non-RID tree shown above, without overwriting either input. `Clean` deletes only a safely marked composed tree.
+Internal role leaves are under `bin/Debug/net10.0/sunder-roles/<role>/<rid>/sunder-dev`.
+The canonical project composes the current RID into the tree above. `Clean` removes
+only owned mutable role/composed output and preserves referenced immutable handoffs.
 
-It contains generated metadata, exact target requirements, the Worker's complete self-contained publish closure, App assemblies and eligible dependencies, package-local RPC descriptors, and files copied from source `Assets/**`. Host-provided App SDK/framework boundary assemblies are excluded. Do not edit, commit, or use `sunder-dev` as the source of truth.
+It contains generated metadata, exact target requirements, the Worker's framework-dependent module and package-owned dependencies, App assemblies and eligible dependencies, package-local RPC descriptors, and files copied from source `Assets/**`. Language runtime, apphost, framework-pack, symbol, generated XML documentation, and toolchain files are excluded. Host-provided App SDK/framework boundary assemblies are excluded. Do not edit, commit, or use `sunder-dev` as the source of truth.
 
 `SunderDevOutputPath` may override only the direct `TargetDir/sunder-dev` child. This restriction lets the build safely delete stale generated output without accepting an arbitrary directory.
 
-## Sign Worker Binaries
+## Sign Package-Owned Binaries
 
-Platform signing must mutate Sunder's private intermediate copy of the computed self-contained publish closure before it is indexed. Append a project-owned target to `SunderPackageWorkerSigningTargets`:
+When a package-owned managed module or native dependency requires platform signing, mutate Sunder's private intermediate copy of the computed thin publish set before it is indexed. Append a project-owned target to `SunderPackageWorkerSigningTargets`:
 
 ```xml
 <PropertyGroup>
@@ -96,7 +102,7 @@ Platform signing must mutate Sunder's private intermediate copy of the computed 
 </Target>
 ```
 
-`@(SunderPackageWorkerSigningFile)` is a private copied instance of the complete `ComputeFilesToPublish` closure; signing it cannot mutate NuGet or .NET runtime-pack caches. `$(SunderPackageWorkerEntryPointRelativePath)` identifies the official apphost within that item set. Sign the supplied files in platform-required order and the apphost last, mutate them in place, and fail the target when signing fails. The hook runs after publish-file computation and before `sunder-dev` copy/index/validation. Do not sign or edit `sunder-dev` or the final archive afterward.
+`@(SunderPackageWorkerSigningFile)` is a private copied instance of the package-owned `ComputeFilesToPublish` set after runtime/toolchain exclusions; signing it cannot mutate NuGet or execution-runtime inputs. `$(SunderPackageWorkerEntryPointRelativePath)` identifies the official managed module within that item set. Sign applicable files in platform-required order and the entry-point module last when required, mutate them in place, and fail the target when signing fails. The hook runs after publish-file computation and before `sunder-dev` copy/index/validation. Do not sign or edit `sunder-dev` or the final archive afterward.
 
 Embedded Authenticode or Apple code signatures are covered by the normal content index. They do not add a Sunder package signature or publisher attestation. Any post-index byte change causes validation and packing to fail.
 
@@ -120,13 +126,21 @@ dotnet publish .\MyPackage.csproj -c Release --no-restore
 
 The pack task validates its existing indexed staging tree without rewriting the index, creates the deterministic archive, then independently extracts and validates that exact written file. A post-signing mutation therefore fails instead of being assigned a new hash. A final validation failure removes the new archive. `SunderPackageFileName`, `SunderPackageOutputPath`, and `SunderPublishPackageOutputPath` customize names/locations when release automation needs them. Prefer defaults unless the pipeline has one explicit artifact convention.
 
-For signed release fan-in, pre-produce the exact `<rid>/sunder-dev` leaves with `SunderPackageWorkerSigningTargets` signing the private closure before indexing, then invoke `PackSunderPackage` with `SunderPackageUsePrebuiltLeaves=true` and `BuildProjectReferences=false`. Do not mutate a leaf after indexing. No Worker or App `Build` runs in prebuilt mode. It fails closed without the reference flag and still validates missing/mismatched leaves. `SunderPackageComposeRuntimeIdentifiers` defaults to all configured RIDs; set it to one RID when intentionally composing a single-RID prebuilt artifact.
+For canonical generated-role release fan-in, freeze before native Build, sign through
+`SunderPackageWorkerSigningTargets` before indexing, and retain each complete
+`sunder-targets/<rid>` bundle with its exported role-input evidence. Invoke
+`PackSunderPackage` with `SunderPackageUsePrebuiltLeaves=true`,
+`BuildProjectReferences=false` and `SunderPackagePrebuiltRoleInputsFile` selecting the
+retained evidence by exact RID/path/SHA-256. The fan-in uses current reviewed source
+and the retained immutable toolset without Build, Compile, Restore or generator
+execution. Missing, changed or stale inputs fail before archive replacement. See
+[qualified role inputs](PREBUILT-ROLE-INPUTS.md) for the full producer/consumer contract.
 
 The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative source for generated manifest, development output, archive layout, hashes, safety checks, and size limits.
 
 ## Capability Inference
 
-Build tooling scans each C# target assembly and its authored project-reference outputs, including compiler-generated async, iterator, and lambda bodies. It reads capability annotations from the resolved `Sunder.Sdk*` assemblies, closes capability dependencies, and detects Sunder theme resources in source/compiled Avalonia XAML. Every Runtime target is also stamped with `rpc.v2` and must infer `worker-protocol.v3` plus the SDK-version-matched baseline.
+Build tooling scans each C# target assembly and its authored project-reference outputs, including compiler-generated async, iterator, and lambda bodies. It reads capability annotations from the resolved `Sunder.Sdk*` assemblies, closes capability dependencies, and detects Sunder theme resources in source/compiled Avalonia XAML. Every Runtime target is also stamped with `rpc.v1` and must infer `worker-protocol.v1` plus the SDK-version-matched baseline.
 
 Inference fails closed for unreadable metadata, unresolved IL, or unclassified dynamic/reflection access. For a genuine dynamic call site, declare the capability and acknowledge the exact diagnostic location:
 

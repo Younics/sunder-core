@@ -40,6 +40,7 @@ export MOCK_ANNOTATION_SHA='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 export MOCK_COMMIT_SHA="$GITHUB_SHA"
 
 PATH="$mock_bin:$PATH" bash "$verifier" 'sdk/v1.2.3'
+GITHUB_REF=refs/tags/runtime/v1.2.3 PATH="$mock_bin:$PATH" bash "$verifier" 'runtime/v1.2.3'
 
 if MOCK_COMMIT_SHA='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' PATH="$mock_bin:$PATH" \
   bash "$verifier" 'sdk/v1.2.3' > "$fixture_dir/wrong-commit.log" 2>&1; then

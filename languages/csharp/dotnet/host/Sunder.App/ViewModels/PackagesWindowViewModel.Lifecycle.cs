@@ -160,6 +160,26 @@ public sealed partial class PackagesWindowViewModel
         Operations.AddWarning(warning);
     }
 
+    private void ApplySelectedPackageExecutionRuntimeState(string packageId)
+    {
+        SelectedPackageExecutionRuntimes.ReplaceWith(
+            _installedPackages.GetExecutionRuntimeStatuses(packageId));
+        NotifySelectedPackageExecutionRuntimeStateChanged();
+    }
+
+    private void ClearSelectedPackageExecutionRuntimeState()
+    {
+        SelectedPackageExecutionRuntimes.Clear();
+        NotifySelectedPackageExecutionRuntimeStateChanged();
+    }
+
+    private void NotifySelectedPackageExecutionRuntimeStateChanged()
+    {
+        OnPropertyChanged(nameof(HasSelectedPackageExecutionRuntimes));
+        OnPropertyChanged(nameof(SelectedPackageExecutionRuntimeSummary));
+        RepairExecutionRuntimeCommand.NotifyCanExecuteChanged();
+    }
+
     private void NotifyListVisibilityChanged()
     {
         OnPropertyChanged(nameof(HasInstalledPackages));
@@ -174,6 +194,8 @@ public sealed partial class PackagesWindowViewModel
         OnPropertyChanged(nameof(ShowMarketplaceDetails));
         OnPropertyChanged(nameof(ShowNoSelection));
         OnPropertyChanged(nameof(ShowSelectedPackageIcon));
+        OnPropertyChanged(nameof(HasSelectedPackageExecutionRuntimes));
+        OnPropertyChanged(nameof(SelectedPackageExecutionRuntimeSummary));
         OnPropertyChanged(nameof(ShowMarketplacePackageDetailsLoading));
         OnPropertyChanged(nameof(ShowMarketplacePackageDetailsContent));
         OnPropertyChanged(nameof(ShowMarketplacePackageDetailsError));
@@ -263,6 +285,7 @@ public sealed partial class PackagesWindowViewModel
         ToggleSelectedMarketplacePackageStarCommand.NotifyCanExecuteChanged();
         UninstallSelectedMarketplacePackageCommand.NotifyCanExecuteChanged();
         UpdateAllPackagesCommand.NotifyCanExecuteChanged();
+        RepairExecutionRuntimeCommand.NotifyCanExecuteChanged();
     }
 
     private void ApplyMarketplaceProfile(RegistryPackageProfile? profile)

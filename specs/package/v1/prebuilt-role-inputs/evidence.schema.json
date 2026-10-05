@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sunder qualified generated-role inputs V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "inputs", "rolePlan", "leaf", "files"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "inputs": { "$ref": "#/$defs/inputs" },
+    "rolePlan": { "$ref": "#/$defs/rolePlan" },
+    "leaf": { "const": "sunder-dev" },
+    "files": { "type": "array", "minItems": 1, "maxItems": 16384, "items": { "$ref": "#/$defs/file" } }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "rid": { "enum": ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"] },
+    "text": { "type": "string", "maxLength": 65536 },
+    "file": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "bytes": { "type": "integer", "minimum": 0, "maximum": 2147483648 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "fileSet": { "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/file" } },
+    "properties": { "type": "object", "maxProperties": 256, "additionalProperties": { "$ref": "#/$defs/text" } },
+    "item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "identity", "metadata"],
+      "properties": {
+        "kind": { "enum": ["compile", "resource", "package", "project", "reference", "using"] },
+        "identity": { "$ref": "#/$defs/text" },
+        "metadata": { "$ref": "#/$defs/properties" }
+      }
+    },
+    "inputs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["packageId", "packageVersion", "project", "projectIdentity", "configuration", "targetFramework", "runtimeIdentifier", "assemblyName", "ownedBaseline", "ownedBaselineSha256", "contractLock", "contractLockSha256", "properties", "items", "sources", "toolset", "externalInputs"],
+      "properties": {
+        "packageId": { "$ref": "#/$defs/text" },
+        "packageVersion": { "$ref": "#/$defs/text" },
+        "project": { "$ref": "#/$defs/text" },
+        "projectIdentity": { "$ref": "#/$defs/text" },
+        "configuration": { "$ref": "#/$defs/text" },
+        "targetFramework": { "const": "net10.0" },
+        "runtimeIdentifier": { "$ref": "#/$defs/rid" },
+        "assemblyName": { "$ref": "#/$defs/text" },
+        "ownedBaseline": { "$ref": "#/$defs/text" },
+        "ownedBaselineSha256": { "$ref": "#/$defs/sha256" },
+        "contractLock": { "$ref": "#/$defs/text" },
+        "contractLockSha256": { "$ref": "#/$defs/sha256" },
+        "properties": { "$ref": "#/$defs/properties" },
+        "items": { "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/item" } },
+        "sources": { "$ref": "#/$defs/fileSet" },
+        "toolset": { "$ref": "#/$defs/fileSet" },
+        "externalInputs": { "$ref": "#/$defs/fileSet" }
+      }
+    },
+    "role": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "libraries", "generatedInputs", "references", "runtimeReferences", "receipt"],
+      "properties": {
+        "role": { "enum": ["worker", "app"] },
+        "libraries": { "type": "array", "maxItems": 8192, "items": { "$ref": "#/$defs/text" } },
+        "generatedInputs": { "$ref": "#/$defs/fileSet" },
+        "references": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/file" } },
+        "runtimeReferences": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/file" } },
+        "receipt": { "type": "string", "maxLength": 67108864 }
+      }
+    },
+    "rolePlan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["inputFingerprint", "nativePlanSha256", "hasApp", "roles"],
+      "properties": {
+        "inputFingerprint": { "$ref": "#/$defs/sha256" },
+        "nativePlanSha256": { "$ref": "#/$defs/sha256" },
+        "hasApp": { "type": "boolean" },
+        "roles": { "type": "array", "minItems": 1, "maxItems": 2, "items": { "$ref": "#/$defs/role" } }
+      }
+    }
+  }
+}

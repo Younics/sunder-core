@@ -21,7 +21,12 @@ internal interface ICliHostLifecycleClient : ICliHostStatusClient
     Task<HostOperationDescriptor> WaitForOperationAsync(HostOperationDescriptor operation, CancellationToken token);
 }
 
-internal interface ICliHostClient : ICliHostLifecycleClient;
+internal interface ICliManagedRuntimeClient : ICliHostClientRole
+{
+    Task<HostRuntimeStatus> EnsureRuntimeReadyAsync(CancellationToken token);
+}
+
+internal interface ICliHostClient : ICliHostLifecycleClient, ICliManagedRuntimeClient;
 
 internal sealed class CliHostClient : ICliHostClient
 {
@@ -68,6 +73,53 @@ internal sealed class CliHostClient : ICliHostClient
         return await _client.WaitForOperationAsync(operation, token).ConfigureAwait(false);
     }
 
+    public async Task<HostRuntimeStatus> EnsureRuntimeReadyAsync(CancellationToken token)
+    {
+        await EnsureCompatibleAsync(token).ConfigureAwait(false);
+        while (true)
+        {
+            var status = await _client.GetStatusAsync(token).ConfigureAwait(false);
+            if (status.ActiveOperationId is { } activeOperationId)
+            {
+                var active = await _client.GetOperationAsync(activeOperationId, token).ConfigureAwait(false);
+                await _client.WaitForOperationAsync(active, token).ConfigureAwait(false);
+                continue;
+            }
+            if (status.State == HostRuntimeState.Ready
+                && status.DesiredState == HostRuntimeDesiredState.Running)
+            {
+                return status;
+            }
+            if (status.State is HostRuntimeState.Starting
+                or HostRuntimeState.Stopping
+                or HostRuntimeState.Restarting)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(200), token).ConfigureAwait(false);
+                continue;
+            }
+
+            HostLifecycleSubmission submission;
+            try
+            {
+                submission = await _client.SubmitStartRuntimeAsync(
+                    new HostLifecycleRequest(Guid.NewGuid(), status.DeploymentGeneration),
+                    token).ConfigureAwait(false);
+            }
+            catch (HttpRequestException exception)
+                when (exception.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                continue;
+            }
+
+            var operation = await _client.WaitForOperationAsync(submission.Operation, token).ConfigureAwait(false);
+            if (operation.State != HostOperationState.Succeeded)
+            {
+                throw new CliUnavailableException(
+                    operation.Message ?? "Sunder Host could not start its Runtime worker.");
+            }
+        }
+    }
+
     private async Task EnsureCompatibleAsync(CancellationToken token)
     {
         _handshake ??= await _client.GetHandshakeAsync(token).ConfigureAwait(false);
@@ -88,8 +140,8 @@ internal interface ICliRuntimeSystemClient : ICliRuntimeClientRole
 internal interface ICliRuntimeResetClient : ICliRuntimeClientRole
 {
     Task<RuntimeResetChallengeResponse> PrepareResetAsync(CancellationToken token);
-    Task<RuntimeResetDrainResponse> DrainForResetAsync(string challenge, CancellationToken token);
-    Task<RuntimeV1ResetResult> ResetLocalStateAsync(CancellationToken token);
+    Task<RuntimeV1ResetResult> DrainAndResetLocalStateAsync(RuntimeResetChallengeResponse challenge, CancellationToken token);
+    Task<RuntimeV1ResetResult> DrainAndResetStartupCacheAsync(RuntimeResetChallengeResponse challenge, CancellationToken token);
 }
 
 internal interface ICliRuntimePackageClient : ICliRuntimeClientRole
@@ -154,7 +206,25 @@ internal interface ICliRuntimeManagementClient : ICliRuntimeClientRole
     Task<RegistryPackageManagementOperationResponse> SetYankAsync(RuntimeRegistryYankRequest request, CancellationToken token);
     Task<RegistryPackageManagementOperationResponse> SetDeprecationAsync(RuntimeRegistryDeprecateRequest request, CancellationToken token);
     Task<RegistryPackageManagementOperationResponse> SetDistTagAsync(RuntimeRegistryDistTagRequest request, CancellationToken token);
-    Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken token);
+    Task<RegistryStackManagementOperationResponse> SetRegistryStackVisibilityAsync(RuntimeRegistryStackVisibilityRequest request, CancellationToken token);
+}
+
+internal interface ICliRuntimeExecutionRuntimeClient : ICliRuntimeClientRole
+{
+    Task<IReadOnlyList<InstalledExecutionRuntimeSummary>> GetExecutionRuntimesAsync(CancellationToken token);
+    Task<InstalledExecutionRuntimeSummary> GetExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token);
+    Task<IReadOnlyList<RuntimeExecutionRuntimePackageReference>> GetExecutionRuntimeReferencesAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token);
+    Task<RuntimeExecutionRuntimeOperationResult> EnsureExecutionRuntimeAsync(RuntimeExecutionRuntimeEnsureRequest request, CancellationToken token);
+    Task<RuntimeExecutionRuntimeOperationResult> ImportExecutionRuntimeAsync(string filePath, CancellationToken token);
+    Task<RuntimeExecutionRuntimeOperationResult> VerifyExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token);
+    Task<RuntimeExecutionRuntimeOperationResult> RepairExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token);
+    Task<RuntimeExecutionRuntimeOperationResult> CollectExecutionRuntimeGarbageAsync(CancellationToken token);
+}
+
+internal interface ICliRuntimeDevPackageClient : ICliRuntimeClientRole
+{
+    Task<RuntimeDevPackageImportsPrepared> PrepareDevPackageImportsAsync(RuntimePrepareDevPackageImportsRequest request, CancellationToken token);
+    IDevPackageOwnerSession CreateDevPackageOwnerSession(Action<string, Exception>? reportFault = null);
 }
 
 internal interface ICliRuntimeClient :
@@ -166,7 +236,9 @@ internal interface ICliRuntimeClient :
     ICliRuntimeStackClient,
     ICliRuntimeAuthClient,
     ICliRuntimePublishClient,
-    ICliRuntimeManagementClient;
+    ICliRuntimeManagementClient,
+    ICliRuntimeExecutionRuntimeClient,
+    ICliRuntimeDevPackageClient;
 
 internal sealed class CliRuntimeClient : ICliRuntimeClient
 {
@@ -193,9 +265,14 @@ internal sealed class CliRuntimeClient : ICliRuntimeClient
 
     public Task<SystemStatusResponse> GetSystemStatusAsync(CancellationToken token) => _client.GetSystemStatusAsync(token);
     public Task<RuntimeResetChallengeResponse> PrepareResetAsync(CancellationToken token) => _client.PrepareResetAsync(token);
-    public Task<RuntimeResetDrainResponse> DrainForResetAsync(string challenge, CancellationToken token) => _client.DrainForResetAsync(challenge, token);
-    public Task<RuntimeV1ResetResult> ResetLocalStateAsync(CancellationToken token)
-        => RuntimeV1StateReset.ResetAsync(_resetLeaseWait, token);
+    public Task<RuntimeV1ResetResult> DrainAndResetLocalStateAsync(
+        RuntimeResetChallengeResponse challenge,
+        CancellationToken token)
+        => _client.DrainAndResetLocalStateAsync(challenge, _resetLeaseWait, token);
+    public Task<RuntimeV1ResetResult> DrainAndResetStartupCacheAsync(
+        RuntimeResetChallengeResponse challenge,
+        CancellationToken token)
+        => _client.DrainAndResetStartupCacheAsync(challenge, _resetLeaseWait, token);
     public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken token) => _client.GetInstalledPackagesAsync(token);
     public Task<RuntimePackageSnapshot> GetPackageSnapshotAsync(CancellationToken token) => _client.GetPackageSnapshotAsync(token);
     public Task<RuntimeRegistryAuthStartResponse> StartRegistryAuthAsync(RuntimeRegistryAuthStartRequest request, CancellationToken token) => _client.StartRegistryAuthAsync(request, token);
@@ -216,7 +293,7 @@ internal sealed class CliRuntimeClient : ICliRuntimeClient
     public Task<RegistryPackageManagementOperationResponse> SetYankAsync(RuntimeRegistryYankRequest request, CancellationToken token) => _client.SetYankAsync(request, token);
     public Task<RegistryPackageManagementOperationResponse> SetDeprecationAsync(RuntimeRegistryDeprecateRequest request, CancellationToken token) => _client.SetDeprecationAsync(request, token);
     public Task<RegistryPackageManagementOperationResponse> SetDistTagAsync(RuntimeRegistryDistTagRequest request, CancellationToken token) => _client.SetDistTagAsync(request, token);
-    public Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken token) => _client.DeleteRegistryStackAsync(request, token);
+    public Task<RegistryStackManagementOperationResponse> SetRegistryStackVisibilityAsync(RuntimeRegistryStackVisibilityRequest request, CancellationToken token) => _client.SetRegistryStackVisibilityAsync(request, token);
     public Task<IReadOnlyList<PackageSettingsSchemaDescriptor>> GetPackageSettingsSchemasAsync(CancellationToken token) => _client.GetPackageSettingsSchemasAsync(token);
     public Task<PackageSettingsValuesResponse?> GetPackageSettingsValuesAsync(string packageId, CancellationToken token) => _client.GetPackageSettingsValuesAsync(packageId, token);
     public Task<PackageSettingValueResponse> GetPackageSettingValueAsync(string packageId, string key, CancellationToken token) => _client.GetPackageSettingValueAsync(packageId, key, token);
@@ -233,6 +310,18 @@ internal sealed class CliRuntimeClient : ICliRuntimeClient
     public Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken token) => _client.ListStackExportItemsAsync(token);
     public Task<RuntimeStackExportResponse> ExportStackAsync(RuntimeStackExportRequest request, CancellationToken token) => _client.ExportStackAsync(request, token);
     public Task DownloadContentAsync(ContentDownloadDescriptor download, string destinationPath, CancellationToken token) => _client.DownloadContentAsync(download, destinationPath, token);
+    public Task<IReadOnlyList<InstalledExecutionRuntimeSummary>> GetExecutionRuntimesAsync(CancellationToken token) => _client.GetExecutionRuntimesAsync(token);
+    public Task<InstalledExecutionRuntimeSummary> GetExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => _client.GetExecutionRuntimeAsync(identity, token);
+    public Task<IReadOnlyList<RuntimeExecutionRuntimePackageReference>> GetExecutionRuntimeReferencesAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => _client.GetExecutionRuntimeReferencesAsync(identity, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> EnsureExecutionRuntimeAsync(RuntimeExecutionRuntimeEnsureRequest request, CancellationToken token) => _client.EnsureExecutionRuntimeAsync(request, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> ImportExecutionRuntimeAsync(string filePath, CancellationToken token) => _client.ImportExecutionRuntimeAsync(filePath, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> VerifyExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => _client.VerifyExecutionRuntimeAsync(identity, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> RepairExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => _client.RepairExecutionRuntimeAsync(identity, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> CollectExecutionRuntimeGarbageAsync(CancellationToken token) => _client.CollectExecutionRuntimeGarbageAsync(token);
+    public IDevPackageOwnerSession CreateDevPackageOwnerSession(Action<string, Exception>? reportFault = null)
+        => _client.CreateDevPackageOwnerSession("cli", reportFault);
+    public Task<RuntimeDevPackageImportsPrepared> PrepareDevPackageImportsAsync(RuntimePrepareDevPackageImportsRequest request, CancellationToken token)
+        => _client.PrepareDevPackageImportsAsync(request, token);
     public void Dispose() => _client.Dispose();
 }
 

@@ -174,7 +174,10 @@ internal sealed partial class PackageSessionLifecycleService
             return PackageLifecycleStageResult.Failed(errors[0], currentPackages, warnings, errors);
         }
 
-        var loaded = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, operationToken);
+        var loaded = await _reconciler.LoadMergedSessionAsync(
+            sources.ActiveDevOverlays,
+            baseGeneration,
+            operationToken);
         warnings.AddRange(loaded.Warnings);
         errors.AddRange(loaded.Errors);
         if (loaded.Session is null || errors.Count > 0)
@@ -211,6 +214,7 @@ internal sealed partial class PackageSessionLifecycleService
         catch (Exception exception)
         {
             await loaded.Session.DisposeAsync();
+            if (exception is RuntimeRequiredProviderException) throw;
             _logger.LogError(exception, "Failed to prepare package lifecycle stage {StageId}", stageId);
             const string message = "Package lifecycle stage preparation failed.";
             return PackageLifecycleStageResult.Failed(message, currentPackages, warnings, [message]);
@@ -293,6 +297,11 @@ internal sealed partial class PackageSessionLifecycleService
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            if (exception is RuntimeRequiredProviderException)
+            {
+                _sessions.MarkStageFailed(stageId, exception.Message);
+                throw;
+            }
             _logger.LogError(exception, "Failed to commit package lifecycle stage {StageId}", stageId);
             const string message = "Package lifecycle stage could not be committed.";
             _sessions.MarkStageFailed(stageId, message);
@@ -326,7 +335,10 @@ internal sealed partial class PackageSessionLifecycleService
         var currentPackages = _sessions.State.GetActivePackages();
         var currentSources = _sessions.State.GetActivePackageSources();
         var sources = candidateSources ?? _sessions.Sources.Snapshot();
-        var loaded = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, cancellationToken);
+        var loaded = await _reconciler.LoadMergedSessionAsync(
+            sources.ActiveDevOverlays,
+            baseGeneration,
+            cancellationToken);
         warnings.AddRange(loaded.Warnings);
         errors.AddRange(loaded.Errors);
         if (loaded.Session is null || errors.Count > 0 && !allowPackageErrors)
@@ -363,6 +375,7 @@ internal sealed partial class PackageSessionLifecycleService
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            if (exception is RuntimeRequiredProviderException) throw;
             _logger.LogError(exception, "Failed to start package background services");
             const string message = "Package lifecycle load failed while starting background services.";
             return PackageLifecycleOperationResult.Failed(message, currentPackages, warnings, [message], impacted);
@@ -393,7 +406,10 @@ internal sealed partial class PackageSessionLifecycleService
         var baseGeneration = _sessions.Generation;
         var sources = _sessions.Sources.Snapshot();
         if (!updateSources(sources)) return PackageSessionOperationResult.Failed(failureMessage ?? "Package session source update failed.");
-        var loaded = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, operationToken);
+        var loaded = await _reconciler.LoadMergedSessionAsync(
+            sources.ActiveDevOverlays,
+            baseGeneration,
+            operationToken);
         var warnings = loaded.Warnings.ToList();
         var errors = loaded.Errors.ToList();
         if (loaded.Session is null || errors.Count > 0)
@@ -419,6 +435,7 @@ internal sealed partial class PackageSessionLifecycleService
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            if (exception is RuntimeRequiredProviderException) throw;
             _logger.LogError(exception, "Failed to start background services for merged package session");
             const string message = "Package session load failed while starting background services.";
             return new PackageSessionOperationResult(false, message, warnings, [message], impactedPackageIds, null);

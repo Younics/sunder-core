@@ -20,6 +20,25 @@ for command_name in cmp find gh grep jq; do
   command -v "$command_name" >/dev/null 2>&1 \
     || { printf '%s is required to verify GitHub release assets.\n' "$command_name" >&2; exit 127; }
 done
+
+expected_asset_names=("$@")
+if [[ -n "${SUNDER_ADDITIONAL_RELEASE_ASSETS:-}" ]]; then
+  while IFS= read -r asset_name; do
+    [[ -n "$asset_name" ]] || continue
+    expected_asset_names+=("$asset_name")
+  done <<< "$SUNDER_ADDITIONAL_RELEASE_ASSETS"
+fi
+seen_expected_names=''
+for asset_name in "${expected_asset_names[@]}"; do
+  [[ "$asset_name" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] \
+    || { printf 'Unsafe expected release asset name: %s\n' "$asset_name" >&2; exit 1; }
+  if grep -Fqx "$asset_name" <<< "$seen_expected_names"; then
+    printf 'Duplicate expected release asset name: %s\n' "$asset_name" >&2
+    exit 2
+  fi
+  seen_expected_names+="$asset_name"$'\n'
+done
+expected_names_json="$(printf '%s\n' "${expected_asset_names[@]}" | jq -R . | jq -s 'sort')"
 if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
   printf 'sha256sum or shasum is required to verify GitHub release assets.\n' >&2
   exit 127
@@ -37,11 +56,11 @@ release_endpoint="repos/$GH_REPO/releases/$release_id"
 release_json=''
 for _ in {1..30}; do
   if release_json="$(gh api -H 'Accept: application/vnd.github+json' "$release_endpoint")" \
-    && jq -e --argjson release_id "$release_id" --arg tag "$tag" --argjson count "$#" --argjson expected_draft "$expected_draft" '
+    && jq -e --argjson release_id "$release_id" --arg tag "$tag" --argjson expected_names "$expected_names_json" --argjson expected_draft "$expected_draft" '
       .id == $release_id
       and .tag_name == $tag
       and .draft == $expected_draft
-      and (.assets | length) == $count
+      and ([.assets[].name] | sort) == $expected_names
       and all(.assets[]; .state == "uploaded" and (.digest | type == "string" and startswith("sha256:")))
     ' <<< "$release_json" >/dev/null; then
     break

@@ -2,9 +2,9 @@
 
 > **Release/source channel:** The npm tarball README describes that published version. The copy on the repository's default branch tracks current source and may be ahead of npm; use the matching `sdk/v*` tag when auditing a release.
 
-`@sunder/sdk` contains RPC descriptors and generated bindings, the native `sunder.worker.v3` Runtime worker API, and the web App bridge. Worker code receives the common package identity, content and temporary roots, persistent role-local workspace, Host-mediated settings/state/files/secrets, structured logging, RPC clients, callback/auth handlers, exact-generation fault reporting, and staged lifecycle signals. It does not expose managed module/DI contracts, background services, Stack contributor adapters, Avalonia, Registry clients, or package installation APIs.
+`@sunder/sdk` contains RPC V1 descriptors and generated bindings, the `sunder.worker.v1` Runtime worker API, and the web App bridge. Worker code receives the common package identity, content and temporary roots, persistent role-local workspace, Host-mediated settings/state/files/secrets, structured logging, RPC clients, callback/auth handlers, exact-generation fault reporting, and staged lifecycle signals. It does not expose managed module/DI contracts, background services, Stack contributor adapters, Avalonia, Registry clients, or package installation APIs.
 
-Use `@sunder/sdk/browser` from any framework-agnostic web App target. That export targets only the injected `sunder.bridge.v2` API and contains browser-safe RPC, navigation, and external-link bridge types; it does not import Node built-ins, worker framing, or package tooling. React is one scaffold choice, not a web target requirement.
+Use `@sunder/sdk/browser` from any framework-agnostic web App target. That export targets only the injected `sunder.bridge.v1` API and contains browser-safe RPC, navigation, and external-link bridge types; it does not import Node built-ins, worker framing, or package tooling. React is one scaffold choice, not a web target requirement.
 
 ```ts
 import { getSunder } from "@sunder/sdk/browser";
@@ -14,7 +14,58 @@ const catalog = await getSunder().rpc.discover("example.rpc");
 
 The main export is dependency-free and intended for Node worker Runtime code and build-time descriptor generation. Keep browser code on the `/browser` export.
 
+## Implementation-First RPC
+
+The main export includes the closed `rpc` DSL for owned TS/JS development through package-tool schema-version-3 configuration. It provides `router`, `contract`, `provider`, `unary`, `serverStream`, and the frozen `schema` constructors. `RpcSchemaValue` and `RpcHandlers` retain schema-derived types, including `bigint`, `Uint8Array`, optional versus nullable properties, maps and unions. The package tool supplies contextual source checking against generated backend types without executing handlers.
+
+```ts
+import { runWorker } from "@sunder/sdk";
+import { packageRpc } from "./rpc.js";
+
+void runWorker(() => ({ providers: packageRpc.providerRegistrations }));
+```
+
+The bundler privately binds generated registrations; an unbundled router throws rather than inventing identity or hashes. There is no public `rpc.bind`, SDK runtime compiler or runtime dependency. The [owned source and release workflow](../package-tool/README.md#owned-v3-source-and-releases) documents explicit Accept/Check/Freeze, generated output and source-verified packing.
+
+An owned `rpc.contract` may set `includeSchemaDialect: true` to preserve an existing
+descriptor's optional, fixed JSON Schema Draft 2020-12 annotation during migration.
+Omission/`false` keeps the default descriptor unchanged. This boolean does not select
+another dialect or protocol, and descriptor-hash changes still require the normal
+baseline workflow. C# exposes the same option as `SunderRpcServiceAttribute.IncludeSchemaDialect`.
+
+Associated App policy is declared on the owning contract with
+`appUse: { required: false, actions: ["discover", "invoke"] }`. Public contracts
+require this opt-in; private contracts default to required use of all applicable
+actions. Explicit policy defaults to optional use and omitted actions to all
+applicable actions. Arrays must contain a distinct, nonempty subset of
+`discover`/`invoke`/`subscribe` supported by the methods. Tooling carries policy in
+receipts, leaving descriptor/ABI bytes unchanged and granting nothing to the Worker
+from App policy.
+
+Use `runtimeUse: { required: true, actions: ["discover", "invoke"] }` on an owned
+contract to declare Runtime consumption. Both public and private contracts have
+no Runtime use by default, regardless of provider registration. Explicit policy
+defaults to optional readiness and all method-applicable actions, with the same
+action validation as App policy. Worker receipts combine these exact owned uses
+with locked imports; App receipts omit Runtime policy and grants. Required
+readiness does not select an invocation endpoint.
+
+The same router accepts lock-generated `rpcImports.<key>.provider(...)` bindings from
+the reserved `#sunder/rpc` module. Those builders return typed `RpcImportedProvider`
+declarations and use restored descriptor types, with no authored identity/hash/schema
+copy. The tool checks all handlers and generates exact Runtime registrations; provider
+intent grants no consumer use. See [implement an imported extension](../package-tool/README.md#implement-an-imported-extension).
+
+Use `rpc.schema.json({ objectOnly: true })` for an open raw JSON object without a
+property-count bound. It infers `JsonObject` and rejects arrays/scalars; ordinary
+`rpc.schema.json()` retains the full `JsonValue` shape. Explicit `minProperties` or
+`maxProperties` bounds can be combined with the object-only form.
+
+## Worker Composition
+
 Configure a worker synchronously. Sunder snapshots and freezes the returned composition before advertising it to the Host; lifecycle callbacks may perform asynchronous work and receive cancellation through `AbortSignal`:
+
+This descriptor-first registration example remains the migration form used by existing templates. V3 source uses `packageRpc.providerRegistrations` instead.
 
 ```ts
 import { PackageStorageKeyMigration, runWorker } from "@sunder/sdk";

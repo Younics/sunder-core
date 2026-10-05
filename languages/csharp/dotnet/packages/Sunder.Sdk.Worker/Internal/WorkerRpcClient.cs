@@ -25,9 +25,12 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         _output = output;
         _environment = environment;
         _limits = limits;
+        RoleLocalWorkspace = new WorkerPackageRoleLocalWorkspace();
     }
 
     internal WorkerEnvironment Environment => _environment;
+
+    internal WorkerPackageRoleLocalWorkspace RoleLocalWorkspace { get; }
 
     public SunderRpcResourceProfile? ResourceProfile { get; internal set; }
 

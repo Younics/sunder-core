@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Storage;
 
@@ -83,7 +84,7 @@ internal sealed partial class SunderWorkerRuntime
         var protocolVersion = WorkerJson.RequiredNonNegativeInt64(root, "protocolVersion");
         var challenge = WorkerJson.RequiredString(root, "challenge", 128);
         var packageId = WorkerJson.RequiredString(root, "packageId", 256);
-        var packageVersion = WorkerJson.RequiredString(root, "packageVersion", 128);
+        var packageVersion = WorkerJson.RequiredString(root, "packageVersion", SemanticVersion.MaximumLength);
         var activationId = WorkerJson.RequiredSafeId(root, "activationId", 64);
         var sessionId = WorkerJson.RequiredSafeId(root, "sessionId", 256);
         if (!string.Equals(protocol, WorkerProtocol.Name, StringComparison.Ordinal)
@@ -501,8 +502,9 @@ internal sealed partial class SunderWorkerRuntime
 
     private ValueTask HandleActivateAsync(JsonElement root)
     {
-        WorkerJson.RequireOnlyProperties(root, "type", "sessionGeneration");
+        WorkerJson.RequireOnlyProperties(root, "type", "sessionGeneration", "workspaceRootPath");
         var sessionGeneration = WorkerJson.RequiredNonNegativeInt64(root, "sessionGeneration");
+        var workspaceRootPath = WorkerJson.RequiredString(root, "workspaceRootPath", 4096);
         lock (Gate)
         {
             if (_phase != RuntimePhase.StorageMigrationsPrepared
@@ -510,6 +512,7 @@ internal sealed partial class SunderWorkerRuntime
             {
                 throw new WorkerProtocolException("host.activate is duplicate or out of order.");
             }
+            _client.RoleLocalWorkspace.Bind(workspaceRootPath, _environment);
             _phase = RuntimePhase.Activating;
         }
         _activationOperation = CompleteActivationAsync(sessionGeneration);

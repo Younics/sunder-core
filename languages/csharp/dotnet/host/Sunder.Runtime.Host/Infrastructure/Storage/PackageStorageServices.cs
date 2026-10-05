@@ -8,10 +8,7 @@ internal sealed class LocalPackageStorageContext : IPackageStorageContext
 {
     internal LocalPackageStorageContext(string packageId, string packageDataRootPath)
     {
-        var packageRoot = Path.Combine(
-            Path.GetFullPath(packageDataRootPath),
-            SanitizePathSegment(packageId)
-        );
+        var packageRoot = GetPackageRootPath(packageId, packageDataRootPath);
 
         DataRootPath = Path.Combine(packageRoot, "data");
         LogsRootPath = Path.Combine(packageRoot, "logs");
@@ -41,6 +38,9 @@ internal sealed class LocalPackageStorageContext : IPackageStorageContext
     internal JsonPackageKeyValueStore SettingsStore { get; }
 
     public IPackageRoleLocalWorkspace RoleLocalWorkspace { get; }
+
+    internal static string GetPackageRootPath(string packageId, string packageDataRootPath) =>
+        Path.Combine(Path.GetFullPath(packageDataRootPath), SanitizePathSegment(packageId));
 
     private static string SanitizePathSegment(string value)
     {
@@ -157,6 +157,8 @@ internal sealed class PackageSettings(JsonPackageKeyValueStore store) : IPackage
 internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
 {
     private readonly string _rootPath = Path.GetFullPath(rootPath);
+
+    internal string RootPath => _rootPath;
 
     public async Task<byte[]?> ReadAsync(string relativePath, CancellationToken cancellationToken = default)
     {

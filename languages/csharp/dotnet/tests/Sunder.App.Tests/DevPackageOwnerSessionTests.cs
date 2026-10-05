@@ -1,267 +1,84 @@
 using System.Net;
+using System.Net.Http.Json;
 using Sunder.App.Services;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Xunit;
+using AppDevPackageOwnerSession = Sunder.App.Services.DevPackageOwnerSession;
 
 namespace Sunder.App.Tests;
 
 public sealed class DevPackageOwnerSessionTests
 {
     [Fact]
-    public async Task Acquire_UsesInvocationCredentialsAndCompleteWatchSettings()
+    public async Task AppSession_DelegatesOwnershipToSharedRuntimeClientSession()
     {
         var runtimeId = Guid.NewGuid();
-        var runtimeUrl = new Uri("http://127.0.0.1:5275/");
-        var connection = new RuntimeConnectionState(runtimeUrl);
-        connection.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "runtime-bearer-token"));
-        var client = new OwnerClient(runtimeId);
-        await using var session = new DevPackageOwnerSession(new OwnerClientFactory(client), connection);
-        var folders = new[] { Path.Combine(".", "dev-a"), Path.Combine(".", "dev-b") };
+        DevPackageOwnerMutationRequest? mutation = null;
+        var handler = new DelegateHandler(async request =>
+        {
+            switch (request.RequestUri!.AbsolutePath)
+            {
+                case "/api/handshake":
+                    return Json(new RuntimeHandshakeResponse(
+                        RuntimeProtocol.Identity,
+                        RuntimeProtocol.CurrentRevision,
+                        RuntimeProtocol.MinimumSupportedRevision,
+                        RuntimeProtocol.MaximumSupportedRevision,
+                        runtimeId,
+                        [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.DevPackageOwnerLeasesV1],
+                        new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "1.0.0", "test")));
+                case var path when path.StartsWith("/api/v1/dev-package-owners/", StringComparison.Ordinal)
+                                   && !path.EndsWith("/release", StringComparison.Ordinal):
+                    mutation = await request.Content!.ReadFromJsonAsync<DevPackageOwnerMutationRequest>();
+                    var ownerId = path.Split('/')[^1];
+                    return Json(new DevPackageOwnerLeaseResponse(
+                        runtimeId,
+                        ownerId,
+                        mutation!.MutationId,
+                        mutation.Revision,
+                        DateTimeOffset.UtcNow.AddMinutes(1),
+                        1,
+                        [new DevPackageOwnerPackage("demo", false)]));
+                case var path when path.EndsWith("/release", StringComparison.Ordinal):
+                    return new HttpResponseMessage(HttpStatusCode.NoContent);
+                default:
+                    return new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+        });
+        var connection = new RuntimeConnectionInfo(
+            new Uri("http://127.0.0.1:5275/"),
+            "runtime-bearer-token");
+        using var transport = new RuntimeClientTransport(() => connection, handler);
+        await using var session = new AppDevPackageOwnerSession(transport);
 
-        var lease = await session.AcquireAsync(folders, watch: true);
-
-        Assert.NotEqual("runtime-bearer-token", session.OwnerToken);
-        Assert.Equal(session.OwnerId, client.OwnerId);
-        Assert.Equal(session.OwnerToken, client.Mutation?.OwnerToken);
-        Assert.Equal(runtimeId, client.Mutation?.RuntimeInstanceId);
-        Assert.Equal(1, client.Mutation?.Revision);
-        Assert.Equal(2, client.Mutation?.Folders.Count);
-        Assert.All(client.Mutation!.Folders, folder => Assert.True(folder.Watch));
-        Assert.Equal(runtimeId, lease.RuntimeInstanceId);
-
-        await session.ReleaseAsync();
-        Assert.NotNull(client.Release);
-        Assert.Equal(session.OwnerToken, client.Release?.OwnerToken);
-    }
-
-    [Fact]
-    public async Task Acquire_RetriesUncertainMutationWithSameIdAndRevision()
-    {
-        var runtimeId = Guid.NewGuid();
-        var runtimeUrl = new Uri("http://127.0.0.1:5275/");
-        var connection = new RuntimeConnectionState(runtimeUrl);
-        connection.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "runtime-bearer-token"));
-        var client = new OwnerClient(runtimeId) { FailFirstMutation = true };
-        await using var session = new DevPackageOwnerSession(new OwnerClientFactory(client), connection);
-        var folders = new[] { Path.Combine(".", "dev-a") };
-
-        await Assert.ThrowsAsync<HttpRequestException>(() => session.AcquireAsync(folders, watch: false));
-        await session.AcquireAsync(folders, watch: false);
-
-        Assert.Equal(2, client.Mutations.Count);
-        Assert.Equal(client.Mutations[0].MutationId, client.Mutations[1].MutationId);
-        Assert.Equal(client.Mutations[0].Revision, client.Mutations[1].Revision);
-    }
-
-    [Fact]
-    public async Task Release_AfterUncertainAcquireFailure_UsesPendingMutationIdentity()
-    {
-        var runtimeId = Guid.NewGuid();
-        var runtimeUrl = new Uri("http://127.0.0.1:5275/");
-        var connection = new RuntimeConnectionState(runtimeUrl);
-        connection.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "runtime-bearer-token"));
-        var client = new OwnerClient(runtimeId) { FailFirstMutation = true };
-        await using var session = new DevPackageOwnerSession(new OwnerClientFactory(client), connection);
-
-        await Assert.ThrowsAsync<HttpRequestException>(
-            () => session.AcquireAsync([Path.Combine(".", "dev-a")], watch: false));
+        var lease = await session.AcquireAsync([Path.Combine(".", "dev-a")], watch: false);
         await session.ReleaseAsync();
 
-        var release = Assert.Single(client.Releases);
-        Assert.Equal(runtimeId, release.RuntimeInstanceId);
-        Assert.Equal(session.OwnerToken, release.OwnerToken);
+        Assert.Equal("demo", Assert.Single(lease.Packages).PackageId);
+        Assert.NotNull(mutation);
+        Assert.NotEqual(connection.BearerToken, mutation.OwnerToken);
+        Assert.Equal(Environment.ProcessId, mutation.ProcessId);
+        Assert.NotNull(mutation.ProcessStartedAtUtc);
     }
 
     [Fact]
-    public async Task Release_WhenCleanupResponseFails_RetainsPendingIdentityForRetry()
+    public void AppSession_HoldsOnlyTheSharedOwnerSessionImplementation()
     {
-        var runtimeId = Guid.NewGuid();
-        var runtimeUrl = new Uri("http://127.0.0.1:5275/");
-        var connection = new RuntimeConnectionState(runtimeUrl);
-        connection.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "runtime-bearer-token"));
-        var client = new OwnerClient(runtimeId)
-        {
-            FailFirstMutation = true,
-            FailFirstRelease = true,
-        };
-        await using var session = new DevPackageOwnerSession(new OwnerClientFactory(client), connection);
+        var field = Assert.Single(typeof(AppDevPackageOwnerSession)
+            .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic));
 
-        await Assert.ThrowsAsync<HttpRequestException>(
-            () => session.AcquireAsync([Path.Combine(".", "dev-a")], watch: false));
-        await Assert.ThrowsAsync<HttpRequestException>(() => session.ReleaseAsync());
-        await session.ReleaseAsync();
-
-        Assert.Equal(2, client.Releases.Count);
-        Assert.All(client.Releases, release => Assert.Equal(runtimeId, release.RuntimeInstanceId));
+        Assert.Equal(typeof(Sunder.Runtime.Client.DevPackageOwnerSession), field.FieldType);
     }
 
-    [Fact]
-    public async Task Heartbeat_ReacquiresDesiredSetAfterRuntimeWorkerReplacement()
+    private static HttpResponseMessage Json<T>(T value)
+        => new(HttpStatusCode.OK) { Content = JsonContent.Create(value) };
+
+    private sealed class DelegateHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {
-        var firstRuntimeId = Guid.NewGuid();
-        var secondRuntimeId = Guid.NewGuid();
-        var runtimeUrl = new Uri("http://127.0.0.1:5275/");
-        var connection = new RuntimeConnectionState(runtimeUrl);
-        connection.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "runtime-bearer-token"));
-        var client = new OwnerClient(firstRuntimeId) { LeaseLifetime = TimeSpan.FromMilliseconds(30) };
-        await using var session = new DevPackageOwnerSession(new OwnerClientFactory(client), connection);
-        var folders = new[] { Path.Combine(".", "dev-a"), Path.Combine(".", "dev-b") };
-        await session.AcquireAsync(folders, watch: true);
-
-        client.RuntimeId = secondRuntimeId;
-        await client.SecondMutation.Task.WaitAsync(TimeSpan.FromSeconds(3));
-
-        Assert.Equal(2, client.Mutations.Count);
-        var replacement = client.Mutations[1];
-        Assert.Equal(secondRuntimeId, replacement.RuntimeInstanceId);
-        Assert.Equal(1, replacement.Revision);
-        Assert.Equal(client.Mutations[0].Folders, replacement.Folders);
-    }
-
-    [Fact]
-    public async Task Heartbeat_WhenLeaseWasReaped_ReacquiresDesiredSetInSameRuntime()
-    {
-        var runtimeId = Guid.NewGuid();
-        var runtimeUrl = new Uri("http://127.0.0.1:5275/");
-        var connection = new RuntimeConnectionState(runtimeUrl);
-        connection.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "runtime-bearer-token"));
-        var client = new OwnerClient(runtimeId)
-        {
-            LeaseLifetime = TimeSpan.FromMilliseconds(30),
-            RejectFirstHeartbeat = true,
-        };
-        var heartbeatFailureLogged = false;
-        void Observe(AppSessionLogSnapshotEntry entry)
-            => heartbeatFailureLogged |= string.Equals(
-                entry.Message,
-                "The App dev package owner heartbeat failed; the Runtime TTL will fence a lost App session.",
-                StringComparison.Ordinal);
-
-        AppSessionLog.EntryWritten += Observe;
-        try
-        {
-            await using var session = new DevPackageOwnerSession(new OwnerClientFactory(client), connection);
-            var folders = new[] { Path.Combine(".", "dev-a"), Path.Combine(".", "dev-b") };
-            await session.AcquireAsync(folders, watch: true);
-
-            await client.SecondMutation.Task.WaitAsync(TimeSpan.FromSeconds(3));
-
-            Assert.Equal(2, client.Mutations.Count);
-            var replacement = client.Mutations[1];
-            Assert.Equal(runtimeId, replacement.RuntimeInstanceId);
-            Assert.Equal(1, replacement.Revision);
-            Assert.NotEqual(client.Mutations[0].MutationId, replacement.MutationId);
-            Assert.Equal(client.Mutations[0].Folders, replacement.Folders);
-            Assert.False(heartbeatFailureLogged);
-        }
-        finally
-        {
-            AppSessionLog.EntryWritten -= Observe;
-        }
-    }
-
-    private sealed class OwnerClientFactory(OwnerClient client) : IRuntimeApiClientFactory
-    {
-        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
-            => typeof(TClient) == typeof(IRuntimeDevPackageOwnerClient)
-                ? (TClient)(object)client
-                : throw new InvalidOperationException($"Unexpected client type {typeof(TClient).Name}.");
-    }
-
-    private sealed class OwnerClient(Guid runtimeId) : IRuntimeDevPackageOwnerClient
-    {
-        private Guid _runtimeId = runtimeId;
-        public List<DevPackageOwnerMutationRequest> Mutations { get; } = [];
-        public DevPackageOwnerMutationRequest? Mutation => Mutations.LastOrDefault();
-        public string? OwnerId { get; private set; }
-        public List<DevPackageOwnerReleaseRequest> Releases { get; } = [];
-        public DevPackageOwnerReleaseRequest? Release => Releases.LastOrDefault();
-        public bool FailFirstMutation { get; init; }
-        public bool FailFirstRelease { get; init; }
-        public bool RejectFirstHeartbeat { get; init; }
-        public TimeSpan LeaseLifetime { get; init; } = TimeSpan.FromMinutes(1);
-        public TaskCompletionSource SecondMutation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _heartbeatCount;
-
-        public Guid RuntimeId
-        {
-            get => _runtimeId;
-            set => _runtimeId = value;
-        }
-
-        public Task<RuntimeHandshakeResponse> GetRuntimeHandshakeAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(new RuntimeHandshakeResponse(
-                RuntimeProtocol.Identity,
-                RuntimeProtocol.CurrentRevision,
-                RuntimeProtocol.MinimumSupportedRevision,
-                RuntimeProtocol.MaximumSupportedRevision,
-                RuntimeId,
-                [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.DevPackageOwnerLeasesV1],
-                new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "1.1.0", "test")));
-
-        public Task<DevPackageOwnerLeaseResponse> ReplaceDevPackageOwnerAsync(
-            string ownerId,
-            DevPackageOwnerMutationRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            OwnerId = ownerId;
-            Mutations.Add(request);
-            if (Mutations.Count == 2)
-            {
-                SecondMutation.TrySetResult();
-            }
-            if (FailFirstMutation && Mutations.Count == 1)
-            {
-                throw new HttpRequestException("response lost");
-            }
-            return Task.FromResult(new DevPackageOwnerLeaseResponse(
-                RuntimeId,
-                ownerId,
-                request.MutationId,
-                request.Revision,
-                DateTimeOffset.UtcNow.Add(LeaseLifetime),
-                request.Revision,
-                []));
-        }
-
-        public Task<DevPackageOwnerLeaseResponse> HeartbeatDevPackageOwnerAsync(
-            string ownerId,
-            DevPackageOwnerHeartbeatRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            if (RejectFirstHeartbeat && Interlocked.Increment(ref _heartbeatCount) == 1)
-            {
-                throw new RuntimeClientException(
-                    HttpStatusCode.Unauthorized,
-                    "Authentication required",
-                    "Dev package owner credentials are invalid.");
-            }
-            return Task.FromResult(new DevPackageOwnerLeaseResponse(
-                RuntimeId,
-                ownerId,
-                Mutation!.MutationId,
-                Mutation.Revision,
-                DateTimeOffset.UtcNow.Add(LeaseLifetime),
-                Mutation.Revision,
-                []));
-        }
-
-        public Task ReleaseDevPackageOwnerAsync(
-            string ownerId,
-            DevPackageOwnerReleaseRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            Releases.Add(request);
-            if (FailFirstRelease && Releases.Count == 1)
-            {
-                throw new HttpRequestException("release response lost");
-            }
-            return Task.CompletedTask;
-        }
-
-        public void Dispose()
-        {
-        }
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+            => send(request);
     }
 }

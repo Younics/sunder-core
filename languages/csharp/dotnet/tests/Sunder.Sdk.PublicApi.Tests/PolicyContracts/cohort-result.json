@@ -1,0 +1,48 @@
+{
+  "idempotencyKey": "release-2026-09",
+  "requestSha256": "8888888888888888888888888888888888888888888888888888888888888888",
+  "packagePolicy": {
+    "revision": 42,
+    "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "checkpoint": {
+    "sequence": 99,
+    "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "topologyGeneration": 1,
+    "topologyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "committedAtUtc": "2026-09-14T10:00:00+00:00",
+  "versions": [
+    {
+      "package": {
+        "packageId": "example.agent",
+        "version": "2.0.0",
+        "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expectedAvailability": "Listed",
+      "availability": "Yanked"
+    }
+  ],
+  "previousTags": [
+    {
+      "packageId": "example.agent",
+      "tags": [
+        {
+          "packageId": "example.agent",
+          "tag": "latest",
+          "target": {
+            "packageId": "example.agent",
+            "version": "2.0.0",
+            "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ]
+    }
+  ],
+  "resultingTags": [
+    {
+      "packageId": "example.agent",
+      "tags": []
+    }
+  ]
+}

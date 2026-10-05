@@ -56,6 +56,9 @@ public sealed class InstalledPackagesPaneViewModel : IDisposable
         await _catalog.RefreshInstalledPackageStateOnlyAsync(addWarning, cancellationToken).ConfigureAwait(false);
     }
 
+    public Task RefreshExecutionRuntimesAsync(CancellationToken cancellationToken = default)
+        => _catalog.RefreshExecutionRuntimesAsync(cancellationToken);
+
     public void RebuildList(string searchText)
     {
         var packageStates = InstalledPackageCatalogProjector.Build(
@@ -85,6 +88,9 @@ public sealed class InstalledPackagesPaneViewModel : IDisposable
 
     public RegistryPackageUpdate? GetPackageUpdate(string packageId)
         => _catalog.GetPackageUpdate(packageId);
+
+    public IReadOnlyList<PackageExecutionRuntimeStatusViewModel> GetExecutionRuntimeStatuses(string packageId)
+        => _catalog.GetExecutionRuntimeStatuses(packageId);
 
     public void Dispose()
     {

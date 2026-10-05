@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import {
-  SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR,
+  SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
-  type RpcContractDescriptorV1,
-  type RpcContractDescriptorV2,
+  type RpcContractDescriptor,
 } from "@sunder/sdk";
 import { fetchRegistryContract, fetchRegistryContractBindings } from "../src/registry";
 
@@ -23,8 +22,8 @@ const requestSchema = {
   additionalProperties: false,
 } as const;
 
-const descriptor: RpcContractDescriptorV2 = {
-  descriptorVersion: 2,
+const descriptor: RpcContractDescriptor = {
+  descriptorVersion: 1,
   schemaProfile: "sunder.rpc.values.v1",
   contractId: CONTRACT_ID,
   version: CONTRACT_VERSION,
@@ -57,7 +56,7 @@ const canonicalBytes = canonicalRpcDescriptorBytes(descriptor);
 const descriptorSha256 = sha256(canonicalBytes);
 const abiSha256 = rpcAbiSha256(descriptor);
 
-test("Registry contract fetch verifies V2 metadata and passes both identities into binding generation", async () => {
+test("Registry contract fetch verifies V1 metadata and passes both identities into binding generation", async () => {
   const calls: string[] = [];
   const fetchImplementation = sequenceFetch(
     calls,
@@ -74,7 +73,7 @@ test("Registry contract fetch verifies V2 metadata and passes both identities in
   assert.equal(result.metadata.firstPublisherPackageId, "example.publisher");
   assert.equal(result.metadata.firstPublisherPackageVersion, "2.0.0");
   assert.equal(result.metadata.publishedAtUtc, "2026-07-31T10:00:00Z");
-  assert.equal(result.descriptor.descriptorVersion, 2);
+  assert.equal(result.descriptor.descriptorVersion, 1);
   assert.equal(result.descriptor.contractId, CONTRACT_ID);
   assert.deepEqual(result.canonicalBytes, canonicalBytes);
   assert.match(result.bindings, /export class MessagesClient/u);
@@ -84,7 +83,7 @@ test("Registry contract fetch verifies V2 metadata and passes both identities in
 });
 
 test("annotation-only descriptor changes alter descriptor identity but preserve ABI identity", async () => {
-  const annotated: RpcContractDescriptorV2 = {
+  const annotated: RpcContractDescriptor = {
     ...descriptor,
     $defs: {
       ...descriptor.$defs,
@@ -147,7 +146,7 @@ test("Registry contract fetch rejects package and private contract exposure", as
   }
 });
 
-test("Registry contract fetch rejects V1 metadata instead of interpreting sha256", async () => {
+test("Registry contract fetch rejects legacy sha256-only metadata", async () => {
   const legacyMetadata = {
     contractId: CONTRACT_ID,
     version: CONTRACT_VERSION,
@@ -167,32 +166,19 @@ test("Registry contract fetch rejects V1 metadata instead of interpreting sha256
   assert.deepEqual(calls, [METADATA_URL]);
 });
 
-test("Registry contract fetch rejects a V1 descriptor even under V2-shaped metadata", async () => {
-  const legacyDescriptor: RpcContractDescriptorV1 = {
-    descriptorVersion: 1,
-    contractId: CONTRACT_ID,
-    version: CONTRACT_VERSION,
-    services: [{
-      serviceId: "messages",
-      methods: [{
-        methodId: "send",
-        kind: "unary",
-        requestSchema: { $ref: "#/$defs/Request" },
-        responseSchema: { $ref: "#/$defs/Response" },
-      }],
-    }],
-    $defs: descriptor.$defs,
-  };
-  const legacyBytes = canonicalRpcDescriptorBytes(legacyDescriptor);
+test("Registry contract fetch rejects a non-V1 descriptor under current metadata", async () => {
+  const invalidBytes = new TextEncoder().encode(
+    new TextDecoder().decode(canonicalBytes).replace('"descriptorVersion":1', '"descriptorVersion":2'),
+  );
 
   await assert.rejects(
     fetchRegistryContract(fetchRequest(sequenceFetch(
       [],
-      metadataFor(descriptor, legacyBytes),
-      legacyBytes,
-      { entityTag: sha256(legacyBytes) },
+      metadataFor(descriptor, invalidBytes),
+      invalidBytes,
+      { entityTag: sha256(invalidBytes) },
     ))),
-    /must use descriptorVersion 2/u,
+    /descriptorVersion must be exactly 1/u,
   );
 });
 
@@ -210,7 +196,7 @@ test("Registry contract metadata and descriptor require the exact requested ID a
     assert.deepEqual(calls, [METADATA_URL]);
   }
 
-  const mismatchedDescriptors: RpcContractDescriptorV2[] = [
+  const mismatchedDescriptors: RpcContractDescriptor[] = [
     { ...descriptor, contractId: "other.messages" },
     { ...descriptor, version: "1.2.4" },
   ];
@@ -339,7 +325,7 @@ test("Registry contract fetch enforces descriptor content type, length, size, an
 });
 
 function metadataFor(
-  value: RpcContractDescriptorV2,
+  value: RpcContractDescriptor,
   bytes: Uint8Array = canonicalRpcDescriptorBytes(value),
   overrides: Readonly<Record<string, unknown>> = {},
 ): Record<string, unknown> {
@@ -417,9 +403,9 @@ function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function rpcAbiSha256(value: RpcContractDescriptorV2): string {
+function rpcAbiSha256(value: RpcContractDescriptor): string {
   return createHash("sha256")
-    .update(SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR, "utf8")
+    .update(SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, "utf8")
     .update(canonicalRpcAbiProjectionBytes(value))
     .digest("hex");
 }

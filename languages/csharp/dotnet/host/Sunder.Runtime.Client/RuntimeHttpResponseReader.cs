@@ -98,7 +98,7 @@ public sealed class RuntimeHttpResponseReader
             problem?.Detail,
             problem?.Code,
             correlationId,
-            innerException: null);
+            innerException: null) { Details = problem?.Details?.Clone() };
     }
 
     internal async Task<byte[]> ReadRequiredPayloadAsync(
@@ -147,5 +147,6 @@ public sealed class RuntimeHttpResponseReader
         string? Title,
         string? Detail,
         string? Code,
-        string? CorrelationId);
+        string? CorrelationId,
+        JsonElement? Details);
 }

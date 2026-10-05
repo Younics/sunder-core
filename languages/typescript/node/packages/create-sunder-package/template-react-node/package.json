@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.18.1 <25.0.0"
   },
   "scripts": {
+    "contracts:accept": "sunder-package contracts accept",
+    "contracts:check": "sunder-package contracts check",
+    "contracts:freeze": "sunder-package contracts freeze",
     "typecheck": "sunder-package generate && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.browser.json --noEmit",
     "test": "npm run typecheck && node --test test/*.test.cjs",
     "sunder:dev": "sunder-package dev --watch",
@@ -27,5 +30,9 @@
     "@vitejs/plugin-react": "^6.0.5",
     "typescript": "6.0.3",
     "vite": "^8.2.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "fsevents": false
   }
 }

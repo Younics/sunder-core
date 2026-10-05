@@ -8,6 +8,68 @@ namespace Sunder.Host.Supervisor.Tests;
 public sealed partial class HostSupervisorFoundationTests
 {
     [Fact]
+    public void HostRuntimeStatePathValidator_RequiresDisjointHostOwnedTrees()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var hostRoot = Path.Combine(root, "host");
+            var runtimeRoot = Path.Combine(root, "runtime");
+            HostRuntimeStatePathValidator.Validate(
+                hostRoot,
+                runtimeRoot,
+                Path.Combine(hostRoot, "connection", "host.json"),
+                Path.Combine(root, "app", "RuntimeHost", "Sunder.Runtime.Host"),
+                Path.Combine(root, "app"));
+
+            Assert.Throws<InvalidOperationException>(() => HostRuntimeStatePathValidator.Validate(
+                Path.Combine(runtimeRoot, "installed", "host", "1.0.0"),
+                runtimeRoot,
+                Path.Combine(root, "connection", "host.json"),
+                runtimeHostPath: null,
+                supervisorBasePath: Path.Combine(root, "app")));
+            Assert.Throws<InvalidOperationException>(() => HostRuntimeStatePathValidator.Validate(
+                hostRoot,
+                Path.Combine(hostRoot, "runtime"),
+                Path.Combine(hostRoot, "connection", "host.json"),
+                runtimeHostPath: null,
+                supervisorBasePath: Path.Combine(root, "app")));
+            Assert.Throws<InvalidOperationException>(() => HostRuntimeStatePathValidator.Validate(
+                hostRoot,
+                runtimeRoot,
+                Path.Combine(runtimeRoot, "connection.json"),
+                runtimeHostPath: null,
+                supervisorBasePath: Path.Combine(root, "app")));
+            Assert.Throws<InvalidOperationException>(() => HostRuntimeStatePathValidator.Validate(
+                hostRoot,
+                Path.Combine(root, "app", "runtime-state"),
+                Path.Combine(hostRoot, "connection", "host.json"),
+                runtimeHostPath: null,
+                supervisorBasePath: Path.Combine(root, "app")));
+            Assert.Throws<InvalidOperationException>(() => HostRuntimeStatePathValidator.Validate(
+                hostRoot,
+                runtimeRoot,
+                Path.Combine(hostRoot, "connection", "host.json"),
+                runtimeHostPath: null,
+                supervisorBasePath: Path.Combine(root, "app"),
+                runtimeResourcePolicyFilePath: Path.Combine(runtimeRoot, "policy.json")));
+            if (OperatingSystem.IsMacOS())
+            {
+                Assert.Throws<InvalidOperationException>(() => HostRuntimeStatePathValidator.Validate(
+                    hostRoot,
+                    Path.Combine(root, "APP", "runtime-state"),
+                    Path.Combine(hostRoot, "connection", "host.json"),
+                    runtimeHostPath: null,
+                    supervisorBasePath: Path.Combine(root, "app")));
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void HostStartupOptions_PreservesPerUserDefaults()
     {
         var root = CreateTempDirectory();

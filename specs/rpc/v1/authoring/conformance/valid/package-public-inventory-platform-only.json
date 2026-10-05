@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "packageId": "example.dependency",
+  "packageVersion": "1.2.3",
+  "packageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+  "publicContractCount": 1,
+  "contracts": [
+    {
+      "contractId": "sunder.stack.contributor",
+      "contractVersion": "2.0.0",
+      "descriptorBytes": 489,
+      "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+      "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+      "artifactSource": "imported",
+      "authorityKind": "platform",
+      "authorityId": "sunder.core",
+      "selectedAuthorityRelease": "1.1.0",
+      "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930"
+    }
+  ]
+}

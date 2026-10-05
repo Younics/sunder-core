@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
@@ -38,6 +39,8 @@ internal sealed record ActiveLoadedPackage(
 
     public Func<ActiveLoadedPackage>? RecoveryFactory { get; init; }
 
+    public RuntimePackageExecutionRuntimeBinding? ExecutionRuntimeBinding { get; init; }
+
     public IPackageAuthHandler? AuthHandler => Worker.AuthHandler;
 
     public IPackageCallbackHandler? GetCallbackHandler(string callbackHandlerId)
@@ -55,6 +58,8 @@ internal sealed class ActivePackageSession
     private readonly Dictionary<string, ActiveLoadedPackage> _loadedPackageMap;
     private readonly Dictionary<string, SessionPackageDescriptor> _sessionPackageMap;
     private readonly Dictionary<string, RuntimePackageSource> _packageSourceMap;
+    private readonly IReadOnlyList<IReadOnlyList<string>> _workerStartupWaves;
+    private readonly int _maximumWorkerStartupConcurrency;
     private readonly object _lifecycleSync = new();
     private readonly List<Task> _lifecycleOperations = [];
     private readonly List<Task> _runtimeGenerationActivationOperations = [];
@@ -70,13 +75,22 @@ internal sealed class ActivePackageSession
         IDictionary<string, ActiveLoadedPackage> loadedPackages,
         IDictionary<string, SessionPackageDescriptor> sessionPackages,
         bool workersStarted = true,
-        IEnumerable<RuntimePackageSource>? readySources = null)
+        IEnumerable<RuntimePackageSource>? readySources = null,
+        IEnumerable<IReadOnlyList<string>>? workerStartupWaves = null,
+        int maximumWorkerStartupConcurrency = PackageSessionConcurrencyOptions.DefaultMaximumConcurrency)
     {
+        if (maximumWorkerStartupConcurrency is < PackageSessionConcurrencyOptions.MinimumConcurrency
+            or > PackageSessionConcurrencyOptions.MaximumConcurrency)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumWorkerStartupConcurrency));
+        }
         SessionFolder = sessionFolder;
         _loadedPackageMap = new Dictionary<string, ActiveLoadedPackage>(loadedPackages, StringComparer.OrdinalIgnoreCase);
         _sessionPackageMap = new Dictionary<string, SessionPackageDescriptor>(sessionPackages, StringComparer.OrdinalIgnoreCase);
         _packageSourceMap = (readySources ?? loadedPackages.Values.Select(static package => package.Source))
             .ToDictionary(static source => source.PackageId, StringComparer.OrdinalIgnoreCase);
+        _workerStartupWaves = NormalizeWorkerStartupWaves(_loadedPackageMap, workerStartupWaves);
+        _maximumWorkerStartupConcurrency = maximumWorkerStartupConcurrency;
         _workersStarted = workersStarted;
     }
 
@@ -94,11 +108,18 @@ internal sealed class ActivePackageSession
     private bool _runtimeGenerationMonitoringStarted;
     private long? _committedSessionGeneration;
 
-    public static ActivePackageSession CreateEmpty() => new();
+    public static ActivePackageSession CreateEmpty(PackageSessionStartupTraceAttempt? startupTrace = null)
+        => new() { StartupTrace = startupTrace };
 
     public bool IsEmpty { get; }
 
     public string? SessionFolder { get; }
+
+    internal PackageSessionStartupTraceAttempt? StartupTrace { get; init; }
+    internal RuntimeRequiredProviderPlan? RequiredProviderPlan { get; set; }
+    internal Action<string, bool>? CandidateProviderReady { get; set; }
+    private long? _startupGeneration;
+    internal void BindStartupGeneration(long generation) => _startupGeneration = generation;
 
     public async Task StartWorkersAsync(
         ILogger logger,
@@ -113,52 +134,105 @@ internal sealed class ActivePackageSession
 
         var startupStarted = Stopwatch.GetTimestamp();
         var attemptedWorkers = new List<(string PackageId, IRuntimePackageWorker Worker)>();
-        Task? startTask = null;
         try
         {
-            foreach (var package in _loadedPackageMap.Values)
+            if (RequiredProviderPlan is { } plan)
+            {
+                await StartRequiredProvidersAsync(plan, attemptedWorkers, logger, startupTimeout, cancellationToken);
+                _workersStarted = true;
+                return;
+            }
+            for (var waveIndex = 0; waveIndex < _workerStartupWaves.Count; waveIndex++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                attemptedWorkers.Add((package.Descriptor.PackageId, package.Worker));
-                var workerStarted = Stopwatch.GetTimestamp();
-                using var startupTimeoutCancellation = new CancellationTokenSource(startupTimeout);
-                using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken,
-                    startupTimeoutCancellation.Token);
-                startTask = Task.Run(
-                    () => package.Worker.StartAsync(startupDeadline.Token),
-                    CancellationToken.None);
-                TrackLifecycleOperation(startTask);
+                var packageIds = _workerStartupWaves[waveIndex];
+                var packages = packageIds
+                    .Where(_loadedPackageMap.ContainsKey)
+                    .Select(packageId => _loadedPackageMap[packageId])
+                    .ToArray();
+                if (packages.Length == 0) continue;
+                var attempted = new bool[packages.Length];
+                var failures = new Exception?[packages.Length];
+                StartupTrace?.RecordWorkerWaveStarted(
+                    waveIndex,
+                    _workerStartupWaves.Count,
+                    packages.Length,
+                    _maximumWorkerStartupConcurrency);
+                using var waveCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 try
                 {
-                    await startTask.WaitAsync(startupDeadline.Token);
+                    await Parallel.ForEachAsync(
+                        Enumerable.Range(0, packages.Length),
+                        new ParallelOptions
+                        {
+                            MaxDegreeOfParallelism = _maximumWorkerStartupConcurrency,
+                            CancellationToken = waveCancellation.Token,
+                        },
+                        async (index, token) =>
+                        {
+                            var package = packages[index];
+                            attempted[index] = true;
+                            try
+                            {
+                                await StartWorkerAsync(package, logger, startupTimeout, token)
+                                    .ConfigureAwait(false);
+                            }
+                            catch (Exception exception)
+                            {
+                                failures[index] = exception;
+                                waveCancellation.Cancel();
+                            }
+                        }).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException exception) when (
-                    startupTimeoutCancellation.IsCancellationRequested
-                    && !cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (
+                    cancellationToken.IsCancellationRequested
+                    || failures.Any(static failure => failure is not null))
                 {
-                    logger.LogWarning(
-                        "Package worker {PackageId} startup timed out after {ElapsedMilliseconds} ms",
-                        package.Descriptor.PackageId,
-                        Stopwatch.GetElapsedTime(workerStarted).TotalMilliseconds);
-                    throw new TimeoutException(
-                        $"Package worker '{package.Descriptor.PackageId}' did not start within {startupTimeout.TotalSeconds:0.###} seconds.",
-                        exception);
                 }
-                catch
+                finally
                 {
-                    logger.LogWarning(
-                        "Package worker {PackageId} startup failed after {ElapsedMilliseconds} ms",
-                        package.Descriptor.PackageId,
-                        Stopwatch.GetElapsedTime(workerStarted).TotalMilliseconds);
-                    throw;
+                    for (var index = 0; index < packages.Length; index++)
+                    {
+                        if (attempted[index])
+                        {
+                            attemptedWorkers.Add((packages[index].Descriptor.PackageId, packages[index].Worker));
+                        }
+                    }
                 }
-                startTask = null;
-                RefreshWorkerMetadata(package.Descriptor.PackageId, package);
-                logger.LogInformation(
-                    "Started package worker {PackageId} in {ElapsedMilliseconds} ms",
-                    package.Descriptor.PackageId,
-                    Stopwatch.GetElapsedTime(workerStarted).TotalMilliseconds);
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    StartupTrace?.RecordWorkerWaveCompleted(
+                        waveIndex,
+                        _workerStartupWaves.Count,
+                        packages.Length,
+                        _maximumWorkerStartupConcurrency,
+                        "canceled");
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                var owningFailure = failures.FirstOrDefault(static failure => failure is not OperationCanceledException)
+                                    ?? failures.FirstOrDefault(static failure => failure is not null);
+                if (owningFailure is not null)
+                {
+                    StartupTrace?.RecordWorkerWaveCompleted(
+                        waveIndex,
+                        _workerStartupWaves.Count,
+                        packages.Length,
+                        _maximumWorkerStartupConcurrency,
+                        "failed");
+                    ExceptionDispatchInfo.Capture(owningFailure).Throw();
+                }
+
+                foreach (var package in packages)
+                {
+                    RefreshWorkerMetadata(package.Descriptor.PackageId, package);
+                }
+                StartupTrace?.RecordWorkerWaveCompleted(
+                    waveIndex,
+                    _workerStartupWaves.Count,
+                    packages.Length,
+                    _maximumWorkerStartupConcurrency,
+                    "succeeded");
             }
 
             _workersStarted = true;
@@ -169,10 +243,6 @@ internal sealed class ActivePackageSession
         }
         catch
         {
-            if (startTask is not null && !startTask.IsCompleted)
-            {
-                _ = ObserveAsync(startTask);
-            }
             logger.LogWarning(
                 "Package worker startup failed after {ElapsedMilliseconds} ms; stopping {AttemptedWorkerCount} attempted worker(s)",
                 Stopwatch.GetElapsedTime(startupStarted).TotalMilliseconds,
@@ -184,6 +254,111 @@ internal sealed class ActivePackageSession
                 operationStarted: TrackLifecycleOperation);
             throw;
         }
+    }
+
+    private async Task StartRequiredProvidersAsync(RuntimeRequiredProviderPlan plan,
+        List<(string PackageId, IRuntimePackageWorker Worker)> attempted, ILogger logger, TimeSpan timeout, CancellationToken token)
+    {
+        var pending = _loadedPackageMap.Keys.ToHashSet(StringComparer.Ordinal);
+        var ready = GetActivePackageSources().Select(source => source.PackageId).Where(id => !pending.Contains(id)).ToHashSet(StringComparer.Ordinal);
+        var running = new Dictionary<string, Task>(StringComparer.Ordinal);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        try
+        {
+            while (pending.Count + running.Count > 0)
+            {
+                foreach (var id in pending.Where(id => plan.CanStart(id, ready)).Order(StringComparer.Ordinal).ToArray())
+                {
+                    if (running.Count >= _maximumWorkerStartupConcurrency) break;
+                    pending.Remove(id);
+                    var package = _loadedPackageMap[id];
+                    attempted.Add((id, package.Worker));
+                    running.Add(id, StartAsync(package, attempted.Count - 1));
+                }
+                if (running.Count == 0) throw plan.Stalled(pending);
+                await Task.WhenAny(running.Values).WaitAsync(token);
+                foreach (var id in running.Where(pair => pair.Value.IsCompleted).Select(pair => pair.Key).Order(StringComparer.Ordinal).ToArray())
+                {
+                    await running[id];
+                    running.Remove(id);
+                    RefreshWorkerMetadata(id, _loadedPackageMap[id]);
+                    ready.Add(id);
+                    CandidateProviderReady?.Invoke(id, true);
+                }
+            }
+        }
+        catch
+        {
+            cancellation.Cancel();
+            await Task.WhenAll(running.Values.Select(ObserveAsync));
+            throw;
+        }
+
+        async Task StartAsync(ActiveLoadedPackage package, int frontierIndex)
+        {
+            StartupTrace?.RecordWorkerWaveStarted(frontierIndex, _loadedPackageMap.Count, 1, _maximumWorkerStartupConcurrency);
+            var outcome = "failed";
+            try
+            {
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
+                deadline.CancelAfter(timeout);
+                var compose = package.Worker.ComposeAsync(deadline.Token);
+                TrackLifecycleOperation(compose);
+                await compose.WaitAsync(deadline.Token);
+                CandidateProviderReady?.Invoke(package.Descriptor.PackageId, false);
+                await StartWorkerAsync(package, logger, timeout, deadline.Token);
+                outcome = "succeeded";
+            }
+            catch (OperationCanceledException) { outcome = "canceled"; throw; }
+            finally { StartupTrace?.RecordWorkerWaveCompleted(frontierIndex, _loadedPackageMap.Count, 1, _maximumWorkerStartupConcurrency, outcome); }
+        }
+    }
+
+    private async Task StartWorkerAsync(
+        ActiveLoadedPackage package,
+        ILogger logger,
+        TimeSpan startupTimeout,
+        CancellationToken cancellationToken)
+    {
+        var workerStarted = Stopwatch.GetTimestamp();
+        using var startupTimeoutCancellation = new CancellationTokenSource(startupTimeout);
+        using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            startupTimeoutCancellation.Token);
+        var startTask = Task.Run(
+            () => package.Worker.StartAsync(startupDeadline.Token),
+            CancellationToken.None);
+        TrackLifecycleOperation(startTask);
+        try
+        {
+            await startTask.WaitAsync(startupDeadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (
+            startupTimeoutCancellation.IsCancellationRequested
+            && !cancellationToken.IsCancellationRequested)
+        {
+            if (!startTask.IsCompleted) _ = ObserveAsync(startTask);
+            logger.LogWarning(
+                "Package worker {PackageId} startup timed out after {ElapsedMilliseconds} ms",
+                package.Descriptor.PackageId,
+                Stopwatch.GetElapsedTime(workerStarted).TotalMilliseconds);
+            throw new TimeoutException(
+                $"Package worker '{package.Descriptor.PackageId}' did not start within {startupTimeout.TotalSeconds:0.###} seconds.",
+                exception);
+        }
+        catch
+        {
+            if (!startTask.IsCompleted) _ = ObserveAsync(startTask);
+            logger.LogWarning(
+                "Package worker {PackageId} startup failed after {ElapsedMilliseconds} ms",
+                package.Descriptor.PackageId,
+                Stopwatch.GetElapsedTime(workerStarted).TotalMilliseconds);
+            throw;
+        }
+        logger.LogInformation(
+            "Started package worker {PackageId} in {ElapsedMilliseconds} ms",
+            package.Descriptor.PackageId,
+            Stopwatch.GetElapsedTime(workerStarted).TotalMilliseconds);
     }
 
     public IReadOnlyDictionary<string, ActiveLoadedPackage> LoadedPackageMap => _loadedPackageMap;
@@ -286,6 +461,7 @@ internal sealed class ActivePackageSession
         }
 
         _runtimeGenerationCommitted = true;
+        _startupGeneration = null;
     }
 
     public void StartRuntimeGenerationMonitoring(
@@ -454,6 +630,7 @@ internal sealed class ActivePackageSession
             _runtimeGenerationMonitoringStarted = false;
             _runtimeGenerationCommitted = false;
             _committedSessionGeneration = null;
+            _startupGeneration = null;
         }
         _workersStarted = false;
         _storageActivationTransaction = null;
@@ -492,9 +669,40 @@ internal sealed class ActivePackageSession
     public bool OwnsRuntimeGeneration(
         string packageId,
         RuntimePackageGeneration generation)
-        => _runtimeGenerationCommitted
-           && _committedSessionGeneration == generation.SessionGeneration
+        => (_runtimeGenerationCommitted && _committedSessionGeneration == generation.SessionGeneration
+            || _startupGeneration == generation.SessionGeneration)
            && OwnsPackageActivation(packageId, generation.ActivationId);
+
+    internal bool TryGetRuntimeGeneration(
+        string packageId,
+        out RuntimePackageGeneration generation)
+    {
+        if (_committedSessionGeneration is { } sessionGeneration
+            && _loadedPackageMap.TryGetValue(packageId, out var package)
+            && package.ExecutionRuntimeBinding is not null)
+        {
+            generation = new RuntimePackageGeneration(package.RuntimeActivationId, sessionGeneration);
+            return true;
+        }
+        generation = null!;
+        return false;
+    }
+
+    internal IReadOnlyList<string> GetExecutionRuntimeDependentPackageIds(
+        IReadOnlySet<string> blockedIdentityKeys)
+    {
+        ArgumentNullException.ThrowIfNull(blockedIdentityKeys);
+        lock (_lifecycleSync)
+        {
+            return _loadedPackageMap
+                .Where(entry => IsPackageEnabled(entry.Key)
+                                && entry.Value.ExecutionRuntimeBinding is { } binding
+                                && blockedIdentityKeys.Contains(binding.Identity.SingleFlightKey))
+                .Select(static entry => entry.Key)
+                .OrderBy(static packageId => packageId, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
 
     private async Task MonitorRuntimeGenerationAsync(
         Task completion,
@@ -949,6 +1157,7 @@ internal sealed class ActivePackageSession
 
     private Task GetOrStartDisposal()
     {
+        StartupTrace?.TryFail("discarded");
         TaskCompletionSource? completion = null;
         lock (_lifecycleSync)
         {
@@ -1102,6 +1311,27 @@ internal sealed class ActivePackageSession
         catch
         {
         }
+    }
+
+    private static IReadOnlyList<IReadOnlyList<string>> NormalizeWorkerStartupWaves(
+        IReadOnlyDictionary<string, ActiveLoadedPackage> loadedPackages,
+        IEnumerable<IReadOnlyList<string>>? workerStartupWaves)
+    {
+        var waves = (workerStartupWaves
+                     ?? loadedPackages.Keys.Select(static packageId => (IReadOnlyList<string>)[packageId]))
+            .Select(static wave => (IReadOnlyList<string>)wave.ToArray())
+            .Where(static wave => wave.Count > 0)
+            .ToArray();
+        var packageIds = waves.SelectMany(static wave => wave).ToArray();
+        if (packageIds.Count(packageId => !loadedPackages.ContainsKey(packageId)) != 0
+            || packageIds.Distinct(StringComparer.OrdinalIgnoreCase).Count() != packageIds.Length
+            || packageIds.Length != loadedPackages.Count)
+        {
+            throw new ArgumentException(
+                "Worker startup waves must contain every loaded package exactly once.",
+                nameof(workerStartupWaves));
+        }
+        return waves;
     }
 
     private static StringComparer PathComparer { get; } = OperatingSystem.IsWindows()

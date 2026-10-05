@@ -67,6 +67,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         _runtimeHostPath = string.IsNullOrWhiteSpace(runtimeHostPath) ? null : Path.GetFullPath(runtimeHostPath);
         _connectionInfoPath = Path.GetFullPath(connectionInfoPath);
         _runtimeStateRoot = Path.GetFullPath(runtimeStateRoot ?? RuntimeLocalState.GetV1RootPath());
+        RuntimeOwnedFileSystem.ValidateNoReparsePointAncestors(_runtimeStateRoot);
         _startupTimeout = startupTimeout;
         _runtimeLeaseTimeoutTicks = startupTimeout.Ticks;
         _isRuntimeLeaseAvailable = isRuntimeLeaseAvailable ?? (() => RuntimeLocalState.IsLeaseAvailable(_runtimeStateRoot));
@@ -90,6 +91,14 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 ? _connection
                 : null;
         }
+    }
+
+    internal string RuntimeStateRootPath => _runtimeStateRoot;
+
+    internal string GetRuntimeStateRootIdentity()
+    {
+        RuntimeLocalState.EnsureInitialized(_runtimeStateRoot, deleteStaleSchemaTemporaryFiles: false);
+        return RuntimeOwnedFileSystem.GetMutableDirectoryIdentity(_runtimeStateRoot);
     }
 
     public void PrepareForFastShutdown()
@@ -208,6 +217,67 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         }
     }
 
+    internal async Task<(RuntimeV1ResetResult Result, string RootIdentity)> ResetRuntimeStateAsync(
+        bool startupCacheOnly,
+        CancellationToken cancellationToken = default,
+        Action? afterStarted = null)
+    {
+        await _submissionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var activeOperation = GetActiveOperation();
+                if (activeOperation is not null)
+                {
+                    await ExecuteOperationCoreAsync(activeOperation.OperationId, _lifetime.Token)
+                        .ConfigureAwait(false);
+                    EnsureOperationSucceeded(activeOperation.OperationId);
+                }
+
+                var status = GetStatus();
+                var stop = CreateOperationSubmission(
+                    new HostLifecycleRequest(Guid.NewGuid(), status.DeploymentGeneration),
+                    HostOperationKinds.RuntimeStop,
+                    out _);
+                await ExecuteOperationCoreAsync(stop.Operation.OperationId, _lifetime.Token)
+                    .ConfigureAwait(false);
+                EnsureOperationSucceeded(stop.Operation.OperationId);
+
+                cancellationToken.ThrowIfCancellationRequested();
+                var rootIdentity = GetRuntimeStateRootIdentity();
+                SetResetRequired(required: true);
+                var result = startupCacheOnly
+                    ? await RuntimeV1StateReset.ResetStartupCacheAsync(
+                            TimeSpan.Zero,
+                            _runtimeStateRoot,
+                            cancellationToken,
+                            afterStarted,
+                            rootIdentity)
+                        .ConfigureAwait(false)
+                    : await RuntimeV1StateReset.ResetAsync(
+                            TimeSpan.Zero,
+                            _runtimeStateRoot,
+                            cancellationToken,
+                            afterStarted,
+                            rootIdentity)
+                        .ConfigureAwait(false);
+                SetResetRequired(required: false);
+                return (result, rootIdentity);
+            }
+            finally
+            {
+                _lifecycleGate.Release();
+            }
+        }
+        finally
+        {
+            _submissionGate.Release();
+        }
+    }
+
     public async Task ReconcileStartupAsync(CancellationToken cancellationToken)
     {
         await _submissionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -283,39 +353,82 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            HostLifecycleSubmission submission;
-            lock (_stateGate)
+            var submission = CreateOperationSubmission(request, kind, out var accepted);
+            if (accepted)
             {
-                var transition = HostLifecycleTransitions.CalculateSubmission(
-                    _persistentState,
-                    request,
-                    kind,
-                    Guid.NewGuid().ToString("N"),
-                    DateTimeOffset.UtcNow);
-                if (transition is HostLifecycleRetrySubmissionResult retry)
-                {
-                    return new HostLifecycleSubmission(retry.Operation);
-                }
-                if (transition is HostLifecycleSubmissionConflictResult conflict)
-                {
-                    throw new HostLifecycleConflictException(
-                        conflict.Code,
-                        conflict.Message,
-                        conflict.ActiveOperationId);
-                }
-                var accepted = (HostLifecycleAcceptedSubmissionResult)transition;
-                _lifecycleStore.Save(accepted.State);
-                _persistentState = accepted.State;
-                _failureCode = null;
-                _failureMessage = null;
-                submission = new HostLifecycleSubmission(accepted.Operation);
+                ScheduleOperation(submission.Operation.OperationId);
             }
-            ScheduleOperation(submission.Operation.OperationId);
             return submission;
         }
         finally
         {
             _submissionGate.Release();
+        }
+    }
+
+    private HostLifecycleSubmission CreateOperationSubmission(
+        HostLifecycleRequest request,
+        string kind,
+        out bool accepted)
+    {
+        lock (_stateGate)
+        {
+            if (_persistentState.ResetRequired
+                && kind is HostOperationKinds.RuntimeStart or HostOperationKinds.RuntimeRestart)
+            {
+                throw new HostLifecycleConflictException(
+                    "host.runtime-reset-required",
+                    "Runtime startup is fenced until Runtime state reset reaches terminal evidence.");
+            }
+            var transition = HostLifecycleTransitions.CalculateSubmission(
+                _persistentState,
+                request,
+                kind,
+                Guid.NewGuid().ToString("N"),
+                DateTimeOffset.UtcNow);
+            if (transition is HostLifecycleRetrySubmissionResult retry)
+            {
+                accepted = false;
+                return new HostLifecycleSubmission(retry.Operation);
+            }
+            if (transition is HostLifecycleSubmissionConflictResult conflict)
+            {
+                throw new HostLifecycleConflictException(
+                    conflict.Code,
+                    conflict.Message,
+                    conflict.ActiveOperationId);
+            }
+            var acceptedTransition = (HostLifecycleAcceptedSubmissionResult)transition;
+            _lifecycleStore.Save(acceptedTransition.State);
+            _persistentState = acceptedTransition.State;
+            _failureCode = null;
+            _failureMessage = null;
+            accepted = true;
+            return new HostLifecycleSubmission(acceptedTransition.Operation);
+        }
+    }
+
+    private void SetResetRequired(bool required)
+    {
+        lock (_stateGate)
+        {
+            if (_persistentState.ResetRequired == required)
+            {
+                return;
+            }
+            var updated = _persistentState with { ResetRequired = required };
+            _lifecycleStore.Save(updated);
+            _persistentState = updated;
+        }
+    }
+
+    private void EnsureOperationSucceeded(string operationId)
+    {
+        var operation = GetRequiredOperation(operationId);
+        if (operation.State != HostOperationState.Succeeded)
+        {
+            throw new InvalidOperationException(
+                operation.Message ?? $"Host lifecycle operation '{operationId}' failed with state '{operation.State}'.");
         }
     }
 

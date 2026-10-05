@@ -1,0 +1,11 @@
+{
+  "catalog": {
+    "authorityId": "sunder.core",
+    "releaseVersion": "1.1.0",
+    "catalogSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "lifecycleState": "Revoked",
+  "disposition": "Denied",
+  "errorCode": "contract-authority.revoked",
+  "revokedAtUtc": "2026-09-14T10:00:00+00:00"
+}

@@ -76,6 +76,21 @@ public sealed partial class RuntimeApiClient
     public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
         => _management.GetInstalledPackagesAsync(cancellationToken);
 
+    public Task<IReadOnlyList<InstalledExecutionRuntimeSummary>> GetExecutionRuntimesAsync(
+        CancellationToken cancellationToken = default)
+        => _management.GetExecutionRuntimesAsync(cancellationToken);
+
+    public Task<RuntimeExecutionRuntimeImpact> GetExecutionRuntimeImpactAsync(
+        RuntimeExecutionRuntimeIdentity identity,
+        CancellationToken cancellationToken = default)
+        => _management.GetExecutionRuntimeImpactAsync(identity, cancellationToken);
+
+    public Task<RuntimeExecutionRuntimeOperationResult> RepairExecutionRuntimeAsync(
+        RuntimeExecutionRuntimeIdentity identity,
+        RuntimeExecutionRuntimeImpact impact,
+        CancellationToken cancellationToken = default)
+        => _management.RepairExecutionRuntimeAsync(identity, impact, cancellationToken);
+
     public Uri CreatePackageAssetUri(string packageId, string assetPath)
         => _management.CreatePackageAssetUri(packageId, assetPath);
 

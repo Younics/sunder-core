@@ -1,0 +1,32 @@
+<Project>
+  <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
+    <TargetFramework>net10.0</TargetFramework>
+    <BaseIntermediateOutputPath>obj/consumer/</BaseIntermediateOutputPath>
+    <SunderPackageBuildProject>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)Sunder.Package.Build/Sunder.Package.Build.csproj'))</SunderPackageBuildProject>
+    <SunderPackageBuildTaskAssembly Condition="'$(TaskShadowUseDefaultTaskAssembly)' != 'true'">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)Sunder.Package.Build/bin/$(Configuration)/net10.0/Sunder.Package.Build.dll'))</SunderPackageBuildTaskAssembly>
+    <SunderPackageBuildTaskSourceIsImmutable>false</SunderPackageBuildTaskSourceIsImmutable>
+    <SunderPackageBuildTaskShadowRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)obj/consumer/task-shadow'))</SunderPackageBuildTaskShadowRoot>
+    <SunderPackageBuildTaskShadowStamp Condition="'$(SunderPackageBuildTaskShadowStamp)' == ''">clean-build</SunderPackageBuildTaskShadowStamp>
+    <TargetDir>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)obj/probe-target'))))</TargetDir>
+    <ExpectedProbeValue Condition="'$(ExpectedProbeValue)' == ''">format-ready</ExpectedProbeValue>
+    <SunderPackageBuildTaskSourceGlobalProperties>$(SunderPackageBuildTaskSourceGlobalProperties);ProbeValue;TaskShadowFailAfterSourceLockAcquisition;TaskShadowBuildNodeIdentityFile;TaskShadowAfterBuildWaitStartedFile;TaskShadowAfterBuildContinueFile;TaskShadowAfterOutputWaitStartedFile;TaskShadowAfterOutputContinueFile;TaskShadowDependencyPropertyRecordFile</SunderPackageBuildTaskSourceGlobalProperties>
+  </PropertyGroup>
+
+  <Import Project="$(SunderPackageBuildTargetsPath)" />
+
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.TaskShadowProbeTask"
+             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
+
+  <Target Name="Run" DependsOnTargets="_PrepareSunderPackageBuildTasks">
+    <Sunder.Package.Build.Tasks.TaskShadowProbeTask>
+      <Output TaskParameter="Result" PropertyName="_TaskShadowProbeResult" />
+    </Sunder.Package.Build.Tasks.TaskShadowProbeTask>
+    <Error Condition="'$(_TaskShadowProbeResult)' != '$(ExpectedProbeValue)'"
+           Text="The clean-build task shadow returned '$(_TaskShadowProbeResult)' instead of '$(ExpectedProbeValue)'." />
+    <WriteLinesToFile File="$(ProbeOutput)"
+                      Lines="$(_TaskShadowProbeResult)"
+                      Overwrite="true"
+                      Condition="'$(ProbeOutput)' != ''" />
+  </Target>
+</Project>

@@ -72,20 +72,20 @@ function generateCandidate() {
 
   return {
     schemaVersion: 1,
-    candidateId: "sunder-core-v1-final-freeze",
-    status: "immutable-sunder-1.0-compatibility-freeze",
+    candidateId: "sunder-core-v1-pre-implementation-first-migration",
+    status: "phase-0-reopened-migration-oracle",
     generatedBy: "scripts/compatibility/generate-core-compatibility-candidate.mjs",
     generatorSha256: sourceFingerprint("scripts/compatibility/generate-core-compatibility-candidate.mjs").sha256,
     decisions: {
       retained: [
         {
           surface: "RPC descriptor V1",
-          classification: "standalone compatibility utility only",
-          deployableInManifestV3: false,
+          classification: "current canonical C# deployable schema",
+          deployableInManifestV1: true,
           evidence: [
-            "specs/rpc/v2/README.md",
+            "specs/rpc/v1/README.md",
             "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/SunderRpcContractDescriptorTests.cs",
-            "languages/typescript/node/packages/package-tool/test/rpc-bindings.test.ts",
+            "languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/PackageBuildManifestTests.cs",
           ],
         },
         {
@@ -109,7 +109,12 @@ function generateCandidate() {
           effect: "Sunder.Sdk.Stacks no longer references or packages Sunder.Sdk.Worker.",
         },
       ],
-      rationale: "The approved cleanup removes the unshipped Worker-specific Stack convenience while retaining transport-neutral Stack contracts and handlers.",
+      pendingCutovers: [
+        "implementation-first-csharp-and-node-rpc-authoring",
+        "protocol-project-package-and-authored-descriptor-retirement",
+        "source-derived-signed-platform-contract-catalog",
+      ],
+      rationale: "The technical V1 reset remains evidence while implementation-first RPC authoring replaces descriptor-first Protocol projects without changing immutable semantic contract tuples.",
     },
     publicArtifacts: {
       coordinatedVersion: developerVersion,
@@ -121,21 +126,27 @@ function generateCandidate() {
       registryContracts: baselineReference(publicApiBaselines, "Sunder.Registry.Contracts"),
       packageBuildMsbuild: collectMsbuildSurface(publicApiBaselines),
       npm: collectNpmSurfaces(),
+      npmReleaseContract: {
+        workspaceManifest: sourceFingerprint("languages/typescript/node/package.json"),
+        lockfile: sourceFingerprint("languages/typescript/node/package-lock.json"),
+        inventory: sourceFingerprint("eng/test-oracles/core-public-packages.json"),
+        verifier: sourceFingerprint("scripts/release/verify-node-package-artifacts.mjs"),
+      },
       cli: collectCliSurface(),
     },
     protocols: {
       rpcDescriptor: {
-        current: readIntegerConstant(rpcContractsPath, "DescriptorVersionV2"),
-        standaloneCompatibility: [readIntegerConstant(rpcContractsPath, "DescriptorVersionV1")],
+        current: readIntegerConstant(rpcContractsPath, "DescriptorVersion"),
+        standaloneCompatibility: [],
         unversionedConstantSelects: readIntegerConstant(rpcContractsPath, "DescriptorVersion"),
         valueProfile: readStringConstant(rpcContractsPath, "ValueSchemaProfile"),
-        manifestV3RequiresDescriptor: 2,
+        packageManifestV1RequiresDescriptor: 1,
       },
       runtime: constantsFromBaseline(publicApiBaselines, "Sunder.Runtime.Contracts", "RuntimeProtocol"),
       host: constantsFromBaseline(publicApiBaselines, "Sunder.Host.Contracts", "HostProtocol"),
       browserBridge: {
-        identity: "sunder.bridge.v2",
-        version: 2,
+        identity: "sunder.bridge.v1",
+        version: 1,
         resourceProfileDeclaration: sourceFingerprint(
           "languages/typescript/node/packages/sdk/src/browser.ts",
         ),
@@ -146,6 +157,7 @@ function generateCandidate() {
           sourceFingerprint("languages/csharp/dotnet/host/Sunder.App/Services/AppWebPendingRequestRegistry.cs"),
         ],
       },
+      workerConformance: listFiles("specs/worker/v1/conformance").map(sourceFingerprint),
     },
     http: {
       runtime: {
@@ -249,6 +261,7 @@ function generateCandidate() {
       latestCliTag: latestTag(tags, "cli/v"),
       latestHostTag: latestTag(tags, "host/v"),
       tagFamilies: ["app/v<semver>", "cli/v<semver>", "host/v<semver>", "sdk/v<semver>"],
+      workerV1Thresholds: sourceFingerprint("eng/release/worker-v1-thresholds.json"),
       workflows: listFiles(".github/workflows")
         .filter((path) => /(?:ci|release|validation|promotion)\.yml$/u.test(path))
         .map(sourceFingerprint),
@@ -257,7 +270,7 @@ function generateCandidate() {
       packageArchive: { extension: ".sunderpkg", mediaType: "application/vnd.sunder.package" },
       stackArchive: { extension: ".sunderstack", mediaType: "application/vnd.sunder.stack" },
       projectionArchive: { extension: ".sunderprojection" },
-      runtimeTarget: { kind: "worker", protocol: "sunder.worker.v3" },
+      runtimeTarget: { kind: "worker", protocol: "sunder.worker.v1" },
       supportedRids: readQuotedArray(packageFormatPath, "Rids"),
       executables: ["Sunder.App", "Sunder.Host.Supervisor", "Sunder.Runtime.Host", "sunder"],
       payloadPolicy: {
@@ -278,7 +291,7 @@ function generateCandidate() {
       cloudFront: "not present in Core source or configuration",
     },
     phase2Deltas: [
-      "Added explicit RPC DescriptorVersionV1 and made unversioned DescriptorVersion select current V2.",
+      "Reset RPC descriptor semantics to one DescriptorVersion V1 selected by the unversioned DescriptorVersion constant.",
       "Added Sunder.Host.Contracts and Sunder.Package.Build to the existing .NET API baseline gate.",
       "Aligned @sunder/sdk/browser resourceProfile declarations with the injected bridge object.",
       "Replaced Runtime message-based RPC validation classification with structured validator metadata.",
@@ -290,22 +303,9 @@ function generateCandidate() {
       "Removed the public Stack Worker registration convenience surface and the Sunder.Sdk.Stacks dependency on Sunder.Sdk.Worker.",
     ],
     allowedFutureDeltas: [
-      {
-        phase: 1,
-        surface: "Runtime Stack failure classification",
-        change: "Replace RuntimeEndpointErrors Stack failure message matching with typed internal failure categories while retaining the reviewed public Runtime status/error-code inventory.",
-        expectedLedgerEffect: "Runtime endpoint behavior is keyed by failure category rather than diagnostic text; no route, DTO, or public error-code addition.",
-        acceptance: "Focused tests vary diagnostic text independently of category, every category maps to the reviewed status/code pair, and Runtime endpoint plus compatibility-candidate checks pass.",
-        implementationStatus: "implemented",
-      },
-      {
-        phase: 5,
-        surface: "Sunder.Sdk.Stacks Worker registration convenience API",
-        change: "Remove CreateWorkerProviderRegistration and the Sunder.Sdk.Worker project/package dependency from Sunder.Sdk.Stacks; construct Worker registration in first-party templates and consumers.",
-        expectedLedgerEffect: "The Sunder.Sdk.Stacks public API baseline and NuGet dependency graph lose the Worker-specific surface; Stack format and RPC contracts remain unchanged.",
-        acceptance: "Public API and packed NuGet dependency tests prove removal, templates and external consumers build, and App/Runtime receive no transitive Worker dependency through Stacks.",
-        implementationStatus: "implemented",
-      },
+      "implementation-first-csharp-and-node-rpc-authoring",
+      "protocol-project-package-and-authored-descriptor-retirement",
+      "source-derived-signed-platform-contract-catalog",
     ],
     verificationGates: [
       "node scripts/compatibility/generate-core-compatibility-candidate.mjs --check",
@@ -730,6 +730,7 @@ function collectPersistence() {
   const installedPackages = "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/InstalledPackageStore.cs";
   const rpcPermissions = "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/RuntimeRpcPermissionStore.cs";
   const packageStoreRecovery = "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/PackageStoreRecovery.cs";
+  const packageStoreTransactions = "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/PackageStoreTransactionManager.cs";
   const packageState = "languages/csharp/dotnet/host/Sunder.Runtime.Host/Infrastructure/Storage/PackageStateSerializer.cs";
   const packageSecrets = "languages/csharp/dotnet/host/Sunder.Runtime.Host/Infrastructure/Storage/PackageSecretsSerializer.cs";
   const packageStorageMigration = "languages/csharp/dotnet/host/Sunder.Runtime.Host/Infrastructure/Storage/PackageStorageMigrationJournal.cs";
@@ -804,9 +805,9 @@ function collectPersistence() {
       document(
         "package-store-transaction",
         ["runtime/v1/transactions/<transaction>/journal.json"],
-        { schema: readMatchedInteger(packageStoreRecovery, /journal\.SchemaVersion != (\d+)/u, "package transaction schema") },
+        { schema: readIntegerConstant(packageStoreTransactions, "JournalSchemaVersion") },
         "fail closed during recovery when journal identity, phase, paths, or catalogs are invalid",
-        [packageStoreRecovery, "languages/csharp/dotnet/host/Sunder.Runtime.Host/Services/PackageStoreTransactionManager.cs"],
+        [packageStoreRecovery, packageStoreTransactions],
       ),
       document(
         "package-state-and-settings",
@@ -942,7 +943,7 @@ function collectTemplates() {
           })),
       },
       roles: {
-        runtime: "canonical unsuffixed self-contained Worker V3 executable",
+        runtime: "canonical unsuffixed framework-dependent Worker V1 project with a managed module entry point",
         app: "optional role-isolated Avalonia App project",
         protocol: "package-local non-package contract project",
       },
@@ -965,7 +966,7 @@ function collectTemplates() {
 function topologyFiles(root) {
   return listFiles(root)
     .filter((path) => !path.split("/").some((part) =>
-      part === "dist" || part === "node_modules" || part.startsWith(".sunder-")))
+      part === ".sunder" || part === "dist" || part === "node_modules" || part.startsWith(".sunder-")))
     .map(sourceFingerprint);
 }
 

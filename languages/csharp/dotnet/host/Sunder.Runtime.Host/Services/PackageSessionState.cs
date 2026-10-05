@@ -132,11 +132,26 @@ internal sealed class PackageSessionState(
         }
     }
 
+    internal bool AppPredicatesSatisfied(RuntimeRpcReadinessEvaluator readiness, string version, bool development, string? manifestHash,
+        IReadOnlyList<RuntimeRequiredProviderPredicate> predicates, IReadOnlyList<string>? ownerOnlyContracts = null)
+    {
+        lock (_syncRoot) return readiness.AppPredicatesSatisfied(_activeEntry.Session, version, development, manifestHash, predicates, ownerOnlyContracts);
+    }
+
     public IReadOnlyList<SessionPackageDescriptor> GetSessionPackages()
     {
         lock (_syncRoot)
         {
             return _activeEntry.Session.GetSessionPackages();
+        }
+    }
+
+    internal IReadOnlyList<string> GetExecutionRuntimeDependentPackageIds(
+        IReadOnlySet<string> blockedIdentityKeys)
+    {
+        lock (_syncRoot)
+        {
+            return _activeEntry.Session.GetExecutionRuntimeDependentPackageIds(blockedIdentityKeys);
         }
     }
 
@@ -864,7 +879,8 @@ internal sealed class PackageSessionState(
             exception,
             action,
             committed,
-            out recoveryRequest);
+            out recoveryRequest,
+            out _);
 
     public bool HandleRuntimeGenerationFault(
         string packageId,
@@ -901,7 +917,26 @@ internal sealed class PackageSessionState(
             exception,
             action,
             committed,
-            out recoveryRequest);
+            out recoveryRequest,
+            out _);
+
+    internal bool HandleExecutionRuntimePolicyFault(
+        string packageId,
+        RuntimePackageGeneration runtimeGeneration,
+        long expectedGeneration,
+        Exception exception,
+        Func<long, Task>? committed,
+        out Task cleanupCompletion)
+        => HandlePackageFaultCore(
+            packageId,
+            PackageFaultTarget.ForRuntimeGeneration(runtimeGeneration),
+            expectedGeneration,
+            PackageFailureOrigin.RuntimeActivation,
+            exception,
+            "comply with exact execution-runtime lifecycle policy",
+            committed,
+            out _,
+            out cleanupCompletion);
 
     private bool HandlePackageFaultCore(
         string packageId,
@@ -911,7 +946,8 @@ internal sealed class PackageSessionState(
         Exception exception,
         string action,
         Func<long, Task>? committed,
-        out RuntimePackageRecoveryRequest? recoveryRequest)
+        out RuntimePackageRecoveryRequest? recoveryRequest,
+        out Task cleanupCompletion)
     {
         ActiveLoadedPackage? packageToDeactivate;
         PackageDeactivationWork? deactivation;
@@ -920,6 +956,7 @@ internal sealed class PackageSessionState(
         FaultPublicationReservation publication;
         long committedGeneration;
         recoveryRequest = null;
+        cleanupCompletion = Task.CompletedTask;
         lock (_syncRoot)
         {
             var failedAtUtc = _timeProvider.GetUtcNow();
@@ -945,6 +982,7 @@ internal sealed class PackageSessionState(
             _generation = committedGeneration;
             retiredEpoch = AdvanceGenerationUnderLock(sessionEntry, committedGeneration);
             deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
+            cleanupCompletion = deactivation?.Completion.Task ?? Task.CompletedTask;
             recoveryRequest = CreateRecoveryRequestLocked(
                 packageId,
                 packageToDeactivate,

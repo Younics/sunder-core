@@ -47,7 +47,9 @@ Create the current managed .NET Runtime preset with the public template:
 ```powershell
 dotnet new install Sunder.Package.Templates
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
-dotnet build .\MyPackage\MyPackage.csproj
+dotnet restore .\MyPackage\MyPackage.csproj
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:AcceptSunderContracts -p:SunderContractKey=sample -p:SunderContractNextVersion=2.0.0
+dotnet build .\MyPackage\MyPackage.csproj --no-restore
 ```
 
 The build emits an unpacked development package:
@@ -62,14 +64,16 @@ Load it into Sunder App during development:
 Sunder.App.exe --dev-package .\MyPackage\bin\Debug\net10.0\sunder-dev
 ```
 
-Set the package version once in `MyPackage/Sunder.Package.props`, then create and validate the distributable archive with the canonical pack target:
+Set the package version once in `MyPackage/MyPackage.csproj`, then freeze the reviewed
+contracts and create the distributable archive:
 
 ```powershell
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:FreezeSunderContracts
 dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
 ```
 
-Current Runtime authoring is Worker-only: the .NET and Node presets emit self-contained, exact-RID Worker V3 executables. Avalonia and framework-agnostic web App modules remain role-isolated, in-process extensions of `Sunder.App`, with React/Vite as one web template. The package format is not tied to those presets. Future Python, Rust, Go, or other worker toolchains, UI approaches, and web frameworks can participate when their tooling emits the canonical archive and uses a target kind/protocol supported by the Host.
+Runtime authoring is Worker-only. The canonical V1 package model uses module entry points launched by exact bound execution runtimes. The TypeScript preset emits a thin CommonJS Worker V1 module bound to the separately trusted Node 24 runtime. Avalonia and framework-agnostic web App modules remain role-isolated, in-process extensions of `Sunder.App`, with React/Vite as one web template. The package format is not tied to those presets, and future worker toolchains can participate when they emit the canonical archive and use a Host-supported target, protocol, and module ABI.
 
 ## Architecture
 

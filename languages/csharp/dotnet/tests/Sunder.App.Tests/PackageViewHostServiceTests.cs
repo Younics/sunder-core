@@ -21,13 +21,27 @@ namespace Sunder.App.Tests;
 public sealed class PackageViewHostServiceTests
 {
     [Fact]
+    public async Task MissingProcessPermitDoesNotLoadAPackageAssembly()
+    {
+        using var scope = Sunder.Core.TestSupport.TemporaryDirectoryScope.Create("sunder-app-permit");
+        var package = CreateActivePackage("example.policy");
+        var folder = CreateAppPackageSource(scope.RootPath, package.PackageId);
+        var source = RuntimeContractTestData.Snapshot(package.PackageId, PackageSourceKind.Dev, folder);
+        await using var host = new PackageViewHostService(new AppPackageViewRegistry(), [], [], [], scope.RootPath,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync, uiDispatcher: TestUiDispatcher);
+        await host.ApplyPackageDeltaAsync([package], [source]);
+        Assert.Equal(0, host.LoadContextCount);
+        Assert.Equal(0, host.LoadedPackageCount);
+    }
+
+    [Fact]
     public async Task ApplyPackageDeltaAsync_RuntimeOnlyPackageDoesNotMaterializeOrCreateAppLoadContext()
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var package = CreateActivePackage("runtime.only") with { HostRoles = PackageHostRoles.Runtime };
         var downloadCalled = false;
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -55,16 +69,16 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
-    public async Task InitialPackageGeneration_StaleRuntimeSnapshotFailsForStartupRetry()
+    public async Task InitialDevPackageGeneration_StaleRuntimeSnapshotFailsForStartupRetry()
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var package = CreateActivePackage("stale.package");
         var source = RuntimeContractTestData.Snapshot(
             package.PackageId,
-            PackageSourceKind.Installed,
+            PackageSourceKind.Dev,
             "stale-content");
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -105,7 +119,7 @@ public sealed class PackageViewHostServiceTests
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(rootPath);
         var notificationCenter = new NotificationCenterService(Path.Combine(rootPath, "notifications.json"));
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -147,7 +161,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        await using var hostService = new PackageViewHostService(
+        await using var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -187,7 +201,7 @@ public sealed class PackageViewHostServiceTests
     public async Task DisablePackageAsync_WaitsForPackageScopedBackgroundProcessesToStop()
     {
         var backgroundProcesses = new BackgroundProcessQueueService(maxParallelism: 1);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -250,7 +264,7 @@ public sealed class PackageViewHostServiceTests
         Directory.CreateDirectory(sessionFolder);
         try
         {
-            var hostService = new PackageViewHostService(
+            var hostService = TestAppPackageHost.Create(
                 new AppPackageViewRegistry(),
                 [],
                 [],
@@ -326,7 +340,7 @@ public sealed class PackageViewHostServiceTests
     public async Task DisposeAsync_RejectsPublicOperations()
     {
         var dispatcher = new TrackingUiDispatcher();
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(dispatcher),
             [],
             [],
@@ -372,7 +386,7 @@ public sealed class PackageViewHostServiceTests
         {
             registry.RegisterPackageView<DispatcherControlPackageView>("agent", "agent.chat", serviceProvider);
         }
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -421,7 +435,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        await using var hostService = new PackageViewHostService(
+        await using var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -467,7 +481,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -500,7 +514,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        await using var hostService = new PackageViewHostService(
+        await using var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -536,7 +550,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        await using var hostService = new PackageViewHostService(
+        await using var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -579,7 +593,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        await using var hostService = new PackageViewHostService(
+        await using var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -615,7 +629,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        await using var hostService = new PackageViewHostService(
+        await using var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -680,7 +694,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        await using var hostService = new PackageViewHostService(
+        await using var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -722,7 +736,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        await using var hostService = new PackageViewHostService(
+        await using var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -770,7 +784,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        await using var hostService = new PackageViewHostService(
+        await using var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -799,7 +813,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             "agent.chat",
             serviceProvider);
-        await using var hostService = new PackageViewHostService(
+        await using var hostService = TestAppPackageHost.Create(
             registry,
             [],
             [serviceProvider],
@@ -893,7 +907,7 @@ public sealed class PackageViewHostServiceTests
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var downloadCount = 0;
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -932,7 +946,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var firstSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -976,7 +990,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -1034,7 +1048,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var currentSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -1125,7 +1139,7 @@ public sealed class PackageViewHostServiceTests
             await generation.DisposeAsync();
         }
 
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher,
@@ -1200,7 +1214,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var currentSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -1263,7 +1277,7 @@ public sealed class PackageViewHostServiceTests
         var package = CreateActiveAgentPackage();
         var firstSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var resourceAssemblies = new AppPackageResourceAssemblyRegistry();
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             resourceAssemblyRegistry: resourceAssemblies,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
@@ -1317,7 +1331,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var retirementCount = 0;
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher,
@@ -1378,7 +1392,7 @@ public sealed class PackageViewHostServiceTests
             await generation.DisposeAsync();
         }
 
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher,
@@ -1426,7 +1440,7 @@ public sealed class PackageViewHostServiceTests
         var viewRegistry = new AppPackageViewRegistry();
         var notificationCenter = new NotificationCenterService(
             Path.Combine(rootPath, "notifications.json"));
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             viewRegistry,
             [],
             [],
@@ -1472,7 +1486,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -1512,7 +1526,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -1566,7 +1580,7 @@ public sealed class PackageViewHostServiceTests
             rpcHandler);
         var notificationCenter = new NotificationCenterService(
             Path.Combine(rootPath, "notifications.json"));
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -1738,7 +1752,7 @@ public sealed class PackageViewHostServiceTests
             packageSourceFolder);
         var notificationCenter = new NotificationCenterService(
             Path.Combine(rootPath, "notifications.json"));
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -1824,7 +1838,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             PackageSourceKind.Dev,
             packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -1881,7 +1895,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             PackageSourceKind.Dev,
             packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -1941,7 +1955,7 @@ public sealed class PackageViewHostServiceTests
             string.Empty);
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -2003,7 +2017,7 @@ public sealed class PackageViewHostServiceTests
             string.Empty);
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -2055,7 +2069,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -2116,7 +2130,7 @@ public sealed class PackageViewHostServiceTests
         var dispatcher = new GateNextUiDispatcher();
         var notificationCenter = new NotificationCenterService(
             Path.Combine(rootPath, "notifications.json"));
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(dispatcher), [], [], [], sessionFolder,
             notificationCenter: notificationCenter,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
@@ -2175,7 +2189,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -2238,7 +2252,7 @@ public sealed class PackageViewHostServiceTests
             await generation.DisposeAsync();
         }
 
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher,
@@ -2331,7 +2345,7 @@ public sealed class PackageViewHostServiceTests
             await generation.DisposeAsync();
         }
 
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher,
@@ -2390,7 +2404,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -2434,7 +2448,7 @@ public sealed class PackageViewHostServiceTests
         Directory.CreateDirectory(sessionFolder);
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             notificationCenter: notificationCenter,
             backgroundProcessQueue: backgroundProcesses,
@@ -2509,7 +2523,7 @@ public sealed class PackageViewHostServiceTests
             RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, agentSourceFolder),
             RuntimeContractTestData.Snapshot("tools", PackageSourceKind.Dev, toolsSourceFolder),
         };
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             notificationCenter: notificationCenter,
             backgroundProcessQueue: backgroundProcesses,
@@ -2603,7 +2617,7 @@ public sealed class PackageViewHostServiceTests
         Directory.CreateDirectory(sessionFolder);
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -2641,7 +2655,7 @@ public sealed class PackageViewHostServiceTests
         var package = CreateActiveAgentPackage();
         var blockedHash = string.Empty;
         var downloadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: async (snapshot, destination, cancellationToken) =>
             {
@@ -2692,7 +2706,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var images = new Queue<TrackedImage>([new TrackedImage(), new TrackedImage()]);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             loadPackageIconImageAsync: (_, _) =>
@@ -2749,7 +2763,7 @@ public sealed class PackageViewHostServiceTests
         var package = CreateActiveAgentPackage();
         var loadCount = 0;
         var firstImage = new TrackedImage();
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             loadPackageIconImageAsync: (_, _) =>
@@ -2796,7 +2810,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -2830,7 +2844,7 @@ public sealed class PackageViewHostServiceTests
             "agent",
             PackageSourceKind.Dev,
             packageSourceFolder);
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
@@ -2870,7 +2884,7 @@ public sealed class PackageViewHostServiceTests
     public async Task DisposeAsync_WhenRemainingResourceDisposalIsUnproven_QuarantinesGeneration()
     {
         var resource = new ThrowingOwnedResource();
-        var hostService = new PackageViewHostService(
+        var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [resource],
@@ -3075,7 +3089,7 @@ public sealed class PackageViewHostServiceTests
             if (request.RequestUri?.AbsolutePath == "/api/handshake")
             {
                 return JsonResponse(
-                    "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":8,\"minimumSupportedRevision\":8,\"maximumSupportedRevision\":8,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"app-web-rpc.v2\",\"rpc.v2\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}");
+                    "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":1,\"minimumSupportedRevision\":1,\"maximumSupportedRevision\":1,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"app-web-rpc.v1\",\"schema-first-rpc.v1\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}");
             }
             if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app-sessions/open")
             {

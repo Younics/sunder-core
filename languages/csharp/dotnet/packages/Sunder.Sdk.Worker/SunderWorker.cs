@@ -3,16 +3,16 @@ using Sunder.Sdk.Worker.Internal;
 
 namespace Sunder.Sdk.Worker;
 
-/// <summary>Runs a standalone .NET worker over the canonical Sunder Worker V3 process protocol.</summary>
+/// <summary>Runs a standalone .NET worker over the canonical Sunder Worker V1 process protocol.</summary>
 public static class SunderWorker
 {
     private const int MaximumDiagnosticCharacters = 4096;
     private static readonly object DiagnosticGate = new();
 
-    /// <summary>Configures and runs a canonical Worker V3 activation until the Host shuts it down.</summary>
+    /// <summary>Configures and runs a canonical Worker V1 activation until the Host shuts it down.</summary>
     /// <remarks>Configuration runs once before the immutable contribution catalog is advertised. Standard output is reserved exclusively for worker protocol frames.</remarks>
-    [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
-    [SunderSdkCapability(SunderWorkerCapabilities.ProtocolV3)]
+    [SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+    [SunderSdkCapability(SunderWorkerCapabilities.ProtocolV1)]
     public static async Task RunAsync(
         Func<SunderWorkerContext, SunderWorkerOptions> configure,
         CancellationToken cancellationToken = default)
@@ -68,7 +68,7 @@ public static class SunderWorker
             {
                 var context = new SunderWorkerContext(client);
                 var options = configure(context)
-                              ?? throw new InvalidOperationException("Worker V3 configuration returned null options.");
+                              ?? throw new InvalidOperationException("Worker V1 configuration returned null options.");
                 return WorkerRuntimeConfiguration.FromOptions(options, context);
             },
             input,

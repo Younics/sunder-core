@@ -2,6 +2,8 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
 
+internal abstract record PackageStoreChange;
+
 internal sealed record PackageStoreMutation(
     PackageStoreMutationKind Kind,
     string? PackageId = null,
@@ -12,16 +14,44 @@ internal sealed record PackageStoreMutation(
     bool AllowCascade = false,
     string? ConfirmationToken = null,
     PackageCapabilityConsent? CapabilityConsent = null,
-    string? ConsentManifestSha256 = null);
+    string? ConsentManifestSha256 = null,
+    IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord>? ExecutionRuntimeBindings = null)
+    : PackageStoreChange
+{
+    internal Sunder.Registry.Contracts.RegistryPackageResolutionPolicy? ResolutionPolicy { get; init; }
+    internal IReadOnlyList<Sunder.Package.Format.SunderPackageTargetKey>? RegistryProjectionTargets { get; init; }
+}
+
+internal sealed record PackageExecutionRuntimeRebindMutation(
+    string PackageId,
+    InstalledPackageRecord ExpectedPackage,
+    IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> DesiredBindings)
+    : PackageStoreChange;
+
+internal sealed record PackageExecutionRuntimePolicyUpdateMutation(
+    string PackageId,
+    InstalledPackageRecord ExpectedPackage,
+    IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> DesiredBindings)
+    : PackageStoreChange;
+
+internal sealed record PackageLifecyclePolicyUpdateMutation(
+    string PackageId,
+    InstalledPackageRecord ExpectedPackage,
+    InstalledPackagePolicyRecord? DesiredPolicy) : PackageStoreChange;
 
 internal sealed record RegistryPackageUploadMetadata(
     InstalledPackageProvenanceRecord Provenance,
-    string ConsentManifestSha256);
+    string ConsentManifestSha256,
+    IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> ExecutionRuntimeBindings)
+{
+    internal Sunder.Registry.Contracts.RegistryPackageResolutionPolicy? ResolutionPolicy { get; init; }
+    internal IReadOnlyList<Sunder.Package.Format.SunderPackageTargetKey>? AcquiredTargets { get; init; }
+}
 
-internal sealed record RegistryPackageStateExpectation(
-    string PackageId,
-    string? Version,
-    InstalledPackageProvenanceRecord? Provenance);
+internal sealed record LocalExecutionRuntimePolicyAuthority(
+    long Generation,
+    IReadOnlyList<ExecutionRuntimeIdentity> InstallationIdentities,
+    IReadOnlyList<ExecutionRuntimeIdentity> ActivationIdentities);
 
 internal enum PackageStoreTransactionPhase
 {
@@ -35,9 +65,35 @@ internal enum PackageStoreTransactionPhase
     RolledBack,
 }
 
+internal enum PackageStoreCutoverPhase
+{
+    Prepared,
+    PreLaunchPolicyConfirmed,
+    CandidateReady,
+    PreCommitPolicyConfirmed,
+    DurableCommitStarted,
+    DurableCommitted,
+    GenerationCommitAcknowledged,
+    OldGenerationStopped,
+    Completed,
+}
+
+internal enum PackageStoreCommitDisposition
+{
+    Committed,
+    RolledBack,
+    Indeterminate,
+}
+
+internal sealed record PackageStoreCommitResult(
+    PackageOperationResult OperationResult,
+    PackageStoreCommitDisposition Disposition);
+
 internal enum PackageStoreFaultPoint
 {
+    CutoverPrepared,
     JournalPrepared,
+    DurableCommitStarted,
     PayloadsCommitting,
     DirectoryMoveBefore,
     DirectoryMoveAfter,
@@ -45,6 +101,9 @@ internal enum PackageStoreFaultPoint
     PayloadsCommitted,
     CatalogReplacing,
     CatalogReplaced,
+    PolicyReconciling,
+    PolicyReconciled,
+    CatalogCommitRecording,
     CatalogCommitted,
     Cleanup,
 }
@@ -65,7 +124,9 @@ internal sealed record PackageStorePreparedStage(
     IReadOnlyList<InstalledPackageRecord> ProspectivePackages,
     IReadOnlyDictionary<string, string> PreparationSourcePaths,
     PackageOperationResult Result,
-    long BaseCatalogGeneration);
+    long BaseCatalogGeneration,
+    LocalExecutionRuntimePolicyAuthority? LocalRuntimePolicyAuthority = null,
+    ExecutionRuntimeLifecyclePolicySnapshot? RegistryRuntimePolicyAuthority = null);
 
 internal sealed record PackageStoreStagePreparation(
     PackageStorePreparedStage? Stage,
@@ -113,13 +174,31 @@ internal sealed record PackageStoreJournalAction(
     PackageStoreJournalActionProgress Progress = PackageStoreJournalActionProgress.Pending,
     PackageStoreJournalRollbackProgress RollbackProgress = PackageStoreJournalRollbackProgress.None);
 
+internal enum PackageStoreStorageSnapshotKind
+{
+    Data,
+    Workspace,
+    Files,
+}
+
+internal sealed record PackageStoreStorageSnapshot(
+    string PackageId,
+    PackageStoreStorageSnapshotKind Kind,
+    string TargetPath,
+    string SnapshotPath,
+    bool Existed);
+
 internal sealed record PackageStoreTransactionJournal(
     int SchemaVersion,
     string TransactionId,
+    PackageStoreCutoverPhase CutoverPhase,
+    bool RequiresRuntimePublication,
     PackageStoreTransactionPhase Phase,
     IReadOnlyList<InstalledPackageRecord> PreviousPackages,
     IReadOnlyList<InstalledPackageRecord> DesiredPackages,
-    IReadOnlyList<PackageStoreJournalAction> Actions);
+    IReadOnlyList<PackageStoreJournalAction> Actions,
+    IReadOnlyList<PackageStoreStorageSnapshot> StorageSnapshots,
+    IReadOnlyList<ExecutionRuntimeLifecyclePolicyEntryV1> RuntimePolicyUpdates = null!);
 
 internal sealed record PendingStoreStage(
     string StageId,
@@ -128,4 +207,9 @@ internal sealed record PendingStoreStage(
     IReadOnlyList<InstalledPackageRecord> ProspectivePackages,
     IReadOnlyList<PreparedPackageArchiveMutation> PreparedArchives,
     PackageOperationResult Result,
-    long BaseCatalogGeneration);
+    long BaseCatalogGeneration,
+    IReadOnlyList<ExecutionRuntimeLifecyclePolicyEntryV1> RuntimePolicyUpdates,
+    ExecutionRuntimeLifecyclePolicySnapshot? RegistryRuntimePolicyAuthority = null,
+    LocalExecutionRuntimeBindingSnapshot? LocalBindingAuthority = null,
+    LocalExecutionRuntimePolicyAuthority? LocalRuntimePolicyAuthority = null,
+    IReadOnlyList<InstalledPackagePolicyRecord>? PackagePolicyAuthority = null);

@@ -1,0 +1,114 @@
+namespace Sunder.Runtime.Host.Services;
+
+internal sealed class ExecutionRuntimeGarbageCollectionAuthoritySnapshot
+{
+    public ExecutionRuntimeGarbageCollectionAuthoritySnapshot(
+        IEnumerable<InstalledPackageExecutionRuntimeBindingRecord> packageBindings,
+        ExecutionRuntimeLifecyclePolicySnapshot? lifecyclePolicies = null)
+    {
+        ArgumentNullException.ThrowIfNull(packageBindings);
+        PackageBindings = Array.AsReadOnly(packageBindings.ToArray());
+        LifecyclePolicies = lifecyclePolicies
+                            ?? new ExecutionRuntimeLifecyclePolicySnapshot(0, []);
+    }
+
+    public IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> PackageBindings { get; }
+
+    public ExecutionRuntimeLifecyclePolicySnapshot LifecyclePolicies { get; }
+}
+
+internal interface IExecutionRuntimeGarbageCollectionAuthority
+{
+    Task<TResult> ExecuteAsync<TResult>(
+        Func<ExecutionRuntimeGarbageCollectionAuthoritySnapshot, CancellationToken, Task<TResult>> operation,
+        CancellationToken cancellationToken);
+}
+
+internal sealed class PackageExecutionRuntimeGarbageCollectionAuthority(
+    RuntimeOperationGate operationGate,
+    PackageStoreCoordinator packageStore,
+    ExecutionRuntimeLifecyclePolicyCache lifecyclePolicies) : IExecutionRuntimeGarbageCollectionAuthority
+{
+    public async Task<TResult> ExecuteAsync<TResult>(
+        Func<ExecutionRuntimeGarbageCollectionAuthoritySnapshot, CancellationToken, Task<TResult>> operation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        await using var operationLease = await operationGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        var packageSnapshot = await packageStore.CaptureExecutionRuntimeGarbageCollectionAuthorityAsync(
+                operationLease.CancellationToken)
+            .ConfigureAwait(false);
+        await lifecyclePolicies.InitializeAsync(operationLease.CancellationToken).ConfigureAwait(false);
+        return await operation(
+                new ExecutionRuntimeGarbageCollectionAuthoritySnapshot(
+                    packageSnapshot.PackageBindings,
+                    lifecyclePolicies.CaptureSnapshot()),
+                operationLease.CancellationToken)
+            .ConfigureAwait(false);
+    }
+}
+
+internal sealed record ExecutionRuntimeRetention(
+    ExecutionRuntimeIdentity? Identity = null,
+    string? ContentIdentity = null,
+    string? ArtifactSha256 = null,
+    long? ArtifactSize = null,
+    string? ManifestSha256 = null);
+
+internal interface IExecutionRuntimeRetentionManager
+{
+    ValueTask<IAsyncDisposable> RetainAsync(
+        ExecutionRuntimeRetention retention,
+        CancellationToken cancellationToken = default);
+}
+
+internal sealed class ExecutionRuntimeRetentionRegistry
+{
+    private readonly object _sync = new();
+    private readonly Dictionary<Guid, ExecutionRuntimeRetention> _retentions = [];
+
+    internal IAsyncDisposable RetainUnderFence(
+        ExecutionRuntimeRetention retention,
+        RuntimeFileLock crossProcessPin)
+    {
+        ArgumentNullException.ThrowIfNull(crossProcessPin);
+        var retentionId = Guid.NewGuid();
+        lock (_sync)
+        {
+            _retentions.Add(retentionId, retention);
+        }
+        return new RetentionLease(this, retentionId, crossProcessPin);
+    }
+
+    internal IReadOnlyList<ExecutionRuntimeRetention> SnapshotUnderFence()
+    {
+        lock (_sync)
+        {
+            return Array.AsReadOnly(_retentions.Values.ToArray());
+        }
+    }
+
+    private void Release(Guid retentionId)
+    {
+        lock (_sync)
+        {
+            _retentions.Remove(retentionId);
+        }
+    }
+
+    private sealed class RetentionLease(
+        ExecutionRuntimeRetentionRegistry owner,
+        Guid retentionId,
+        RuntimeFileLock crossProcessPin) : IAsyncDisposable
+    {
+        private ExecutionRuntimeRetentionRegistry? _owner = owner;
+        private RuntimeFileLock? _crossProcessPin = crossProcessPin;
+
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Exchange(ref _owner, null)?.Release(retentionId);
+            Interlocked.Exchange(ref _crossProcessPin, null)?.Dispose();
+            return ValueTask.CompletedTask;
+        }
+    }
+}

@@ -13,13 +13,15 @@ internal sealed class RuntimeProtocolDescriptor
         RuntimeProtocolFeatures.AtomicPackageSnapshotV1,
         RuntimeProtocolFeatures.PackageStageStatusV1,
         RuntimeProtocolFeatures.DevPackageOwnerLeasesV1,
+        RuntimeProtocolFeatures.DevPackageImportsV1,
         RuntimeProtocolFeatures.TargetAwarePackageSnapshotsV1,
         RuntimeProtocolFeatures.StartupDiagnosticsV1,
-        RuntimeProtocolFeatures.SchemaFirstRpcV2,
-        RuntimeProtocolFeatures.RpcPermissionsV2,
-        RuntimeProtocolFeatures.AppWebRpcV2,
+        RuntimeProtocolFeatures.SchemaFirstRpcV1,
+        RuntimeProtocolFeatures.RpcPermissionsV1,
+        RuntimeProtocolFeatures.AppWebRpcV1,
         RuntimeProtocolFeatures.RuntimeResourcePolicyV1,
         RuntimeProtocolFeatures.PackageRuntimeRecoveryV1,
+        RuntimeProtocolFeatures.ExecutionRuntimeManagementV1,
     });
 
     public RuntimeProtocolDescriptor(RuntimeResourcePolicy? resourcePolicy = null)

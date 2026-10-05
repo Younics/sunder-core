@@ -134,6 +134,106 @@ internal static class CliJsonData
         updatedAtUtc = stack.UpdatedAtUtc,
     };
 
+    public static object PackageStatus(
+        InstalledPackageDescriptor? installed,
+        SessionPackageDescriptor? session,
+        bool active,
+        RuntimePackageSnapshot snapshot,
+        IReadOnlyList<CliPackageRuntimeStatus> executionRuntimes) => new
+    {
+        packageId = session?.PackageId ?? installed!.PackageId,
+        installed = installed is null ? null : new
+        {
+            name = installed.Name,
+            version = installed.Version,
+            enabled = installed.IsEnabled,
+            installedAtUtc = installed.InstalledAtUtc,
+            statusMessage = installed.StatusMessage,
+            source = installed.Provenance.SourceKind.ToString().ToLowerInvariant(),
+            versionPolicy = installed.Provenance.VersionPolicy.ToString().ToLowerInvariant(),
+            registryOrigin = installed.Provenance.RegistryOrigin,
+            tag = installed.Provenance.RequestedTag,
+            requestedVersion = installed.Provenance.RequestedVersion,
+        },
+        session = session is null ? null : new
+        {
+            displayName = session.DisplayName,
+            version = session.Version,
+            enabled = session.IsEnabled,
+            active,
+            readiness = session.Readiness.ToString().ToLowerInvariant(),
+            failureOrigin = session.FailureOrigin?.ToString().ToLowerInvariant(),
+            lastError = session.LastError,
+            lastFailureAtUtc = session.LastFailureAtUtc,
+            failureCount = session.FailureCount,
+        },
+        runtime = new
+        {
+            instanceId = snapshot.RuntimeInstanceId,
+            sessionGeneration = snapshot.SessionGeneration,
+            bootstrapState = snapshot.BootstrapState.ToString().ToLowerInvariant(),
+        },
+        executionRuntimes = executionRuntimes.Select(status => new
+        {
+            target = new
+            {
+                role = status.Binding.Role,
+                rid = status.Binding.Rid,
+            },
+            requirement = new
+            {
+                runtimeId = status.Binding.Requirement.RuntimeId,
+                versionRange = status.Binding.Requirement.VersionRange,
+                moduleAbi = status.Binding.Requirement.ModuleAbi,
+            },
+            binding = new
+            {
+                runtimeId = status.Binding.Runtime.RuntimeId,
+                version = status.Binding.Runtime.Version,
+                packagingRevision = status.Binding.Runtime.PackagingRevision,
+                rid = status.Binding.Runtime.Rid,
+                moduleAbi = status.Binding.Runtime.ModuleAbi,
+                manifestSha256 = status.Binding.Runtime.ManifestSha256,
+                artifactSha256 = status.Binding.Runtime.ArtifactSha256,
+            },
+            installed = status.InstalledRuntime is not null,
+            status = status.InstalledRuntime?.Status ?? "missing",
+            health = status.InstalledRuntime is null ? null : new
+            {
+                status = status.InstalledRuntime.Health.Status,
+                checkedAtUtc = status.InstalledRuntime.Health.CheckedAtUtc,
+                repairRecommended = status.InstalledRuntime.Health.RepairRecommended,
+                message = status.InstalledRuntime.Health.Message,
+            },
+            lifecycle = new
+            {
+                state = status.Lifecycle.State,
+                supportedFromUtc = status.Lifecycle.SupportedFromUtc,
+                deprecatedAtUtc = status.Lifecycle.DeprecatedAtUtc,
+                installBlockedAtUtc = status.Lifecycle.InstallBlockedAtUtc,
+                activationBlockedAtUtc = status.Lifecycle.ActivationBlockedAtUtc,
+                revokedAtUtc = status.Lifecycle.RevokedAtUtc,
+                policyMessage = status.Lifecycle.PolicyMessage,
+                runtimePolicyRevision = status.Lifecycle.RuntimePolicyRevision,
+                policyObservedAtUtc = status.Lifecycle.PolicyObservedAtUtc,
+                source = status.LifecycleSource,
+            },
+            actions = new
+            {
+                ensureRequired = status.EnsureRequired,
+                repairRequired = status.RepairRequired,
+                rebindRequired = status.RebindRequired,
+                updateRecommended = status.UpdateRecommended,
+                ensureCommand = status.EnsureCommand,
+                repairCommand = status.RepairCommand,
+                rebindPreflightCommand = status.RebindPreflightCommand,
+                rebindApplyCommand = status.RebindApplyCommand,
+                impactedPackageIds = status.ImpactedPackageIds,
+                message = status.ActionMessage,
+            },
+        }).ToArray(),
+    };
+
     public static object RegistryPackageChange(RuntimeRegistryPackageChangeResult result) => new
     {
         success = result.Success,
@@ -144,14 +244,7 @@ internal static class CliJsonData
         warnings = result.Warnings,
         errors = result.Errors,
         impactedPackageIds = result.ImpactedPackageIds,
-        plan = result.PlanItems.Select(item => new
-        {
-            packageId = item.PackageId,
-            currentVersion = item.CurrentVersion,
-            version = item.Version,
-            update = item.IsUpdate,
-            deprecatedMessage = item.DeprecatedMessage,
-        }).ToArray(),
+        plan = result.PlanItems.Select(PlanItem).ToArray(),
         requiredCapabilityConsents = result.RequiredCapabilityConsents.Select(consent => new
         {
             packageId = consent.PackageId,
@@ -159,6 +252,88 @@ internal static class CliJsonData
             manifestSha256 = consent.ManifestSha256,
             capabilities = consent.Capabilities,
         }).ToArray(),
+    };
+
+    public static object RegistryPackageExecution(
+        CliPackageChangePreflight preflight,
+        bool dryRun,
+        RuntimeRegistryPackageChangeResult? result) => new
+    {
+        mode = dryRun ? "dry-run" : "apply",
+        applied = result is not null,
+        preflight = new
+        {
+            success = preflight.Success,
+            packageDownloadBytes = preflight.PackageDownloadBytes,
+            fullRuntimeDownloadBytes = preflight.FullRuntimeDownloadBytes,
+            incrementalRuntimeDownloadBytes = preflight.IncrementalRuntimeDownloadBytes,
+            reusedRuntimeBytes = preflight.ReusedRuntimeBytes,
+            fullDownloadBytes = preflight.FullDownloadBytes,
+            incrementalDownloadBytes = preflight.IncrementalDownloadBytes,
+            planExpectations = preflight.PlanExpectations.Select(expectation => new
+            {
+                registryOrigin = expectation.RegistryOrigin,
+                includePrerelease = expectation.IncludePrerelease,
+                expectedResolutionFingerprint = expectation.ExpectedResolutionFingerprint,
+            }).ToArray(),
+            plan = preflight.Items.Select(PlanItem).ToArray(),
+            runtimeDownloads = preflight.RuntimeDownloads.Select(download => new
+            {
+                identity = new
+                {
+                    runtimeId = download.Artifact.Identity.RuntimeId,
+                    version = download.Artifact.Identity.Version,
+                    packagingRevision = download.Artifact.Identity.PackagingRevision,
+                    rid = download.Artifact.Identity.Rid,
+                    moduleAbi = download.Artifact.Identity.ModuleAbi,
+                },
+                fullBytes = download.Artifact.ArtifactSize,
+                incrementalBytes = download.IncrementalBytes,
+                alreadyInstalledAndHealthy = download.AlreadyInstalled,
+                lifecycle = new
+                {
+                    state = download.Artifact.Lifecycle.State,
+                    supportedFromUtc = download.Artifact.Lifecycle.SupportedFromUtc,
+                    deprecatedAtUtc = download.Artifact.Lifecycle.DeprecatedAtUtc,
+                    installBlockedAtUtc = download.Artifact.Lifecycle.InstallBlockedAtUtc,
+                    activationBlockedAtUtc = download.Artifact.Lifecycle.ActivationBlockedAtUtc,
+                    revokedAtUtc = download.Artifact.Lifecycle.RevokedAtUtc,
+                    message = download.Artifact.Lifecycle.Message,
+                },
+            }).ToArray(),
+            conflicts = preflight.Conflicts.Select(conflict => new
+            {
+                packageId = conflict.PackageId,
+                currentVersion = conflict.CurrentVersion,
+                requestedVersionRange = conflict.RequestedVersionRange,
+                requiredByPackageId = conflict.RequiredByPackageId,
+                code = conflict.ErrorCode,
+                message = conflict.Message,
+            }).ToArray(),
+            runtimeConflicts = preflight.RuntimeConflicts.Select(conflict => new
+            {
+                code = conflict.Code,
+                message = conflict.Message,
+                runtimeId = conflict.Requirement.RuntimeId,
+                versionRange = conflict.Requirement.VersionRange,
+                moduleAbi = conflict.Requirement.ModuleAbi,
+                rid = conflict.Rid,
+                packageId = conflict.PackageId,
+                targetRole = conflict.TargetRole,
+                requiredHostTrustGeneration = conflict.RequiredHostTrustGeneration,
+            }).ToArray(),
+            requiredCapabilityConsents = preflight.RequiredCapabilityConsents.Select(consent => new
+            {
+                packageId = consent.PackageId,
+                packageVersion = consent.PackageVersion,
+                manifestSha256 = consent.ManifestSha256,
+                capabilities = consent.Capabilities,
+            }).ToArray(),
+            skippedPackageIds = preflight.SkippedPackageIds,
+            warnings = preflight.Warnings,
+            errors = preflight.Errors,
+        },
+        result = result is null ? null : RegistryPackageChange(result),
     };
 
     public static object PackageOperation(PackageOperationResult result) => new
@@ -260,6 +435,7 @@ internal static class CliJsonData
         RuntimeRegistryErrorCode.DownloadTooLarge => "download_too_large",
         RuntimeRegistryErrorCode.ArtifactVerificationFailed => "artifact_verification_failed",
         RuntimeRegistryErrorCode.ConsentRequired => "consent_required",
+        RuntimeRegistryErrorCode.StalePlan => "stale_plan",
         RuntimeRegistryErrorCode.Cancelled => "cancelled",
         _ => "internal_error",
     };
@@ -271,4 +447,13 @@ internal static class CliJsonData
             username = user.Username,
             displayName = user.DisplayName,
         };
+
+    private static object PlanItem(RuntimeRegistryPackageInstallPlanItem item) => new
+    {
+        packageId = item.PackageId,
+        currentVersion = item.CurrentVersion,
+        version = item.Version,
+        actionKind = item.ActionKind,
+        deprecatedMessage = item.DeprecatedMessage,
+    };
 }

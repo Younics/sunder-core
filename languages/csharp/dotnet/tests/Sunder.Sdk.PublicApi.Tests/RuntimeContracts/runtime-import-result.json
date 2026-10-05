@@ -1,0 +1,42 @@
+{
+  "success": true,
+  "errorCode": null,
+  "message": "The trusted execution runtime was imported.",
+  "action": "import",
+  "runtime": {
+    "identity": {
+      "runtimeId": "sunder.runtime.dotnet",
+      "version": "10.0.1",
+      "packagingRevision": 2,
+      "rid": "win-x64",
+      "moduleAbi": "sunder.dotnet-worker-module.v1",
+      "manifestSha256": "runtime-manifest-10.0.1-2",
+      "artifactSha256": "runtime-artifact-10.0.1-2"
+    },
+    "status": "ready",
+    "size": 104857600,
+    "packageReferenceCount": 3,
+    "acquisitionSource": "local-import",
+    "signingKeyId": "sunder-runtime-release-2026-01",
+    "trustGeneration": 2,
+    "health": {
+      "status": "ready",
+      "checkedAtUtc": "2026-07-11T10:01:00+00:00",
+      "repairRecommended": false,
+      "message": null
+    },
+    "lifecycle": {
+      "state": "supported",
+      "supportedFromUtc": "2026-07-10T12:00:00+00:00",
+      "deprecatedAtUtc": null,
+      "installBlockedAtUtc": null,
+      "activationBlockedAtUtc": null,
+      "revokedAtUtc": null,
+      "policyMessage": null,
+      "runtimePolicyRevision": 42,
+      "policyObservedAtUtc": "2026-07-11T10:00:00+00:00"
+    },
+    "installedAtUtc": "2026-07-11T09:00:00+00:00"
+  },
+  "alreadyPresent": false
+}

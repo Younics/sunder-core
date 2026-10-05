@@ -17,41 +17,38 @@ internal static class WorkerProcessEnvironment
     public static IReadOnlyDictionary<string, string?> CreateBaseline(
         Func<string, string?> readVariable,
         string temporaryPath,
-        bool isWindows,
+        WorkerProcessPlatform platform,
         bool allowDockerEnvironment)
     {
         ArgumentNullException.ThrowIfNull(readVariable);
         ArgumentException.ThrowIfNullOrWhiteSpace(temporaryPath);
         var environment = new Dictionary<string, string?>(
-            isWindows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+            platform == WorkerProcessPlatform.Windows
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal);
 
-        Copy("PATH");
-        if (isWindows)
+        if (platform == WorkerProcessPlatform.Windows)
         {
-            Copy("USERPROFILE");
-            Copy("PATHEXT");
-            Copy("ComSpec");
-            Copy("SystemRoot");
-            if (!environment.ContainsKey("PATHEXT"))
+            var systemRoot = readVariable("SystemRoot");
+            if (string.IsNullOrWhiteSpace(systemRoot))
             {
-                environment["PATHEXT"] = ".COM;.EXE;.BAT;.CMD";
+                systemRoot = readVariable("WINDIR");
             }
-            if (!environment.ContainsKey("ComSpec")
-                && environment.TryGetValue("SystemRoot", out var systemRoot))
+            if (string.IsNullOrWhiteSpace(systemRoot))
             {
-                environment["ComSpec"] = Path.Combine(systemRoot!, "System32", "cmd.exe");
+                throw new InvalidOperationException(
+                    "The Windows Worker environment requires SystemRoot or WINDIR.");
             }
+            environment["SystemRoot"] = systemRoot;
+            environment["WINDIR"] = systemRoot;
         }
-        else
+        else if (platform == WorkerProcessPlatform.MacOS)
         {
-            Copy("HOME");
-            Copy("LANG");
-            Copy("LC_ALL");
-            Copy("LC_CTYPE");
-            if (!environment.ContainsKey("LANG"))
-            {
-                environment["LANG"] = "C.UTF-8";
-            }
+            Copy("__CF_USER_TEXT_ENCODING");
+        }
+        else if (platform != WorkerProcessPlatform.Linux)
+        {
+            throw new ArgumentOutOfRangeException(nameof(platform), platform, "The Worker platform is unsupported.");
         }
 
         if (allowDockerEnvironment)
@@ -77,6 +74,14 @@ internal static class WorkerProcessEnvironment
         }
     }
 
+    public static WorkerProcessPlatform GetCurrentPlatform()
+    {
+        if (OperatingSystem.IsWindows()) return WorkerProcessPlatform.Windows;
+        if (OperatingSystem.IsMacOS()) return WorkerProcessPlatform.MacOS;
+        if (OperatingSystem.IsLinux()) return WorkerProcessPlatform.Linux;
+        throw new PlatformNotSupportedException("Sunder Workers require Windows, macOS, or Linux.");
+    }
+
     public static bool AllowsDockerEnvironment(
         SunderPackageTargetManifest target,
         IReadOnlyList<string> approvedSensitiveCapabilities)
@@ -86,4 +91,11 @@ internal static class WorkerProcessEnvironment
            && approvedSensitiveCapabilities.Contains(
                SunderSdkCapabilities.DockerEnvironmentV1,
                StringComparer.Ordinal);
+}
+
+internal enum WorkerProcessPlatform
+{
+    Windows,
+    MacOS,
+    Linux,
 }

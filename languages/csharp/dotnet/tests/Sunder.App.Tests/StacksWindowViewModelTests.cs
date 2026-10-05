@@ -1408,7 +1408,8 @@ public sealed class StacksWindowViewModelTests
                 "sunder.package.agent",
                 CurrentVersion: null,
                 Version: "1.2.0",
-                IsUpdate: false,
+                PackageContentIdentity: "package-content-identity",
+                ActionKind: RegistryPackageActionKinds.PackageInstall,
                 DeprecatedMessage: null,
                 DependsOn: [],
                 Targets: [],
@@ -1436,7 +1437,8 @@ public sealed class StacksWindowViewModelTests
                 "sunder.package.agent",
                 CurrentVersion: null,
                 Version: "1.2.0",
-                IsUpdate: false,
+                PackageContentIdentity: "package-content-identity",
+                ActionKind: RegistryPackageActionKinds.PackageInstall,
                 DeprecatedMessage: null,
                 DependsOn: [],
                 Targets: [],
@@ -1456,7 +1458,8 @@ public sealed class StacksWindowViewModelTests
             [],
             [],
             [],
-            []);
+            [],
+            ResolutionFingerprint: new string('f', 64));
         var registryClient = new FakeRegistryApiClient
         {
             InstallPlanResponses = [installPlan, installPlan, noChangesPlan],
@@ -1515,6 +1518,7 @@ public sealed class StacksWindowViewModelTests
         Assert.Equal("preview", appliedRequirement.Tag);
         Assert.Equal(">=2.3.0", appliedRequirement.VersionRange);
         Assert.False(appliedRequirement.Required);
+        Assert.Equal(new string('f', 64), runtimeApiClient.LastRegistryApplyRequest.ExpectedResolutionFingerprint);
         Assert.Equal(["agent-profile"], runtimeApiClient.LastImportRequest?.SelectedFragmentIds);
         Assert.Equal(["action-key"], runtimeApiClient.LastImportRequest?.SelectedActionIds);
     }
@@ -2002,7 +2006,7 @@ public sealed class StacksWindowViewModelTests
             return Task.FromResult(new RegistryPublishStackResponse(true, "team-stack", "Published Stack 'team-stack'.", [], []));
         }
 
-        public Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken cancellationToken = default)
+        public Task<RegistryStackManagementOperationResponse> SetRegistryStackVisibilityAsync(RuntimeRegistryStackVisibilityRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RegistryStackManagementOperationResponse(true, "Deleted Stack.", []));
 
         public Uri CreatePackageAssetUri(string packageId, string assetPath) => new($"file:///packages/{packageId}/{assetPath}");

@@ -80,7 +80,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         TimeSpan? retirementBudget = null,
         TimeSpan? retirementDrainBudget = null,
         string? packageContentCacheRoot = null,
-        Action<Exception>? fatalCleanupFaultHandler = null)
+        Action<Exception>? fatalCleanupFaultHandler = null,
+        IAppPackagePolicy? packagePolicy = null)
     {
         _sessionFolder = sessionFolder;
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
@@ -156,7 +157,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             notificationCenter,
             backgroundProcessQueue,
             getRuntimeConnectionInfo,
-            _uiDispatcher);
+            _uiDispatcher,
+            packagePolicy);
         var initialGeneration = _generationBuilder.CreateInitialGeneration(
             viewRegistry,
             disabledPackageIds,
@@ -255,7 +257,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         AppPackageResourceAssemblyRegistry resourceAssemblyRegistry,
         Func<RuntimeConnectionInfo?> getRuntimeConnectionInfo,
         IUiDispatcher uiDispatcher,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IAppPackagePolicy? packagePolicy = null)
         => await CreateForPackagesCoreAsync(
             activePackages,
             packageSources,
@@ -266,7 +269,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             resourceAssemblyRegistry,
             getRuntimeConnectionInfo,
             uiDispatcher,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, packagePolicy).ConfigureAwait(false);
 
     private static async Task<PackageViewHostService> CreateForPackagesCoreAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
@@ -278,7 +281,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry,
         Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
         IUiDispatcher? uiDispatcher,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IAppPackagePolicy? packagePolicy = null)
     {
         AppPackageSessionDirectories.ScheduleStaleSessionCleanup();
         var sessionFolder = activePackages.Count > 0 ? AppPackageSessionDirectories.CreateSessionFolder() : null;
@@ -294,7 +298,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             backgroundProcessQueue: backgroundProcessQueue,
             resourceAssemblyRegistry: resourceAssemblyRegistry,
             getRuntimeConnectionInfo: getRuntimeConnectionInfo,
-            uiDispatcher: uiDispatcher);
+            uiDispatcher: uiDispatcher,
+            packagePolicy: packagePolicy);
 
         try
         {

@@ -1,0 +1,28 @@
+{
+  "descriptorVersion": 1,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "contractId": "example.rpc.v1.nonfinitenumber",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "example": {
+      "methods": {
+        "read": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
+          "requestSchema": { "$ref": "#/$defs/Value" },
+          "responseSchema": { "$ref": "#/$defs/Value" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Value": {
+      "type": "number",
+      "format": "float64",
+      "minimum": 0,
+      "maximum": 1e400
+    }
+  }
+}

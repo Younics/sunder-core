@@ -10,12 +10,19 @@ namespace Sunder.App.Tests;
 public sealed class RuntimePersistentLauncherTests
 {
     [Fact]
-    public void ServiceEnvironmentPersistsOnlyThePolicyFilePathNotWorkerPayloadOrOtherSunderValues()
+    public void ServiceEnvironmentPersistsPublicDevelopmentTrustButNotPrivateOrUnrelatedSunderValues()
     {
         var startInfo = new ProcessStartInfo("sunder-host");
         startInfo.Environment[RuntimeResourcePolicyEnvironment.PolicyFilePathVariable] = "/app/v1/policy.json";
         startInfo.Environment[RuntimeResourcePolicyEnvironment.LaunchPayloadVariable] = "stale-payload";
         startInfo.Environment["SUNDER_REGISTRY_TOKEN"] = "secret";
+        startInfo.Environment["SUNDER_RUNTIME_DEVELOPMENT_RELEASE_KEY_ID"] = "development-release-key";
+        startInfo.Environment["SUNDER_RUNTIME_DEVELOPMENT_RELEASE_PUBLIC_KEY_BASE64"] = "public-key";
+        startInfo.Environment["SUNDER_RUNTIME_DEVELOPMENT_TRUST_GENERATION"] = "2";
+        startInfo.Environment["SUNDER_RUNTIME_DEVELOPMENT_ALLOW_INSECURE_LOOPBACK_REGISTRY"] = "true";
+        startInfo.Environment["SUNDER_EXECUTION_RUNTIME_DEVELOPMENT_STATE_ROOT"] = "/private/key-state";
+        startInfo.Environment["DOTNET_ENVIRONMENT"] = "Development";
+        startInfo.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
 
         var environment = RuntimeLauncherProcess.GetServiceEnvironment(startInfo).ToArray();
 
@@ -32,6 +39,22 @@ public sealed class RuntimePersistentLauncherTests
         Assert.DoesNotContain(environment, pair => string.Equals(
             pair.Key,
             "SUNDER_REGISTRY_TOKEN",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(environment, pair => pair is
+            { Key: "SUNDER_RUNTIME_DEVELOPMENT_RELEASE_KEY_ID", Value: "development-release-key" });
+        Assert.Contains(environment, pair => pair is
+            { Key: "SUNDER_RUNTIME_DEVELOPMENT_RELEASE_PUBLIC_KEY_BASE64", Value: "public-key" });
+        Assert.Contains(environment, pair => pair is
+            { Key: "SUNDER_RUNTIME_DEVELOPMENT_TRUST_GENERATION", Value: "2" });
+        Assert.Contains(environment, pair => pair is
+            { Key: "SUNDER_RUNTIME_DEVELOPMENT_ALLOW_INSECURE_LOOPBACK_REGISTRY", Value: "true" });
+        Assert.Contains(environment, pair => pair is
+            { Key: "DOTNET_ENVIRONMENT", Value: "Development" });
+        Assert.Contains(environment, pair => pair is
+            { Key: "ASPNETCORE_ENVIRONMENT", Value: "Development" });
+        Assert.DoesNotContain(environment, pair => string.Equals(
+            pair.Key,
+            "SUNDER_EXECUTION_RUNTIME_DEVELOPMENT_STATE_ROOT",
             StringComparison.OrdinalIgnoreCase));
     }
 

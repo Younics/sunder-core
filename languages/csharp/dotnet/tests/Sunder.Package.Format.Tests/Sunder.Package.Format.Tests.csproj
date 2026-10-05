@@ -8,4 +8,16 @@
     <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\..\..\..\..\specs\package\v1\**\*.json"
+          Link="PackageV1Conformance\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\execution-runtime\v1\**\*.json"
+          Link="ExecutionRuntimeV1Conformance\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\**\*.json"
+          Link="RpcV1Authoring\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

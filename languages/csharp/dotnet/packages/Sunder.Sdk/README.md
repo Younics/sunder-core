@@ -56,7 +56,7 @@ Decision summary:
 
 | Need | Package/tool |
 | --- | --- |
-| Worker V3 Runtime leaf | `Sunder.Sdk.Worker` |
+| Worker V1 Runtime leaf | `Sunder.Sdk.Worker` |
 | App or Protocol project | `Sunder.Sdk` |
 | Avalonia views/settings | Add `Sunder.Sdk.Avalonia` to that App leaf |
 | Stack contributor | Add `Sunder.Sdk.Stacks` to the implementing leaf |
@@ -66,7 +66,7 @@ Decision summary:
 
 ## Package Shape
 
-A Sunder package is one universal archive with shared content and exact App/Runtime RID targets. An App target may expose one App module; a Runtime target is an independently executable exact-RID Worker V3 process. A shared-only package may contain descriptor bundles without executable targets.
+A Sunder package is one universal archive with shared content and exact App/Runtime RID targets. An App target may expose one App module; a Runtime target is a Worker V1 module launched by its exact bound execution runtime in an independently supervised process. A shared-only package may contain descriptor bundles without executable targets.
 
 Typical package projects:
 
@@ -228,11 +228,23 @@ Runtime applies the declared rewrites atomically under the document lock, retain
 
 ## Owner And Cross-Package RPC
 
-Use `Sunder.Sdk.Rpc` for App-to-Worker owner calls and cross-package Runtime calls. A package bundles every contract descriptor it provides or imports under `payload/shared`, declares the descriptor identity and hashes in `contractBundles`, declares maximum requested `discover`, `invoke`, and `subscribe` actions in `usesContracts`, and declares each provider in `provides`. Worker V3 registers the same manifest-declared provider identity through `SunderWorkerProviderRegistration`. Consumers receive a caller-scoped `ISunderRpcClient`; endpoint references identify one exact activation and never retarget a replacement.
+Implementation-first C# contracts use the declarative types in `Sunder.Sdk.Rpc`.
+Mark an ordinary class or interface with `SunderRpcService`, mark its RPC methods
+with `SunderRpcMethod`, and describe named values with `SunderRpcDefinition` plus
+the closed facet, transparent-wrapper, numeric-enum, union, discriminator, and
+variant attributes. A concrete annotated partial class is the normal one-service/
+one-provider shorthand. Use `SunderRpcProvider(typeof(IService))` only for a
+separately declared service interface or an explicit multi-provider binding.
+These attributes contain no compiler or runtime reflection behavior. They are the
+frozen SDK input for the coordinated `Sunder.Package.Build` source-compiler
+cutover; until that compiler lands, annotations alone do not produce package RPC
+artifacts and the descriptor-backed build path below remains active.
 
-Descriptors are strict UTF-8 JSON with `descriptorVersion: 2`, exact `schemaProfile: "sunder.rpc.values.v1"`, strict SemVer contract versions, keyed services and methods, declared errors, and local `#/$defs/...` schema references. The supported Draft 2020-12 profile is deliberately closed: bounded ordinary strings and collections; closed case-sensitive records; portable JSON values and objects; safe integers; explicit `float32` and `float64` numbers; asserted string formats; exact big-integer and decimal strings; bounded base64 bytes; content references; local references; productive recursion; and unambiguous nullable or tagged `oneOf` unions. Remote references, bare `type: "number"`, legacy UUID/date-time logical types, unknown keywords, open records, unbounded ordinary values, unproductive recursion, duplicate or case-colliding names, and excessive descriptor depth/count/size are rejected during package validation.
+Use `Sunder.Sdk.Rpc` for App-to-Worker owner calls and cross-package Runtime calls. A package bundles every contract descriptor it provides or imports under `payload/shared`, declares the descriptor identity and hashes in `contractBundles`, declares maximum requested `discover`, `invoke`, and `subscribe` actions in `usesContracts`, and declares each provider in `provides`. Worker V1 registers the same manifest-declared provider identity through `SunderWorkerProviderRegistration`. Consumers receive a caller-scoped `ISunderRpcClient`; endpoint references identify one exact activation and never retarget a replacement.
 
-Descriptor hashes use deterministic JCS-compatible canonical JSON, while ABI hashes use the domain-separated structural RPC V2 identity. Every descriptor number must decode to a finite IEEE-754 binary64 value. Integer-valued keywords and safe-integer schema values remain mathematical integers in the inclusive range `-9007199254740991` through `9007199254740991`; floating-point schemas select their wire semantics explicitly with `format: "float32"` or `format: "float64"`.
+Descriptors are strict UTF-8 JSON with `descriptorVersion: 1`, exact `schemaProfile: "sunder.rpc.values.v1"`, strict SemVer contract versions, keyed services and methods, declared errors, and local `#/$defs/...` schema references. The supported Draft 2020-12 profile is deliberately closed: bounded ordinary strings and collections; closed case-sensitive records; portable JSON values and objects; safe integers; explicit `float32` and `float64` numbers; asserted string formats; exact big-integer and decimal strings; bounded base64 bytes; content references; local references; productive recursion; and unambiguous nullable or tagged `oneOf` unions. Remote references, bare `type: "number"`, legacy UUID/date-time logical types, unknown keywords, open records, unbounded ordinary values, unproductive recursion, duplicate or case-colliding names, and excessive descriptor depth/count/size are rejected during package validation.
+
+Descriptor hashes use deterministic JCS-compatible canonical JSON, while ABI hashes use the domain-separated structural RPC V1 identity. Every descriptor number must decode to a finite IEEE-754 binary64 value. Integer-valued keywords and safe-integer schema values remain mathematical integers in the inclusive range `-9007199254740991` through `9007199254740991`; floating-point schemas select their wire semantics explicitly with `format: "float32"` or `format: "float64"`.
 
 Runtime validates requests and responses/events against the same parsed descriptor. Grants are explicit, default-deny, durable, and fenced to the caller package version plus manifest hash. Revocation immediately removes discovery visibility and cancels active calls and subscriptions. Use `SunderRpcException` for bounded domain failures, `SunderRpcContentReference` for host-mediated large content, and the typed client extensions or `SunderRpcCSharpGenerator` for generated bindings.
 
@@ -351,7 +363,9 @@ The canonical explicit pack target produces a distributable `.sunderpkg` archive
 dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
 
-Generated package families read the package version once from `Sunder.Package.props`. `dotnet publish` remains available when a pipeline also needs normal publish output.
+Generated packages read the package version once from the authored project. Use
+`PackSunderPackage` for the canonical role-isolated archive; internal role outputs
+are generated by the build tooling.
 
 Validate before publishing to a registry:
 

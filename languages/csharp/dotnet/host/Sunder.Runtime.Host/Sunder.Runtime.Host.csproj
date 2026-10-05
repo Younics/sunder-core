@@ -9,6 +9,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Sunder.Package.Projections\Sunder.Package.Projections.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.LocalState\Sunder.Runtime.LocalState.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
@@ -16,5 +17,23 @@
     <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
     <ProjectReference Include="..\..\libraries\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
   </ItemGroup>
+
+  <Target Name="GenerateCoreStackHostTransport" BeforeTargets="CoreCompile" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <Compile Remove="@(_CoreStackHostCompile)" />
+      <_CoreStackHostCompile Remove="@(_CoreStackHostCompile)" />
+    </ItemGroup>
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../../packages/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj"
+             Targets="GetCoreStackHostTransport"
+             Properties="Configuration=$(Configuration);TargetFramework=net10.0;BuildingSolutionFile=false"
+             RemoveProperties="RuntimeIdentifier;SelfContained;OutputPath;OutDir;BaseOutputPath;IntermediateOutputPath;BaseIntermediateOutputPath;MSBuildProjectExtensionsPath;DefineConstants;Nullable;CurrentSolutionConfigurationContents;SolutionPath;SolutionDir;SolutionName;SolutionFileName;SolutionExt"
+             BuildInParallel="false" StopOnFirstFailure="true">
+      <Output TaskParameter="TargetOutputs" ItemName="_CoreStackHostCompile" />
+    </MSBuild>
+    <Error Condition="'@(_CoreStackHostCompile->Count())' != '1'" Text="Core Host requires one checked role-local Stack transport source." />
+    <ItemGroup>
+      <Compile Include="@(_CoreStackHostCompile)" AutoGen="true" Visible="false" Link="StackTransport/CoreStackHostTransport.g.cs" />
+    </ItemGroup>
+  </Target>
 
 </Project>

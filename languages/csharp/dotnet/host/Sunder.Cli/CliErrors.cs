@@ -104,6 +104,7 @@ internal static class CliErrorMapper
         RuntimeRegistryErrorCode.NotFound => CliExitCodes.NotFound,
         RuntimeRegistryErrorCode.Conflict => CliExitCodes.Conflict,
         RuntimeRegistryErrorCode.ConsentRequired => CliExitCodes.Conflict,
+        RuntimeRegistryErrorCode.StalePlan => CliExitCodes.Conflict,
         RuntimeRegistryErrorCode.RegistryUnavailable => CliExitCodes.Unavailable,
         RuntimeRegistryErrorCode.Cancelled => CliExitCodes.Cancelled,
         _ => CliExitCodes.Failure,

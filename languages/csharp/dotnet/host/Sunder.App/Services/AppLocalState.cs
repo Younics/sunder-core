@@ -4,6 +4,7 @@ namespace Sunder.App.Services;
 
 internal static class AppLocalState
 {
+    internal const string StateRootEnvironmentVariable = "SUNDER_APP_STATE_ROOT";
     internal const int SchemaVersion = 1;
     internal const string Product = "Sunder";
     internal const string Api = "sunder.app.local-state";
@@ -14,17 +15,22 @@ internal static class AppLocalState
     };
 
     internal static string RootPath
-    {
-        get
-        {
-            var localApplicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            if (string.IsNullOrWhiteSpace(localApplicationData))
-            {
-                throw new InvalidOperationException("The current user's local application data directory is unavailable.");
-            }
+        => ResolveRootPath(Environment.GetEnvironmentVariable(StateRootEnvironmentVariable));
 
-            return Path.Combine(localApplicationData, "Sunder", "app", "v1");
+    internal static string ResolveRootPath(string? configuredRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredRoot))
+        {
+            return Path.GetFullPath(configuredRoot);
         }
+
+        var localApplicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrWhiteSpace(localApplicationData))
+        {
+            throw new InvalidOperationException("The current user's local application data directory is unavailable.");
+        }
+
+        return Path.Combine(localApplicationData, "Sunder", "app", "v1");
     }
 
     internal static string GetPath(params string[] segments)

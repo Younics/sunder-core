@@ -78,6 +78,16 @@ internal sealed partial class RegistryClient
         if (file.Length <= 0 || file.Length > maxBytes)
             throw new InvalidDataException($"The publication archive must be between 1 and {maxBytes} bytes.");
 
+        RegistryPolicyIdentity? authority = null;
+        if (fieldName == "stack")
+        {
+            using var preflight = new HttpRequestMessage(HttpMethod.Get, CreateUri(RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.PublicationAuthorityPolicy)));
+            preflight.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.Value);
+            using var policyResponse = await SendAsync(preflight, token).ConfigureAwait(false);
+            authority = await ReadRequiredAsync<RegistryPolicyIdentity>(policyResponse, token).ConfigureAwait(false);
+            if (authority.Revision <= 0) throw new InvalidDataException("A verified publication authority revision is required.");
+        }
+
         await using var stream = new FileStream(
             fullPath,
             FileMode.Open,
@@ -97,6 +107,11 @@ internal sealed partial class RegistryClient
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.Value);
         request.Headers.Add(RegistryPublishRequestHeaders.ExpectedResourceId, expectedResourceId);
+        if (authority is not null)
+        {
+            request.Headers.Add(RegistryPolicyMutationHeaders.IdempotencyKey, Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)));
+            request.Headers.Add(RegistryPolicyMutationHeaders.PublicationAuthorityRevision, authority.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
         if (setLatest is not null)
         {
             request.Headers.Add(RegistryPublishRequestHeaders.SetLatest, setLatest.Value ? "true" : "false");

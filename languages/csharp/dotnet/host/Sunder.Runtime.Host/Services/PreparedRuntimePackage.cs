@@ -19,9 +19,17 @@ internal sealed record PreparedRuntimePackage(
     IReadOnlyDictionary<string, SunderRpcContractDescriptor>? RpcContracts = null,
     string? ManifestSha256 = null)
 {
-    public DevProcessLaunchMetadata? DevProcessLaunch { get; init; }
+    public RuntimePackageExecutionRuntimeBinding? ExecutionRuntimeBinding { get; init; }
+
+    internal ExecutionRuntimeLifecyclePolicyEntryV1? ExecutionRuntimePolicyAuthority { get; init; }
 
     public string SessionId { get; init; } = Guid.NewGuid().ToString("N");
 
     public IReadOnlyList<string> ApprovedSensitiveCapabilities { get; init; } = [];
+
+    internal IAsyncDisposable? ExecutionRuntimeRetention { get; init; }
+
+    internal PreparedPackageProjectionLease? PackageProjectionLease { get; init; }
+
+    internal PackageSessionStartupTracePackage? StartupTrace { get; init; }
 }

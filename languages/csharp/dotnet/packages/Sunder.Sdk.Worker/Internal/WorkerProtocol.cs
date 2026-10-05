@@ -2,8 +2,8 @@ namespace Sunder.Sdk.Worker.Internal;
 
 internal static class WorkerProtocol
 {
-    public const string Name = "sunder.worker.v3";
-    public const int Version = 3;
+    public const string Name = "sunder.worker.v1";
+    public const int Version = 1;
     public const long MaximumSafeInteger = 9_007_199_254_740_991;
     public const int EnvelopeReserveBytes = 64 * 1024;
 }

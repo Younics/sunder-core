@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,7 +13,7 @@ import {
 } from "../src/resource-profile";
 import { formatUtcTimestamp } from "../src/timestamp";
 import type { JsonValue, WorkerResourceProfile } from "../src/types";
-import { workerV3ConformanceCorpus } from "./worker-v3-conformance-corpus";
+import { workerV1ConformanceCorpus } from "./worker-v1-conformance-corpus";
 
 const packageIdentity = {
   packageId: "example.package",
@@ -22,6 +21,11 @@ const packageIdentity = {
   activationId: "a".repeat(32),
   sessionId: "b".repeat(32),
 };
+const semanticVersionBoundary = workerV1ConformanceCorpus.semanticVersionBoundary;
+const maximumSemanticVersion = semanticVersionBoundary.prefix
+  + semanticVersionBoundary.suffixCharacter.repeat(semanticVersionBoundary.acceptedSuffixLength);
+const overlongSemanticVersion = semanticVersionBoundary.prefix
+  + semanticVersionBoundary.suffixCharacter.repeat(semanticVersionBoundary.rejectedSuffixLength);
 const provider = {
   providerId: "example.provider",
   contractId: "example.rpc",
@@ -39,11 +43,11 @@ const minimumResourceProfile = {
   contentReferenceBytes: 1024 * 1024,
 } as const;
 
-test("Node worker executes the shared Worker V3 conformance corpus", async () => {
-  const corpus = workerV3ConformanceCorpus;
-  assert.equal(corpus.formatVersion, 3);
-  assert.equal(corpus.protocol.identity, "sunder.worker.v3");
-  assert.equal(corpus.protocol.version, 3);
+test("Node worker executes the shared Worker V1 conformance corpus", async () => {
+  const corpus = workerV1ConformanceCorpus;
+  assert.equal(corpus.formatVersion, 1);
+  assert.equal(corpus.protocol.identity, "sunder.worker.v1");
+  assert.equal(corpus.protocol.version, 1);
   assert.deepEqual(Object.keys(corpus.categories), [
     "shutdown-order",
     "framing",
@@ -84,6 +88,7 @@ test("Node worker executes the shared Worker V3 conformance corpus", async () =>
     send(worker, {
       type: "host.activate",
       sessionGeneration: corpus.lifecycle.sessionGeneration,
+      workspaceRootPath: worker.workspaceRoot,
     });
 
     const migrationKeys = await worker.messages.next();
@@ -264,11 +269,56 @@ test("worker performs handshake, unary, stream, cancellation, and graceful shutd
   }
 });
 
+test("worker enforces exact package and caller SemVer length boundaries", async () => {
+  assert.equal(maximumSemanticVersion.length, 256);
+  assert.equal(overlongSemanticVersion.length, 257);
+  assert.equal(maximumSemanticVersion.length, semanticVersionBoundary.maximumLength);
+  assert.equal(overlongSemanticVersion.length, semanticVersionBoundary.maximumLength + 1);
+
+  const packageAccepted = startWorker(undefined, false, maximumSemanticVersion);
+  try {
+    await handshake(packageAccepted);
+    send(packageAccepted, { type: "host.shutdown", shutdownId: "maximum-package-version", reason: "test" });
+    assert.equal((await packageAccepted.messages.next()).type, "worker.shutdown-ack");
+    assert.equal(await exitCode(packageAccepted.child), 0);
+  } finally {
+    packageAccepted.child.kill("SIGKILL");
+  }
+
+  const packageRejected = startWorker(undefined, false, overlongSemanticVersion);
+  try {
+    assert.equal(await exitCode(packageRejected.child), 70);
+  } finally {
+    packageRejected.child.kill("SIGKILL");
+  }
+
+  const callerAccepted = startWorker();
+  try {
+    await handshake(callerAccepted);
+    send(callerAccepted, invocation("maximum-caller-version", "unary", "echo", maximumSemanticVersion));
+    assert.equal((await callerAccepted.messages.next()).type, "worker.result");
+    send(callerAccepted, { type: "host.shutdown", shutdownId: "maximum-caller-version", reason: "test" });
+    assert.equal((await callerAccepted.messages.next()).type, "worker.shutdown-ack");
+    assert.equal(await exitCode(callerAccepted.child), 0);
+  } finally {
+    callerAccepted.child.kill("SIGKILL");
+  }
+
+  const callerRejected = startWorker();
+  try {
+    await handshake(callerRejected);
+    send(callerRejected, invocation("overlong-caller-version", "unary", "echo", overlongSemanticVersion));
+    assert.equal(await exitCode(callerRejected.child), 70);
+  } finally {
+    callerRejected.child.kill("SIGKILL");
+  }
+});
+
 test("activation callback can await discovery and invocation before acknowledgement", async () => {
   const worker = startWorker("activation-await-rpc");
   try {
     await prepareActivation(worker);
-    send(worker, { type: "host.activate", sessionGeneration: 1 });
+    send(worker, { type: "host.activate", sessionGeneration: 1, workspaceRootPath: worker.workspaceRoot });
 
     const discover = await worker.messages.next();
     assert.equal(discover.type, "worker.discover");
@@ -391,7 +441,7 @@ test("storage-migration preparation is exact-generation and read-only before act
       sessionGeneration: 1,
     });
     await waitForStderr(worker, "MIGRATION_PREPARATION_OK");
-    send(worker, { type: "host.activate", sessionGeneration: 1 });
+    send(worker, { type: "host.activate", sessionGeneration: 1, workspaceRootPath: worker.workspaceRoot });
     assert.deepEqual(await worker.messages.next(), { type: "worker.activated", sessionGeneration: 1 });
     send(worker, { type: "host.shutdown", shutdownId: "migration-stop", reason: "test" });
     assert.equal((await worker.messages.next()).type, "worker.shutdown-ack");
@@ -420,7 +470,7 @@ test("exact generation commit retries are idempotent during and after acknowledg
     send(worker, commit);
     assert.deepEqual(await worker.messages.next(), generationCommitted());
     await prepareStorageMigrations(worker);
-    send(worker, { type: "host.activate", sessionGeneration: 1 });
+    send(worker, { type: "host.activate", sessionGeneration: 1, workspaceRootPath: worker.workspaceRoot });
     assert.deepEqual(await worker.messages.next(), { type: "worker.activated", sessionGeneration: 1 });
     send(worker, { type: "host.shutdown", shutdownId: "commit-stop", reason: "test" });
     assert.equal((await worker.messages.next()).type, "worker.shutdown-ack");
@@ -484,6 +534,28 @@ test("worker requires the exact closed effective resource profile hash", async (
     assert.match(worker.stderr(), /resourceProfileHash/u);
   } finally {
     worker.child.kill("SIGKILL");
+  }
+});
+
+test("worker rejects every invalid shared safe-integer token spelling", async () => {
+  for (const fixture of workerV1ConformanceCorpus.safeIntegerTokens.filter((item) => !item.valid)) {
+    const worker = startWorker();
+    try {
+      const hello = JSON.stringify({
+        type: "host.hello",
+        protocol: "sunder.worker.v1",
+        protocolVersion: 1,
+        challenge: "safe-integer-token",
+        ...packageIdentity,
+        providers: [provider],
+        resourceProfile: minimumResourceProfile,
+        resourceProfileHash: computeWorkerResourceProfileHash(minimumResourceProfile),
+      }).replace('"protocolVersion":1', `"protocolVersion":${fixture.token}`);
+      sendRaw(worker, hello);
+      assert.equal(await exitCode(worker.child), 70, fixture.name);
+    } finally {
+      worker.child.kill("SIGKILL");
+    }
   }
 });
 
@@ -752,7 +824,7 @@ test("shutdown aborts a staged candidate callback without acknowledging the cand
   }
 });
 
-test("worker exposes immutable context roots and emits normalized settings schema", async () => {
+test("worker binds its immutable context workspace on activation and emits normalized settings schema", async () => {
   const contextWorker = startWorker("context");
   try {
     await handshake(contextWorker);
@@ -805,7 +877,7 @@ test("caller-owned scope carries authority through RPC calls and closes idempote
   const worker = startWorker("scope-roundtrip");
   try {
     await prepareActivation(worker);
-    send(worker, { type: "host.activate", sessionGeneration: 1 });
+    send(worker, { type: "host.activate", sessionGeneration: 1, workspaceRootPath: worker.workspaceRoot });
     const opened = await worker.messages.next();
     assert.equal(opened.type, "worker.scope-open");
     assert.equal(opened.deadlineUtc, "2030-01-02T03:04:05.6780000Z");
@@ -861,7 +933,7 @@ test("caller-owned content is staged, verified, streamed, released, and scoped",
   await writeFile(openedPath, "host content", "utf8");
   try {
     await prepareActivation(worker);
-    send(worker, { type: "host.activate", sessionGeneration: 1 });
+    send(worker, { type: "host.activate", sessionGeneration: 1, workspaceRootPath: worker.workspaceRoot });
     const scope = await worker.messages.next();
     assert.equal(scope.type, "worker.scope-open");
     send(worker, {
@@ -907,7 +979,7 @@ test("package data APIs preserve inline and verified payload transport", async (
   await mkdir(payloadRoot, { recursive: true });
   try {
     await prepareActivation(worker);
-    send(worker, { type: "host.activate", sessionGeneration: 1 });
+    send(worker, { type: "host.activate", sessionGeneration: 1, workspaceRootPath: worker.workspaceRoot });
 
     const effective = await worker.messages.next();
     assert.deepEqual({ type: effective.type, key: effective.key, mode: effective.mode }, {
@@ -993,7 +1065,7 @@ test("worker sends structured logger and event records over the isolated logging
   const worker = startWorker("logging");
   try {
     await prepareActivation(worker);
-    send(worker, { type: "host.activate", sessionGeneration: 1 });
+    send(worker, { type: "host.activate", sessionGeneration: 1, workspaceRootPath: worker.workspaceRoot });
     const first = await worker.messages.next();
     const second = await worker.messages.next();
     const entries = new Map([first, second].map((entry) => [entry.channel, entry]));
@@ -1037,7 +1109,7 @@ test("worker advertises and dispatches callback and auth contributions for the e
     });
     assert.deepEqual(await worker.messages.next(), generationCommitted());
     await prepareStorageMigrations(worker);
-    send(worker, { type: "host.activate", sessionGeneration: 1 });
+    send(worker, { type: "host.activate", sessionGeneration: 1, workspaceRootPath: worker.workspaceRoot });
     assert.deepEqual(await worker.messages.next(), { type: "worker.activated", sessionGeneration: 1 });
 
     send(worker, contribution("host.callback-start", "callback-start", {
@@ -1231,7 +1303,7 @@ test("only declared domain errors cross the provider boundary", async (context) 
     assert.deepEqual(await declared.messages.next(), {
       type: "worker.error",
       id: "declared",
-      error: workerV3ConformanceCorpus.rpc.domainFault.error,
+      error: workerV1ConformanceCorpus.rpc.domainFault.error,
     });
     send(declared, { type: "host.shutdown", shutdownId: "declared-stop", reason: "test" });
     assert.equal((await declared.messages.next()).type, "worker.shutdown-ack");
@@ -1486,7 +1558,11 @@ test("provider content client binds register, verified stream open, and discard 
   }
 });
 
-function startWorker(mode?: string, rpcExtendedDeadlineV1 = false): WorkerProcess {
+function startWorker(
+  mode?: string,
+  rpcExtendedDeadlineV1 = false,
+  packageVersion = packageIdentity.packageVersion,
+): WorkerProcess {
   const fixture = resolve(__dirname, "worker-fixture.js");
   const root = mkdtempSync(join(tmpdir(), "sunder-worker-test-"));
   const contentRoot = join(root, "content");
@@ -1498,14 +1574,13 @@ function startWorker(mode?: string, rpcExtendedDeadlineV1 = false): WorkerProces
   const child = spawn(process.execPath, [fixture], {
     stdio: ["pipe", "pipe", "pipe"],
     env: {
-      SUNDER_WORKER_PROTOCOL: "sunder.worker.v3",
+      SUNDER_WORKER_PROTOCOL: "sunder.worker.v1",
       SUNDER_PACKAGE_ID: packageIdentity.packageId,
-      SUNDER_PACKAGE_VERSION: packageIdentity.packageVersion,
+      SUNDER_PACKAGE_VERSION: packageVersion,
       SUNDER_ACTIVATION_ID: packageIdentity.activationId,
       SUNDER_SESSION_ID: packageIdentity.sessionId,
       SUNDER_PACKAGE_CONTENT_ROOT: contentRoot,
       SUNDER_WORKER_TEMP_ROOT: temporaryRoot,
-      SUNDER_PACKAGE_WORKSPACE_ROOT: workspaceRoot,
       SUNDER_TEST_MODE: mode,
       ...(rpcExtendedDeadlineV1 ? { SUNDER_RPC_EXTENDED_DEADLINE_V1: "1" } : {}),
     },
@@ -1517,7 +1592,7 @@ function startWorker(mode?: string, rpcExtendedDeadlineV1 = false): WorkerProces
     stderr += chunk.toString("utf8");
   });
   child.once("exit", () => rmSync(root, { recursive: true, force: true }));
-  return { child, messages, stderr: () => stderr, contentRoot, temporaryRoot, workspaceRoot };
+  return { child, messages, stderr: () => stderr, contentRoot, temporaryRoot, workspaceRoot, packageVersion };
 }
 
 async function handshake(
@@ -1525,7 +1600,7 @@ async function handshake(
   profile: WorkerResourceProfile = SUNDER_WORKER_STANDARD_RESOURCE_PROFILE,
 ): Promise<void> {
   await prepareActivation(worker, "challenge", 1, profile);
-  send(worker, { type: "host.activate", sessionGeneration: 1 });
+  send(worker, { type: "host.activate", sessionGeneration: 1, workspaceRootPath: worker.workspaceRoot });
   assert.deepEqual(await worker.messages.next(), { type: "worker.activated", sessionGeneration: 1 });
 }
 
@@ -1584,10 +1659,11 @@ function sendHello(
 ): void {
   send(worker, {
     type: "host.hello",
-    protocol: "sunder.worker.v3",
-    protocolVersion: 3,
+    protocol: "sunder.worker.v1",
+    protocolVersion: 1,
     challenge,
     ...packageIdentity,
+    packageVersion: worker.packageVersion,
     providers: [provider],
     resourceProfile: profile,
     resourceProfileHash: profileHash,
@@ -1622,7 +1698,12 @@ function contributionResult(type: string, id: string, value: JsonValue): Readonl
   };
 }
 
-function invocation(id: string, kind: "unary" | "server-stream", methodId: string): JsonValue {
+function invocation(
+  id: string,
+  kind: "unary" | "server-stream",
+  methodId: string,
+  callerPackageVersion = "1.0.0",
+): JsonValue {
   return {
     type: "host.invoke",
     id,
@@ -1633,7 +1714,7 @@ function invocation(id: string, kind: "unary" | "server-stream", methodId: strin
     request: { message: "hello" },
     context: {
       callerPackageId: "caller.package",
-      callerPackageVersion: "1.0.0",
+      callerPackageVersion,
       deadlineUtc: formatUtcTimestamp(new Date(Date.now() + 30_000)),
       callDepth: 1,
       provider: {
@@ -1698,10 +1779,27 @@ function send(worker: WorkerProcess, message: JsonValue): void {
   worker.child.stdin.write(encodeFrame(message));
 }
 
+function sendRaw(worker: WorkerProcess, json: string): void {
+  const body = Buffer.from(json, "utf8");
+  worker.child.stdin.write(Buffer.concat([
+    Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "ascii"),
+    body,
+  ]));
+}
+
 async function exitCode(child: ChildProcessWithoutNullStreams): Promise<number | null> {
   if (child.exitCode !== null) return child.exitCode;
-  const [code] = await once(child, "exit") as [number | null, NodeJS.Signals | null];
-  return code;
+  return await new Promise<number | null>((resolvePromise, reject) => {
+    const onExit = (code: number | null): void => {
+      clearTimeout(timer);
+      resolvePromise(code);
+    };
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      reject(new Error("Timed out waiting for the worker process to exit."));
+    }, 5_000);
+    child.once("exit", onExit);
+  });
 }
 
 async function waitForStderr(worker: WorkerProcess, value: string): Promise<void> {
@@ -1720,7 +1818,7 @@ function object(value: JsonValue | undefined): Readonly<Record<string, JsonValue
 function assertEnvelopePropertySet(envelope: Readonly<Record<string, JsonValue>>): void {
   const type = envelope.type;
   if (typeof type !== "string") assert.fail("Worker envelope type must be a string.");
-  const expected = workerV3ConformanceCorpus.envelopePropertySets[type];
+  const expected = workerV1ConformanceCorpus.envelopePropertySets[type];
   assert.ok(expected !== undefined, `Shared corpus has no property set for '${type}'.`);
   assert.deepEqual(Object.keys(envelope).sort(), [...expected].sort(), `${type} property set changed`);
 }
@@ -1732,6 +1830,7 @@ interface WorkerProcess {
   readonly contentRoot: string;
   readonly temporaryRoot: string;
   readonly workspaceRoot: string;
+  readonly packageVersion: string;
 }
 
 class MessageQueue {

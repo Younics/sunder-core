@@ -19,10 +19,8 @@ public sealed class FixturePackageModule : ISunderAppPackageModule
     }
 }
 
-public static class StackRpcClientReference
+public static class StackDomainAdapterReference
 {
-    public static StackContributorRpcClient CreateClient(
-        ISunderRpcCallScope scope,
-        SunderRpcEndpointReference endpoint)
-        => new(scope, endpoint);
+    public static StackContributorServiceAdapter CreateAdapter(IPackageStackContributor contributor)
+        => new(contributor);
 }

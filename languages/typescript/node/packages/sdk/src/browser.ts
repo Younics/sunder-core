@@ -3,6 +3,7 @@ import { formatUtcTimestamp } from "./timestamp";
 
 export { formatUtcTimestamp } from "./timestamp";
 export { RpcDomainError, RpcError } from "./types";
+export { isVersionInRange } from "./validation";
 export {
   RpcDescriptorError,
   canonicalizeDescriptor,
@@ -12,27 +13,24 @@ export {
 export type { RpcDescriptorErrorCode } from "./descriptor";
 export {
   RpcInstanceError,
-  SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR,
+  SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
   computeRpcAbiSha256,
   computeRpcDescriptorSha256,
-  rpcAbiV2Projection,
+  rpcAbiV1Projection,
   validateRpcInstance,
-} from "./descriptor-v2";
+} from "./descriptor-v1";
 export type {
   JsonSchema,
   RpcContractDescriptor,
   RpcContractDescriptorV1,
-  RpcContractDescriptorV2,
-  RpcErrorDescriptorV2,
+  RpcErrorDescriptorV1,
   RpcMethodDescriptorV1,
-  RpcMethodDescriptorV2,
-  RpcMethodDescriptorV2Base,
+  RpcMethodDescriptorV1Base,
   RpcMethodIdempotency,
   RpcSchemaReference,
   RpcServiceDescriptorV1,
-  RpcServiceDescriptorV2,
 } from "./types";
 
 export type BrowserJsonPrimitive = JsonPrimitive;
@@ -124,7 +122,7 @@ export interface SunderBrowserResourceProfile {
 }
 
 export interface SunderBrowserApi {
-  readonly version: 2;
+  readonly version: 1;
   readonly resourceProfile: SunderBrowserResourceProfile;
   readonly rpc: SunderBrowserRpc;
   openExternal(url: string, options?: BrowserCallOptions): Promise<{ readonly opened: boolean }>;
@@ -137,7 +135,7 @@ let adaptedApi: SunderBrowserApi | undefined;
 
 export function getSunder(): SunderBrowserApi {
   const candidate = (globalThis as typeof globalThis & { readonly sunder?: SunderBrowserApi }).sunder;
-  if (candidate?.version !== 2) {
+  if (candidate?.version !== 1) {
     throw new Error("The Sunder browser bridge is not available in this document.");
   }
   if (candidate === adaptedSource && adaptedApi !== undefined) return adaptedApi;
@@ -165,7 +163,7 @@ export function getSunder(): SunderBrowserApi {
   });
   adaptedSource = candidate;
   adaptedApi = Object.freeze({
-    version: 2,
+    version: 1,
     resourceProfile: candidate.resourceProfile,
     rpc,
     openExternal: (url: string, options?: BrowserCallOptions) => candidate.openExternal(url, outboundOptions(options)),

@@ -1,31 +1,16 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const descriptor = require("../contracts/example.rpc.json");
+const descriptor = require("../.sunder/generated/rpc/contracts/messages.rpc.json");
 const config = require("../sunder.package.json");
 
-test("package identity and RPC V2 metadata are configured", () => {
-  assert.equal(config.schemaVersion, 2);
+test("package identity and RPC V1 metadata are configured", () => {
+  assert.equal(config.schemaVersion, 3);
   assert.equal(config.id, "sunderpackageidscaffoldtoken");
   assert.deepEqual(config.workerCapabilities, []);
-  assert.deepEqual(config.contracts, [{
-    path: "contracts/example.rpc.json",
-    exposure: "package",
-  }]);
-  assert.deepEqual(config.providers, [{
-    providerId: "sunderpackageidscaffoldtoken.provider",
-    role: "runtime",
-    contractId: "example.messages",
-    contractVersion: "2.0.0",
-    audience: "owner",
-  }]);
-  assert.deepEqual(config.usesContracts, []);
-  assert.deepEqual(config.rpcBindings, [{
-    path: "contracts/example.rpc.json",
-    outputFile: "example-messages.g.ts",
-  }]);
+  assert.deepEqual(config.rpc, { module: "src/rpc.ts", export: "packageRpc" });
 
-  assert.equal(descriptor.descriptorVersion, 2);
-  assert.equal(descriptor.version, "2.0.0");
+  assert.equal(descriptor.descriptorVersion, 1);
+  assert.equal(descriptor.contractId, `${config.id}.messages`);
   assert.deepEqual(descriptor.errors, {});
   assert.equal(Array.isArray(descriptor.services), false);
   assert.equal(Array.isArray(descriptor.services.messages.methods), false);

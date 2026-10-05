@@ -16,6 +16,14 @@ internal sealed record RuntimePackageSource(
     SunderPackageTargetKey? SelectedTargetKey = null,
     SunderPackageTargetManifest? SelectedTarget = null)
 {
+    internal string? RegistryPolicyOrigin { get; init; }
+    internal string? RegistryPolicyContentIdentity { get; init; }
+    internal InstalledPackagePolicyRecord? InstalledPolicy { get; init; }
+    internal InstalledPackageCompatibilityRecord? Compatibility { get; init; }
+    internal DevelopmentImportAuthority? DevelopmentImports { get; init; }
+    internal IReadOnlyList<string> DevelopmentOmittedPackages { get; init; } = [];
+    internal IReadOnlyList<SunderPackageTargetKey>? AcquiredTargets { get; init; }
+
     internal string Folder => SourceFolder;
 
     internal string EffectiveSnapshotFolder => string.IsNullOrWhiteSpace(SnapshotFolder) ? SourceFolder : SnapshotFolder;

@@ -17,6 +17,13 @@ public static class SunderPackageManifestValidator
         SunderPackageManifest? manifest,
         string rootPath,
         ICollection<string> errors)
+        => ValidateCore(manifest, rootPath, errors);
+
+    internal static void ValidateCore(
+        SunderPackageManifest? manifest,
+        string rootPath,
+        ICollection<string> errors,
+        IReadOnlySet<SunderPackageTargetKey>? acquiredTargets = null)
     {
         if (manifest is null)
         {
@@ -60,7 +67,8 @@ public static class SunderPackageManifestValidator
             static file => file.Path.ToString(),
             static file => file.FullPath,
             StringComparer.Ordinal);
-        PackageTargetValidator.Validate(manifest, files.Select(static file => file.Path), errors);
+        PackageTargetValidator.Validate(manifest, files.Select(static file => file.Path), errors, acquiredTargets);
+        PackageDotNetWorkerValidator.Validate(manifest, physicalFiles, errors, acquiredTargets);
         PackageAssetValidator.ValidateIcon(manifest, physicalFiles, errors);
         PackageContractValidator.Validate(manifest, physicalFiles, errors);
         PackageDependencyValidator.Validate(manifest.DependsOn, errors);

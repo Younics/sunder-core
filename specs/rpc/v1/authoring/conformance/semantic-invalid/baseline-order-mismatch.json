@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "authorityKind": "package",
+  "authorityId": "example.owner",
+  "packageId": "example.owner",
+  "contracts": {
+    "zMinimal": {
+      "contractId": "example.rpc.v1.minimal",
+      "current": {
+        "state": "draft",
+        "exposure": "public",
+        "contractVersion": "2.0.0",
+        "descriptorBytes": 487,
+        "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"example.rpc.v1.minimal\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0\"}",
+        "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+        "abiProjectionBytes": 390,
+        "canonicalAbiProjection": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"type\":\"object\"}},\"contractId\":\"example.rpc.v1.minimal\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}}}",
+        "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42"
+      },
+      "history": []
+    },
+    "aBase64": {
+      "contractId": "example.rpc.v1.unboundedbase64",
+      "current": {
+        "state": "draft",
+        "exposure": "public",
+        "contractVersion": "2.0.0",
+        "descriptorBytes": 378,
+        "canonicalDescriptor": "{\"$defs\":{\"Value\":{\"contentEncoding\":\"base64\",\"type\":\"string\"}},\"contractId\":\"example.rpc.v1.unboundedbase64\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"read\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Value\"},\"responseSchema\":{\"$ref\":\"#/$defs/Value\"}}}}},\"version\":\"2.0.0\"}",
+        "descriptorSha256": "1cab33cde30b1f2989ee3a141f7ae9edddefb48c11bb122613563e2c5e5ef472",
+        "abiProjectionBytes": 360,
+        "canonicalAbiProjection": "{\"$defs\":{\"Value\":{\"contentEncoding\":\"base64\",\"type\":\"string\"}},\"contractId\":\"example.rpc.v1.unboundedbase64\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"read\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Value\"},\"responseSchema\":{\"$ref\":\"#/$defs/Value\"}}}}}}",
+        "abiSha256": "1dfd88034f2078d9b0ee886153c46a3e60aebd821c77d8683f613fa696a66d16"
+      },
+      "history": []
+    }
+  }
+}

@@ -1,5 +1,8 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Text.Json;
 using System.Xml.Linq;
 using Sunder.Core.TestSupport;
@@ -61,9 +64,17 @@ public sealed class CorePublicPackageContractTests
                     Assert.Equal(
                         ["Sunder.Sdk"],
                         references.EnumerateArray()
+                            .Where(reference => !reference.TryGetProperty("ReferenceOutputAssembly", out var output)
+                                || !string.Equals(output.GetString(), "false", StringComparison.OrdinalIgnoreCase))
                             .Select(reference => Path.GetFileNameWithoutExtension(
                                 reference.GetProperty("FullPath").GetString()))
-                            .Order(StringComparer.Ordinal));
+                             .Order(StringComparer.Ordinal));
+                    var tool = Assert.Single(references.EnumerateArray(), reference =>
+                        Path.GetFileNameWithoutExtension(reference.GetProperty("FullPath").GetString()) == "Sunder.ExecutionRuntime.Build");
+                    Assert.Equal("false", tool.GetProperty("ReferenceOutputAssembly").GetString());
+                    Assert.Equal("false", tool.GetProperty("BuildReference").GetString());
+                    Assert.Equal("all", tool.GetProperty("PrivateAssets").GetString());
+                    Assert.Equal("all", tool.GetProperty("ExcludeAssets").GetString());
                 }
             }
 
@@ -76,8 +87,22 @@ public sealed class CorePublicPackageContractTests
             Assert.InRange(firstBytes.LongLength, 1, package.MaximumBytes);
 
             using var archive = ZipFile.OpenRead(first);
-            var entries = archive.Entries.Select(entry => entry.FullName).ToHashSet(StringComparer.Ordinal);
+            var entryNames = archive.Entries.Select(entry => entry.FullName).ToArray();
+            Assert.Equal(entryNames.Length, entryNames.Distinct(StringComparer.Ordinal).Count());
+            var entries = entryNames.ToHashSet(StringComparer.Ordinal);
             VerifyNugetEntries(package, entries);
+            if (package.PackageId == "Sunder.Package.Build")
+            {
+                Assert.DoesNotContain(entries, entry => entry.Contains("BouncyCastle", StringComparison.Ordinal));
+            }
+            if (package.PackageId == "Sunder.Sdk.Stacks")
+            {
+                Assert.Equal(
+                    package.RequiredEntries.Where(static entry => entry.EndsWith(".rpc.json", StringComparison.Ordinal)).Order(StringComparer.Ordinal),
+                    entries.Where(static entry => entry.EndsWith(".rpc.json", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
+                AssertStackDescriptorResources(archive, repositoryRoot);
+                await AssertStackBundleConsumerAsync(archive, scope.CreateDirectory("consumer", package.PackageId), repositoryRoot);
+            }
             var nuspecEntry = Assert.Single(archive.Entries, entry => entry.FullName.EndsWith(".nuspec", StringComparison.Ordinal));
             using var nuspecStream = nuspecEntry.Open();
             var nuspec = XDocument.Load(nuspecStream);
@@ -112,9 +137,9 @@ public sealed class CorePublicPackageContractTests
         Assert.Equal(SunderPackageFormat.CurrentManifestVersion, expected.ManifestVersion);
         Assert.Equal([SunderPackageFormat.AppHostRole, SunderPackageFormat.RuntimeHostRole], expected.Roles);
         Assert.Equal(SunderPackageFormat.WorkerTargetKind, expected.RuntimeKind);
-        Assert.Equal("sunder.worker.v3", expected.WorkerProtocol);
-        Assert.Equal("worker-protocol.v3", expected.WorkerCapability);
-        Assert.Equal(3, expected.WorkerProtocolVersion);
+        Assert.Equal("sunder.worker.v1", expected.WorkerProtocol);
+        Assert.Equal("worker-protocol.v1", expected.WorkerCapability);
+        Assert.Equal(1, expected.WorkerProtocolVersion);
         Assert.True(expected.RuntimeRequiresExactRid);
         Assert.True(expected.AppHasNoWorkerAuthority);
         Assert.True(expected.RuntimeHasNoAppAuthority);
@@ -153,14 +178,19 @@ public sealed class CorePublicPackageContractTests
             explicitlyPackableProjects);
     }
 
-    [Fact]
+    [Theory]
+    [InlineData("Sunder.Sdk", "lib/net10.0/Sunder.Sdk.dll")]
+    [InlineData("Sunder.Package.Build", "tasks/net10.0/Sunder.Package.Format.dll")]
     [Trait("Category", "Artifact")]
     [Trait("Size", "Small")]
-    public void PublicNugetOracle_RejectsSeededMissingRequiredArtifact()
+    public void PublicNugetOracle_RejectsSeededMissingRequiredArtifact(string packageId, string missingEntry)
     {
-        var package = LoadInventory().Nuget[0];
-        var entries = package.RequiredEntries.ToHashSet(StringComparer.Ordinal);
-        entries.Remove(package.RequiredEntries[0]);
+        var package = Assert.Single(LoadInventory().Nuget, candidate => candidate.PackageId == packageId);
+        var entries = package.RequiredEntries
+            .Concat(["README.md", "LICENSE", "icon.png", $"{package.PackageId}.nuspec"])
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains(missingEntry, package.RequiredEntries);
+        entries.Remove(missingEntry);
 
         Assert.ThrowsAny<Exception>(() => VerifyNugetEntries(package, entries));
     }
@@ -172,6 +202,7 @@ public sealed class CorePublicPackageContractTests
         startInfo.ArgumentList.Add(projectPath);
         startInfo.ArgumentList.Add("-nologo");
         startInfo.ArgumentList.Add("-nodeReuse:false");
+        startInfo.ArgumentList.Add("-p:Configuration=Release");
         startInfo.ArgumentList.Add("-getProperty:PackageId,IsPackable,PackageType,IncludeBuildOutput,TargetFramework");
         startInfo.ArgumentList.Add("-getItem:ProjectReference");
         await using var process = CapturedProcess.Start(startInfo);
@@ -191,7 +222,7 @@ public sealed class CorePublicPackageContractTests
         startInfo.ArgumentList.Add("build");
         startInfo.ArgumentList.Add(projectPath);
         startInfo.ArgumentList.Add("--configuration");
-        startInfo.ArgumentList.Add("Debug");
+        startInfo.ArgumentList.Add("Release");
         startInfo.ArgumentList.Add("--no-restore");
         startInfo.ArgumentList.Add("--disable-build-servers");
         startInfo.ArgumentList.Add("--nologo");
@@ -211,7 +242,7 @@ public sealed class CorePublicPackageContractTests
         startInfo.ArgumentList.Add("pack");
         startInfo.ArgumentList.Add(projectPath);
         startInfo.ArgumentList.Add("--configuration");
-        startInfo.ArgumentList.Add("Debug");
+        startInfo.ArgumentList.Add("Release");
         startInfo.ArgumentList.Add("--no-restore");
         startInfo.ArgumentList.Add("--disable-build-servers");
         startInfo.ArgumentList.Add("--output");
@@ -252,6 +283,99 @@ public sealed class CorePublicPackageContractTests
         }
     }
 
+    private static void AssertStackDescriptorResources(ZipArchive archive, string repositoryRoot)
+    {
+        var assembly = Assert.Single(
+            archive.Entries,
+            static entry => entry.FullName == "lib/net10.0/Sunder.Sdk.Stacks.dll");
+        using var bytes = new MemoryStream();
+        using (var content = assembly.Open()) content.CopyTo(bytes);
+        bytes.Position = 0;
+        using var pe = new PEReader(bytes);
+        var metadata = pe.GetMetadataReader();
+        var references = metadata.AssemblyReferences.Select(handle => metadata.GetString(metadata.GetAssemblyReference(handle).Name)).ToArray();
+        Assert.Equal(["Sunder.Sdk"], references.Where(name => name.StartsWith("Sunder.", StringComparison.Ordinal)));
+        Assert.DoesNotContain(references, name => name.StartsWith("Microsoft.CodeAnalysis", StringComparison.Ordinal)
+            || name.StartsWith("Microsoft.Build", StringComparison.Ordinal));
+        var resourceHandle = Assert.Single(metadata.ManifestResources, handle =>
+            metadata.GetString(metadata.GetManifestResource(handle).Name)
+                .EndsWith(".rpc.json", StringComparison.Ordinal));
+        var resource = metadata.GetManifestResource(resourceHandle);
+        Assert.Equal("Sunder.Sdk.Stacks.Contracts.sunder.stack.contributor.rpc.json", metadata.GetString(resource.Name));
+        Assert.True(resource.Implementation.IsNil);
+
+        var resourceSection = pe.GetSectionData(pe.PEHeaders.CorHeader!.ResourcesDirectory.RelativeVirtualAddress).GetContent();
+        var offset = checked((int)resource.Offset);
+        Assert.InRange(offset, 0, resourceSection.Length - sizeof(int));
+        var length = BinaryPrimitives.ReadInt32LittleEndian(resourceSection.AsSpan(offset, sizeof(int)));
+        Assert.InRange(length, 0, resourceSection.Length - offset - sizeof(int));
+        var embeddedBytes = resourceSection.AsSpan(offset + sizeof(int), length).ToArray();
+
+        var descriptorEntry = Assert.Single(
+            archive.Entries,
+            static entry => entry.FullName == "contracts/sunder.stack.contributor.rpc.json");
+        using var packedBytes = new MemoryStream();
+        using (var content = descriptorEntry.Open()) content.CopyTo(packedBytes);
+        var sourceBytes = File.ReadAllBytes(Path.Combine(
+            repositoryRoot,
+            "languages",
+            "csharp",
+            "dotnet",
+            "packages",
+            "Sunder.Sdk.Stacks",
+            "Contracts",
+            "sunder.stack.contributor.rpc.json"));
+        Assert.Equal(sourceBytes, packedBytes.ToArray());
+        Assert.Equal(sourceBytes, embeddedBytes);
+    }
+
+    private static async Task AssertStackBundleConsumerAsync(
+        ZipArchive archive,
+        string consumerDirectory,
+        string repositoryRoot)
+    {
+        var propsPath = Path.Combine(consumerDirectory, "buildTransitive", "Sunder.Sdk.Stacks.props");
+        var descriptorPath = Path.Combine(consumerDirectory, "contracts", "sunder.stack.contributor.rpc.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(propsPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(descriptorPath)!);
+        await ExtractEntryAsync(archive, "buildTransitive/Sunder.Sdk.Stacks.props", propsPath);
+        await ExtractEntryAsync(archive, "contracts/sunder.stack.contributor.rpc.json", descriptorPath);
+
+        var projectPath = Path.Combine(consumerDirectory, "consumer.proj");
+        new XDocument(
+            new XElement("Project",
+                new XElement("Import", new XAttribute("Project", propsPath))))
+            .Save(projectPath);
+        var startInfo = DotnetStartInfo(repositoryRoot);
+        startInfo.ArgumentList.Add("msbuild");
+        startInfo.ArgumentList.Add(projectPath);
+        startInfo.ArgumentList.Add("-nologo");
+        startInfo.ArgumentList.Add("-nodeReuse:false");
+        startInfo.ArgumentList.Add("-p:Configuration=Release");
+        startInfo.ArgumentList.Add("-p:SunderPackageProject=true");
+        startInfo.ArgumentList.Add("-getItem:SunderContractBundle");
+        await using var process = CapturedProcess.Start(startInfo);
+        var result = await process.EnsureSuccessAsync(TimeSpan.FromSeconds(30));
+        var start = result.StandardOutput.IndexOf('{');
+        var end = result.StandardOutput.LastIndexOf('}');
+        Assert.True(start >= 0 && end > start, result.CombinedOutput);
+        using var document = JsonDocument.Parse(result.StandardOutput[start..(end + 1)]);
+        var bundle = Assert.Single(document.RootElement.GetProperty("Items").GetProperty("SunderContractBundle").EnumerateArray());
+        Assert.Equal(Path.GetFullPath(descriptorPath), Path.GetFullPath(bundle.GetProperty("FullPath").GetString()!));
+        Assert.Equal("sunder.stack.contributor", bundle.GetProperty("ContractId").GetString());
+        Assert.Equal("2.0.0", bundle.GetProperty("Version").GetString());
+        Assert.Equal("contracts/sunder.stack.contributor.rpc.json", bundle.GetProperty("DescriptorPath").GetString());
+        Assert.Equal("public", bundle.GetProperty("Exposure").GetString());
+    }
+
+    private static async Task ExtractEntryAsync(ZipArchive archive, string entryName, string outputPath)
+    {
+        var entry = Assert.Single(archive.Entries, candidate => candidate.FullName == entryName);
+        await using var source = entry.Open();
+        await using var destination = File.Create(outputPath);
+        await source.CopyToAsync(destination);
+    }
+
     private static bool IsGeneratedOpenPackagingEnvelope(string path)
         => path is "[Content_Types].xml" or "_rels/.rels"
            || path.StartsWith("package/services/metadata/core-properties/", StringComparison.Ordinal);
@@ -277,6 +401,12 @@ public sealed class CorePublicPackageContractTests
         Assert.Contains("README.md", entries);
         Assert.Contains("LICENSE", entries);
         Assert.Contains("icon.png", entries);
+        var expected = package.RequiredEntries
+            .Concat(["README.md", "LICENSE", "icon.png", $"{package.PackageId}.nuspec"])
+            .Order(StringComparer.Ordinal);
+        Assert.Equal(
+            expected,
+            entries.Where(static entry => !IsGeneratedOpenPackagingEnvelope(entry)).Order(StringComparer.Ordinal));
     }
 
     private static PublicPackageInventory LoadInventory()

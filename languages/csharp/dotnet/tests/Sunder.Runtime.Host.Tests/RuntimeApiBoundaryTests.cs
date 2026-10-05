@@ -23,7 +23,7 @@ public sealed class RuntimeApiBoundaryTests
             Guid.Parse("11111111-1111-1111-1111-111111111111"),
             [
                 RuntimeProtocolFeatures.VersionedApiV1,
-                RuntimeProtocolFeatures.SchemaFirstRpcV2,
+                RuntimeProtocolFeatures.SchemaFirstRpcV1,
                 RuntimeProtocolFeatures.RuntimeResourcePolicyV1,
             ],
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "1.2.3", "1.2.3+test"),
@@ -160,12 +160,56 @@ public sealed class RuntimeApiBoundaryTests
     {
         var root = CreateTempDirectory();
         var source = CreateSnapshotSource(root);
-        using var store = new PackageUiSnapshotStore(new RuntimePackagePaths(root));
+        var stateRoot = Path.Combine(root, "runtime-state");
+        RuntimeLocalState.EnsureInitialized(stateRoot);
+        using var store = new PackageUiSnapshotStore(new RuntimePackagePaths(stateRoot));
         var descriptor = Assert.Single(store.CreateSnapshots([
             CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Installed),
         ], generation: 3));
 
         Assert.Null(store.Acquire(descriptor.SnapshotId, generation: 4, stageId: null));
+        Assert.Empty(descriptor.SnapshotUri);
+        var reference = Assert.IsType<PackageUiProjectionReferenceDescriptor>(descriptor.ProjectionReference);
+        Assert.Equal("app", reference.ConsumerRole);
+        Assert.Equal(descriptor.ContentHash, reference.CacheKey);
+        var json = JsonSerializer.Serialize(descriptor, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.DoesNotContain(root, json, StringComparison.OrdinalIgnoreCase);
+        var leaseRoot = Path.Combine(
+            stateRoot,
+            RuntimeV1StateDescriptor.PackageProjectionCacheDirectory.Replace('/', Path.DirectorySeparatorChar),
+            "leases");
+        Assert.Single(Directory.EnumerateFiles(leaseRoot, "*.json", SearchOption.AllDirectories));
+
+        store.RemoveSnapshots([descriptor]);
+
+        Assert.Empty(Directory.EnumerateFiles(leaseRoot, "*.json", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public void PackageUiSnapshotStore_ReusesInstalledProjectionWithinGeneration()
+    {
+        var root = CreateTempDirectory();
+        var source = CreateSnapshotSource(root);
+        var stateRoot = Path.Combine(root, "runtime-state");
+        RuntimeLocalState.EnsureInitialized(stateRoot);
+        using var store = new PackageUiSnapshotStore(new RuntimePackagePaths(stateRoot));
+        var targetSource = CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Installed);
+
+        var first = Assert.Single(store.CreateSnapshots([targetSource], generation: 3));
+        var second = Assert.Single(store.CreateSnapshots([targetSource], generation: 3));
+        var leaseRoot = Path.Combine(
+            stateRoot,
+            RuntimeV1StateDescriptor.PackageProjectionCacheDirectory.Replace('/', Path.DirectorySeparatorChar),
+            "leases");
+
+        Assert.Equal(first.SnapshotId, second.SnapshotId);
+        Assert.Single(Directory.EnumerateFiles(leaseRoot, "*.json", SearchOption.AllDirectories));
+
+        store.RemoveSnapshots([first]);
+        Assert.Single(Directory.EnumerateFiles(leaseRoot, "*.json", SearchOption.AllDirectories));
+
+        store.RemoveSnapshots([second]);
+        Assert.Empty(Directory.EnumerateFiles(leaseRoot, "*.json", SearchOption.AllDirectories));
     }
 
     [Fact]
@@ -340,6 +384,31 @@ public sealed class RuntimeApiBoundaryTests
     }
 
     [Fact]
+    public async Task AppSnapshotsKeepRuntimeDependenciesInTheGraphWithoutLoadingTheirAppCode()
+    {
+        using var temporary = Sunder.Core.TestSupport.TemporaryDirectoryScope.Create("sunder-app-role-snapshots");
+        var paths = new RuntimePackagePaths(temporary.GetPath("runtime"));
+        RuntimeLocalState.EnsureInitialized(paths.RootPath);
+        var app = CanonicalPackageTestBuilder.CreateTargetSource(CreateSnapshotSource(temporary.RootPath), PackageSourceKind.Dev).Source with
+        { Dependencies = [new("runtime.dependency", ">=1.0.0")] };
+        var dependency = new RuntimePackageSource("runtime.dependency", PackageSourceKind.Dev, temporary.GetPath("not-an-app"), HostRoles: PackageHostRoles.Runtime);
+        var sources = new[] { dependency, app };
+        var descriptors = sources.ToDictionary(source => source.PackageId, source => new SessionPackageDescriptor(
+            source.PackageId, source.PackageId, "1.0.0", source.HostRoles, null, true, PackageReadinessState.Ready, [], null, null, null, 0));
+        var session = new ActivePackageSession(null, new Dictionary<string, ActiveLoadedPackage>(), descriptors, readySources: sources);
+        var owner = new RuntimeSessionOwner(Microsoft.Extensions.Logging.Abstractions.NullLogger<RuntimeSessionOwner>.Instance, new RuntimeEventStreamService());
+        using var snapshots = new PackageUiSnapshotStore(paths);
+        try
+        {
+            await owner.PublishAsync(session, owner.Sources.Snapshot(), [], [], owner.Generation);
+            Assert.Equal(2, session.GetAppPackageSources().Count);
+            var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
+            Assert.Equal(app.PackageId, Assert.Single(ui.GetActiveSnapshots(PackageTargetSelection.GetCurrentRuntimeIdentifier())).PackageId);
+        }
+        finally { await owner.State.ClearActiveSessionAsync(); }
+    }
+
+    [Fact]
     public async Task PackageUiSnapshotLease_OwnsAlreadyOpenStreamAcrossStoreRemoval()
     {
         var root = CreateTempDirectory();
@@ -509,10 +578,16 @@ public sealed class RuntimeApiBoundaryTests
             "InstalledPath",
             "StagingPath",
             "ArchivePath",
+            "CandidateArchives",
+            "PlatformCatalogPath",
         };
         var offenders = typeof(PackageUiSnapshotDescriptor).Assembly.ExportedTypes
             .SelectMany(type => type.GetProperties().Select(property => new { Type = type, Property = property }))
+            // Authenticated development requests explicitly name local authoring inputs.
             .Where(member => member.Type != typeof(DevPackageOwnerFolder))
+            .Where(member => member.Type != typeof(RuntimePrepareDevPackageImportsRequest)
+                || member.Property.Name is not (nameof(RuntimePrepareDevPackageImportsRequest.Folder)
+                    or nameof(RuntimePrepareDevPackageImportsRequest.CandidateArchives) or nameof(RuntimePrepareDevPackageImportsRequest.PlatformCatalogPath)))
             .Select(member => $"{member.Type.Name}.{member.Property.Name}")
             .Where(member => forbiddenNames.Contains(member[(member.LastIndexOf('.') + 1)..]))
             .ToArray();
@@ -529,6 +604,30 @@ public sealed class RuntimeApiBoundaryTests
         Assert.Equal(
             typeof(Sunder.Sdk.Stacks.StackImportOutcome),
             typeof(Sunder.Sdk.Stacks.StackImportResult).GetProperty(nameof(Sunder.Sdk.Stacks.StackImportResult.Outcome))?.PropertyType);
+    }
+
+    [Fact]
+    public void DevelopmentPreparationContract_RoundTripsLocalInputsAndFreezesCandidateCollections()
+    {
+        var candidates = new[] { "owner.sunderpkg", "extension.sunderpkg" };
+        var request = new RuntimePrepareDevPackageImportsRequest("sunder-dev")
+        {
+            CandidateArchives = candidates,
+            PlatformCatalogPath = "catalog.json",
+        };
+        candidates[0] = "changed.sunderpkg";
+        Assert.Null(request.RegistryOrigin); Assert.Equal("owner.sunderpkg", request.CandidateArchives[0]);
+        Assert.Throws<NotSupportedException>(() => ((IList<string>)request.CandidateArchives).Clear());
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(request, options);
+        var copy = System.Text.Json.JsonSerializer.Deserialize<RuntimePrepareDevPackageImportsRequest>(bytes, options)!;
+        Assert.Null(copy.RegistryOrigin); Assert.Equal(request.CandidateArchives, copy.CandidateArchives);
+        Assert.Equal("catalog.json", copy.PlatformCatalogPath);
+        Assert.Throws<NotSupportedException>(() => ((IList<string>)copy.CandidateArchives).Clear());
+        var absent = System.Text.Json.JsonSerializer.Deserialize<RuntimePrepareDevPackageImportsRequest>("{\"folder\":\"sunder-dev\"}", options)!;
+        Assert.Null(absent.RegistryOrigin); Assert.Empty(absent.CandidateArchives); Assert.Null(absent.PlatformCatalogPath);
+        Assert.Throws<System.Text.Json.JsonException>(() => System.Text.Json.JsonSerializer.Deserialize<RuntimePrepareDevPackageImportsRequest>(
+            "{\"folder\":\"sunder-dev\",\"platformTrustPolicy\":\"retired.json\"}", options));
     }
 
     [Fact]

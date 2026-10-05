@@ -48,8 +48,8 @@ internal sealed class StackPublishingController(
             return StackPublishingResult.Failed("The selected Stack is not published.");
         }
 
-        var result = await runtimeClient.DeleteRegistryStackAsync(
-            new RuntimeRegistryDeleteStackRequest(registryUrl.AbsoluteUri, publishedStackId),
+        var result = await runtimeClient.SetRegistryStackVisibilityAsync(
+            new RuntimeRegistryStackVisibilityRequest(registryUrl.AbsoluteUri, publishedStackId),
             cancellationToken);
         if (!result.Success)
         {
@@ -58,8 +58,7 @@ internal sealed class StackPublishingController(
                 : result.Errors.FirstOrDefault() ?? "Registry Stack unpublish failed.");
         }
 
-        await library.ClearPublishStateAsync(stack.StackId, cancellationToken);
-        return StackPublishingResult.Succeeded(result.Message ?? $"Unpublished Stack '{publishedStackId}'.");
+        return StackPublishingResult.Succeeded(result.Message ?? $"Unlisted Stack '{publishedStackId}'. Published revisions remain available.");
     }
 
     public async Task<StackPublishingResult> ToggleStarAsync(

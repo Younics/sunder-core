@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sunder.dev/specs/package/v1/execution-runtime-requirement.schema.json",
+  "title": "Sunder Package Execution Runtime Requirement V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "versionRange", "moduleAbi"],
+  "properties": {
+    "id": { "$ref": "#/$defs/dotIdentifier" },
+    "versionRange": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 1024,
+      "description": "A canonical Sunder stable SemVer range with a nonempty solution set bounded to one major line. Semantic bounds are enforced by the format validator.",
+      "pattern": "^(?:(?:<=|>=|<|>|=)?(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*))(?: (?:(?:<=|>=|<|>|=)?(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)))*$"
+    },
+    "moduleAbi": { "$ref": "#/$defs/dotIdentifier" }
+  },
+  "$defs": {
+    "dotIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?){0,15}$"
+    }
+  }
+}

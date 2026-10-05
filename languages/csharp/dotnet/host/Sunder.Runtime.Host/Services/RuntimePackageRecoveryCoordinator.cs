@@ -381,7 +381,7 @@ internal sealed class RuntimePackageRecoveryCoordinator : IHostedService, IAsync
                 _sessions.Generation,
                 request.PackageId,
                 success: null,
-                $"Restarting package '{request.PackageId}' after its Worker V3 activation failed.");
+                $"Restarting package '{request.PackageId}' after its Worker V1 activation failed.");
             operationToken.ThrowIfCancellationRequested();
             replacement = request.RecoveryFactory();
             ValidateReplacement(request, replacement);
@@ -560,7 +560,7 @@ internal sealed class RuntimePackageRecoveryCoordinator : IHostedService, IAsync
             }
             _logger.LogWarning(
                 exception,
-                "Package {PackageId} Worker V3 recovery failed with rolling failure count {FailureCount}",
+                "Package {PackageId} Worker V1 recovery failed with rolling failure count {FailureCount}",
                 request.PackageId,
                 failureCount);
             return failureCount >= _policy.SuspensionFailureCount

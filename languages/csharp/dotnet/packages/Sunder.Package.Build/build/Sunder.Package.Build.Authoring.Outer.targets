@@ -1,0 +1,181 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)Sunder.Package.Build.Authoring.RoleInputs.targets" />
+  <!-- No mixed authoring assembly is compiled. The ordinary Build request plans
+       the complete source once, then compiles this same project with isolated
+       internal role properties. These are not developer-maintained projects. -->
+  <Target Name="Build" DependsOnTargets="BeforeBuild;_BuildSunderPackageRoles;AfterBuild" Returns="@(_SunderPackageRidResult)" />
+  <Target Name="Compile" DependsOnTargets="_BuildSunderPackageRoles" />
+  <Target Name="CoreCompile" DependsOnTargets="_BuildSunderPackageRoles" />
+
+  <Target Name="_PlanSunderPackageRoles" DependsOnTargets="_CaptureSunderQualifiedRoleInputs;ResolveReferences;GenerateGlobalUsings;_PrepareSunderPackageResources">
+    <PropertyGroup>
+      <_SunderRoleNullable>false</_SunderRoleNullable>
+      <_SunderRoleNullable Condition="'$(Nullable)' == 'enable' or '$(Nullable)' == 'annotations'">true</_SunderRoleNullable>
+      <_SunderRoleRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_SunderRoleRid>
+      <_SunderRoleRid Condition="'$(_SunderRoleRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_SunderRoleRid>
+      <_SunderRoleIntermediateRoot>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath('$(SunderPackageAuthoringIntermediateRoot)', '$(MSBuildProjectDirectory)'))))</_SunderRoleIntermediateRoot>
+      <_SunderRoleOutputRoot>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath('$(SunderPackageAuthoringOutputRoot)', '$(MSBuildProjectDirectory)'))))</_SunderRoleOutputRoot>
+      <SunderDevOutputDiscoveryRoot>$(_SunderRoleOutputRoot)sunder-targets/$(_SunderRoleRid)/</SunderDevOutputDiscoveryRoot>
+      <SunderDevOutputPath>$(SunderDevOutputDiscoveryRoot)sunder-dev</SunderDevOutputPath>
+    </PropertyGroup>
+    <GenerateSunderRpcBindingsTask GeneratePackageRoles="true" GenerationMode="Combined"
+                                  SourceFiles="@(Compile)" ReferencePaths="@(ReferencePath)" RuntimeReferencePaths="@(ReferenceCopyLocalPaths);@(ReferenceDependencyPaths)" PackageId="$(SunderPackageId)"
+                                  PackageVersion="$(Version)" ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)"
+                                  TargetFramework="$(TargetFramework)" DefineConstants="$(DefineConstants)" OutputType="Library"
+                                  AssemblyName="$(AssemblyName)" NullableEnabled="$(_SunderRoleNullable)"
+                                  ProjectAssetsFile="$(ProjectAssetsFile)" ProjectFile="$(MSBuildProjectFullPath)" ProjectExtensionsPath="$(MSBuildProjectExtensionsPath)"
+                                  RuntimeIdentifier="$(_SunderRoleRid)" PackageReferences="@(PackageReference)" ProjectReferences="@(ProjectReference)" ProjectImports="$(MSBuildAllProjects)"
+                                  ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                                  OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
+                                  ContractCacheRoot="$(SunderContractCacheRoot)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                                  ProjectDirectory="$(MSBuildProjectDirectory)" IntermediateOutputPath="$(IntermediateOutputPath)">
+      <Output TaskParameter="PackageRolePlans" ItemName="_SunderPackageRolePlan" />
+    </GenerateSunderRpcBindingsTask>
+    <Error Condition="'@(_SunderPackageRolePlan)' == ''" Text="package-authoring.source-required: The authored package requires a current role plan and reviewed contract baseline." />
+    <PropertyGroup><_SunderRoleHasApp>@(_SunderPackageRolePlan->'%(HasApp)')</_SunderRoleHasApp></PropertyGroup>
+  </Target>
+
+  <Target Name="_BuildSunderPackageRoles" DependsOnTargets="_PlanSunderPackageRoles;_AcquireSunderPackageRoleBuildLease;_CleanSunderUnusedPackageApp" Returns="@(_SunderPackageRidResult)">
+    <Error Condition="'$(SunderPackageRidBuild)' != 'true' or '$(RuntimeIdentifier)' == ''" Text="package-authoring.rid-required: Role analysis requires an evaluated exact-RID package request." />
+    <PropertyGroup>
+      <_SunderRolePlanPath>@(_SunderPackageRolePlan->'%(SnapshotPath)')</_SunderRolePlanPath>
+      <_SunderRolePlanSha256>@(_SunderPackageRolePlan->'%(Sha256)')</_SunderRolePlanSha256>
+      <_SunderRoleSnapshotRoot>@(_SunderPackageRolePlan->'%(SnapshotGeneratedDirectory)')</_SunderRoleSnapshotRoot>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderPackageRole Include="worker" OutputType="Exe" AssemblyName="$(AssemblyName)" />
+      <_SunderPackageRole Include="app" OutputType="Library" AssemblyName="$(AssemblyName).App" Condition="'%(_SunderPackageRolePlan.HasApp)' == 'true'" />
+    </ItemGroup>
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Build" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderRoleRid);SunderPackageCompilationRole=%(_SunderPackageRole.Identity);SunderPackageRolePlanPath=$(_SunderRolePlanPath);SunderPackageRolePlanSha256=$(_SunderRolePlanSha256);AssemblyName=%(_SunderPackageRole.AssemblyName);OutputType=%(_SunderPackageRole.OutputType);SunderPackageProject=true;IntermediateOutputPath=$(_SunderRoleIntermediateRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/;OutputPath=$(_SunderRoleOutputRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/;AppendRuntimeIdentifierToOutputPath=false;ProjectAssetsFile=$(_SunderRoleSnapshotRoot)/roles/%(_SunderPackageRole.Identity)/restore/project.assets.json;MSBuildProjectExtensionsPath=$(_SunderRoleSnapshotRoot)/roles/%(_SunderPackageRole.Identity)/restore/"
+             RemoveProperties="OutDir;StartupObject;SunderPackagePrimaryProject;SunderPackageInnerBuild">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderPackageRoleOutput" />
+    </MSBuild>
+    <ItemGroup>
+      <_SunderRoleLeaf Include="$(_SunderRoleOutputRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/sunder-dev"
+                       DiscoveryRoot="$(_SunderRoleOutputRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/" />
+    </ItemGroup>
+    <AggregateSunderPackageTask TargetLeaves="@(_SunderRoleLeaf)" OutputPath="$(SunderDevOutputPath)" OutputDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                                ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(SunderDevOutputDiscoveryRoot)" ExpectedPackageVersion="$(Version)" />
+    <ManageSunderPackageRoleInputsTask Action="Export" ProjectDirectory="$(MSBuildProjectDirectory)" CapturedInputs="@(_SunderQualifiedRoleInputFrame)"
+                                      RolePlanPath="$(_SunderRolePlanPath)" RolePlanSha256="$(_SunderRolePlanSha256)" DevPackagePath="$(SunderDevOutputPath)">
+      <Output TaskParameter="Result" ItemName="_SunderExportedRoleInputs" />
+    </ManageSunderPackageRoleInputsTask>
+    <ItemGroup>
+      <_SunderPackageRidResult Include="$(SunderDevOutputPath)" DiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                               RuntimeIdentifier="$(_SunderRoleRid)" TargetFramework="$(TargetFramework)" HasApp="$(_SunderRoleHasApp)"
+                               AssemblyName="$(AssemblyName).App" RolePlanPath="$(_SunderRolePlanPath)" RolePlanSha256="$(_SunderRolePlanSha256)" SnapshotRoot="$(_SunderRoleSnapshotRoot)"
+                                AppOutputPath="$(_SunderRoleOutputRoot)sunder-roles/app/$(_SunderRoleRid)/"
+                                AppIntermediatePath="$(_SunderRoleIntermediateRoot)sunder-roles/app/$(_SunderRoleRid)/"
+                                RoleInputsPath="@(_SunderExportedRoleInputs)" RoleInputsSha256="@(_SunderExportedRoleInputs->'%(Sha256)')" />
+    </ItemGroup>
+    <ManageSunderPackageOperationLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_SunderPackageRoleBuildLease)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageRoleBuildLease" />
+    </ManageSunderPackageOperationLockTask>
+    <OnError ExecuteTargets="_ReleaseSunderPackageRoleBuildLease" />
+  </Target>
+
+  <Target Name="_AcquireSunderPackageRoleBuildLease" DependsOnTargets="_PrepareSunderPackageBuildTasks">
+    <ItemGroup>
+      <_SunderRoleBuildLock Include="$([System.IO.Path]::GetFullPath('$(OutputPath)sunder-roles', '$(MSBuildProjectDirectory)'))">
+        <DiscoveryRoot>$([System.IO.Path]::GetFullPath('$(OutputPath)sunder-roles', '$(MSBuildProjectDirectory)'))</DiscoveryRoot>
+      </_SunderRoleBuildLock>
+    </ItemGroup>
+    <ManageSunderPackageOperationLockTask Action="Acquire" ProjectDirectory="$(MSBuildProjectDirectory)" OutputDirectories="@(_SunderRoleBuildLock)"
+                                           WaitProject="$(MSBuildThisFileDirectory)Sunder.Package.Build.SourceLock.targets">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageRoleBuildLease" />
+    </ManageSunderPackageOperationLockTask>
+  </Target>
+  <Target Name="_ReleaseSunderPackageRoleBuildLease" Condition="'$(_SunderPackageRoleBuildLease)' != ''">
+    <ManageSunderPackageOperationLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_SunderPackageRoleBuildLease)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageRoleBuildLease" />
+    </ManageSunderPackageOperationLockTask>
+  </Target>
+
+  <Target Name="_CleanSunderUnusedPackageApp" Condition="'$(_SunderRoleHasApp)' == 'false'">
+    <PropertyGroup>
+      <_SunderUnusedRolePlanPath>@(_SunderPackageRolePlan->'%(SnapshotPath)')</_SunderUnusedRolePlanPath>
+      <_SunderUnusedRolePlanSha256>@(_SunderPackageRolePlan->'%(Sha256)')</_SunderUnusedRolePlanSha256>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderUnusedRoleLock Include="%(_SunderPackageRolePlan.SnapshotGeneratedDirectory)" DiscoveryRoot="%(_SunderPackageRolePlan.SnapshotIntermediateOutputPath)" />
+    </ItemGroup>
+    <ManageSunderRpcGeneratedOutputLockTask Action="Acquire" ProjectDirectory="$(MSBuildProjectDirectory)" OutputDirectories="@(_SunderUnusedRoleLock)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderRpcGeneratedOutputLockLeaseId" />
+    </ManageSunderRpcGeneratedOutputLockTask>
+    <ReadSunderPackageRoleInputsTask PlanPath="$(_SunderUnusedRolePlanPath)" ExpectedSha256="$(_SunderUnusedRolePlanSha256)"
+                                    ProjectIdentity="$(MSBuildProjectName)" Role="worker" OutputLockLeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)" />
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Clean" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderRoleRid);SunderPackageCompilationRole=app;SunderPackageProject=true;BuildProjectReferences=false;AssemblyName=$(AssemblyName).App;OutputType=Library;IntermediateOutputPath=$(_SunderRoleIntermediateRoot)sunder-roles/app/$(_SunderRoleRid)/;OutputPath=$(_SunderRoleOutputRoot)sunder-roles/app/$(_SunderRoleRid)/;AppendRuntimeIdentifierToOutputPath=false"
+             RemoveProperties="OutDir;SunderPackagePrimaryProject;SunderPackageInnerBuild" />
+    <ManageSunderRpcGeneratedOutputLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderRpcGeneratedOutputLockLeaseId" />
+    </ManageSunderRpcGeneratedOutputLockTask>
+    <OnError ExecuteTargets="_ReleaseSunderRpcGeneratedOutputLock" />
+  </Target>
+
+  <Target Name="_RejectSunderSingleProjectPrebuiltBuild" BeforeTargets="BeforeBuild"
+          Condition="'$(SunderPackageUsePrebuiltLeaves)' == 'true'">
+    <Error Text="Single-project prebuilt packing requires qualified role-input evidence; this build must not rebuild signed prebuilt inputs." />
+  </Target>
+
+  <Target Name="PackSunderPackage" DependsOnTargets="Build">
+    <PropertyGroup>
+      <SunderPackageOutputPath Condition="'$(SunderPackageOutputPath)' == ''">$(_SunderRoleOutputRoot)$(AssemblyName).$(Version).sunderpkg</SunderPackageOutputPath>
+    </PropertyGroup>
+    <PackSunderPackageTask DevPackagePath="$(SunderDevOutputPath)" DevPackageDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                           PackageOutputPath="$(SunderPackageOutputPath)" ProjectDirectory="$(MSBuildProjectDirectory)"
+                           GeneratePackageRoles="true" SourceFiles="@(Compile)" ReferencePaths="@(ReferencePath)"
+                           ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                           ProjectIdentity="$(MSBuildProjectName)" AssemblyName="$(AssemblyName)" Configuration="$(Configuration)"
+                           TargetFramework="$(TargetFramework)" DefineConstants="$(DefineConstants)" OutputType="Library" NullableEnabled="$(_SunderRoleNullable)"
+                           IntermediateOutputPath="$(IntermediateOutputPath)" OwnedContractsPath="$(SunderOwnedContractsPath)"
+                           ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)" />
+  </Target>
+
+  <Target Name="_CleanSunderPackageRoles" BeforeTargets="CoreClean" DependsOnTargets="_PrepareSunderPackageBuildTasks">
+    <PropertyGroup>
+      <_SunderCleanRoleRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_SunderCleanRoleRid>
+      <_SunderCleanRoleRid Condition="'$(_SunderCleanRoleRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_SunderCleanRoleRid>
+    </PropertyGroup>
+    <ItemGroup><_SunderCleanRole Include="worker;app" /></ItemGroup>
+    <ItemGroup>
+      <_SunderRoleCleanLock Include="$([System.IO.Path]::GetFullPath('$(OutputPath)sunder-roles', '$(MSBuildProjectDirectory)'))"
+                            DiscoveryRoot="$([System.IO.Path]::GetFullPath('$(OutputPath)sunder-roles', '$(MSBuildProjectDirectory)'))" />
+    </ItemGroup>
+    <ManageSunderPackageOperationLockTask Action="Acquire" ProjectDirectory="$(MSBuildProjectDirectory)" OutputDirectories="@(_SunderRoleCleanLock)"
+                                           WaitProject="$(MSBuildThisFileDirectory)Sunder.Package.Build.SourceLock.targets">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageRoleCleanLease" />
+    </ManageSunderPackageOperationLockTask>
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Clean" BuildInParallel="false" StopOnFirstFailure="true"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderCleanRoleRid);SunderPackageCompilationRole=%(_SunderCleanRole.Identity);SunderPackageProject=true;BuildProjectReferences=false;IntermediateOutputPath=$(IntermediateOutputPath)sunder-roles/%(_SunderCleanRole.Identity)/$(_SunderCleanRoleRid)/;OutputPath=$(OutputPath)sunder-roles/%(_SunderCleanRole.Identity)/$(_SunderCleanRoleRid)/;AppendRuntimeIdentifierToOutputPath=false"
+             RemoveProperties="OutDir;SunderPackagePrimaryProject;SunderPackageInnerBuild" />
+    <CleanSunderPackageOutputTask OutputPath="$([System.IO.Path]::Combine('$(TargetDir)', 'sunder-dev'))" OutputDiscoveryRoot="$(TargetDir)"
+                                  ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(TargetDir)" />
+    <ManageSunderPackageOperationLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_SunderPackageRoleCleanLease)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageRoleCleanLease" />
+    </ManageSunderPackageOperationLockTask>
+    <OnError ExecuteTargets="_ReleaseSunderPackageRoleCleanLease" />
+  </Target>
+  <Target Name="_ReleaseSunderPackageRoleCleanLease" Condition="'$(_SunderPackageRoleCleanLease)' != ''">
+    <ManageSunderPackageOperationLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_SunderPackageRoleCleanLease)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageRoleCleanLease" />
+    </ManageSunderPackageOperationLockTask>
+  </Target>
+  <Target Name="_PackSunderPackageAggregateForRid" DependsOnTargets="_PrepareSunderPackageBuildTasks;ResolveReferences;GenerateGlobalUsings;_PrepareSunderPackageResources">
+    <PropertyGroup>
+      <_SunderPackNullable>false</_SunderPackNullable>
+      <_SunderPackNullable Condition="'$(Nullable)' == 'enable' or '$(Nullable)' == 'annotations'">true</_SunderPackNullable>
+    </PropertyGroup>
+    <PackSunderPackageTask DevPackagePath="$(SunderPackageAuthoringPackInput)" DevPackageDiscoveryRoot="$(SunderPackageAuthoringOutputRoot)"
+                           PackageOutputPath="$(SunderPackageAuthoringPackOutput)" ProjectDirectory="$(MSBuildProjectDirectory)" GeneratePackageRoles="true"
+                           SourceFiles="@(Compile)" ReferencePaths="@(ReferencePath)" ResourceItems="@(_SunderResourceInputs)"
+                           GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                           ProjectIdentity="$(MSBuildProjectName)" AssemblyName="$(AssemblyName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                           DefineConstants="$(DefineConstants)" OutputType="Library" NullableEnabled="$(_SunderPackNullable)" IntermediateOutputPath="$(IntermediateOutputPath)"
+                           OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                           AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)" />
+  </Target>
+
+  <Import Project="$(MSBuildThisFileDirectory)Sunder.Package.Build.Authoring.Dispatch.targets" Condition="'$(SunderPackageRidBuild)' != 'true'" />
+</Project>

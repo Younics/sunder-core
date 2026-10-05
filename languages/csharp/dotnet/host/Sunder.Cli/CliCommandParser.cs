@@ -136,24 +136,6 @@ internal sealed partial class CliCommandParser
 
     public string GetPath(Command command) => _helpPaths[command];
 
-    private void BuildRuntimeCommands()
-    {
-        var runtime = Group(Root, "runtime", "Inspect and manage the local Sunder Runtime.");
-        Bind(Leaf(runtime, "status", "Show authenticated Runtime status."), "runtime status", _ => new RuntimeStatusCommand());
-        AddRuntimeLifecycleCommand(runtime, "start", RuntimeLifecycleAction.Start);
-        AddRuntimeLifecycleCommand(runtime, "stop", RuntimeLifecycleAction.Stop);
-        AddRuntimeLifecycleCommand(runtime, "restart", RuntimeLifecycleAction.Restart);
-
-        var reset = Leaf(runtime, "reset", "Drain the Runtime and delete validated local Runtime V1 state.");
-        var yes = Flag("--yes", "Confirm the destructive reset.");
-        reset.Options.Add(yes);
-        reset.Validators.Add(result =>
-        {
-            if (!result.GetValue(yes)) result.AddError("Runtime reset is destructive. Specify '--yes' to continue.");
-        });
-        Bind(reset, "runtime reset", result => new RuntimeResetCommand(result.GetValue(yes)));
-    }
-
     private void BuildPackageCommands()
     {
         var package = Group(Root, "package", "Browse, install, list, and update packages.");
@@ -191,6 +173,8 @@ internal sealed partial class CliCommandParser
         var approveSensitiveCapabilities = Flag(
             "--approve-sensitive-capabilities",
             "Explicitly approve exact sensitive worker capabilities shown by Runtime preflight.");
+        var yes = Flag("--yes", "Apply the exact Runtime-generated Registry install preflight.");
+        var dryRun = Flag("--dry-run", "Show Registry package/runtime bytes and conflicts without applying changes.");
         install.Arguments.Add(packageId);
         install.Options.Add(file);
         install.Options.Add(version);
@@ -198,6 +182,8 @@ internal sealed partial class CliCommandParser
         install.Options.Add(allowDowngrade);
         install.Options.Add(reinstall);
         install.Options.Add(approveSensitiveCapabilities);
+        install.Options.Add(yes);
+        install.Options.Add(dryRun);
         install.Validators.Add(result =>
         {
             var id = result.GetResult(packageId)?.Tokens.FirstOrDefault()?.Value;
@@ -210,6 +196,12 @@ internal sealed partial class CliCommandParser
                 result.AddError("Options '--version' and '--tag' cannot be used together.");
             if (path is not null && (exactVersion is not null || explicitTag is not null))
                 result.AddError("Options '--version' and '--tag' are only valid for Registry installs.");
+            if (path is null && result.GetValue(yes) == result.GetValue(dryRun))
+                result.AddError("Registry package install requires exactly one of '--yes' or '--dry-run'.");
+            if (path is not null && (result.GetValue(yes) || result.GetValue(dryRun)))
+                result.AddError("Options '--yes' and '--dry-run' are only valid for Registry installs.");
+            if (result.GetValue(dryRun) && result.GetValue(approveSensitiveCapabilities))
+                result.AddError("Option '--approve-sensitive-capabilities' is only valid when applying a Registry install with '--yes'.");
         });
         Bind(install, "package install", result =>
         {
@@ -227,7 +219,8 @@ internal sealed partial class CliCommandParser
                 exactVersion is null ? result.GetValue(tag) ?? "latest" : null,
                 result.GetValue(allowDowngrade),
                 result.GetValue(reinstall),
-                result.GetValue(approveSensitiveCapabilities));
+                result.GetValue(approveSensitiveCapabilities),
+                result.GetValue(dryRun));
         });
     }
 
@@ -344,13 +337,16 @@ internal sealed partial class CliCommandParser
 
     private void BuildRegistryStackCommands(Command registry)
     {
-        var stack = Group(registry, "stack", "Publish and delete remote Registry Stacks.");
+        var stack = Group(registry, "stack", "Publish and manage remote Registry Stack visibility.");
         AddStackPublish(stack, "registry stack publish", devLocal: false);
 
-        var delete = Leaf(stack, "delete", "Delete a remote Registry Stack.");
-        var deleteId = RequiredTextArgument("stack-id", "Registry Stack id.");
-        delete.Arguments.Add(deleteId);
-        Bind(delete, "registry stack delete", result => new DeleteStackCommand(result.GetRequiredValue(deleteId)));
+        foreach (var name in new[] { "unlist", "relist" })
+        {
+            var visibility = Leaf(stack, name, "Change Stack listing visibility while retaining published revisions.");
+            var stackId = RequiredTextArgument("stack-id", "Registry Stack id.");
+            visibility.Arguments.Add(stackId);
+            Bind(visibility, "registry stack " + name, result => new SetStackVisibilityCommand(result.GetRequiredValue(stackId), name == "relist"));
+        }
     }
 
     private void BuildDeveloperCommands()
@@ -359,8 +355,12 @@ internal sealed partial class CliCommandParser
         var package = Group(dev, "package", "Work with local package artifacts.");
         var validate = Leaf(package, "validate", "Validate and inspect a local .sunderpkg archive.");
         var packageFile = RequiredTextArgument("file", "Local .sunderpkg archive.");
+        var apiOutput = ValueOption("--api-output", "Export validated public API inspection data to a new directory (offline).", "directory");
         validate.Arguments.Add(packageFile);
-        Bind(validate, "dev package validate", result => new ValidatePackageCommand(result.GetRequiredValue(packageFile)));
+        validate.Options.Add(apiOutput);
+        Bind(validate, "dev package validate", result => new ValidatePackageCommand(result.GetRequiredValue(packageFile), result.GetValue(apiOutput)));
+
+        AddDevPackageRuntimeCommands(package);
 
         var stack = Group(dev, "stack", "Work with local Stack artifacts.");
         var inspect = Leaf(stack, "inspect", "Validate and inspect a local .sunderstack archive.");
@@ -480,10 +480,3 @@ internal sealed partial class CliCommandParser
     }
 
 }
-
-internal sealed record CliCommandParseResult(
-    CliInvocation? Invocation,
-    IReadOnlyList<string> Errors,
-    Command HelpScope,
-    bool ShowHelp,
-    bool Json);

@@ -1,49 +1,24 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="Sunder.Package.props" />
-
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <Version>1.0.0</Version>
+    <IsPackable>false</IsPackable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <EnableRuntimePackDownload>false</EnableRuntimePackDownload>
+    <EnableAppHostPackDownload>false</EnableAppHostPackDownload>
     <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
-    <SelfContained>true</SelfContained>
-    <UseAppHost>true</UseAppHost>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>false</UseAppHost>
     <PublishSingleFile>false</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
     <SunderPackageProject>true</SunderPackageProject>
-    <SunderPackagePrimaryProject>true</SunderPackagePrimaryProject>
-    <SunderPackageAppProject>Sunder.Package.Quickstart.App\Sunder.Package.Quickstart.App.csproj</SunderPackageAppProject>
-    <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\sunder-package.json'))</SunderGeneratedPackageManifest>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Worker\Sunder.Sdk.Worker.csproj" />
-    <ProjectReference Include="Sunder.Package.Quickstart.Protocol\Sunder.Package.Quickstart.Protocol.csproj"
-                      PrivateAssets="all" />
-    <ProjectReference Include="$(SunderPackageAppProject)"
-                      Condition="'$(SunderPackageAppProject)' != '' and '$(SunderPackageInnerBuild)' != 'true'"
-                      ReferenceOutputAssembly="false"
-                      Private="false"
-                      BuildReference="false"
-                      PrivateAssets="all" />
-    <Compile Include="PackageMetadata.cs" />
-    <Compile Include="Sunder.Package.Quickstart.Worker\**\*.cs"
-             Exclude="Sunder.Package.Quickstart.Worker\bin\**;Sunder.Package.Quickstart.Worker\obj\**" />
-    <SunderContractBundle Include="Sunder.Package.Quickstart.Protocol\Contracts\greeting.rpc.json"
-                          ContractId="docs.sunder.quickstart.greeting"
-                          Version="2.0.0"
-                          DescriptorPath="contracts/greeting.rpc.json"
-                          Exposure="package" />
-    <SunderRpcProvider Include="docs.sunder.quickstart.greeting"
-                       ContractId="docs.sunder.quickstart.greeting"
-                       ContractVersion="2.0.0"
-                       Role="runtime"
-                       Audience="owner" />
-    <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)"
-                         Role="runtime"
-                         Rid="$(RuntimeIdentifier)"
-                         Kind="worker" />
+    <ProjectReference Include="..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
+    <ProjectReference Include="..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj"
+                      ReferenceOutputAssembly="false" PrivateAssets="all" />
   </ItemGroup>
 
   <Import Project="..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets" />

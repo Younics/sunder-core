@@ -17,7 +17,11 @@ public sealed record RegistryPackageInstallExecutionResult(
 
     public RuntimePackageStamp? CommittedStamp { get; init; }
 
+    public IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts { get; init; } = [];
+
     public IReadOnlyList<PackageCapabilityConsent> RequiredCapabilityConsents { get; init; } = [];
+
+    public IReadOnlyList<RuntimeRegistryExecutionRuntimeResolutionConflict> RuntimeConflicts { get; init; } = [];
 
     public static RegistryPackageInstallExecutionResult Empty(string message)
         => new(true, message, true, false, [], [], [], []);
@@ -35,12 +39,12 @@ public sealed record RegistryPackageInstallProgress(string StatusText, double? P
 public sealed class RegistryPackageInstallService
 {
     private const string AnySemanticVersionRange = ">=0.0.0-0";
-    private readonly Func<IReadOnlyList<PackageCapabilityConsent>, CancellationToken, Task<bool>>? _consentPrompt;
+    private readonly Func<RegistryPackageChangePreflight, CancellationToken, Task<bool>>? _confirmationPrompt;
 
     public RegistryPackageInstallService(
-        Func<IReadOnlyList<PackageCapabilityConsent>, CancellationToken, Task<bool>>? consentPrompt = null)
+        Func<RegistryPackageChangePreflight, CancellationToken, Task<bool>>? confirmationPrompt = null)
     {
-        _consentPrompt = consentPrompt;
+        _confirmationPrompt = confirmationPrompt;
     }
 
     public async Task<RegistryPackageInstallExecutionResult> InstallPackageAsync(
@@ -55,7 +59,8 @@ public sealed class RegistryPackageInstallService
         CancellationToken cancellationToken = default)
     {
         IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        if (_consentPrompt is not null)
+        string? expectedResolutionFingerprint = null;
+        if (_confirmationPrompt is not null)
         {
             var batch = ToBatchRequest(
                 registryClient.RegistryUrl,
@@ -65,14 +70,25 @@ public sealed class RegistryPackageInstallService
                 allowDowngrade,
                 reinstall);
             var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(batch, cancellationToken);
-            if (!plan.Success)
+            if (HasPlanFailures(plan))
             {
                 return PlanFailed(plan);
             }
-            consents = await RequestConsentAsync(plan.RequiredCapabilityConsents, cancellationToken);
+            if (!IsResolutionFingerprint(plan.ResolutionFingerprint))
+            {
+                return InvalidPreviewFingerprint(plan);
+            }
+            expectedResolutionFingerprint = plan.ResolutionFingerprint;
+            var expectedPlans = CreateExpectedPlans(batch, plan);
+            var preflight = await RegistryPackageChangePreflight.CreateAsync(
+                plan,
+                runtimeApiClient,
+                cancellationToken,
+                expectedPlans);
+            consents = await RequestConfirmationAsync(preflight, cancellationToken);
             if (consents is null)
             {
-                return ConsentDeclined(plan.RequiredCapabilityConsents, plan.Items);
+                return ConfirmationDeclined(plan.RequiredCapabilityConsents, plan.Items);
             }
         }
         progress?.Invoke(new("Runtime is resolving and applying the package transaction...", 10));
@@ -84,13 +100,14 @@ public sealed class RegistryPackageInstallService
                 string.IsNullOrWhiteSpace(version) ? tag ?? "latest" : null,
                 AllowDowngrade: allowDowngrade,
                 Reinstall: reinstall,
-                CapabilityConsents: consents),
+                CapabilityConsents: consents,
+                ExpectedResolutionFingerprint: expectedResolutionFingerprint),
             cancellationToken);
         progress?.Invoke(new(result.Message, 100));
         return ToAppResult(result);
     }
 
-    public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveInstallPlanForPackagesAsync(
+    public async Task<RuntimeRegistryResolveInstallPlanResponse> ResolveInstallPlanForPackagesAsync(
         IReadOnlyList<SunderStackPackageRequirement> packages,
         IRegistryClient registryClient,
         IRuntimeRegistryPackageClient runtimeApiClient,
@@ -98,7 +115,12 @@ public sealed class RegistryPackageInstallService
         CancellationToken cancellationToken = default)
     {
         progress?.Invoke(new("Runtime is resolving the package graph...", 10));
-        return runtimeApiClient.ResolveRegistryPackagePlanAsync(ToBatchRequest(packages, registryClient.RegistryUrl), cancellationToken);
+        var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(
+            ToBatchRequest(packages, registryClient.RegistryUrl),
+            cancellationToken);
+        return plan.Success && !IsResolutionFingerprint(plan.ResolutionFingerprint)
+            ? InvalidPreviewFingerprintPlan(plan)
+            : plan;
     }
 
     public async Task<RegistryPackageInstallExecutionResult> InstallPackagesAsync(
@@ -106,22 +128,52 @@ public sealed class RegistryPackageInstallService
         IRegistryClient registryClient,
         IRuntimeRegistryPackageClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? expectedResolutionFingerprint = null)
     {
         var request = ToBatchRequest(packages, registryClient.RegistryUrl);
-        if (_consentPrompt is not null)
+        if (_confirmationPrompt is not null)
         {
             var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(request, cancellationToken);
-            if (!plan.Success)
+            if (HasPlanFailures(plan))
             {
                 return PlanFailed(plan);
             }
-            var consents = await RequestConsentAsync(plan.RequiredCapabilityConsents, cancellationToken);
+            if (!IsResolutionFingerprint(plan.ResolutionFingerprint))
+            {
+                return InvalidPreviewFingerprint(plan);
+            }
+            expectedResolutionFingerprint = plan.ResolutionFingerprint;
+            var preflight = await RegistryPackageChangePreflight.CreateAsync(
+                plan,
+                runtimeApiClient,
+                cancellationToken,
+                CreateExpectedPlans(request, plan));
+            var consents = await RequestConfirmationAsync(preflight, cancellationToken);
             if (consents is null)
             {
-                return ConsentDeclined(plan.RequiredCapabilityConsents, plan.Items);
+                return ConfirmationDeclined(plan.RequiredCapabilityConsents, plan.Items);
             }
-            request = request with { CapabilityConsents = consents };
+            request = request with
+            {
+                CapabilityConsents = consents,
+                ExpectedResolutionFingerprint = expectedResolutionFingerprint,
+            };
+        }
+        else if (expectedResolutionFingerprint is not null)
+        {
+            if (!IsResolutionFingerprint(expectedResolutionFingerprint))
+            {
+                return InvalidPreviewFingerprint(new RuntimeRegistryResolveInstallPlanResponse(
+                    true,
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    ResolutionFingerprint: expectedResolutionFingerprint));
+            }
+            request = request with { ExpectedResolutionFingerprint = expectedResolutionFingerprint };
         }
         progress?.Invoke(new("Runtime is applying the package transaction...", 10));
         var result = await runtimeApiClient.ApplyRegistryPackagePlanAsync(request, cancellationToken);
@@ -135,7 +187,8 @@ public sealed class RegistryPackageInstallService
         CancellationToken cancellationToken = default)
     {
         IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        if (_consentPrompt is not null)
+        IReadOnlyList<RuntimeRegistryPackagePlanExpectation>? expectedPlans = null;
+        if (_confirmationPrompt is not null)
         {
             var preview = await runtimeApiClient.UpdateRegistryPackagesAsync(
                 new RuntimeRegistryUpdateRequest(DryRun: true),
@@ -144,15 +197,33 @@ public sealed class RegistryPackageInstallService
             {
                 return ToAppResult(preview);
             }
-            consents = await RequestConsentAsync(preview.RequiredCapabilityConsents, cancellationToken);
+            if (preview.PlanItems.Count == 0)
+            {
+                return ToAppResult(preview);
+            }
+            var resolved = ResolveUpdatePlan(preview);
+            var plan = resolved.Plan;
+            if (HasPlanFailures(plan))
+            {
+                return PlanFailed(plan);
+            }
+            expectedPlans = resolved.ExpectedPlans;
+            var preflight = await RegistryPackageChangePreflight.CreateAsync(
+                plan,
+                runtimeApiClient,
+                cancellationToken,
+                expectedPlans);
+            consents = await RequestConfirmationAsync(preflight, cancellationToken);
             if (consents is null)
             {
-                return ConsentDeclined(preview.RequiredCapabilityConsents, preview.PlanItems);
+                return ConfirmationDeclined(plan.RequiredCapabilityConsents, plan.Items);
             }
         }
         progress?.Invoke(new("Runtime is resolving and applying updates...", 10));
         var result = await runtimeApiClient.UpdateRegistryPackagesAsync(
-            new RuntimeRegistryUpdateRequest(CapabilityConsents: consents),
+            new RuntimeRegistryUpdateRequest(
+                CapabilityConsents: consents,
+                ExpectedPlans: expectedPlans),
             cancellationToken);
         progress?.Invoke(new(result.Message, 100));
         return ToAppResult(result);
@@ -165,7 +236,8 @@ public sealed class RegistryPackageInstallService
         CancellationToken cancellationToken = default)
     {
         IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        if (_consentPrompt is not null)
+        IReadOnlyList<RuntimeRegistryPackagePlanExpectation>? expectedPlans = null;
+        if (_confirmationPrompt is not null)
         {
             var preview = await runtimeApiClient.UpdateRegistryPackagesAsync(
                 new RuntimeRegistryUpdateRequest(PackageId: packageId, DryRun: true),
@@ -174,15 +246,34 @@ public sealed class RegistryPackageInstallService
             {
                 return ToAppResult(preview);
             }
-            consents = await RequestConsentAsync(preview.RequiredCapabilityConsents, cancellationToken);
+            if (preview.PlanItems.Count == 0)
+            {
+                return ToAppResult(preview);
+            }
+            var resolved = ResolveUpdatePlan(preview);
+            var plan = resolved.Plan;
+            if (HasPlanFailures(plan))
+            {
+                return PlanFailed(plan);
+            }
+            expectedPlans = resolved.ExpectedPlans;
+            var preflight = await RegistryPackageChangePreflight.CreateAsync(
+                plan,
+                runtimeApiClient,
+                cancellationToken,
+                expectedPlans);
+            consents = await RequestConfirmationAsync(preflight, cancellationToken);
             if (consents is null)
             {
-                return ConsentDeclined(preview.RequiredCapabilityConsents, preview.PlanItems);
+                return ConfirmationDeclined(plan.RequiredCapabilityConsents, plan.Items);
             }
         }
         progress?.Invoke(new($"Runtime is resolving and applying the recorded update policy for {packageId}...", 10));
         var result = await runtimeApiClient.UpdateRegistryPackagesAsync(
-            new RuntimeRegistryUpdateRequest(PackageId: packageId, CapabilityConsents: consents),
+            new RuntimeRegistryUpdateRequest(
+                PackageId: packageId,
+                CapabilityConsents: consents,
+                ExpectedPlans: expectedPlans),
             cancellationToken);
         progress?.Invoke(new(result.Message, 100));
         return ToAppResult(result);
@@ -195,34 +286,47 @@ public sealed class RegistryPackageInstallService
         Action<RegistryPackageInstallProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        if (_consentPrompt is not null)
+        var previewRequest = new RuntimeRegistrySourceAdoptionRequest(
+            packageId,
+            registryUrl.AbsoluteUri,
+            Tag: "latest",
+            DryRun: true);
+        var preview = await runtimeApiClient.AdoptRegistryPackageSourceAsync(
+            previewRequest,
+            cancellationToken);
+        if (!preview.Success)
         {
-            var preview = await runtimeApiClient.AdoptRegistryPackageSourceAsync(
-                new RuntimeRegistrySourceAdoptionRequest(
-                    packageId,
-                    registryUrl.AbsoluteUri,
-                    Tag: "latest",
-                    DryRun: true),
-                cancellationToken);
-            if (!preview.Success)
-            {
-                return ToAppResult(preview);
-            }
-            consents = await RequestConsentAsync(preview.RequiredCapabilityConsents, cancellationToken);
+            return ToAppResult(preview);
+        }
+        var resolved = ResolveAdoptionPlan(preview, registryUrl, includePrerelease: false);
+        if (HasPlanFailures(resolved.Plan))
+        {
+            return PlanFailed(resolved.Plan);
+        }
+
+        IReadOnlyList<PackageCapabilityConsent>? consents = null;
+        if (_confirmationPrompt is not null)
+        {
+            var preflight = await RegistryPackageChangePreflight.CreateAsync(
+                resolved.Plan,
+                runtimeApiClient,
+                cancellationToken,
+                resolved.ExpectedPlans);
+            consents = await RequestConfirmationAsync(preflight, cancellationToken);
             if (consents is null)
             {
-                return ConsentDeclined(preview.RequiredCapabilityConsents, preview.PlanItems);
+                return ConfirmationDeclined(resolved.Plan.RequiredCapabilityConsents, resolved.Plan.Items);
             }
         }
         progress?.Invoke(new($"Runtime is adopting the Registry source and updating {packageId}...", 10));
         var result = await runtimeApiClient.AdoptRegistryPackageSourceAsync(
-            new RuntimeRegistrySourceAdoptionRequest(
-                packageId,
-                registryUrl.AbsoluteUri,
-                Tag: "latest",
-                Confirm: true,
-                CapabilityConsents: consents),
+            previewRequest with
+            {
+                Confirm = true,
+                DryRun = false,
+                CapabilityConsents = consents,
+                ExpectedResolutionFingerprint = resolved.ExpectedPlans[0].ExpectedResolutionFingerprint,
+            },
             cancellationToken);
         progress?.Invoke(new(result.Message, 100));
         return ToAppResult(result);
@@ -263,24 +367,68 @@ public sealed class RegistryPackageInstallService
             AllowDowngrade: allowDowngrade,
             Reinstall: reinstall);
 
-    private async Task<IReadOnlyList<PackageCapabilityConsent>?> RequestConsentAsync(
-        IReadOnlyList<PackageCapabilityConsent> required,
+    private static ResolvedUpdatePlan ResolveUpdatePlan(RuntimeRegistryPackageChangeResult preview)
+    {
+        var plan = PlanFromPreview(preview);
+        if (preview.PlanExpectations.Count == 0
+            || preview.PlanExpectations.Any(static expectation =>
+                !IsResolutionFingerprint(expectation.ExpectedResolutionFingerprint)))
+        {
+            return new ResolvedUpdatePlan(InvalidPreviewFingerprintPlan(plan), []);
+        }
+        return new ResolvedUpdatePlan(plan, preview.PlanExpectations);
+    }
+
+    private static ResolvedUpdatePlan ResolveAdoptionPlan(
+        RuntimeRegistryPackageChangeResult preview,
+        Uri registryUrl,
+        bool includePrerelease)
+    {
+        var plan = PlanFromPreview(preview);
+        if (preview.PlanExpectations.Count != 1)
+        {
+            return new ResolvedUpdatePlan(InvalidAdoptionPreviewPlan(plan), []);
+        }
+
+        var expectation = preview.PlanExpectations[0];
+        if (!IsResolutionFingerprint(expectation.ExpectedResolutionFingerprint)
+            || expectation.IncludePrerelease != includePrerelease
+            || !SameRegistryOrigin(registryUrl, expectation.RegistryOrigin))
+        {
+            return new ResolvedUpdatePlan(InvalidAdoptionPreviewPlan(plan), []);
+        }
+        return new ResolvedUpdatePlan(
+            plan with { ResolutionFingerprint = expectation.ExpectedResolutionFingerprint },
+            [expectation]);
+    }
+
+    private static RuntimeRegistryResolveInstallPlanResponse PlanFromPreview(
+        RuntimeRegistryPackageChangeResult preview)
+        => new(
+            preview.Success,
+            preview.PlanItems,
+            preview.Warnings,
+            preview.Errors,
+            preview.Conflicts,
+            [],
+            preview.RequiredCapabilityConsents,
+            RuntimeArtifacts: preview.RuntimeArtifacts,
+            RuntimeConflicts: preview.RuntimeConflicts);
+
+    private async Task<IReadOnlyList<PackageCapabilityConsent>?> RequestConfirmationAsync(
+        RegistryPackageChangePreflight preflight,
         CancellationToken cancellationToken)
     {
-        if (required.Count == 0)
-        {
-            return [];
-        }
-        return await _consentPrompt!(required, cancellationToken).ConfigureAwait(false)
-            ? required
+        return await _confirmationPrompt!(preflight, cancellationToken).ConfigureAwait(false)
+            ? preflight.Plan.RequiredCapabilityConsents
             : null;
     }
 
-    private static RegistryPackageInstallExecutionResult ConsentDeclined(
+    private static RegistryPackageInstallExecutionResult ConfirmationDeclined(
         IReadOnlyList<PackageCapabilityConsent> required,
         IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> planItems)
         => RegistryPackageInstallExecutionResult.Failed(
-            "Sensitive worker capability consent was not approved; no package changes were applied.",
+            "Package changes were not approved; no package changes were applied.",
             planItems: planItems) with
         {
             RequiredCapabilityConsents = required,
@@ -288,14 +436,93 @@ public sealed class RegistryPackageInstallService
 
     private static RegistryPackageInstallExecutionResult PlanFailed(
         RuntimeRegistryResolveInstallPlanResponse plan)
-        => RegistryPackageInstallExecutionResult.Failed(
-            plan.Errors.FirstOrDefault() ?? "Registry package plan resolution failed.",
-            plan.Errors,
+    {
+        var errors = plan.Errors
+            .Concat(plan.Conflicts.Select(static conflict => string.IsNullOrWhiteSpace(conflict.Message)
+                ? $"Package '{conflict.PackageId}' conflicts with the requested change."
+                : conflict.Message))
+            .Concat(plan.RuntimeConflicts.Select(static conflict => conflict.Message))
+            .DefaultIfEmpty("Registry package plan resolution failed.")
+            .ToArray();
+        return RegistryPackageInstallExecutionResult.Failed(
+            errors[0],
+            errors,
             plan.Warnings,
             plan.Items) with
         {
+            Conflicts = plan.Conflicts,
             RequiredCapabilityConsents = plan.RequiredCapabilityConsents,
+            RuntimeConflicts = plan.RuntimeConflicts,
         };
+    }
+
+    private static RegistryPackageInstallExecutionResult InvalidPreviewFingerprint(
+        RuntimeRegistryResolveInstallPlanResponse plan)
+        => PlanFailed(InvalidPreviewFingerprintPlan(plan));
+
+    private static RuntimeRegistryResolveInstallPlanResponse InvalidPreviewFingerprintPlan(
+        RuntimeRegistryResolveInstallPlanResponse plan)
+        => new(
+            false,
+            plan.Items,
+            plan.Warnings,
+            ["Registry package preview did not return a valid resolution fingerprint. Refresh the preview and retry."],
+            plan.Conflicts,
+            plan.TrustedArtifactOrigins,
+            plan.RequiredCapabilityConsents,
+            plan.RuntimeArtifacts,
+            plan.RuntimeConflicts,
+            plan.ResolutionFingerprint,
+            plan.RuntimePolicyRevision,
+            plan.ExpiresAtUtc);
+
+    private static RuntimeRegistryResolveInstallPlanResponse InvalidAdoptionPreviewPlan(
+        RuntimeRegistryResolveInstallPlanResponse plan)
+        => new(
+            false,
+            plan.Items,
+            plan.Warnings,
+            plan.Errors.Concat([
+                "Registry source adoption preview did not return one valid plan fingerprint for the selected Registry source. Refresh the preview and retry.",
+            ]).ToArray(),
+            plan.Conflicts,
+            plan.TrustedArtifactOrigins,
+            plan.RequiredCapabilityConsents,
+            plan.RuntimeArtifacts,
+            plan.RuntimeConflicts,
+            plan.ResolutionFingerprint,
+            plan.RuntimePolicyRevision,
+            plan.ExpiresAtUtc);
+
+    private static IReadOnlyList<RuntimeRegistryPackagePlanExpectation> CreateExpectedPlans(
+        RuntimeRegistryPackageBatchRequest request,
+        RuntimeRegistryResolveInstallPlanResponse plan)
+        =>
+        [
+            new RuntimeRegistryPackagePlanExpectation(
+                request.RegistryOrigin,
+                request.IncludePrerelease,
+                plan.ResolutionFingerprint),
+        ];
+
+    private static bool IsResolutionFingerprint(string? value)
+        => value is { Length: 64 }
+           && value.All(static character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static bool HasPlanFailures(RuntimeRegistryResolveInstallPlanResponse plan)
+        => !plan.Success
+           || plan.Errors.Count != 0
+           || plan.Conflicts.Count != 0
+           || plan.RuntimeConflicts.Count != 0;
+
+    private static bool SameRegistryOrigin(Uri expected, string actual)
+        => Uri.TryCreate(actual, UriKind.Absolute, out var actualUri)
+           && Uri.Compare(
+               expected,
+               actualUri,
+               UriComponents.SchemeAndServer | UriComponents.Path,
+               UriFormat.SafeUnescaped,
+               StringComparison.Ordinal) == 0;
 
     private static RegistryPackageInstallExecutionResult ToAppResult(RuntimeRegistryPackageChangeResult result)
         => new RegistryPackageInstallExecutionResult(
@@ -309,6 +536,12 @@ public sealed class RegistryPackageInstallService
             result.PlanItems)
         {
             CommittedStamp = result.CommittedStamp,
+            Conflicts = result.Conflicts,
             RequiredCapabilityConsents = result.RequiredCapabilityConsents,
+            RuntimeConflicts = result.RuntimeConflicts,
         };
+
+    private sealed record ResolvedUpdatePlan(
+        RuntimeRegistryResolveInstallPlanResponse Plan,
+        IReadOnlyList<RuntimeRegistryPackagePlanExpectation> ExpectedPlans);
 }

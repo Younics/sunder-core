@@ -9,26 +9,21 @@ namespace Sunder.Sdk.Rpc;
 internal readonly record struct SunderRpcDescriptorProjection(
     byte[] CanonicalUtf8,
     string Sha256,
-    byte[]? CanonicalAbiProjectionUtf8,
-    string? AbiSha256);
+    byte[] CanonicalAbiProjectionUtf8,
+    string AbiSha256);
 
 internal static class SunderRpcDescriptorProjector
 {
-    private static readonly byte[] AbiV2DomainSeparator = "sunder.rpc.abi.v2\0"u8.ToArray();
+    private static readonly byte[] AbiDomainSeparator = "sunder.rpc.abi.v1\0"u8.ToArray();
 
     public static SunderRpcDescriptorProjection Project(
         JsonElement root,
-        IReadOnlyDictionary<string, JsonElement> definitions,
-        bool includeAbiProjection)
+        IReadOnlyDictionary<string, JsonElement> definitions)
     {
         var canonicalUtf8 = Canonicalize(root);
         var sha256 = Convert.ToHexString(SHA256.HashData(canonicalUtf8)).ToLowerInvariant();
-        var canonicalAbiProjectionUtf8 = includeAbiProjection
-            ? CanonicalizeAbiProjection(root, definitions)
-            : null;
-        var abiSha256 = canonicalAbiProjectionUtf8 is null
-            ? null
-            : HashAbiV2(canonicalAbiProjectionUtf8);
+        var canonicalAbiProjectionUtf8 = CanonicalizeAbiProjection(root, definitions);
+        var abiSha256 = HashAbi(canonicalAbiProjectionUtf8);
         return new SunderRpcDescriptorProjection(
             canonicalUtf8,
             sha256,
@@ -328,10 +323,10 @@ internal static class SunderRpcDescriptorProjector
     private static bool IsNullSchema(JsonElement schema)
         => schema.TryGetProperty("type", out var type) && type.GetString() == "null";
 
-    private static string HashAbiV2(byte[] canonicalProjection)
+    private static string HashAbi(byte[] canonicalProjection)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData(AbiV2DomainSeparator);
+        hash.AppendData(AbiDomainSeparator);
         hash.AppendData(canonicalProjection);
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }

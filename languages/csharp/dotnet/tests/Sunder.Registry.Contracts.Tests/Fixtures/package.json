@@ -22,15 +22,21 @@
       "role": "runtime",
       "rid": "win-x64",
       "kind": "worker",
-      "entryPoint": "bin/sample-worker.exe",
+      "entryPoint": "bin/sample-worker.dll",
       "targetFramework": "net10.0",
       "sdkVersion": "1.1.0",
       "requiredHostCapabilities": [
         "core.v1",
-        "rpc.v2",
+        "execution-runtime.v1",
+        "rpc.v1",
         "sdk-baseline-1-1.v1",
-        "worker-protocol.v3"
+        "worker-protocol.v1"
       ],
+      "executionRuntime": {
+        "runtimeId": "sunder.runtime.dotnet",
+        "versionRange": "\u003E=10.0.0 \u003C11.0.0",
+        "moduleAbi": "sunder.dotnet-worker-module.v1"
+      },
       "views": []
     },
     {
@@ -45,6 +51,7 @@
         "sdk-baseline-1-1.v1",
         "views.v1"
       ],
+      "executionRuntime": null,
       "views": [
         {
           "viewId": "sunder.package.sample.workspace",
@@ -104,7 +111,7 @@
       "audience": "public"
     }
   ],
-  "manifestFormatVersion": 3,
+  "manifestFormatVersion": 1,
   "archiveFormatVersion": 1,
   "publishedAtUtc": "2026-07-11T10:00:00+00:00",
   "trustedArtifactOrigins": [

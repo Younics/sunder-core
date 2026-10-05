@@ -1,0 +1,19 @@
+{
+  "package": {
+    "packageId": "example.agent",
+    "version": "2.0.0",
+    "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "packageState": "SecurityBlocked",
+  "versionAvailability": "Listed",
+  "disposition": "Denied",
+  "errorCode": "package.security-blocked",
+  "publicReason": "Security policy blocks this package identity.",
+  "platformDependencies": [
+    {
+      "authorityId": "sunder.core",
+      "releaseVersion": "1.1.0",
+      "catalogSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}

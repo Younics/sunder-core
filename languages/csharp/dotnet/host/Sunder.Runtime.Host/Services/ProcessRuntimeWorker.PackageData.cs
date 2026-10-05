@@ -434,6 +434,7 @@ internal sealed partial class ProcessRuntimeWorker
                     throw new SunderWorkerProtocolException(
                         "Process worker payload allocation exceeds the configured limit.");
                 }
+                call.Cancellation.Token.ThrowIfCancellationRequested();
                 var payload = CreateWorkerUploadPayload(length, call.Cancellation.Token);
                 var retained = false;
                 try
@@ -506,7 +507,7 @@ internal sealed partial class ProcessRuntimeWorker
                                               || !PackageStorageValidation.IsValidValue(key)))
                 {
                     throw new InvalidOperationException(
-                        "The package physical-key snapshot exceeds Worker V3 migration bounds.");
+                        "The package physical-key snapshot exceeds Worker V1 migration bounds.");
                 }
                 QueueEnvelope(new
                 {
@@ -1489,6 +1490,7 @@ internal sealed partial class ProcessRuntimeWorker
         WorkerCall call)
     {
         ValidatePackageDataEnvelope(type, root);
+        call.Cancellation.Token.ThrowIfCancellationRequested();
         try
         {
             return AcquirePackageDataLease();

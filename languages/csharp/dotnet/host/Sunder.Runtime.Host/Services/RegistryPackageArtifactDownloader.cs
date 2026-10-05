@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
@@ -15,7 +16,11 @@ internal sealed class RegistryPackageArtifactDownloader(
 {
     private const long MaxArtifactBytes = RuntimeContentTransferStore.MaxPackageUploadBytes;
     private const long MaxAggregateProjectionBytes = 1024L * 1024 * 1024;
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     public async Task<ContentUploadDescriptor> DownloadAsync(
         Uri origin,
@@ -170,32 +175,13 @@ internal sealed class RegistryPackageArtifactDownloader(
         CancellationToken cancellationToken)
     {
         var sourceManifest = projections[0].Manifest!;
+        // Keep the complete source graph. The private installation handoff carries
+        // acquired targets separately; this is not a new publishable full archive.
+        PackageManifestAdmissionPolicy.EnsureSupported(sourceManifest);
         var selectedTargets = item.Artifacts
             .Where(artifact => artifact.Rid is not null)
             .Select(artifact => (Role: artifact.Kind, Rid: artifact.Rid!))
             .ToHashSet();
-        var selectedRoles = selectedTargets.Select(target => target.Role).ToHashSet(StringComparer.Ordinal);
-        var manifest = new SunderPackageManifest
-        {
-            ArchiveFormatVersion = sourceManifest.ArchiveFormatVersion,
-            ManifestVersion = sourceManifest.ManifestVersion,
-            Id = sourceManifest.Id,
-            Name = sourceManifest.Name,
-            Summary = sourceManifest.Summary,
-            Version = sourceManifest.Version,
-            Icon = sourceManifest.Icon,
-            DependsOn = sourceManifest.DependsOn,
-            Targets = (sourceManifest.Targets ?? [])
-                .Where(target => target is not null && selectedTargets.Contains((target.Role!, target.Rid!)))
-                .ToArray(),
-            ContractBundles = sourceManifest.ContractBundles,
-            UsesContracts = (sourceManifest.UsesContracts ?? [])
-                .Where(use => use is not null && selectedRoles.Contains(use.Role!))
-                .ToArray(),
-            Provides = (sourceManifest.Provides ?? [])
-                .Where(provider => provider is not null && selectedRoles.Contains(provider.Role!))
-                .ToArray(),
-        };
 
         var sourcePath = Path.Combine(temporaryRoot, "composed-source");
         Directory.CreateDirectory(sourcePath);
@@ -222,10 +208,12 @@ internal sealed class RegistryPackageArtifactDownloader(
 
         var manifestPath = Path.Combine(sourcePath, "manifest", "sunder-package.json");
         Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
-        await File.WriteAllTextAsync(
-            manifestPath,
-            JsonSerializer.Serialize(manifest, JsonOptions),
-            cancellationToken);
+        File.Copy(ArchiveRelativePath.Parse(SunderPackageFormat.ManifestPath).ToPlatformPath(projections[0].ExtractedProjection!.RootPath), manifestPath);
+        await using (var manifestStream = File.OpenRead(manifestPath))
+        {
+            if (Convert.ToHexStringLower(await SHA256.HashDataAsync(manifestStream, cancellationToken)) != item.Artifacts[0].ManifestSha256)
+                throw new InvalidDataException("Projection source manifest changed before composition.");
+        }
         var contentIndexPath = Path.Combine(sourcePath, "manifest", "content-index.json");
         var entries = new List<SunderPackageContentIndexEntry>();
         foreach (var path in Directory.EnumerateFiles(sourcePath, "*", SearchOption.AllDirectories)
@@ -245,9 +233,8 @@ internal sealed class RegistryPackageArtifactDownloader(
                 JsonOptions),
             cancellationToken);
 
-        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(
-            sourcePath,
-            cancellationToken);
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedProjectionSetAsync(
+            sourcePath, selectedTargets.Select(target => new SunderPackageTargetKey(target.Role, target.Rid)).ToArray(), cancellationToken);
         if (!validation.Success)
         {
             throw new InvalidDataException(
@@ -428,6 +415,7 @@ internal sealed class RegistryPackageArtifactDownloader(
            && string.Equals(planned.EntryPoint, source.EntryPoint, StringComparison.Ordinal)
            && string.Equals(planned.TargetFramework, source.TargetFramework, StringComparison.Ordinal)
            && string.Equals(planned.SdkVersion, source.SdkVersion, StringComparison.Ordinal)
+           && ExecutionRuntimeMatches(planned.ExecutionRuntime, source.ExecutionRuntime)
            && (planned.RequiredHostCapabilities ?? []).SequenceEqual(
                (source.RequiredHostCapabilities ?? []).Select(static capability => capability!),
                StringComparer.Ordinal)
@@ -439,6 +427,16 @@ internal sealed class RegistryPackageArtifactDownloader(
                    view.Icon,
                    view.DefaultPlacement!,
                    view.ShowInHotbar!.Value)));
+
+    private static bool ExecutionRuntimeMatches(
+        RegistryExecutionRuntimeRequirement? planned,
+        SunderPackageExecutionRuntimeManifest? source)
+        => planned is null && source is null
+           || planned is not null
+           && source is not null
+           && string.Equals(planned.RuntimeId, source.Id, StringComparison.Ordinal)
+           && string.Equals(planned.VersionRange, source.VersionRange, StringComparison.Ordinal)
+           && string.Equals(planned.ModuleAbi, source.ModuleAbi, StringComparison.Ordinal);
 
     private static IReadOnlySet<string> BuildAllowedOrigins(
         Uri registryOrigin,

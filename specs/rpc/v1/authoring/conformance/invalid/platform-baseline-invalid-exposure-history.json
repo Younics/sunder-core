@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "authorityKind": "platform",
+  "authorityId": "sunder.core",
+  "contracts": {
+    "stackContributor": {
+      "contractId": "sunder.stack.contributor",
+      "history": [
+        {
+          "state": "release-frozen",
+          "exposure": "package",
+          "contractVersion": "2.0.0",
+          "descriptorBytes": 489,
+          "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"sunder.stack.contributor\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0\"}",
+          "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+          "abiProjectionBytes": 392,
+          "canonicalAbiProjection": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"type\":\"object\"}},\"contractId\":\"sunder.stack.contributor\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}}}",
+          "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+          "catalogRelease": {
+            "authorityId": "sunder.core",
+            "releaseVersion": "1.1.0"
+          }
+        }
+      ]
+    }
+  }
+}

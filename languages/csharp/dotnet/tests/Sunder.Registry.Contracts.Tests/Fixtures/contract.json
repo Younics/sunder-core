@@ -8,5 +8,6 @@
   "descriptorDownloadUrl": "https://registry.example/api/v1/contracts/sample.contract/versions/1.2.3/descriptor",
   "firstPublisherPackageId": "sunder.package.sample",
   "firstPublisherPackageVersion": "2.0.0",
-  "publishedAtUtc": "2026-07-11T10:00:00+00:00"
+  "publishedAtUtc": "2026-07-11T10:00:00+00:00",
+  "etag": "\u0022descriptor-sha\u0022"
 }

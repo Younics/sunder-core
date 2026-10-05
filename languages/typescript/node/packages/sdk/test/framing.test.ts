@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
-import { FrameDecoder, ProtocolError, TransportResourceError, encodeFrame } from "../src/framing";
+import {
+  FrameDecoder,
+  ProtocolError,
+  TransportResourceError,
+  encodeFrame,
+  hasCanonicalNonNegativeIntegerToken,
+} from "../src/framing";
+import { workerV1ConformanceCorpus } from "./worker-v1-conformance-corpus";
 
 test("Content-Length framing round trips across adversarial chunk boundaries", () => {
   const frame = encodeFrame({ type: "worker.result", id: "a", value: { text: "snowman \u2603" } });
@@ -56,6 +63,62 @@ test("framing rejects excessive JSON depth and partial terminal frames", () => {
   );
 });
 
+test("framing preserves the shared safe-integer token spellings", () => {
+  for (const fixture of workerV1ConformanceCorpus.safeIntegerTokens) {
+    const body = Buffer.from(`{"value":${fixture.token}}`, "utf8");
+    const frame = Buffer.concat([
+      Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "ascii"),
+      body,
+    ]);
+    const decoded = new FrameDecoder().push(frame)[0] as Readonly<{ value: number }>;
+    const valid = Number.isSafeInteger(decoded.value)
+      && decoded.value >= 0
+      && hasCanonicalNonNegativeIntegerToken(decoded, "value");
+    assert.equal(valid, fixture.valid, fixture.name);
+  }
+});
+
+test("integer token provenance is nested and fails closed outside the decoder", () => {
+  const body = Buffer.from('{"value":{"version":1.0}}', "utf8");
+  const frame = Buffer.concat([
+    Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "ascii"),
+    body,
+  ]);
+  const decoded = new FrameDecoder().push(frame)[0] as Readonly<{
+    value: Readonly<{ version: number }>;
+  }>;
+
+  assert.equal(hasCanonicalNonNegativeIntegerToken(decoded.value, "version"), false);
+  assert.equal(hasCanonicalNonNegativeIntegerToken({ version: 1 }, "version"), false);
+  assert.equal(hasCanonicalNonNegativeIntegerToken({ ...decoded.value }, "version"), false);
+
+  const canonicalBody = Buffer.from('{"value":{"version":1}}', "utf8");
+  const canonicalFrame = Buffer.concat([
+    Buffer.from(`Content-Length: ${canonicalBody.length}\r\n\r\n`, "ascii"),
+    canonicalBody,
+  ]);
+  const canonical = new FrameDecoder().push(canonicalFrame)[0] as {
+    value: { version: number; added?: number };
+  };
+  assert.equal(hasCanonicalNonNegativeIntegerToken(canonical.value, "version"), true);
+
+  const indexedBody = Buffer.from('{"value":{"2":{"version":1},"1":{"version":1.0}}}', "utf8");
+  const indexed = new FrameDecoder().push(Buffer.concat([
+    Buffer.from(`Content-Length: ${indexedBody.length}\r\n\r\n`, "ascii"),
+    indexedBody,
+  ]))[0] as { value: Record<string, { version: number }> };
+  assert.equal(hasCanonicalNonNegativeIntegerToken(indexed.value["2"]!, "version"), true);
+  assert.equal(hasCanonicalNonNegativeIntegerToken(indexed.value["1"]!, "version"), false);
+
+  canonical.value.version = 2;
+  canonical.value.added = 1;
+  assert.equal(hasCanonicalNonNegativeIntegerToken(canonical.value, "version"), false);
+  assert.equal(hasCanonicalNonNegativeIntegerToken(canonical.value, "added"), false);
+
+  canonical.value.version = -0;
+  assert.equal(hasCanonicalNonNegativeIntegerToken(canonical.value, "version"), false);
+});
+
 test("framing uses ASCII-only collision folding for nested RPC values", () => {
   const value = {
     type: "host.result",
@@ -74,6 +137,28 @@ test("framing uses ASCII-only collision folding for nested RPC values", () => {
   );
 });
 
+test("framing rejects unpaired UTF-16 surrogates in values and property names", () => {
+  for (const source of [
+    '{"type":"host.result","id":"x","value":"\\uD800"}',
+    '{"type":"host.result","id":"x","value":{"\\uD800":true}}',
+  ]) {
+    const body = Buffer.from(source, "utf8");
+    const frame = Buffer.concat([
+      Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "ascii"),
+      body,
+    ]);
+    assert.throws(() => new FrameDecoder().push(frame), /invalid string escape|Unicode scalar/u);
+  }
+  assert.throws(
+    () => encodeFrame({ type: "host.result", id: "x", value: "\ud800" }),
+    /invalid string escape|Unicode scalar/u,
+  );
+  assert.throws(
+    () => encodeFrame({ type: "host.result", id: "x", value: { "\ud800": true } }),
+    /invalid string escape|Unicode scalar/u,
+  );
+});
+
 test("framing admits the exact value plus metadata envelope and rejects one byte or depth beyond it", () => {
   const value = { text: "snowman \u2603 \" \\ \u00e9" };
   const envelope = { type: "worker.result", id: "escape", metadata: "m".repeat(128), value };
@@ -87,6 +172,8 @@ test("framing admits the exact value plus metadata envelope and rejects one byte
     maxMessageDepth: 11,
     maxRpcValueBytes: valueBytes,
     maxValueDepth: 3,
+    maxValueNodes: 16,
+    maxObjectMembers: 4,
     maxEnvelopeReserveBytes: reserveBytes,
   } as const;
 
@@ -102,6 +189,35 @@ test("framing admits the exact value plus metadata envelope and rejects one byte
   };
   encodeFrame({ type: "worker.result", value: [[null]] }, depthLimits);
   assert.throws(() => encodeFrame({ type: "worker.result", value: [[[null]]] }, depthLimits), ProtocolError);
+  assert.throws(
+    () => encodeFrame({ type: "worker.result", value: [null, null, null] }, { ...depthLimits, maxValueNodes: 3 }),
+    TransportResourceError,
+  );
+  assert.throws(
+    () => encodeFrame({ type: "worker.result", value: { a: 1, b: 2 } }, { ...depthLimits, maxObjectMembers: 1 }),
+    TransportResourceError,
+  );
+  const oversizedText = '{"value":[null,null,null]}';
+  const oversizedBody = Buffer.from(oversizedText, "utf8");
+  const oversizedFrame = Buffer.concat([
+    Buffer.from(`Content-Length: ${oversizedBody.length}\r\n\r\n`, "ascii"),
+    oversizedBody,
+  ]);
+  const originalParse = JSON.parse;
+  let materializedOversizedBody = false;
+  JSON.parse = ((source: string, reviver?: (this: unknown, key: string, value: unknown) => unknown) => {
+    if (source === oversizedText) materializedOversizedBody = true;
+    return originalParse(source, reviver);
+  }) as typeof JSON.parse;
+  try {
+    assert.throws(
+      () => new FrameDecoder({ ...depthLimits, maxValueNodes: 3 }).push(oversizedFrame),
+      TransportResourceError,
+    );
+  } finally {
+    JSON.parse = originalParse;
+  }
+  assert.equal(materializedOversizedBody, false);
 
   const errorEnvelope = {
     type: "worker.error",
@@ -147,7 +263,7 @@ interface TransportVector {
 }
 
 async function verifySharedTransportVectors(mutateFirstExpectation: boolean): Promise<void> {
-  const path = resolve(__dirname, "../../../../../../../specs/worker/v3/conformance/transport-vectors.json");
+  const path = resolve(__dirname, "../../../../../../../specs/worker/v1/conformance/transport-vectors.json");
   const corpus = JSON.parse(await readFile(path, "utf8")) as {
     readonly formatVersion: number;
     readonly vectors: readonly TransportVector[];

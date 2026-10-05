@@ -10,15 +10,13 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         SunderRpcContractDescriptor descriptor,
         string accessibility)
     {
-        var isV2 = descriptor.DescriptorVersion == SunderRpcProtocol.DescriptorVersionV2;
-        if (isV2
-            && !string.Equals(
+        if (!string.Equals(
                 descriptor.SchemaProfile,
                 SunderRpcProtocol.ValueSchemaProfile,
                 StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"C# generation supports RPC V2 schema profile '{SunderRpcProtocol.ValueSchemaProfile}'.");
+                $"C# generation supports RPC schema profile '{SunderRpcProtocol.ValueSchemaProfile}'.");
         }
 
         var topLevelNames = new SymbolAllocator();
@@ -44,7 +42,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         var definitionDrafts = new List<DefinitionDraft>();
         foreach (var definition in orderedDefinitions)
         {
-            var kind = GetDefinitionKind(definition.Value, descriptor.Definitions, isV2);
+            var kind = GetDefinitionKind(definition.Value, descriptor.Definitions);
             if (kind is null) continue;
             var typeName = topLevelNames.Allocate(SunderRpcCSharpSyntax.Identifier(definition.Key));
             generatedTypeNames.Add(definition.Key, typeName);
@@ -52,35 +50,30 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         }
 
         var inlineTypeNames = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (isV2)
+        foreach (var definition in orderedDefinitions)
         {
-            foreach (var definition in orderedDefinitions)
-            {
-                CollectInlineTaggedUnions(
-                    definition.Value,
-                    SunderRpcCSharpSyntax.Identifier(definition.Key),
-                    "",
-                    isRoot: true,
-                    descriptor.Definitions,
-                    inlineTypeNames,
-                    definitionDrafts,
-                    topLevelNames);
-            }
-            definitionDrafts = BuildUnionAndEnumDrafts(
-                definitionDrafts,
+            CollectInlineTaggedUnions(
+                definition.Value,
+                SunderRpcCSharpSyntax.Identifier(definition.Key),
+                "",
+                isRoot: true,
                 descriptor.Definitions,
-                generatedTypeNames,
+                inlineTypeNames,
+                definitionDrafts,
                 topLevelNames);
         }
+        definitionDrafts = BuildUnionAndEnumDrafts(
+            definitionDrafts,
+            descriptor.Definitions,
+            generatedTypeNames,
+            topLevelNames);
 
-        var errorDrafts = isV2
-            ? descriptor.Errors.Values
-                .OrderBy(static declaration => declaration.Code, StringComparer.Ordinal)
-                .Select(declaration => new ErrorDraft(
-                    declaration,
-                    topLevelNames.Allocate(SunderRpcCSharpSyntax.Identifier(declaration.Code) + "RpcError")))
-                .ToArray()
-            : [];
+        var errorDrafts = descriptor.Errors.Values
+            .OrderBy(static declaration => declaration.Code, StringComparer.Ordinal)
+            .Select(declaration => new ErrorDraft(
+                declaration,
+                topLevelNames.Allocate(SunderRpcCSharpSyntax.Identifier(declaration.Code) + "RpcError")))
+            .ToArray();
 
         var serviceMethodDrafts = new List<ServiceMethodDraft>(serviceDrafts.Length);
         foreach (var service in serviceDrafts)
@@ -98,8 +91,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         var context = new SemanticContext(
             descriptor.Definitions,
             generatedTypeNames,
-            inlineTypeNames,
-            isV2);
+            inlineTypeNames);
         var definitions = definitionDrafts
             .Select(definition => BuildDefinition(definition, context))
             .ToArray();
@@ -112,7 +104,6 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
 
         return new SunderRpcCSharpGeneratorModel(
             accessibility,
-            isV2,
             identityTypeName,
             descriptor.DescriptorVersion,
             descriptor.SchemaProfile,
@@ -128,11 +119,9 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
 
     private static DefinitionKind? GetDefinitionKind(
         JsonElement schema,
-        IReadOnlyDictionary<string, JsonElement> schemas,
-        bool isV2)
+        IReadOnlyDictionary<string, JsonElement> schemas)
     {
         if (IsRecordSchema(schema)) return DefinitionKind.Record;
-        if (!isV2) return null;
         if (IsStringEnumSchema(schema)) return DefinitionKind.StringEnum;
         return IsTaggedUnionSchema(schema, schemas) ? DefinitionKind.TaggedUnion : null;
     }
@@ -372,7 +361,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
             var isRequired = required.Contains(property.Name);
             var allowsNull = SchemaAllowsNull(property.Value, context);
             SunderRpcCSharpPropertySerialization serialization;
-            if (!isRequired && context.IsV2 && allowsNull)
+            if (!isRequired && allowsNull)
             {
                 serialization = SunderRpcCSharpPropertySerialization.WhenWritingDefault;
                 propertyType = "global::Sunder.Sdk.Rpc.SunderRpcOptional<" + propertyType + ">";
@@ -574,13 +563,13 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         {
             return ReferenceType(reference.GetString()!, context);
         }
-        if (context.IsV2 && schema.TryGetProperty("contentEncoding", out var contentEncoding))
+        if (schema.TryGetProperty("contentEncoding", out var contentEncoding))
         {
             return contentEncoding.GetString() == "base64"
                 ? "byte[]"
                 : throw new InvalidOperationException("A validated RPC byte schema has an unsupported content encoding.");
         }
-        if (context.IsV2 && schema.TryGetProperty("format", out var format))
+        if (schema.TryGetProperty("format", out var format))
         {
             return format.GetString() switch
             {
@@ -596,7 +585,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                 _ => throw new InvalidOperationException("A validated RPC schema has an unsupported asserted format."),
             };
         }
-        if (context.IsV2 && schema.TryGetProperty("logicalType", out var logicalType))
+        if (schema.TryGetProperty("logicalType", out var logicalType))
         {
             return logicalType.GetString() switch
             {
@@ -620,11 +609,10 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                     return MakeNullable(GetTypeName(valueSchema, context));
                 }
             }
-            if (!context.IsV2) return "global::System.Text.Json.JsonElement";
             throw new InvalidOperationException(
                 "Inline tagged unions cannot be represented by a stable generated C# type; place the union in $defs.");
         }
-        if (context.IsV2 && IsUnconstrainedJsonSchema(schema))
+        if (IsUnconstrainedJsonSchema(schema))
         {
             return "global::System.Text.Json.JsonElement";
         }
@@ -633,9 +621,8 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         {
             "string" => "string",
             "integer" => "long",
-            "number" when !context.IsV2 => "decimal",
             "number" => throw new InvalidOperationException(
-                "A bare RPC number reached C# generation; V2 number schemas must assert float32 or float64."),
+                "A bare RPC number reached C# generation; number schemas must assert float32 or float64."),
             "boolean" => "bool",
             "null" => "object?",
             "array" => "global::System.Collections.Generic.IReadOnlyList<" + GetTypeName(schema.GetProperty("items"), context) + ">",
@@ -689,7 +676,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
             referenceStack.Remove(name);
             return allowsNull;
         }
-        if (context.IsV2 && IsUnconstrainedJsonSchema(schema))
+        if (IsUnconstrainedJsonSchema(schema))
         {
             return true;
         }
@@ -752,20 +739,43 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
     {
         private readonly HashSet<string> _used = new(StringComparer.Ordinal);
 
-        public void Reserve(string value) => _used.Add(value);
+        public void Reserve(string value)
+        {
+            var escaped = SunderRpcCSharpSyntax.EscapeIdentifier(value);
+            if (!_used.Add(CollisionKey(escaped)))
+            {
+                ThrowCollision(escaped);
+            }
+        }
 
         public string Allocate(string preferred)
         {
-            preferred = SunderRpcCSharpSyntax.EscapeIdentifier(preferred);
-            if (_used.Add(preferred)) return preferred;
-            var unescaped = preferred.StartsWith('@') ? preferred[1..] : preferred;
-            for (var suffix = 2; ; suffix++)
+            var escaped = SunderRpcCSharpSyntax.EscapeIdentifier(preferred);
+            if (!_used.Add(CollisionKey(escaped)))
             {
-                var candidate = SunderRpcCSharpSyntax.EscapeIdentifier(
-                    unescaped + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                if (_used.Add(candidate)) return candidate;
+                ThrowCollision(escaped);
             }
+            return escaped;
         }
+
+        private static string CollisionKey(string value)
+        {
+            var unescaped = value.StartsWith('@') ? value[1..] : value;
+            return string.Create(unescaped.Length, unescaped, static (characters, source) =>
+            {
+                for (var index = 0; index < source.Length; index++)
+                {
+                    var character = source[index];
+                    characters[index] = character is >= 'A' and <= 'Z'
+                        ? (char)(character + ('a' - 'A'))
+                        : character;
+                }
+            });
+        }
+
+        private static void ThrowCollision(string value)
+            => throw new InvalidOperationException(
+                $"rpc-authoring.generated-name-collision: Multiple descriptor symbols map to generated C# identifier '{value}'. Use explicit stable names that do not collide before or after escaping.");
     }
 
     private enum DefinitionKind
@@ -826,20 +836,18 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
     private sealed record SemanticContext(
         IReadOnlyDictionary<string, JsonElement> Schemas,
         IReadOnlyDictionary<string, string> GeneratedTypeNames,
-        IReadOnlyDictionary<string, string> InlineTypeNames,
-        bool IsV2);
+        IReadOnlyDictionary<string, string> InlineTypeNames);
 }
 
 internal sealed record SunderRpcCSharpGeneratorModel(
     string Accessibility,
-    bool IsV2,
     string IdentityTypeName,
     int DescriptorVersion,
-    string? SchemaProfile,
+    string SchemaProfile,
     string ContractId,
     string ContractVersion,
     string DescriptorSha256,
-    string? AbiSha256,
+    string AbiSha256,
     IReadOnlyList<SunderRpcCSharpDefinitionModel> Definitions,
     IReadOnlyList<SunderRpcCSharpErrorModel> Errors,
     IReadOnlyList<SunderRpcCSharpServiceModel> Services,
@@ -925,11 +933,11 @@ internal static class SunderRpcCSharpSyntax
         "private", "protected", "public", "readonly", "ref", "return", "sbyte", "sealed", "short",
         "sizeof", "stackalloc", "static", "string", "struct", "switch", "this", "throw", "true",
         "try", "typeof", "uint", "ulong", "unchecked", "unsafe", "ushort", "using", "virtual",
-        "void", "volatile", "while", "add", "alias", "and", "ascending", "async", "await", "by",
-        "descending", "dynamic", "equals", "file", "from", "get", "global", "group", "init", "into",
-        "join", "let", "managed", "nameof", "not", "notnull", "on", "or", "orderby", "partial",
-        "record", "remove", "required", "scoped", "select", "set", "unmanaged", "value", "var", "when",
-        "where", "with", "yield",
+        "void", "volatile", "while", "add", "alias", "allows", "and", "args", "ascending", "async",
+        "await", "by", "descending", "dynamic", "equals", "extension", "field", "file", "from", "get",
+        "global", "group", "init", "into", "join", "let", "managed", "nameof", "nint", "not", "notnull",
+        "nuint", "on", "or", "orderby", "partial", "record", "remove", "required", "scoped", "select",
+        "set", "unmanaged", "value", "var", "when", "where", "with", "yield",
     };
 
     public static string ContractIdentityTypeName(string contractId, string contractVersion)

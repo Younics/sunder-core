@@ -14,6 +14,7 @@
 - shell notifications
 - client-local app-side package fault containment
 - observation of Runtime package/session generations and package logs through authenticated bounded streams
+- package execution-runtime compatibility, lifecycle, integrity, and repair presentation
 - visual theme resources and app branding
 
 `Sunder.App` does not own installed package state, dev-package directory watching, or package-log discovery. Those responsibilities belong to `Sunder.Runtime.Host`.
@@ -122,7 +123,7 @@ When `--dev-package` is used:
 2. Runtime boots its installed package set independently of App startup arguments.
 3. After connecting to the warm Runtime, the App acquires an invocation-owned dev lease and atomically replaces that owner's complete folder/watch set before fetching its initial package snapshot.
 4. The runtime host shadow-materializes and validates the selected Runtime package content.
-5. The runtime host activates each selected Runtime target by loading a managed module or starting a supervised worker process, including exact Worker V3 targets, and reports active descriptors.
+5. The runtime host activates each selected Runtime target by loading a managed module or starting a supervised worker process, including exact Worker V1 targets, and reports active descriptors.
 6. The app downloads generation-scoped package UI snapshots without inspecting the dev directories.
 7. The app activates app-side package modules and registers package UI contributions.
 
@@ -217,10 +218,13 @@ Current package UI actions include:
 - disable installed packages
 - uninstall installed packages
 - inspect package readiness and faults
+- inspect exact execution-runtime compatibility and repair an unhealthy runtime
 
-Registry browsing uses remote Registry APIs. Local installed state always comes from `Sunder.Runtime.Host`. Marketplace search and version details remain historical inspection calls. Install, update, Stack preview, and dependency resolution delegate to Runtime, which supplies its own bounded Manifest V3 and Worker V3 Registry compatibility profile with the current exact RID; the App does not author or override that profile.
+Registry browsing uses remote Registry APIs. Local installed state always comes from `Sunder.Runtime.Host`. Marketplace search and version details remain historical inspection calls. Install, update, Stack preview, and dependency resolution delegate to Runtime, which supplies its own bounded Manifest V1 and Worker V1 Registry compatibility profile with the current exact RID; the App does not author or override that profile.
 
 Current unmanaged packages retain their explicit provenance, including `Unknown`; Sunder never guesses that local bytes came from the configured Registry. Select **Adopt source & update** to explicitly bind an unmanaged package to that Registry's `latest` tag. Dependency planning may replace related packages together, but source adoption remains explicit.
+
+Installed-package details show each exact Runtime target binding and whether its execution runtime is compatible, missing, policy-limited, deprecated, retired, revoked, or unhealthy. Repair is shown only when Runtime recommends it. The action may stop dependent Workers; Runtime owns launch fencing, Worker and lease drain, immutable cached-byte repair, and package reload. App does not inspect runtime-store files or implement a separate low-level execution-runtime console.
 
 ## Build Output Locks
 

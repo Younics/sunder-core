@@ -1,6 +1,6 @@
 # Testing And CI
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V3, .NET 10, and Runtime protocol revision 8.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
 Package tests should cover package-owned behavior at the narrowest boundary, then prove that Release output can be activated and packaged. Do not reference App or Runtime implementation projects just to make a unit test easier.
 
@@ -11,7 +11,7 @@ Package tests should cover package-owned behavior at the narrowest boundary, the
 | Pure unit | DTO validation, schema construction, parsing, domain logic, and cancellation. |
 | Handler/service | RPC provider, server-stream, callback/auth, Stack, and Worker lifecycle behavior using small test implementations of SDK interfaces. |
 | App view model | State transitions and commands without constructing the Sunder shell. Keep most UI behavior outside the control. |
-| Compiled package | Worker V3, generated Protocol bindings, App module registration, Avalonia XAML, and SDK member names still compile. |
+| Compiled package | Worker V1, generated Protocol bindings, App module registration, Avalonia XAML, and SDK member names still compile. |
 | Artifact | `PackSunderPackage` emits one `.sunderpkg` and the exact archive passes `sunder dev package validate`. |
 | Host smoke | The package activates as a development package; primary App-to-Runtime behavior and unload/reload work. |
 
@@ -67,7 +67,15 @@ sunder dev package validate .\src\MyPackage\bin\Release\net10.0\MyPackage.1.2.3.
 
 `Sunder.Package.Build` validates the archive it creates, but the explicit CLI check proves the exact file selected for upload. Fail CI unless exactly one expected archive exists. Do not validate one path and publish another.
 
-The canonical project builds all configured Worker RIDs sequentially during `PackSunderPackage`; no Aggregate wrapper or self `ProjectReference` is needed. A signed release pipeline that has already produced and signed exact leaves can fan them in without builds by adding `-p:SunderPackageUsePrebuiltLeaves=true -p:BuildProjectReferences=false`. Optionally select one prebuilt RID with `-p:SunderPackageComposeRuntimeIdentifiers=<rid>`; omitted selection means all configured RIDs. Missing or mismatched leaves remain fatal.
+The canonical project builds selected Worker/App RIDs sequentially during `PackSunderPackage`.
+Native release jobs can instead retain the qualified bundle exported by ordinary Build
+and fan it in with `SunderPackageUsePrebuiltLeaves=true`, `BuildProjectReferences=false`
+and `SunderPackagePrebuiltRoleInputsFile` selecting exact RID/path/SHA-256 evidence.
+Freeze before native Build and test/sign the retained bytes. Fan-in checks current
+reviewed source and immutable tooling without Build, Compile, Restore or generator
+execution. See [qualified role inputs](PREBUILT-ROLE-INPUTS.md) for commands, selection
+grammar and failure-preservation guarantees. Omitted RID selection requires every
+declared RID; explicit selections must be complete and exact.
 
 ## Host Smoke Checklist
 
@@ -114,7 +122,10 @@ Use maintained major-version Action refs so CI receives compatible upstream fixe
 
 ## Sunder Core Maintainers
 
-Changes to public package contracts must also run:
+Use the [project/lane iteration policy](../testing/core-test-oracles.md#local-iteration).
+Run changed tests first; add public API/contract checks and affected consumers for a
+public surface change. The following are full integration checks for a completed
+public-package/template change, not a mandatory sequence after every edit:
 
 ```powershell
 dotnet test languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj -c Release

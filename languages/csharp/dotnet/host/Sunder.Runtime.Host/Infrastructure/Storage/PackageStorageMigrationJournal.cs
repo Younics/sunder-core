@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Sunder.Sdk.Packaging;
 
 namespace Sunder.Runtime.Host.Infrastructure.Storage;
 
@@ -12,6 +13,7 @@ internal sealed class PackageStorageMigrationJournal
     private const string FormatName = "sunder.package-storage-migrations";
     private const int CurrentVersion = 1;
     private const int MaximumCompletions = 512;
+    private const int MaximumMigrationIdLength = 8 + SemanticVersion.MaximumLength;
     private readonly AtomicFileDocument _document;
 
     internal PackageStorageMigrationJournal(string filePath)
@@ -234,7 +236,7 @@ internal sealed class PackageStorageMigrationJournal
     }
 
     private static bool IsValidMigrationId(string value)
-        => value.Length is > 0 and <= 256
+        => value.Length is > 0 and <= MaximumMigrationIdLength
            && value.All(static character => char.IsAsciiLetterOrDigit(character)
                                                   || character is '.' or '-' or '_' or ':' or '+');
 

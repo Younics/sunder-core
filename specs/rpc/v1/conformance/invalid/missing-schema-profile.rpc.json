@@ -1,0 +1,8 @@
+{
+  "descriptorVersion": 1,
+  "contractId": "example.rpc.v1.missingprofile",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {"example":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Value"},"responseSchema":{"$ref":"#/$defs/Value"}}}}},
+  "$defs": {"Value":{"type":"boolean"}}
+}

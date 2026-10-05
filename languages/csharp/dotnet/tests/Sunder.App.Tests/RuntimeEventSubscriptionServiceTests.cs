@@ -1061,7 +1061,8 @@ public sealed class RuntimeEventSubscriptionServiceTests
         public int SnapshotFailuresRemaining { get; set; }
 
         public Func<CancellationToken, Task<RuntimePackageSnapshot>>?
-            GetRuntimePackageSnapshotAsyncCallback { get; set; }
+            GetRuntimePackageSnapshotAsyncCallback
+        { get; set; }
 
         public IReadOnlyList<PackageUiSnapshotDescriptor> PackageSources { get; set; } = [];
 

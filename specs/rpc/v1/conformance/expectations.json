@@ -1,0 +1,281 @@
+{
+  "formatVersion": 1,
+  "descriptorVersion": 1,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "hashes": {
+    "algorithm": "sha256",
+    "encoding": "lowercase-hex",
+    "descriptorInput": "canonical-descriptor",
+    "abiInput": "domain-separator || normalized-canonical-abi-projection",
+    "abiDomainSeparatorHex": "73756e6465722e7270632e6162692e763100"
+  },
+  "fixtures": [
+    {
+      "path": "valid/complete.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "66d618d063ca2a4a364e5cc938358fb79563bafc5dbe7f34af7f28eb3bd5bdcb",
+      "abiSha256": "ca9be80f911f30e69cbd11c23d747f404c643b8a485f3b123dedd5570b62ee6e",
+      "canonicalDescriptorBytes": 3158,
+      "canonicalAbiProjectionBytes": 2905
+    },
+    {
+      "path": "valid/minimal-annotation-variant.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "22feae1959f8c70872d6f6ff7ef70265fe79b51fd424e0027966678d0e276bb0",
+      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+      "canonicalDescriptorBytes": 500,
+      "canonicalAbiProjectionBytes": 390
+    },
+    {
+      "path": "valid/minimal-reordered.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+      "canonicalDescriptorBytes": 487,
+      "canonicalAbiProjectionBytes": 390
+    },
+    {
+      "path": "valid/minimal.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+      "canonicalDescriptorBytes": 487,
+      "canonicalAbiProjectionBytes": 390
+    },
+    {
+      "path": "valid/productive-recursion.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "b8ecea809be91149207f5385a8637971e4087fc164a49491832018dfe55bb8c4",
+      "abiSha256": "5078f52a3b7c52557dd1a0eb869fb30becdc96e8d395bf116e258b334a44091e",
+      "canonicalDescriptorBytes": 846,
+      "canonicalAbiProjectionBytes": 828
+    },
+    {
+      "path": "valid/set-order-variant.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "84f6c8a055f4c39737c72ee9fea1d0ec0734915883b34d5ce2930d828da00668",
+      "abiSha256": "ca9be80f911f30e69cbd11c23d747f404c643b8a485f3b123dedd5570b62ee6e",
+      "canonicalDescriptorBytes": 3158,
+      "canonicalAbiProjectionBytes": 2905
+    },
+    {
+      "path": "valid/value-profile.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "eaa6365b68fae970e152e9bc1efae60256e48461a6fd5594f81e797b425e382d",
+      "abiSha256": "067c0506a5214b18851c3c60a5e5a6d67e2424a244c4d30cda8cd29f2dd5e780",
+      "canonicalDescriptorBytes": 2476,
+      "canonicalAbiProjectionBytes": 2353
+    },
+    {
+      "path": "valid/optional-instance-facets.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "9c6884ec59520be91dbd31cde0afc59e6b9e0020fc5013680dadbd69df8f0f32",
+      "abiSha256": "466e06ab3c8f7f1243a9c50fdf9c3269b8d1ddf60228cc8add6c75166a3d0f92",
+      "canonicalDescriptorBytes": 1157,
+      "canonicalAbiProjectionBytes": 1139
+    },
+    {
+      "path": "valid/unbounded-base64.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "1cab33cde30b1f2989ee3a141f7ae9edddefb48c11bb122613563e2c5e5ef472",
+      "abiSha256": "1dfd88034f2078d9b0ee886153c46a3e60aebd821c77d8683f613fa696a66d16",
+      "canonicalDescriptorBytes": 378,
+      "canonicalAbiProjectionBytes": 360
+    },
+    {
+      "path": "invalid/bare-number.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/big-integer-leading-zero.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/decimal-reversed-bounds.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/decimal-trailing-zero.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/descriptor-version-decimal.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "descriptor-version"
+    },
+    {
+      "path": "invalid/descriptor-version-exponent.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "descriptor-version"
+    },
+    {
+      "path": "invalid/error-details-missing-reference.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "schema-reference-shape"
+    },
+    {
+      "path": "invalid/error-list.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-representation"
+    },
+    {
+      "path": "invalid/exact-keyword-on-uuid.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/float32-overflow.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "descriptor-number"
+    },
+    {
+      "path": "invalid/logical-type-with-bounds.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/method-list.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-representation"
+    },
+    {
+      "path": "invalid/missing-schema-profile.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/nonempty-array-recursion.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "schema-reference-cycle"
+    },
+    {
+      "path": "invalid/nonempty-map-recursion.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "schema-reference-cycle"
+    },
+    {
+      "path": "invalid/nullable-unconstrained-branch.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/nonfinite-number.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "descriptor-number"
+    },
+    {
+      "path": "invalid/numeric-token-path-collision.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/open-record.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/recursive-reference.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "schema-reference-cycle"
+    },
+    {
+      "path": "invalid/repeated-method-id.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-representation"
+    },
+    {
+      "path": "invalid/required-recursion.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "schema-reference-cycle"
+    },
+    {
+      "path": "invalid/server-stream-response.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "method-shape"
+    },
+    {
+      "path": "invalid/service-list.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-representation"
+    },
+    {
+      "path": "invalid/string-reference.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-reference-shape"
+    },
+    {
+      "path": "invalid/type-array-nullable.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/undeclared-domain-error.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "domain-error-reference"
+    },
+    {
+      "path": "invalid/unsafe-integer.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-number"
+    },
+    {
+      "path": "invalid/unsupported-format.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/wrong-descriptor-version.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-version"
+    },
+    {
+      "path": "invalid/wrong-schema-profile.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    }
+  ]
+}

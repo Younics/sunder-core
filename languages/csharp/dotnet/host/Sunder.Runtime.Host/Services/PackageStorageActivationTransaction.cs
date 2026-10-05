@@ -48,7 +48,7 @@ internal sealed class PackageStorageActivationTransaction
                         ? null
                         : await journal.CaptureSnapshotAsync(cancellationToken).ConfigureAwait(false);
                     var workspaceSnapshot = CaptureWorkspaceSnapshot(package);
-                    snapshots.Add(new PackageSnapshot(
+                    var packageSnapshot = new PackageSnapshot(
                         package,
                         state,
                         stateSnapshot,
@@ -56,8 +56,12 @@ internal sealed class PackageStorageActivationTransaction
                         settingsSnapshot,
                         secretsSnapshot,
                         journalSnapshot,
-                        workspaceSnapshot));
+                        workspaceSnapshot,
+                        FileStoreSnapshot: null);
+                    snapshots.Add(packageSnapshot);
                     secretsSnapshot = null;
+                    var fileStoreSnapshot = CaptureFileStoreSnapshot(package);
+                    snapshots[^1] = packageSnapshot with { FileStoreSnapshot = fileStoreSnapshot };
                 }
                 finally
                 {
@@ -69,16 +73,17 @@ internal sealed class PackageStorageActivationTransaction
             }
             return new PackageStorageActivationTransaction(snapshots);
         }
-        catch
+        catch (Exception snapshotFailure)
         {
             try
             {
                 await new PackageStorageActivationTransaction(snapshots).RollbackAsync()
                     .ConfigureAwait(false);
             }
-            catch
+            catch (Exception rollbackFailure)
             {
                 ZeroSnapshots(snapshots);
+                throw new PackageStorageRollbackException(snapshotFailure, rollbackFailure);
             }
             throw;
         }
@@ -139,6 +144,7 @@ internal sealed class PackageStorageActivationTransaction
         foreach (var package in _packages)
         {
             TryDeleteWorkspaceBackup(package.WorkspaceSnapshot);
+            TryDeleteWorkspaceBackup(package.FileStoreSnapshot);
         }
         ZeroSnapshots(_packages);
     }
@@ -153,6 +159,17 @@ internal sealed class PackageStorageActivationTransaction
         List<Exception>? failures = null;
         foreach (var package in _packages.Reverse())
         {
+            if (package.FileStoreSnapshot is not null)
+            {
+                try
+                {
+                    RestoreWorkspaceSnapshot(package.FileStoreSnapshot);
+                }
+                catch (Exception exception)
+                {
+                    AddFailure("files", exception);
+                }
+            }
             if (package.WorkspaceSnapshot is not null)
             {
                 try
@@ -240,12 +257,33 @@ internal sealed class PackageStorageActivationTransaction
         {
             return null;
         }
-        var workspacePath = Path.GetFullPath(package.Worker.WorkspaceRootPath);
+        return CaptureDirectorySnapshot(
+            package.Descriptor.PackageId,
+            package.Worker.WorkspaceRootPath,
+            "workspace");
+    }
+
+    private static WorkspaceSnapshot CaptureFileStoreSnapshot(ActiveLoadedPackage package)
+    {
+        if (package.FileStore is not LocalPackageFileStore files)
+        {
+            throw new InvalidOperationException(
+                $"Package '{package.Descriptor.PackageId}' does not use Host-authoritative file storage.");
+        }
+        return CaptureDirectorySnapshot(package.Descriptor.PackageId, files.RootPath, "file-store");
+    }
+
+    private static WorkspaceSnapshot CaptureDirectorySnapshot(
+        string packageId,
+        string directoryPath,
+        string storageName)
+    {
+        var workspacePath = Path.GetFullPath(directoryPath);
         var workspace = new DirectoryInfo(workspacePath);
         if (workspace.LinkTarget is not null)
         {
             throw new IOException(
-                $"Package '{package.Descriptor.PackageId}' workspace root must not be a symbolic link or reparse point.");
+                $"Package '{packageId}' {storageName} root must not be a symbolic link or reparse point.");
         }
         Directory.CreateDirectory(workspacePath);
         var parent = Path.GetDirectoryName(workspacePath)
@@ -331,6 +369,7 @@ internal sealed class PackageStorageActivationTransaction
             }
             else
             {
+                PackageStoreFileSystem.EnsureRegularFile(entry.FullName);
                 File.Copy(entry.FullName, destination, overwrite: false);
             }
         }
@@ -344,7 +383,16 @@ internal sealed class PackageStorageActivationTransaction
         AtomicFileSnapshot SettingsSnapshot,
         AtomicFileSnapshot SecretsSnapshot,
         AtomicFileSnapshot? JournalSnapshot,
-        WorkspaceSnapshot? WorkspaceSnapshot);
+        WorkspaceSnapshot? WorkspaceSnapshot,
+        WorkspaceSnapshot? FileStoreSnapshot);
 
     private sealed record WorkspaceSnapshot(string WorkspacePath, string BackupPath);
 }
+
+internal sealed class PackageStorageRollbackException(
+    Exception snapshotFailure,
+    Exception rollbackFailure)
+    : AggregateException(
+        "Package storage snapshot initialization failed and its partial filesystem changes could not be rolled back.",
+        snapshotFailure,
+        rollbackFailure);

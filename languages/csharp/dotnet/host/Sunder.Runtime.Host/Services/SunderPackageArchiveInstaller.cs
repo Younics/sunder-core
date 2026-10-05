@@ -13,7 +13,8 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
         bool isEnabled,
         CancellationToken cancellationToken = default,
         InstalledPackageProvenanceRecord? provenance = null,
-        string? consentManifestSha256 = null)
+        string? consentManifestSha256 = null,
+        IReadOnlyList<SunderPackageTargetKey>? registryProjectionTargets = null)
     {
         if (string.IsNullOrWhiteSpace(packagePath))
         {
@@ -39,10 +40,11 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
         var stagingPath = paths.CreateStagingPath();
         try
         {
-            var sourceValidation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
-                packagePath,
-                sourceStagingPath,
-                cancellationToken);
+            if (registryProjectionTargets is not null && provenance.SourceKind != InstalledPackageSourceKind.Registry)
+                throw new InvalidDataException("Partial package input requires the private Registry projection handoff.");
+            var sourceValidation = registryProjectionTargets is null
+                ? await SunderPackageArchiveInspector.ExtractAndValidateAsync(packagePath, sourceStagingPath, cancellationToken)
+                : await SunderPackageArchiveInspector.ExtractAndValidateProjectionSetAsync(packagePath, sourceStagingPath, registryProjectionTargets, cancellationToken);
             if (!sourceValidation.Success
                 || sourceValidation.Manifest is null
                 || sourceValidation.ContentIndex is null)
@@ -60,13 +62,15 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
                         sourceValidation.Errors));
             }
 
+            var sourceContentIdentity = ComputeContentIdentity(sourceStagingPath);
             var validation = await PackageProjectionMaterializer.MaterializeCurrentRidInstallPackageAsync(
                 sourceStagingPath,
                 stagingPath,
                 sourceValidation.Manifest,
                 sourceValidation.ContentIndex,
                 PackageTargetSelection.GetCurrentRuntimeIdentifier(),
-                cancellationToken);
+                cancellationToken,
+                registryProjectionTargets);
             TryDeleteDirectory(sourceStagingPath);
             var manifest = validation.Manifest!;
             var sourceManifestSha256 = PackageSensitiveCapabilityPolicy.GetManifestSha256(
@@ -85,15 +89,24 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
                 stagingPath,
                 installedPath,
                 isEnabled,
-                provenance);
+                provenance) with
+            {
+                SourcePackageContentIdentity = provenance.SourceKind == InstalledPackageSourceKind.Registry
+                    ? provenance.SourceIdentity : sourceContentIdentity,
+                AcquiredTargets = (registryProjectionTargets ?? SunderPackageTargetResolver.EnumerateTargets(manifest)
+                    .Where(key => key.Rid == PackageTargetSelection.GetCurrentRuntimeIdentifier()).ToArray())
+                    .OrderBy(key => key.Role, StringComparer.Ordinal).ThenBy(key => key.Rid, StringComparer.Ordinal)
+                    .Select(key => new InstalledPackageTargetRecord(key.Role, key.Rid)).ToArray(),
+            };
             return new PackageArchiveMutationPreparationResult(
                 new PreparedPackageArchiveMutation(
                     stagingPath,
                     installedPath,
+                    manifest,
                     installedRecord,
                     consentManifestSha256,
                     activeManifestSha256,
-                    PackageSensitiveCapabilityPolicy.GetRequiredCapabilities(manifest)),
+                    PackageSensitiveCapabilityPolicy.GetRequiredCapabilities(manifest, InstalledPackageProjection.Keys(installedRecord))),
                 null);
         }
         catch (OperationCanceledException)

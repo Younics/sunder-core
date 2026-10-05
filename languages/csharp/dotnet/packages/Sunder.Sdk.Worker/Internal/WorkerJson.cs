@@ -102,6 +102,7 @@ internal static class WorkerJson
 
     private static byte[] SerializeValue(JsonElement value, WorkerLimits limits)
     {
+        ValidateValueBounds(value, limits);
         using var buffer = new FixedPooledBufferWriter(limits.MaximumRpcValueBytes);
         try
         {
@@ -148,11 +149,7 @@ internal static class WorkerJson
             throw new WorkerTransportResourceException(
                 "Protocol envelope metadata exceeded its reserved byte limit.");
         }
-        if (hasRpcValue && GetValueDepth(rpcValue) > limits.MaximumValueDepth)
-        {
-            throw new WorkerTransportResourceException(
-                "RPC value exceeded the negotiated depth limit.");
-        }
+        if (hasRpcValue) ValidateValueBounds(rpcValue, limits);
     }
 
     private static bool TryGetErrorDetails(JsonElement root, out JsonElement details)
@@ -249,6 +246,7 @@ internal static class WorkerJson
     {
         if (!root.TryGetProperty(propertyName, out var value)
             || value.ValueKind != JsonValueKind.Number
+            || !IsCanonicalNonNegativeIntegerToken(value.GetRawText())
             || !value.TryGetInt64(out var result)
             || result is < 0 or > WorkerProtocol.MaximumSafeInteger)
         {
@@ -257,6 +255,12 @@ internal static class WorkerJson
         }
         return result;
     }
+
+    internal static bool IsCanonicalNonNegativeIntegerToken(string value)
+        => value.Length > 0
+           && (value == "0"
+               || value[0] is >= '1' and <= '9'
+               && value.AsSpan(1).IndexOfAnyExceptInRange('0', '9') < 0);
 
     public static bool RequiredBoolean(JsonElement root, string propertyName)
     {
@@ -329,27 +333,43 @@ internal static class WorkerJson
     public static string FormatUtc(DateTimeOffset value)
         => value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
 
-    private static int GetValueDepth(JsonElement value)
+    private static void ValidateValueBounds(JsonElement value, WorkerLimits limits)
     {
         var maximum = 0;
+        var nodes = 0;
         var pending = new Stack<(JsonElement Value, int Depth)>();
         pending.Push((value, 1));
         while (pending.TryPop(out var item))
         {
             maximum = Math.Max(maximum, item.Depth);
+            if (maximum > limits.MaximumValueDepth)
+            {
+                throw new WorkerTransportResourceException(
+                    "RPC value exceeded the negotiated depth limit.");
+            }
+            if (++nodes > limits.MaximumValueNodes)
+            {
+                throw new WorkerTransportResourceException(
+                    "RPC value exceeded the negotiated node-count limit.");
+            }
             if (item.Value.ValueKind == JsonValueKind.Array)
             {
                 foreach (var child in item.Value.EnumerateArray()) pending.Push((child, item.Depth + 1));
             }
             else if (item.Value.ValueKind == JsonValueKind.Object)
             {
+                var members = 0;
                 foreach (var property in item.Value.EnumerateObject())
                 {
+                    if (++members > limits.MaximumObjectMembers)
+                    {
+                        throw new WorkerTransportResourceException(
+                            "RPC value exceeded the negotiated object-member limit.");
+                    }
                     pending.Push((property.Value, item.Depth + 1));
                 }
             }
         }
-        return maximum;
     }
 
     private sealed class FixedPooledBufferWriter : IBufferWriter<byte>, IDisposable

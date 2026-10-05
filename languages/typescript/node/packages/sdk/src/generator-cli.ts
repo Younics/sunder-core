@@ -5,10 +5,10 @@ import { lstat, open, rename, unlink, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join, parse, relative, resolve, sep } from "node:path";
 import { parseRpcContractDescriptor } from "./descriptor";
 import {
-  SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR,
+  SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
-} from "./descriptor-v2";
+} from "./descriptor-v1";
 import { generateTypeScriptBindings } from "./generator";
 
 async function main(): Promise<void> {
@@ -32,15 +32,13 @@ async function main(): Promise<void> {
   const descriptorSha256 = createHash("sha256")
     .update(canonicalRpcDescriptorBytes(descriptor))
     .digest("hex");
-  const options = descriptor.descriptorVersion === 2
-    ? {
-      descriptorSha256,
-      abiSha256: createHash("sha256")
-        .update(SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR, "utf8")
-        .update(canonicalRpcAbiProjectionBytes(descriptor))
-        .digest("hex"),
-    }
-    : { descriptorSha256 };
+  const options = {
+    descriptorSha256,
+    abiSha256: createHash("sha256")
+      .update(SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, "utf8")
+      .update(canonicalRpcAbiProjectionBytes(descriptor))
+      .digest("hex"),
+  };
   const bindings = generateTypeScriptBindings(descriptor, options);
   await replaceOutput(outputPath, bindings, expectedOutput);
 }

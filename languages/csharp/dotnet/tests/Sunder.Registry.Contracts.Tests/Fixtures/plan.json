@@ -5,7 +5,8 @@
       "packageId": "sunder.package.sample",
       "currentVersion": null,
       "version": "1.2.3",
-      "isUpdate": false,
+      "packageContentIdentity": "package-content-identity-123",
+      "actionKind": "package-install",
       "deprecatedMessage": null,
       "dependsOn": [],
       "targets": [
@@ -13,15 +14,21 @@
           "role": "runtime",
           "rid": "win-x64",
           "kind": "worker",
-          "entryPoint": "bin/sample-worker.exe",
+          "entryPoint": "bin/sample-worker.dll",
           "targetFramework": "net10.0",
           "sdkVersion": "1.1.0",
           "requiredHostCapabilities": [
             "core.v1",
-            "rpc.v2",
+            "execution-runtime.v1",
+            "rpc.v1",
             "sdk-baseline-1-1.v1",
-            "worker-protocol.v3"
+            "worker-protocol.v1"
           ],
+          "executionRuntime": {
+            "runtimeId": "sunder.runtime.dotnet",
+            "versionRange": "\u003E=10.0.0 \u003C11.0.0",
+            "moduleAbi": "sunder.dotnet-worker-module.v1"
+          },
           "views": []
         }
       ],
@@ -48,6 +55,25 @@
           "projectionContentIdentity": "projection-content-id",
           "projectionFormatVersion": 1
         }
+      ],
+      "runtimeOnlyRebind": null,
+      "runtimeBindings": [
+        {
+          "role": "runtime",
+          "rid": "win-x64",
+          "requirement": {
+            "runtimeId": "sunder.runtime.dotnet",
+            "versionRange": "\u003E=10.0.0 \u003C11.0.0",
+            "moduleAbi": "sunder.dotnet-worker-module.v1"
+          },
+          "runtime": {
+            "runtimeId": "sunder.runtime.dotnet",
+            "version": "10.0.1",
+            "packagingRevision": 2,
+            "rid": "win-x64",
+            "moduleAbi": "sunder.dotnet-worker-module.v1"
+          }
+        }
       ]
     }
   ],
@@ -56,5 +82,40 @@
   "conflicts": [],
   "trustedArtifactOrigins": [
     "https://artifacts.example"
-  ]
+  ],
+  "resolutionFingerprint": "plan-fingerprint-001",
+  "runtimePolicyRevision": 42,
+  "expiresAtUtc": "2026-07-11T10:05:00+00:00",
+  "compatibilityConflicts": [],
+  "runtimeArtifacts": [
+    {
+      "identity": {
+        "runtimeId": "sunder.runtime.dotnet",
+        "version": "10.0.1",
+        "packagingRevision": 2,
+        "rid": "win-x64",
+        "moduleAbi": "sunder.dotnet-worker-module.v1"
+      },
+      "manifestSha256": "runtime-manifest-sha-001",
+      "artifactSha256": "runtime-artifact-sha-001",
+      "artifactSize": 104857600,
+      "signingKeyId": "sunder-runtime-release-2026-01",
+      "minimumHostTrustGeneration": 2,
+      "nativeAttestationSha256": "native-attestation-sha-001",
+      "nativeAttestationKeyId": "sunder-native-ci-2026-01",
+      "lifecycle": {
+        "state": "supported",
+        "stagedAtUtc": "2026-07-09T12:00:00+00:00",
+        "supportedFromUtc": "2026-07-10T12:00:00+00:00",
+        "deprecatedAtUtc": null,
+        "installBlockedAtUtc": null,
+        "activationBlockedAtUtc": null,
+        "revokedAtUtc": null,
+        "message": null
+      },
+      "observedRuntimePolicyRevision": 42,
+      "downloadUrl": "https://registry.example/api/v1/execution-runtimes/sunder.runtime.dotnet/releases/10.0.1/revisions/2/artifacts/win-x64/download"
+    }
+  ],
+  "runtimeConflicts": []
 }

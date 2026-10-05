@@ -18,6 +18,8 @@ test("package id vectors match the canonical lowercase dot-separated grammar", (
 });
 
 test("strict SemVer vectors match the canonical SDK grammar", () => {
+  assert.equal(isSemanticVersion(`1.0.0+${"a".repeat(250)}`), true);
+  assert.equal(isSemanticVersion(`1.0.0+${"a".repeat(251)}`), false);
   for (const value of [
     "0.0.0",
     "999999999999999999999999.2.3",

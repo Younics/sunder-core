@@ -4,6 +4,9 @@ namespace Sunder.Cli;
 
 internal sealed class ArchiveValidationService
 {
+    public Task<SunderPackageArchiveValidationResult> ExportPackageApiAsync(string path, string outputPath, CancellationToken token)
+        => SunderPackagePublicApiInspection.ExportArchiveAsync(path, outputPath, token);
+
     public Task<SunderPackageArchiveValidationResult> ValidatePackageAsync(string path, CancellationToken token)
         => ValidateAsync(
             path,

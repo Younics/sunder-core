@@ -161,6 +161,15 @@ export MOCK_SOURCE_SHA="$source_sha"
 PATH="$mock_bin:$PATH" bash "$verifier" \
   "$component" "$release_id" "$tag" "$source_sha" "$run_id" "$run_attempt" "$local_dir"
 
+printf 'stale partial acceptance bytes\n' > "$remote_dir/production-acceptance-$release_id-999-1-file-001"
+printf '{"schemaVersion":1}\n' > "$remote_dir/production-acceptance-$release_id-998-1-receipt.json"
+build_release_json
+SUNDER_ALLOW_PRODUCTION_ACCEPTANCE_ASSETS=true PATH="$mock_bin:$PATH" bash "$verifier" \
+  "$component" "$release_id" "$tag" "$source_sha" "$run_id" "$run_attempt" "$local_dir"
+rm "$remote_dir/production-acceptance-$release_id-999-1-file-001" \
+  "$remote_dir/production-acceptance-$release_id-998-1-receipt.json"
+build_release_json
+
 jq '.invocation.runId = "54321"' "$local_dir/release-provenance.json" > "$fixture_dir/tampered-provenance.json"
 cp "$fixture_dir/tampered-provenance.json" "$local_dir/release-provenance.json"
 cp "$fixture_dir/tampered-provenance.json" "$remote_dir/release-provenance.json"
@@ -174,4 +183,4 @@ fi
 grep -Fq 'not bound to the exact repository, workflow, release ID, tag, source, run, attempt' "$fixture_dir/wrong-run.log" \
   || { printf 'Release promotion verifier did not report the run binding failure.\n' >&2; exit 1; }
 
-printf 'Release promotion fixture passed: numeric draft, exact tag, source, successful publication run attempt, bytes, and provenance are bound.\n'
+printf 'Release promotion fixture passed: numeric draft, exact tag, source, successful publication run attempt, bytes, provenance, and retained acceptance-attempt assets are bound.\n'

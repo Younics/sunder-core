@@ -1,0 +1,67 @@
+{
+  "lockVersion": 1,
+  "packageArtifacts": {
+    "example.dependency": {
+      "requestedVersionRange": ">=1.0.0 <2.0.0",
+      "includePrerelease": false,
+      "selectedPackageVersion": "1.2.3",
+      "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+      "registryOrigin": "https://registry.example/",
+      "publicContractCount": 2,
+      "publicInventorySha256": "6f69988fd727caa6b6eeab5a8f0635264a3c663b7a03cfd865784fa4ef022329",
+      "contracts": {
+        "example.rpc.v1.minimal": {
+          "artifactSource": "owned",
+          "authorityKind": "package",
+          "authorityId": "example.dependency",
+          "selectedAuthorityRelease": "1.2.3",
+          "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+          "resolvedContractVersion": "2.0.0",
+          "descriptorBytes": 487,
+          "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+          "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+          "etag": "\"709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371\""
+        },
+        "sunder.stack.contributor": {
+          "artifactSource": "imported",
+          "authorityKind": "platform",
+          "authorityId": "sunder.core",
+          "selectedAuthorityRelease": "1.1.0",
+          "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930",
+          "resolvedContractVersion": "2.0.0",
+          "descriptorBytes": 489,
+          "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+          "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+          "etag": "\"6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567\""
+        }
+      }
+    }
+  },
+  "packageImports": {
+    "example.dependency": {
+      "localName": "dependency",
+      "presence": "optional",
+      "requiredContracts": [
+        "example.rpc.v1.minimal"
+      ]
+    }
+  },
+  "providerImports": {},
+  "platformImports": {
+    "stackContributor": {
+      "authorityKind": "platform",
+      "authorityId": "sunder.core",
+      "authorityReleaseRange": ">=1.0.0 <2.0.0",
+      "includePrerelease": false,
+      "selectedAuthorityRelease": "1.1.0",
+      "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930",
+      "contractId": "sunder.stack.contributor",
+      "resolvedContractVersion": "2.0.0",
+      "registryOrigin": "https://registry.example/",
+      "descriptorBytes": 489,
+      "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+      "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+      "etag": "\"6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567\""
+    }
+  }
+}

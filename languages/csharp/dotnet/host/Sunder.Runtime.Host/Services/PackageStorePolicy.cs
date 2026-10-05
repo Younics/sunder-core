@@ -155,6 +155,18 @@ internal static class PackageStorePolicy
                right.OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase),
                InstalledPackageStore.JsonOptions);
 
+    // Registry resolution fences package/content/binding changes separately from
+    // renewable policy metadata, which has its own exact authority fence.
+    internal static bool CatalogBindingsEqual(IReadOnlyList<InstalledPackageRecord> left, IReadOnlyList<InstalledPackageRecord> right)
+        => CatalogsEqual(left.Select(WithoutRenewablePolicy).ToArray(), right.Select(WithoutRenewablePolicy).ToArray());
+
+    private static InstalledPackageRecord WithoutRenewablePolicy(InstalledPackageRecord package) => package with
+    {
+        Policy = null,
+        ExecutionRuntimeBindings = package.ExecutionRuntimeBindings.Select(binding => binding with
+        { RuntimePolicyRevision = 0, RuntimeLifecycleState = "", PolicyObservedAtUtc = default }).ToArray(),
+    };
+
     private static string ComputeUninstallConfirmationToken(
         string packageId,
         IReadOnlyList<InstalledPackageRecord> packages)

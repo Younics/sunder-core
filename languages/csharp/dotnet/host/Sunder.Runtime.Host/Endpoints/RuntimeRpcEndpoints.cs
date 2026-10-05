@@ -93,8 +93,11 @@ internal static class RuntimeRpcEndpoints
         RuntimeRpcAppSessionOpenRequest request,
         HttpContext context,
         CancellationToken cancellationToken)
-        => context.RequestServices.GetRequiredService<RuntimeRpcAppSessionManager>()
-            .OpenAsync(request, cancellationToken);
+    {
+        var manager = context.RequestServices.GetRequiredService<RuntimeRpcAppSessionManager>();
+        try { return manager.OpenAsync(request, cancellationToken, manager.RequiresProcessSupervision ? AppPolicyPeerIdentity.Read(context) : null); }
+        catch (PackagePolicyDeniedException error) { throw new RuntimeAppPolicyException(error.Code); }
+    }
 
     private static IResult OpenAppCallScopeAsync(
         RuntimeRpcAppCallScopeOpenRequest request,

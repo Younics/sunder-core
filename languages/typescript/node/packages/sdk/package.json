@@ -1,7 +1,7 @@
 {
   "name": "@sunder/sdk",
   "version": "1.1.0",
-  "description": "Zero-dependency TypeScript SDK for Sunder RPC contracts and Worker V3 Runtime packages.",
+  "description": "Zero-dependency TypeScript SDK for Sunder RPC V1 contracts and Worker V1 Runtime packages.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -44,11 +44,11 @@
     }
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.18.1 <25.0.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run typecheck && npm run build && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js"
+    "test": "npm run typecheck && npm run build && node -e \"require('node:fs').rmSync('dist-test', { recursive: true, force: true })\" && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js"
   }
 }

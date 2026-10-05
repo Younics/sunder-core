@@ -904,6 +904,116 @@ public sealed class ActivePackageSessionTests
     }
 
     [Fact]
+    public async Task StartWorkersAsync_UsesBoundedDependencyWaves()
+    {
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thirdEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dependentEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstWaveRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dependentRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = new TestBackgroundService(startEntered: firstEntered, allowStart: firstWaveRelease.Task);
+        var second = new TestBackgroundService(startEntered: secondEntered, allowStart: firstWaveRelease.Task);
+        var third = new TestBackgroundService(startEntered: thirdEntered, allowStart: firstWaveRelease.Task);
+        var dependent = new TestBackgroundService(startEntered: dependentEntered, allowStart: dependentRelease.Task);
+        var packages = new[]
+        {
+            CreateLoadedPackage("first.package", first),
+            CreateLoadedPackage("second.package", second),
+            CreateLoadedPackage("third.package", third),
+            CreateLoadedPackage("dependent.package", dependent),
+        };
+        var session = new ActivePackageSession(
+            sessionFolder: null,
+            packages.ToDictionary(static package => package.Descriptor.PackageId, StringComparer.OrdinalIgnoreCase),
+            packages.ToDictionary(
+                static package => package.Descriptor.PackageId,
+                static package => CreateSessionPackage(package.Descriptor.PackageId, isEnabled: true),
+                StringComparer.OrdinalIgnoreCase),
+            workersStarted: false,
+            workerStartupWaves:
+            [
+                ["first.package", "second.package", "third.package"],
+                ["dependent.package"],
+            ],
+            maximumWorkerStartupConcurrency: 2);
+
+        try
+        {
+            var startup = session.StartWorkersAsync(
+                NullLogger.Instance,
+                TimeSpan.FromSeconds(2),
+                TimeSpan.FromSeconds(1));
+            await Task.WhenAll(firstEntered.Task, secondEntered.Task).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(0, third.StartCount);
+            Assert.Equal(0, dependent.StartCount);
+
+            firstWaveRelease.TrySetResult();
+            await thirdEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await dependentEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(1, third.StartCount);
+            Assert.Equal(1, dependent.StartCount);
+            dependentRelease.TrySetResult();
+            await startup;
+        }
+        finally
+        {
+            firstWaveRelease.TrySetResult();
+            dependentRelease.TrySetResult();
+            await session.StopWorkersAsync(NullLogger.Instance, TimeSpan.FromSeconds(1));
+            await session.DisposeAsync(TimeSpan.FromSeconds(1));
+        }
+    }
+
+    [Fact]
+    public async Task StartWorkersAsync_WaveFailureCancelsSiblingAndDoesNotStartDependents()
+    {
+        var siblingEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var neverRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sibling = new TestBackgroundService(startEntered: siblingEntered, allowStart: neverRelease.Task);
+        var failing = new FailingAfterSignalBackgroundService(siblingEntered.Task);
+        var dependent = new TestBackgroundService();
+        var packages = new[]
+        {
+            CreateLoadedPackage("sibling.package", sibling),
+            CreateLoadedPackage("failing.package", failing),
+            CreateLoadedPackage("dependent.package", dependent),
+        };
+        var session = new ActivePackageSession(
+            sessionFolder: null,
+            packages.ToDictionary(static package => package.Descriptor.PackageId, StringComparer.OrdinalIgnoreCase),
+            packages.ToDictionary(
+                static package => package.Descriptor.PackageId,
+                static package => CreateSessionPackage(package.Descriptor.PackageId, isEnabled: true),
+                StringComparer.OrdinalIgnoreCase),
+            workersStarted: false,
+            workerStartupWaves:
+            [
+                ["sibling.package", "failing.package"],
+                ["dependent.package"],
+            ],
+            maximumWorkerStartupConcurrency: 2);
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => session.StartWorkersAsync(
+                NullLogger.Instance,
+                TimeSpan.FromSeconds(2),
+                TimeSpan.FromSeconds(1)));
+
+            Assert.Equal("injected wave failure", exception.Message);
+            Assert.Equal(0, dependent.StartCount);
+            Assert.Equal(1, sibling.StopCount);
+            Assert.Equal(1, failing.StopCount);
+        }
+        finally
+        {
+            neverRelease.TrySetResult();
+            await session.DisposeAsync(TimeSpan.FromSeconds(1));
+        }
+    }
+
+    [Fact]
     public async Task PackageSessionPublisher_CandidateStartFailureLeavesCommittedGenerationActive()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
@@ -953,6 +1063,186 @@ public sealed class ActivePackageSessionTests
         {
             await owner.State.ClearActiveSessionAsync();
             TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task PackageSessionPublisher_PrecommitCandidateStartFailureRestoresOldSessionAndRpcCatalog()
+    {
+        using var rpcCatalog = new RuntimeRpcCatalog();
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService(),
+            rpcCatalog: rpcCatalog);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance,
+            rpcCatalog: rpcCatalog);
+        var activeService = new RecordingGenerationBackgroundService();
+        var activeSession = CreateRpcSession("active.package", activeService);
+        var failingService = new ImmediateFailingGenerationBackgroundService();
+        var candidateSession = CreateSession("candidate.package", failingService);
+
+        try
+        {
+            await publisher.PublishAsync(
+                activeSession,
+                owner.Sources.Snapshot(),
+                [],
+                [],
+                expectedGeneration: 0,
+                CancellationToken.None);
+            var catalogBeforeFailure = rpcCatalog.GetSnapshot();
+            var endpointBeforeFailure = Assert.Single(catalogBeforeFailure.Providers).Endpoint;
+            var candidate = publisher.Prepare(
+                candidateSession,
+                owner.Sources.Snapshot(),
+                [],
+                [],
+                baseGeneration: 1,
+                requiresPackageStoreCommit: true);
+            var pending = await publisher.BeginPublishAsync(candidate, CancellationToken.None);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => publisher.StartCandidateAsync(pending));
+            await publisher.DiscardAsync(pending);
+
+            Assert.Equal(1, owner.Generation);
+            Assert.Same(activeSession, owner.State.ActiveSession);
+            Assert.Equal(0, activeService.StopCount);
+            Assert.Equal(1, failingService.StartCount);
+            Assert.Equal(1, failingService.StopCount);
+            Assert.Equal(catalogBeforeFailure.Revision, rpcCatalog.Revision);
+            Assert.True(rpcCatalog.TryGetActiveEndpoint(endpointBeforeFailure, out _, out var stale));
+            Assert.False(stale);
+            using var lease = owner.State.AcquireLease();
+            Assert.Same(activeSession, lease.Session);
+        }
+        finally
+        {
+            await owner.State.ClearActiveSessionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task PackageSessionPublisher_PrecommitCandidateStartIsIdempotentAndHidden()
+    {
+        using var rpcCatalog = new RuntimeRpcCatalog();
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService(),
+            rpcCatalog: rpcCatalog);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance,
+            rpcCatalog: rpcCatalog);
+        var activeSession = CreateRpcSession("active.package");
+        var candidateService = new RecordingGenerationBackgroundService();
+        var candidateSession = CreateRpcSession("candidate.package", candidateService);
+
+        try
+        {
+            await publisher.PublishAsync(
+                activeSession,
+                owner.Sources.Snapshot(),
+                [],
+                [],
+                expectedGeneration: 0,
+                CancellationToken.None);
+            var publicCatalog = rpcCatalog.GetSnapshot();
+            var candidate = publisher.Prepare(
+                candidateSession,
+                owner.Sources.Snapshot(),
+                [],
+                [],
+                baseGeneration: 1,
+                requiresPackageStoreCommit: true);
+            var pending = await publisher.BeginPublishAsync(candidate, CancellationToken.None);
+
+            var firstStart = publisher.StartCandidateAsync(pending);
+            var secondStart = publisher.StartCandidateAsync(pending);
+            Assert.Same(firstStart, secondStart);
+            await Task.WhenAll(firstStart, secondStart);
+
+            Assert.Equal(1, candidateService.StartCount);
+            Assert.Equal(0, candidateService.CommitCount);
+            Assert.Equal(1, owner.Generation);
+            Assert.Equal(publicCatalog.Revision, rpcCatalog.Revision);
+            Assert.Equal(
+                "example.provider",
+                Assert.Single(rpcCatalog.GetSnapshot().Providers).ProviderId);
+            Assert.Throws<RuntimeUnavailableException>(() => owner.State.AcquireLease());
+
+            await publisher.DiscardAsync(pending);
+            using var lease = owner.State.AcquireLease();
+            Assert.Same(activeSession, lease.Session);
+        }
+        finally
+        {
+            await owner.State.ClearActiveSessionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task PackageSessionPublisher_PostDurableCandidateFailurePublishesUnavailableWithoutRestoringOldBinding()
+    {
+        using var rpcCatalog = new RuntimeRpcCatalog();
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService(),
+            rpcCatalog: rpcCatalog);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance,
+            new RuntimeLifecyclePolicyOptions
+            {
+                PackageRuntimeGenerationActivationAttempts = 1,
+            },
+            rpcCatalog);
+        var activeService = new RecordingGenerationBackgroundService();
+        var activeSession = CreateRpcSession("active.package", activeService);
+        var failingService = new RepeatedlyFailingGenerationBackgroundService();
+        var candidateSession = CreateSession("candidate.package", failingService);
+
+        try
+        {
+            await publisher.PublishAsync(
+                activeSession,
+                owner.Sources.Snapshot(),
+                [],
+                [],
+                expectedGeneration: 0,
+                CancellationToken.None);
+            var oldEndpoint = Assert.Single(rpcCatalog.GetSnapshot().Providers).Endpoint;
+            var candidate = publisher.Prepare(
+                candidateSession,
+                owner.Sources.Snapshot(),
+                [],
+                [],
+                baseGeneration: 1,
+                requiresPackageStoreCommit: true);
+            var pending = await publisher.BeginPublishAsync(candidate, CancellationToken.None);
+            await publisher.StartCandidateAsync(pending);
+            publisher.MarkPackageStoreCommitted(pending);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => publisher.CommitAsync(pending));
+
+            Assert.Equal(2, owner.Generation);
+            Assert.NotSame(activeSession, owner.State.ActiveSession);
+            Assert.True(owner.State.ActiveSession.IsEmpty);
+            Assert.Throws<RuntimeUnavailableException>(() => owner.State.AcquireLease());
+            Assert.Equal(1, activeService.StopCount);
+            Assert.Equal(1, failingService.StopCount);
+            Assert.False(rpcCatalog.TryGetActiveEndpoint(oldEndpoint, out _, out var stale));
+            Assert.True(stale);
+            Assert.Empty(rpcCatalog.GetSnapshot().Providers);
+            Assert.Contains(
+                owner.GetSnapshot().Errors,
+                error => error.Contains("package store became authoritative", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            await owner.State.ClearActiveSessionAsync();
         }
     }
 
@@ -1039,6 +1329,256 @@ public sealed class ActivePackageSessionTests
         finally
         {
             await owner.State.ClearActiveSessionAsync();
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecutionRuntimePolicyFault_ExposesWorkerCleanupProof()
+    {
+        const string packageId = "test.package";
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService());
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance);
+        var worker = new BlockingPolicyCleanupWorker();
+        var loaded = CreateLoadedPackage(packageId, worker);
+        loaded = loaded with
+        {
+            ExecutionRuntimeBinding = new RuntimePackageExecutionRuntimeBinding(
+                SunderPackageFormat.RuntimeHostRole,
+                "test-rid",
+                "test-runtime",
+                "1.0.0",
+                1,
+                "test-abi",
+                new string('a', 64),
+                new string('b', 64),
+                1,
+                "https://registry.example.test",
+                RuntimeExecutionRuntimeAcquisitionSources.Registry,
+                "test-key",
+                1,
+                1,
+                Sunder.Registry.Contracts.ExecutionRuntimeLifecycleStates.Supported,
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow),
+        };
+        var session = new ActivePackageSession(
+            sessionFolder: null,
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
+            {
+                [packageId] = loaded,
+            },
+            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
+            {
+                [packageId] = CreateSessionPackage(packageId, isEnabled: true),
+            },
+            workersStarted: false);
+
+        try
+        {
+            await publisher.PublishAsync(
+                session,
+                owner.Sources.Snapshot(),
+                [],
+                [],
+                expectedGeneration: 0,
+                CancellationToken.None);
+
+            Assert.Equal(
+                [packageId],
+                owner.State.GetExecutionRuntimeDependentPackageIds(
+                    new HashSet<string>(StringComparer.Ordinal)
+                    {
+                        loaded.ExecutionRuntimeBinding!.Identity.SingleFlightKey,
+                    }));
+            Assert.True(owner.EnforceExecutionRuntimePolicy(
+                packageId,
+                "Execution runtime repair is pending.",
+                out var cleanupCompletion));
+            await worker.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.False(cleanupCompletion.IsCompleted);
+            Assert.Equal(
+                PackageReadinessState.Failed,
+                Assert.Single(owner.GetSnapshot().SessionPackages).Readiness);
+
+            worker.ReleaseStop();
+            await cleanupCompletion.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            worker.ReleaseStop();
+            await owner.State.ClearActiveSessionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ExecutionRuntimeRepair_HoldsOperationGateThroughStoreRepair()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
+        var paths = new RuntimePackagePaths(rootPath);
+        await using var gate = new RuntimeOperationGate();
+        var host = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            new InstalledPackageStore(paths),
+            new SunderPackageArchiveInstaller(paths),
+            operationGate: gate);
+        var repairEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRepair = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var identity = new ExecutionRuntimeIdentity(
+            "test-runtime",
+            "1.0.0",
+            1,
+            "test-rid",
+            "test-abi");
+
+        try
+        {
+            var repair = host.ExecuteExecutionRuntimeRepairAsync(
+                identity,
+                _ => Task.FromResult(new ExecutionRuntimeVerificationResult(
+                    Healthy: false,
+                    DeepVerified: true,
+                    DateTimeOffset.UtcNow,
+                    "Corrupted.")),
+                async token =>
+                {
+                    repairEntered.TrySetResult();
+                    await releaseRepair.Task.WaitAsync(token);
+                    return null;
+                });
+            await repairEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var competingOperation = gate.EnterAsync().AsTask();
+            Assert.False(competingOperation.IsCompleted);
+
+            releaseRepair.TrySetResult();
+            var result = await repair.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(result.Verification.Healthy);
+            Assert.Null(result.Repaired);
+            Assert.Null(result.Reload);
+
+            var competingLease = await competingOperation.WaitAsync(TimeSpan.FromSeconds(2));
+            await competingLease.DisposeAsync();
+        }
+        finally
+        {
+            releaseRepair.TrySetResult();
+            await host.ShutdownAsync();
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecutionRuntimeRecovery_DrainsDependentWorkersBeforeRecoveryMutation()
+    {
+        const string packageId = "recovery.package";
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
+        var paths = new RuntimePackagePaths(rootPath);
+        var installedPackages = new InstalledPackageStore(paths);
+        var host = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            installedPackages,
+            new SunderPackageArchiveInstaller(paths));
+        var worker = new BlockingPolicyCleanupWorker();
+        using var cancellation = new CancellationTokenSource();
+        Task? recovery = null;
+
+        try
+        {
+            await host.InitializeAsync();
+            var packageRoot = paths.GetInstalledPackagePath(packageId, "1.0.0");
+            CanonicalPackageTestBuilder.WriteExplodedPackage(
+                packageRoot,
+                packageId,
+                "1.0.0",
+                typeof(ActivePackageSessionTests).Assembly.Location,
+                roles: [SunderPackageFormat.RuntimeHostRole],
+                runtimeIdentifiers: [PackageTargetSelection.GetCurrentRuntimeIdentifier()]);
+            var installed = CanonicalPackageTestBuilder.CreateInstalledRecord(
+                packageRoot,
+                packageId,
+                "1.0.0",
+                isEnabled: false);
+            await installedPackages.WriteAsync([installed]);
+            var binding = Assert.Single(installed.ExecutionRuntimeBindings);
+            var runtimeBinding = RuntimePackageExecutionRuntimeBinding.FromInstalled(binding);
+            var sessionFolder = Path.Combine(rootPath, "active-session");
+            var loaded = CreateLoadedPackageCore(
+                packageId,
+                sessionFolder,
+                disposalWorker: null,
+                workers: [worker]) with
+            {
+                ExecutionRuntimeBinding = runtimeBinding,
+            };
+            var session = new ActivePackageSession(
+                sessionFolder,
+                new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [packageId] = loaded,
+                },
+                new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [packageId] = CreateSessionPackage(packageId, isEnabled: true),
+                },
+                workersStarted: false);
+            var publisher = new PackageSessionPublisher(
+                host.SessionOwner,
+                NullLogger<PackageSessionPublisher>.Instance);
+            await publisher.PublishAsync(
+                session,
+                host.SessionOwner.Sources.Snapshot(),
+                [],
+                [],
+                expectedGeneration: host.SessionOwner.Generation,
+                CancellationToken.None);
+            var impact = await host.GetExecutionRuntimeImpactAsync(runtimeBinding.Identity);
+            Assert.Equal([packageId], impact.ImpactedPackageIds);
+            var recoveryEntered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            recovery = host.ExecuteExecutionRuntimeRecoveryAsync(
+                runtimeBinding.Identity,
+                impact.Fingerprint,
+                async token =>
+                {
+                    recoveryEntered.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    throw new InvalidOperationException("The blocked recovery unexpectedly resumed.");
+                },
+                cancellation.Token);
+            await worker.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.False(recoveryEntered.Task.IsCompleted);
+
+            worker.ReleaseStop();
+            await recoveryEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(
+                PackageReadinessState.Failed,
+                Assert.Single(host.SessionOwner.GetSnapshot().SessionPackages).Readiness);
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => recovery!);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            worker.ReleaseStop();
+            if (recovery is not null)
+            {
+                try
+                {
+                    await recovery;
+                }
+                catch
+                {
+                }
+            }
+            await host.ShutdownAsync();
             TryDeleteDirectory(rootPath);
         }
     }
@@ -1191,6 +1731,40 @@ public sealed class ActivePackageSessionTests
             await owner.State.ClearActiveSessionAsync();
             firstContext.Dispose();
             secondContext.Dispose();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task PackageStorageActivationTransaction_FileSnapshotFailureRestoresWorkspace()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-storage-snapshot-tests", Guid.NewGuid().ToString("N"));
+        var workspace = Path.Combine(root, "package-data", "workspace");
+        Directory.CreateDirectory(workspace);
+        var baselinePath = Path.Combine(workspace, "baseline.txt");
+        await File.WriteAllTextAsync(baselinePath, "stable");
+        var package = CreateWorkspacePackage(
+                root,
+                "1.0.0",
+                new WorkspaceProbeWorker(new WorkspaceActivationProbe(workspace), candidate: true))
+            with
+            {
+                FileStore = new UnsupportedPackageFileStore(),
+            };
+        try
+        {
+            await package.SecretsStore.SetSecretAsync("preserved.secret", "preserved-value");
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                PackageStorageActivationTransaction.BeginAsync([package], CancellationToken.None));
+
+            Assert.Equal("stable", await File.ReadAllTextAsync(baselinePath));
+            Assert.Equal(
+                "preserved-value",
+                await package.SecretsStore.GetSecretAsync("preserved.secret"));
+            Assert.Empty(WorkspaceActivationBackups(workspace));
+        }
+        finally
+        {
             TryDeleteDirectory(root);
         }
     }
@@ -2585,6 +3159,7 @@ public sealed class ActivePackageSessionTests
         await context.Storage.State.SetValueAsync("legacy.state", value + "-state");
         await context.Storage.SettingsStore.SetValueAsync("legacy.setting", value + "-setting");
         await context.Secrets.SetSecretAsync("legacy.secret", value + "-secret");
+        await context.Storage.Files.WriteAsync("legacy.file", System.Text.Encoding.UTF8.GetBytes(value + "-file"));
     }
 
     private static async Task AssertLegacyStorageAsync(RuntimePackageDataResources context, string value)
@@ -2595,6 +3170,10 @@ public sealed class ActivePackageSessionTests
         Assert.Null(await context.Storage.SettingsStore.GetValueAsync("current.setting"));
         Assert.Equal(value + "-secret", await context.Secrets.GetSecretAsync("legacy.secret"));
         Assert.Null(await context.Secrets.GetSecretAsync("current.secret"));
+        Assert.Equal(
+            value + "-file",
+            System.Text.Encoding.UTF8.GetString((await context.Storage.Files.ReadAsync("legacy.file"))!));
+        Assert.Null(await context.Storage.Files.ReadAsync("current.file"));
     }
 
     private static async Task AssertMigratedStorageAsync(RuntimePackageDataResources context, string value)
@@ -2605,6 +3184,10 @@ public sealed class ActivePackageSessionTests
         Assert.Equal(value + "-setting", await context.Storage.SettingsStore.GetValueAsync("current.setting"));
         Assert.Null(await context.Secrets.GetSecretAsync("legacy.secret"));
         Assert.Equal(value + "-secret", await context.Secrets.GetSecretAsync("current.secret"));
+        Assert.Null(await context.Storage.Files.ReadAsync("legacy.file"));
+        Assert.Equal(
+            value + "-file",
+            System.Text.Encoding.UTF8.GetString((await context.Storage.Files.ReadAsync("current.file"))!));
     }
 
     private static ActivePackageDescriptor CreateActivePackage(
@@ -2724,6 +3307,23 @@ public sealed class ActivePackageSessionTests
         {
             StopCount++;
             StopEntered.TrySetResult();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FailingAfterSignalBackgroundService(Task signal) : TestRuntimePackageWorker
+    {
+        public int StopCount { get; private set; }
+
+        public override async Task StartAsync(CancellationToken cancellationToken = default)
+        {
+            await signal.WaitAsync(cancellationToken);
+            throw new InvalidOperationException("injected wave failure");
+        }
+
+        public override Task StopAsync(CancellationToken cancellationToken = default)
+        {
+            StopCount++;
             return Task.CompletedTask;
         }
     }
@@ -2987,6 +3587,23 @@ public sealed class ActivePackageSessionTests
         public void ReleaseStop() => _releaseStop.TrySetResult();
     }
 
+    private sealed class BlockingPolicyCleanupWorker : TestRuntimePackageWorker
+    {
+        private readonly TaskCompletionSource _releaseStop = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource StopEntered { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async Task StopAsync(CancellationToken cancellationToken = default)
+        {
+            StopEntered.TrySetResult();
+            await _releaseStop.Task.WaitAsync(cancellationToken);
+        }
+
+        public void ReleaseStop() => _releaseStop.TrySetResult();
+    }
+
     private sealed class HangingGenerationBackgroundService : TestRuntimePackageWorker
     {
         private readonly TaskCompletionSource _releaseCommit = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -3175,6 +3792,12 @@ public sealed class ActivePackageSessionTests
                 await context.Secrets.DeleteSecretAsync("legacy.secret", cancellationToken);
                 await context.Secrets.SetSecretAsync("current.secret", secret, cancellationToken);
             }
+            var file = await context.Storage.Files.ReadAsync("legacy.file", cancellationToken);
+            if (file is not null)
+            {
+                await context.Storage.Files.DeleteAsync("legacy.file", cancellationToken);
+                await context.Storage.Files.WriteAsync("current.file", file, cancellationToken);
+            }
             if (failActivation)
             {
                 throw new InvalidOperationException("Injected sibling activation failure.");
@@ -3186,6 +3809,21 @@ public sealed class ActivePackageSessionTests
             context.Dispose();
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class UnsupportedPackageFileStore : IPackageFileStore
+    {
+        public Task<byte[]?> ReadAsync(string relativePath, CancellationToken cancellationToken = default)
+            => Task.FromResult<byte[]?>(null);
+
+        public Task WriteAsync(
+            string relativePath,
+            ReadOnlyMemory<byte> contents,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task DeleteAsync(string relativePath, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     private sealed class WorkspaceActivationProbe(string workspacePath)

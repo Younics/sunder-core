@@ -1,0 +1,456 @@
+<Project InitialTargets="_ValidateSunderPackageBuildTaskSourceLockOwner">
+  <PropertyGroup>
+    <SunderPackageBuildTaskSourceLockPath Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', 'obj', '.sunder-package-build-task-source.lock'))))</SunderPackageBuildTaskSourceLockPath>
+    <_SunderPackageBuildTaskSourceLockFullPath Condition="'$(SunderPackageBuildTaskSourceLockPath)' != ''">$([System.IO.Path]::GetFullPath('$(SunderPackageBuildTaskSourceLockPath)', '$(MSBuildProjectDirectory)'))</_SunderPackageBuildTaskSourceLockFullPath>
+  </PropertyGroup>
+
+  <UsingTask TaskName="_SunderManagePackageBuildTaskSourceLock"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$([System.IO.Path]::Combine('$(MSBuildToolsPath)', 'Microsoft.Build.Tasks.Core.dll'))">
+    <ParameterGroup>
+      <Action ParameterType="System.String" Required="true" />
+      <LockPath ParameterType="System.String" Required="true" />
+      <Context ParameterType="System.String" />
+      <AttemptSignalFile ParameterType="System.String" />
+      <LeaseId ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.Collections" />
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.Diagnostics" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Threading" />
+      <Using Namespace="Microsoft.Build.Framework" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        const string leaseKeyPrefix = "sunder-package-build-task-source-lock:";
+
+        try
+        {
+            if (string.Equals(Action, "Acquire", StringComparison.Ordinal))
+            {
+                var fullPath = Path.GetFullPath(LockPath);
+                var parent = Path.GetDirectoryName(fullPath)
+                    ?? throw new InvalidDataException(
+                        "The Sunder.Package.Build task source lock has no parent directory.");
+                Directory.CreateDirectory(parent);
+
+                FileStream stream = null;
+                var signaled = false;
+                var buildEngine = BuildEngine as IBuildEngine6
+                    ?? throw new InvalidOperationException(
+                        "MSBuild does not expose task object registration and global property enumeration.");
+                try
+                {
+                    var processId = Process.GetCurrentProcess().Id;
+                    Log.LogMessage(
+                        MessageImportance.Low,
+                        $"SUNDER_SOURCE_LOCK_WAITING {Context} pid={processId} path={fullPath}");
+                    var deadline = DateTime.UtcNow.AddMinutes(2);
+                    while (stream is null)
+                    {
+                        try
+                        {
+                            stream = new FileStream(
+                                fullPath,
+                                FileMode.OpenOrCreate,
+                                FileAccess.ReadWrite,
+                                FileShare.None,
+                                1,
+                                FileOptions.None);
+                        }
+                        catch (IOException) when (DateTime.UtcNow < deadline)
+                        {
+                            if (!signaled)
+                            {
+                                // Signal only after a real failed lock attempt, not before opening the file.
+                                if (!string.IsNullOrWhiteSpace(AttemptSignalFile))
+                                {
+                                    var signalPath = Path.GetFullPath(AttemptSignalFile);
+                                    Directory.CreateDirectory(Path.GetDirectoryName(signalPath));
+                                    File.WriteAllText(signalPath, fullPath);
+                                }
+                                signaled = true;
+                            }
+
+                            // Yielded requests consume MSBuild's scheduling budget. Wait as a
+                            // dependency instead, so the lease holder's nested builds can run.
+                            // A fresh request identity prevents caching the backoff target.
+                            var waitProperties = new Hashtable(StringComparer.OrdinalIgnoreCase)
+                            {
+                                ["_SunderPackageBuildTaskSourceLockWaitId"] = Guid.NewGuid().ToString("N"),
+                                ["_SunderPackageBuildTaskSourceLockWaitPath"] = fullPath,
+                                ["SunderPackageBuildTaskSourceLockOwner"] = "false",
+                            };
+                            var removeProperties = buildEngine.GetGlobalProperties().Keys
+                                .Where(name => !waitProperties.Contains(name)).ToArray();
+                            var result = buildEngine.BuildProjectFilesInParallel(
+                                new[] { BuildEngine.ProjectFileOfTaskNode },
+                                new[] { "_WaitForSunderPackageBuildTaskSourceLock" },
+                                new IDictionary[] { waitProperties },
+                                new IList<string>[] { removeProperties },
+                                new string[] { null },
+                                returnTargetOutputs: false);
+                            if (!result.Result)
+                            {
+                                return false;
+                            }
+                        }
+                    }
+
+                    var leaseId = Guid.NewGuid().ToString("N");
+                    buildEngine.RegisterTaskObject(
+                        leaseKeyPrefix + leaseId,
+                        stream,
+                        RegisteredTaskObjectLifetime.Build,
+                        allowEarlyCollection: false);
+                    LeaseId = leaseId;
+                    Log.LogMessage(
+                        MessageImportance.Low,
+                        $"SUNDER_SOURCE_LOCK_ACQUIRED {leaseId} {Context} pid={processId} path={fullPath}");
+                    stream = null;
+                }
+                finally
+                {
+                    stream?.Dispose();
+                }
+            }
+            else if (string.Equals(Action, "Wait", StringComparison.Ordinal))
+            {
+                Thread.Sleep(25);
+            }
+            else if (string.Equals(Action, "Release", StringComparison.Ordinal))
+            {
+                if (!string.IsNullOrWhiteSpace(LeaseId))
+                {
+                    var buildEngine = BuildEngine as IBuildEngine4
+                        ?? throw new InvalidOperationException(
+                            "MSBuild does not expose build-lifetime task object registration.");
+                    if (buildEngine.UnregisterTaskObject(
+                            leaseKeyPrefix + LeaseId,
+                            RegisteredTaskObjectLifetime.Build) is IDisposable lease)
+                    {
+                        lease.Dispose();
+                        Log.LogMessage(
+                            MessageImportance.Low,
+                            $"SUNDER_SOURCE_LOCK_RELEASED {LeaseId} {Context} pid={Process.GetCurrentProcess().Id} path={Path.GetFullPath(LockPath)}");
+                    }
+                    LeaseId = string.Empty;
+                }
+            }
+            else
+            {
+                throw new InvalidDataException(
+                    $"Unsupported Sunder.Package.Build task source lock action '{Action}'.");
+            }
+        }
+        catch (Exception exception)
+        {
+            Log.LogErrorFromException(exception, showStackTrace: false);
+            return false;
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="_WaitForSunderPackageBuildTaskSourceLock">
+    <_SunderManagePackageBuildTaskSourceLock Action="Wait"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockWaitPath)" />
+  </Target>
+
+  <PropertyGroup Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true'">
+    <_SunderPackageBuildTaskUnlockedBuildDependsOn>$(BuildDependsOn)</_SunderPackageBuildTaskUnlockedBuildDependsOn>
+    <_SunderPackageBuildTaskUnlockedRebuildDependsOn>$(RebuildDependsOn)</_SunderPackageBuildTaskUnlockedRebuildDependsOn>
+    <_SunderPackageBuildTaskUnlockedCleanDependsOn>$(CleanDependsOn)</_SunderPackageBuildTaskUnlockedCleanDependsOn>
+    <_SunderPackageBuildTaskUnlockedPackDependsOn>$(PackDependsOn)</_SunderPackageBuildTaskUnlockedPackDependsOn>
+    <_SunderPackageBuildTaskGeneratePackageOnBuild>$(GeneratePackageOnBuild)</_SunderPackageBuildTaskGeneratePackageOnBuild>
+    <_GlobalPropertiesToRemoveFromProjectReferences>$(_GlobalPropertiesToRemoveFromProjectReferences);BuildProjectReferences;GeneratePackageOnBuild;SunderPackageBuildTaskSourceLockAlreadyHeld;SunderPackageBuildTaskSourceLockPath;SunderPackageBuildSourceLockTargetsPath</_GlobalPropertiesToRemoveFromProjectReferences>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
+    <BuildDependsOn>_BuildSunderPackageBuildTaskUnderSourceLock</BuildDependsOn>
+    <CleanDependsOn>_CleanSunderPackageBuildTaskUnderSourceLock</CleanDependsOn>
+    <PackDependsOn>_PackSunderPackageBuildTaskUnderSourceLock</PackDependsOn>
+  </PropertyGroup>
+
+  <Target Name="_BuildSunderPackageBuildTaskWithoutSourceLock"
+          DependsOnTargets="$(_SunderPackageBuildTaskUnlockedBuildDependsOn)"
+          Returns="@(TargetPathWithTargetPlatformMoniker)" />
+
+  <Target Name="_CleanSunderPackageBuildTaskWithoutSourceLock"
+          DependsOnTargets="$(_SunderPackageBuildTaskUnlockedCleanDependsOn);_GetOutputItemsFromPack">
+    <ItemGroup Condition="'$(_SunderPackageBuildTaskGeneratePackageOnBuild)' == 'true' and '$(IsInnerBuild)' != 'true'">
+      <_SunderPackageBuildTaskPackageFilesToDelete Include="@(_OutputPackItems)" />
+    </ItemGroup>
+    <Delete Files="@(_SunderPackageBuildTaskPackageFilesToDelete)" />
+  </Target>
+
+  <Target Name="_PackSunderPackageBuildTaskWithoutSourceLock"
+          DependsOnTargets="$(_SunderPackageBuildTaskUnlockedPackDependsOn)" />
+
+  <Target Name="_ValidateSunderPackageBuildTaskSourceLockOwner"
+          Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true'">
+    <Error Condition="'$(_SunderPackageBuildTaskUnlockedBuildDependsOn)' == '' or '$(_SunderPackageBuildTaskUnlockedRebuildDependsOn)' == '' or '$(_SunderPackageBuildTaskUnlockedCleanDependsOn)' == '' or '$(_SunderPackageBuildTaskUnlockedPackDependsOn)' == ''"
+           Text="Sunder.Package.Build task source-lock ownership must be imported after Sdk.targets so the Build, Rebuild, Clean, and Pack dependency chains are defined." />
+    <Error Condition="'$(TargetFrameworks)' != ''"
+           Text="Sunder.Package.Build task source-lock ownership requires a single TargetFramework; TargetFrameworks is not supported." />
+  </Target>
+
+  <Target Name="_BuildSunderPackageBuildTaskUnderSourceLock"
+          Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
+    <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-build $(MSBuildProjectFullPath)"
+                                             AttemptSignalFile="$(_SunderPackageBuildTaskSourceLockAttemptSignalFile)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerBuildSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="_BuildSunderPackageBuildTaskWithoutSourceLock"
+             BuildInParallel="false"
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=false;BuildProjectReferences=true">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderPackageBuildTaskLockedBuildOutputs" />
+    </MSBuild>
+    <Error Condition="'@(_SunderPackageBuildTaskLockedBuildOutputs)' == ''"
+           Text="The Sunder.Package.Build owner Build returned no outputs." />
+    <Error Condition="!Exists('%(_SunderPackageBuildTaskLockedBuildOutputs.Identity)')"
+           Text="The Sunder.Package.Build owner Build did not produce '%(_SunderPackageBuildTaskLockedBuildOutputs.Identity)'." />
+    <Error Condition="'%(_SunderPackageBuildTaskLockedBuildOutputs.ReferenceAssembly)' != '' and !Exists('%(_SunderPackageBuildTaskLockedBuildOutputs.ReferenceAssembly)')"
+           Text="The Sunder.Package.Build owner Build did not produce reference assembly '%(_SunderPackageBuildTaskLockedBuildOutputs.ReferenceAssembly)'." />
+    <ItemGroup>
+      <TargetPathWithTargetPlatformMoniker Include="@(_SunderPackageBuildTaskLockedBuildOutputs)" />
+    </ItemGroup>
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Pack"
+             BuildInParallel="false"
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=true;NoBuild=true"
+             Condition="'$(_SunderPackageBuildTaskGeneratePackageOnBuild)' == 'true'" />
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-build $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerBuildSourceLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerBuildSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <PropertyGroup>
+      <_SunderPackageBuildTaskOwnerBuildCompleted>true</_SunderPackageBuildTaskOwnerBuildCompleted>
+    </PropertyGroup>
+    <OnError ExecuteTargets="_ReleaseSunderPackageBuildTaskSourceLockForOwnerBuild" />
+  </Target>
+
+  <!-- Preserve the SDK Rebuild chain in the OUTER project state: its public Clean
+       and Build results must be cached for later reference consumers. Forking the
+       entire Rebuild leaves outer Clean unexecuted and able to delete fresh refs.
+       Standalone Clean leaves dependencies alone, so Rebuild first cleans those
+       dependencies under a lease, before the ordinary scoped Clean and Build. -->
+  <Target Name="_CleanSunderPackageBuildTaskReferencesForRebuild"
+          AfterTargets="BeforeRebuild"
+           Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
+    <PropertyGroup>
+      <_SunderPackageBuildTaskRebuildAfterCachedBuild>$(_SunderPackageBuildTaskOwnerBuildCompleted)</_SunderPackageBuildTaskRebuildAfterCachedBuild>
+    </PropertyGroup>
+    <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-rebuild-references $(MSBuildProjectFullPath)"
+                                             AttemptSignalFile="$(_SunderPackageBuildTaskSourceLockAttemptSignalFile)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="CleanReferencedProjects"
+             BuildInParallel="false"
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=$(_SunderPackageBuildTaskGeneratePackageOnBuild);BuildProjectReferences=true" />
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-rebuild-references $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <OnError ExecuteTargets="_ReleaseSunderPackageBuildTaskSourceLockForOwnerRebuild" />
+  </Target>
+
+  <!-- An earlier reference consumer can request Build before the solution requests
+       Rebuild. MSBuild then runs the first Clean but skips its cached Build result.
+       Preserve outer Clean caching, and refresh only that ordering in a new private
+       build state (including references) rather than trusting missing cached outputs. -->
+  <Target Name="_RebuildSunderPackageBuildTaskAfterCachedBuild"
+          BeforeTargets="AfterRebuild"
+          Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true' and '$(_SunderPackageBuildTaskRebuildAfterCachedBuild)' == 'true'">
+    <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-rebuild-cached $(MSBuildProjectFullPath)"
+                                             AttemptSignalFile="$(_SunderPackageBuildTaskSourceLockAttemptSignalFile)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <PropertyGroup>
+      <_SunderPackageBuildTaskRebuildInvocationId>$([System.Guid]::NewGuid().ToString('N'))</_SunderPackageBuildTaskRebuildInvocationId>
+    </PropertyGroup>
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="_BuildSunderPackageBuildTaskWithoutSourceLock"
+             BuildInParallel="false"
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=false;BuildProjectReferences=true;_SunderPackageBuildTaskRebuildInvocationId=$(_SunderPackageBuildTaskRebuildInvocationId)">
+      <Output TaskParameter="TargetOutputs" ItemName="_SunderPackageBuildTaskFreshRebuildOutputs" />
+    </MSBuild>
+    <Error Condition="'@(_SunderPackageBuildTaskFreshRebuildOutputs)' == ''"
+           Text="The Sunder.Package.Build cached-Build Rebuild returned no outputs." />
+    <Error Condition="!Exists('%(_SunderPackageBuildTaskFreshRebuildOutputs.Identity)')"
+           Text="The Sunder.Package.Build Rebuild did not produce '%(_SunderPackageBuildTaskFreshRebuildOutputs.Identity)'." />
+    <Error Condition="'%(_SunderPackageBuildTaskFreshRebuildOutputs.ReferenceAssembly)' != '' and !Exists('%(_SunderPackageBuildTaskFreshRebuildOutputs.ReferenceAssembly)')"
+           Text="The Sunder.Package.Build Rebuild did not produce reference assembly '%(_SunderPackageBuildTaskFreshRebuildOutputs.ReferenceAssembly)'." />
+    <ItemGroup>
+      <TargetPathWithTargetPlatformMoniker Remove="@(TargetPathWithTargetPlatformMoniker)" />
+      <TargetPathWithTargetPlatformMoniker Include="@(_SunderPackageBuildTaskFreshRebuildOutputs)" />
+    </ItemGroup>
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Pack" BuildInParallel="false"
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=true;NoBuild=true;_SunderPackageBuildTaskRebuildInvocationId=$(_SunderPackageBuildTaskRebuildInvocationId)"
+             Condition="'$(_SunderPackageBuildTaskGeneratePackageOnBuild)' == 'true'" />
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-rebuild-cached $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <OnError ExecuteTargets="_ReleaseSunderPackageBuildTaskSourceLockForOwnerRebuild" />
+  </Target>
+
+  <Target Name="_PackSunderPackageBuildTaskUnderSourceLock"
+          Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
+    <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-pack $(MSBuildProjectFullPath)"
+                                             AttemptSignalFile="$(_SunderPackageBuildTaskSourceLockAttemptSignalFile)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerPackSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="_PackSunderPackageBuildTaskWithoutSourceLock"
+             BuildInParallel="false"
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=$(_SunderPackageBuildTaskGeneratePackageOnBuild);BuildProjectReferences=true" />
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-pack $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerPackSourceLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerPackSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <OnError ExecuteTargets="_ReleaseSunderPackageBuildTaskSourceLockForOwnerPack" />
+  </Target>
+
+  <Target Name="_CleanSunderPackageBuildTaskUnderSourceLock"
+          Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
+    <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-clean $(MSBuildProjectFullPath)"
+                                             AttemptSignalFile="$(_SunderPackageBuildTaskSourceLockAttemptSignalFile)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerCleanOperationSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="_CleanSunderPackageBuildTaskWithoutSourceLock"
+             BuildInParallel="false"
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);BuildProjectReferences=false" />
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-clean $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerCleanOperationSourceLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerCleanOperationSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+    <OnError ExecuteTargets="_ReleaseSunderPackageBuildTaskSourceLockForOwnerCleanOperation" />
+  </Target>
+
+  <Target Name="_PackAsBuildAfterTarget"
+          AfterTargets="Build"
+          Condition="'$(SunderPackageBuildTaskSourceLockOwner)' != 'true' and '$(GeneratePackageOnBuild)' == 'true' and '$(IsInnerBuild)' != 'true'"
+          DependsOnTargets="Pack" />
+
+  <Target Name="_CleanPackageFiles"
+          DependsOnTargets="_GetOutputItemsFromPack"
+          AfterTargets="Clean"
+          Condition="('$(SunderPackageBuildTaskSourceLockOwner)' != 'true' or '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' == 'true') and '$(GeneratePackageOnBuild)' == 'true' and '$(IsInnerBuild)' != 'true'">
+    <ItemGroup>
+      <_PackageFilesToDelete Include="@(_OutputPackItems)" />
+    </ItemGroup>
+    <Delete Files="@(_PackageFilesToDelete)" />
+  </Target>
+
+  <Target Name="_AcquireSunderPackageBuildTaskSourceLockForOwner"
+          BeforeTargets="CoreCompile"
+          Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
+    <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-core-compile $(MSBuildProjectFullPath)"
+                                             AttemptSignalFile="$(_SunderPackageBuildTaskSourceLockAttemptSignalFile)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+  </Target>
+
+  <Target Name="_ReleaseSunderPackageBuildTaskSourceLockForOwner"
+          AfterTargets="CoreCompile"
+          Condition="'$(_SunderPackageBuildTaskOwnerSourceLockLeaseId)' != ''">
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-core-compile $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerSourceLockLeaseId)" />
+    <PropertyGroup>
+      <_SunderPackageBuildTaskOwnerSourceLockLeaseId></_SunderPackageBuildTaskOwnerSourceLockLeaseId>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="_ReleaseSunderPackageBuildTaskSourceLockForOwnerBuild"
+          Condition="'$(_SunderPackageBuildTaskOwnerBuildSourceLockLeaseId)' != ''">
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-build $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerBuildSourceLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerBuildSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+  </Target>
+
+  <Target Name="_ReleaseSunderPackageBuildTaskSourceLockForOwnerRebuild"
+          Condition="'$(_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId)' != ''">
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-rebuild-references $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+  </Target>
+
+  <Target Name="_ReleaseSunderPackageBuildTaskSourceLockForOwnerPack"
+          Condition="'$(_SunderPackageBuildTaskOwnerPackSourceLockLeaseId)' != ''">
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-pack $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerPackSourceLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerPackSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+  </Target>
+
+  <Target Name="_ReleaseSunderPackageBuildTaskSourceLockForOwnerCleanOperation"
+          Condition="'$(_SunderPackageBuildTaskOwnerCleanOperationSourceLockLeaseId)' != ''">
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-clean $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerCleanOperationSourceLockLeaseId)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerCleanOperationSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+  </Target>
+
+  <Target Name="_AcquireSunderPackageBuildTaskSourceLockForOwnerClean"
+          BeforeTargets="CoreClean"
+          Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
+    <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-core-clean $(MSBuildProjectFullPath)"
+                                             AttemptSignalFile="$(_SunderPackageBuildTaskSourceLockAttemptSignalFile)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerCleanSourceLockLeaseId" />
+    </_SunderManagePackageBuildTaskSourceLock>
+  </Target>
+
+  <Target Name="_ReleaseSunderPackageBuildTaskSourceLockForOwnerClean"
+          AfterTargets="CoreClean"
+          Condition="'$(_SunderPackageBuildTaskOwnerCleanSourceLockLeaseId)' != ''">
+    <_SunderManagePackageBuildTaskSourceLock Action="Release"
+                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
+                                             Context="owner-core-clean $(MSBuildProjectFullPath)"
+                                             LeaseId="$(_SunderPackageBuildTaskOwnerCleanSourceLockLeaseId)" />
+    <PropertyGroup>
+      <_SunderPackageBuildTaskOwnerCleanSourceLockLeaseId></_SunderPackageBuildTaskOwnerCleanSourceLockLeaseId>
+    </PropertyGroup>
+  </Target>
+</Project>

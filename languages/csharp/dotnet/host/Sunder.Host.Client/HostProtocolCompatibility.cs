@@ -23,10 +23,9 @@ public static class HostProtocolCompatibility
         {
             return $"Host protocol identity '{handshake.ProtocolIdentity}' is not supported.";
         }
-        if (handshake.ProtocolRevision < handshake.MinimumSupportedRevision
-            || handshake.ProtocolRevision > handshake.MaximumSupportedRevision
-            || handshake.MinimumSupportedRevision > HostProtocol.CurrentRevision
-            || handshake.MaximumSupportedRevision < HostProtocol.CurrentRevision)
+        if (handshake.ProtocolRevision != HostProtocol.CurrentRevision
+            || handshake.MinimumSupportedRevision != HostProtocol.MinimumSupportedRevision
+            || handshake.MaximumSupportedRevision != HostProtocol.MaximumSupportedRevision)
         {
             return $"Host protocol revision {handshake.ProtocolRevision} with supported range "
                    + $"{handshake.MinimumSupportedRevision}-{handshake.MaximumSupportedRevision} is incompatible with client revision {HostProtocol.CurrentRevision}.";

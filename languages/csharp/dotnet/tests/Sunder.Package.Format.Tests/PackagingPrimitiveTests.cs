@@ -18,8 +18,10 @@ public sealed class PackagingPrimitiveTests
     [Fact]
     public void SemanticVersion_EnforcesPracticalLengthLimit()
     {
+        Assert.Equal(256, SemanticVersion.MaximumLength);
+        Assert.True(SemanticVersion.TryParse("1.0.0+" + new string('a', SemanticVersion.MaximumLength - 6), out _));
+        Assert.False(SemanticVersion.TryParse("1.0.0+" + new string('a', SemanticVersion.MaximumLength - 5), out _));
         Assert.True(SemanticVersion.TryParse("1.2.3-preview.1+linux-x64", out _));
-        Assert.False(SemanticVersion.TryParse("1.0.0+" + new string('a', SemanticVersion.MaximumLength), out _));
     }
 
     [Fact]

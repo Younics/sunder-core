@@ -265,13 +265,20 @@ public static class SunderPackageProjectionArchiveInspector
         {
             errors.Add($"Projection package manifest has invalid target declarations: {exception.Message}");
         }
+        var workerTargets = new List<SunderPackageTargetManifest>();
         foreach (var target in (manifest.Targets ?? []).Take(SunderPackageFormat.MaxTargets))
         {
             if (target is not null)
             {
                 ValidateTargetMetadata(target, errors);
+                if (target.Role == SunderPackageFormat.RuntimeHostRole
+                    && target.Kind == SunderPackageFormat.WorkerTargetKind)
+                {
+                    workerTargets.Add(target);
+                }
             }
         }
+        PackageTargetValidator.ValidateWorkerAgreement(workerTargets, errors);
         PackageWebViewValidator.ValidateDeclarations(manifest, errors, "Projection package");
 
         var hasSharedPayload = key is { } projectionKey
@@ -319,6 +326,7 @@ public static class SunderPackageProjectionArchiveInspector
     {
         var displayKey = $"{target.Role ?? "unknown"}/{target.Rid ?? "unknown"}";
         PackageTargetValidator.ValidateKind(target, errors, "Projection package");
+        PackageTargetValidator.ValidateExecutionRuntime(target, errors, "Projection package");
 
         if (PackageArchivePathValidator.TryParse(
                 target.EntryPoint,

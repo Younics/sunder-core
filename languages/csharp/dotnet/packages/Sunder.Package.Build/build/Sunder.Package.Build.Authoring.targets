@@ -1,0 +1,191 @@
+<Project>
+  <!-- Imported after the .NET SDK has evaluated its paths. A package library with
+       no authored role-project association owns generated composition; authored
+       executable roots are converted along with their existing bootstrap code.
+       Internal role invocations always carry the selection. -->
+  <PropertyGroup>
+    <_SunderPackageSingleProject Condition="'$(SunderPackageProject)' == 'true' and '$(OutputType)' == 'Library' and '$(SunderPackageRole)' == '' and '$(SunderPackageAppProject)' == '' and '$(SunderPackageRootProject)' == '' and '$(SunderPackagePrimaryProject)' != 'true' and '$(_SunderRpcProjectImportEnabled)' != 'true'">true</_SunderPackageSingleProject>
+    <_SunderPackageSingleProject Condition="'$(SunderPackageCompilationRole)' != ''">true</_SunderPackageSingleProject>
+    <_SunderPackageRoleGlobals>SunderPackageCompilationRole;SunderPackageReferenceRole;SunderPackageRolePlanPath;SunderPackageRolePlanSha256;SunderPackageRidBuild;SunderPackageAuthoringOutputRoot;SunderPackageAuthoringIntermediateRoot;SunderPackageAuthoringPackInput;SunderPackageAuthoringPackOutput;AssemblyName;OutputType;StartupObject;IntermediateOutputPath;OutputPath;OutDir;AppendRuntimeIdentifierToOutputPath;GenerateRuntimeConfigurationFiles;SunderPackageProject;ProjectAssetsFile;MSBuildProjectExtensionsPath</_SunderPackageRoleGlobals>
+    <_GlobalPropertiesToRemoveFromProjectReferences Condition="'$(_SunderPackageSingleProject)' == 'true'">$(_GlobalPropertiesToRemoveFromProjectReferences);$(_SunderPackageRoleGlobals);RuntimeIdentifier;SelfContained;UseAppHost;PublishSingleFile;PublishTrimmed</_GlobalPropertiesToRemoveFromProjectReferences>
+    <GenerateRuntimeConfigurationFiles Condition="'$(SunderPackageCompilationRole)' == 'app'">true</GenerateRuntimeConfigurationFiles>
+    <MSBuildAllProjects Condition="'$(SunderPackageCompilationRole)' != ''">$(MSBuildAllProjects);$(SunderPackageRolePlanPath)</MSBuildAllProjects>
+    <_SunderPackageResourcePreparationTarget Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(SunderPackageCompilationRole)' == ''">_PrepareSunderPackageResources</_SunderPackageResourcePreparationTarget>
+    <SkipCompilerExecution Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(DesignTimeBuild)' == 'true'">true</SkipCompilerExecution>
+    <ProvideCommandLineArgs Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(DesignTimeBuild)' == 'true'">true</ProvideCommandLineArgs>
+    <SunderPackageEditorCompilation Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(SunderPackageCompilationRole)' == '' and '$(DesignTimeBuild)' == 'true'">true</SunderPackageEditorCompilation>
+  </PropertyGroup>
+  <ItemGroup><CompilerVisibleProperty Include="SunderPackageEditorCompilation" /></ItemGroup>
+  <ItemGroup Condition="'$(SunderPackageCompilationRole)' != ''">
+    <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)" Role="runtime" Rid="$(RuntimeIdentifier)" Kind="worker" Condition="'$(SunderPackageCompilationRole)' == 'worker'" />
+    <SunderPackageTarget Include="app/$(RuntimeIdentifier)" Role="app" Rid="$(RuntimeIdentifier)" Kind="avalonia" Condition="'$(SunderPackageCompilationRole)' == 'app'" />
+  </ItemGroup>
+
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             TaskFactory="TaskHostFactory" Runtime="NET" Architecture="$(SunderPackageBuildTaskHostArchitecture)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask"
+             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
+             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
+
+  <Target Name="_CaptureSunderPackageResourceItems">
+    <ItemGroup>
+      <_SunderResourceInputs Remove="@(_SunderResourceInputs)" />
+      <_SunderResourceInputs Include="@(AvaloniaXaml)" ResourceKind="AvaloniaXaml" />
+      <_SunderResourceInputs Include="@(AvaloniaResource)" ResourceKind="AvaloniaResource" />
+      <_SunderResourceInputs Include="@(EmbeddedResource)" ResourceKind="EmbeddedResource" />
+      <_SunderResourceInputs Include="@(Content)" ResourceKind="Content" />
+      <_SunderResourceInputs Include="@(None)" ResourceKind="None" />
+      <_SunderGeneratorProperty Remove="@(_SunderGeneratorProperty)" />
+      <_SunderGeneratorProperty Include="AvaloniaNameGeneratorIsEnabled" Value="$(AvaloniaNameGeneratorIsEnabled)" />
+      <_SunderGeneratorProperty Include="AvaloniaNameGeneratorBehavior" Value="$(AvaloniaNameGeneratorBehavior)" />
+      <_SunderGeneratorProperty Include="AvaloniaNameGeneratorDefaultFieldModifier" Value="$(AvaloniaNameGeneratorDefaultFieldModifier)" />
+      <_SunderGeneratorProperty Include="AvaloniaNameGeneratorFilterByPath" Value="$(AvaloniaNameGeneratorFilterByPath)" />
+      <_SunderGeneratorProperty Include="AvaloniaNameGeneratorFilterByNamespace" Value="$(AvaloniaNameGeneratorFilterByNamespace)" />
+      <_SunderGeneratorProperty Include="AvaloniaNameGeneratorViewFileNamingStrategy" Value="$(AvaloniaNameGeneratorViewFileNamingStrategy)" />
+      <_SunderGeneratorProperty Include="AvaloniaNameGeneratorAttachDevTools" Value="$(AvaloniaNameGeneratorAttachDevTools)" />
+      <_SunderGeneratorProperty Include="AvaloniaUseCompiledBindingsByDefault" Value="$(AvaloniaUseCompiledBindingsByDefault)" />
+      <_SunderGeneratorProperty Include="EnableAvaloniaXamlCompilation" Value="$(EnableAvaloniaXamlCompilation)" />
+      <_SunderGeneratorProperty Include="MvvmToolkitEnableINotifyPropertyChangingSupport" Value="$(MvvmToolkitEnableINotifyPropertyChangingSupport)" />
+      <_SunderGeneratorProperty Remove="@(_SunderGeneratorProperty)" Condition="'%(_SunderGeneratorProperty.Value)' == ''" />
+    </ItemGroup>
+  </Target>
+  <Target Name="_PrepareSunderPackageResources" DependsOnTargets="ResolveLockFileAnalyzers;PrepareResourceNames;_CaptureSunderPackageResourceItems"
+          Condition="'$(_SunderPackageSingleProject)' == 'true'" />
+
+  <Target Name="GenerateSunderPackageDesignTimeSources" BeforeTargets="CoreCompile"
+          DependsOnTargets="_PrepareSunderPackageBuildTasks"
+          Condition="'$(DesignTimeBuild)' == 'true' and '$(_SunderPackageSingleProject)' == 'true' and '$(SunderPackageCompilationRole)' == '' and '$(IsCrossTargetingBuild)' != 'true'">
+    <Error Condition="'$(SkipCompilerExecution)' != 'true'" Text="package-authoring.design-time-invalid: A combined editor compilation must not emit an implementation assembly." />
+    <PropertyGroup>
+      <_SunderDesignTimeIntermediate>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', '$(Configuration)', '$(TargetFramework)', 'sunder-design-time'))))))</_SunderDesignTimeIntermediate>
+      <_SunderEditorAnalyzer>$([System.IO.Path]::Combine($([System.IO.Path]::GetDirectoryName('$(_SunderPackageBuildTaskShadowAssemblyFullPath)')), 'Sunder.Package.Build.Editor.dll'))</_SunderEditorAnalyzer>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_SunderEditorAnalyzer)')" Text="package-authoring.editor-generator-unavailable: The complete Sunder build-tool snapshot must contain its portable editor analyzer." />
+    <ItemGroup>
+      <Analyzer Remove="@(Analyzer)" Condition="'%(Analyzer.Filename)%(Analyzer.Extension)' == 'Sunder.Package.Build.Editor.dll'" />
+      <Analyzer Include="$(_SunderEditorAnalyzer)" />
+    </ItemGroup>
+    <GenerateSunderRpcBindingsTask GenerationMode="EditorImports" GeneratePackageRoles="true"
+                                  PackageId="$(SunderPackageId)" PackageVersion="$(Version)" ProjectIdentity="$(MSBuildProjectName)"
+                                  Configuration="$(Configuration)" TargetFramework="$(TargetFramework)" DefineConstants="$(DefineConstants)"
+                                  AssemblyName="$(AssemblyName)" OutputType="Library"
+                                  OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                                  AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)" ProjectDirectory="$(MSBuildProjectDirectory)"
+                                  IntermediateOutputPath="$(_SunderDesignTimeIntermediate)">
+      <Output TaskParameter="CompileItems" ItemName="Compile" />
+    </GenerateSunderRpcBindingsTask>
+  </Target>
+
+  <Target Name="_ReadSunderPackageRoleDependencies" BeforeTargets="PrepareProjectReferences;ResolvePackageAssets;AssignTargetPaths;AddAvaloniaResources;_InjectAdditionalFiles;GenerateAvaloniaResources"
+          DependsOnTargets="_PrepareSunderPackageBuildTasks;_CaptureSunderPackageResourceItems"
+          Condition="'$(SunderPackageCompilationRole)' != '' and '$(SunderPackageRolePlanPath)' != '' and '$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_SunderRolePlanDirectory Include="$([System.IO.Path]::GetDirectoryName('$(SunderPackageRolePlanPath)'))">
+        <DiscoveryRoot>$([System.IO.Path]::GetDirectoryName($([System.IO.Path]::GetDirectoryName('$(SunderPackageRolePlanPath)'))))</DiscoveryRoot>
+      </_SunderRolePlanDirectory>
+    </ItemGroup>
+    <ManageSunderRpcGeneratedOutputLockTask Action="Acquire" ProjectDirectory="$(MSBuildProjectDirectory)" OutputDirectories="@(_SunderRolePlanDirectory)">
+      <Output TaskParameter="LeaseId" PropertyName="_SunderRpcGeneratedOutputLockLeaseId" />
+    </ManageSunderRpcGeneratedOutputLockTask>
+    <ReadSunderPackageRoleInputsTask PlanPath="$(SunderPackageRolePlanPath)" ExpectedSha256="$(SunderPackageRolePlanSha256)"
+                                    ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                                    RuntimeIdentifier="$(RuntimeIdentifier)" PackageVersion="$(Version)"
+                                    ProjectDirectory="$(MSBuildProjectDirectory)" EvaluatedResources="@(_SunderResourceInputs)" ValidateResourceEvaluation="true"
+                                    EvaluatedGeneratorProperties="@(_SunderGeneratorProperty)"
+                                    Role="$(SunderPackageCompilationRole)" OutputLockLeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)">
+      <Output TaskParameter="CompileItems" ItemName="_SunderRoleCompile" />
+      <Output TaskParameter="ReferencePaths" ItemName="_SunderRoleReferences" />
+      <Output TaskParameter="RuntimeReferencePaths" ItemName="_SunderRoleRuntimeReferences" />
+      <Output TaskParameter="AssemblyName" PropertyName="_SunderRoleAssemblyName" />
+      <Output TaskParameter="BindingSnapshots" ItemName="_SunderRpcBindingSnapshot" />
+      <Output TaskParameter="ContractBundles" ItemName="_SunderSourceContractBundle" />
+      <Output TaskParameter="RpcProviders" ItemName="_SunderSourceRpcProvider" />
+      <Output TaskParameter="RpcUses" ItemName="_SunderSourceRpcUse" />
+      <Output TaskParameter="AuthoringReceipts" ItemName="_SunderRpcAuthoringReceipt" />
+      <Output TaskParameter="CompileAssetPaths" ItemName="_SunderRoleCompileAssets" />
+      <Output TaskParameter="RuntimeAssetPaths" ItemName="_SunderRoleRuntimeAssets" />
+      <Output TaskParameter="ExcludedProjectReferences" ItemName="_SunderRoleExcludedProjects" />
+      <Output TaskParameter="ProjectAssetsFile" PropertyName="_SunderExpectedRoleAssetsFile" />
+      <Output TaskParameter="ProjectExtensionsPath" PropertyName="_SunderExpectedRoleExtensionsPath" />
+      <Output TaskParameter="ResourceItems" ItemName="_SunderRoleResources" />
+      <Output TaskParameter="ExcludedGenerators" ItemName="_SunderRoleExcludedGenerators" />
+    </ReadSunderPackageRoleInputsTask>
+    <Error Condition="'$(_SunderRoleAssemblyName)' != '$(AssemblyName)'" Text="package-authoring.role-plan-invalid: The role assembly identity differs from the compilation request." />
+    <PropertyGroup Condition="'$(_SunderExpectedRoleAssetsFile)' != ''">
+      <_SunderActualRoleAssetsFile>$([System.IO.Path]::GetFullPath('$(ProjectAssetsFile)'))</_SunderActualRoleAssetsFile>
+      <_SunderExpectedRoleAssetsFile>$([System.IO.Path]::GetFullPath('$(_SunderExpectedRoleAssetsFile)'))</_SunderExpectedRoleAssetsFile>
+    </PropertyGroup>
+    <Error Condition="'$(_SunderExpectedRoleAssetsFile)' != '' and '$(_SunderActualRoleAssetsFile)' != '$(_SunderExpectedRoleAssetsFile)'"
+           Text="package-authoring.role-plan-invalid: The inner build did not select its verified role assets file." />
+    <ItemGroup>
+      <ProjectReference Remove="@(_SunderRoleExcludedProjects)" MatchOnMetadata="FullPath" MatchOnMetadataOptions="PathLike" />
+      <AvaloniaXaml Remove="@(AvaloniaXaml)" />
+      <AvaloniaResource Remove="@(AvaloniaResource)" />
+      <EmbeddedResource Remove="@(EmbeddedResource)" />
+      <_SunderRoleCopyItem Include="@(Content)" Condition="('%(Content.CopyToOutputDirectory)' != '' and '%(Content.CopyToOutputDirectory)' != 'Never') or ('%(Content.CopyToPublishDirectory)' != '' and '%(Content.CopyToPublishDirectory)' != 'Never')" />
+      <_SunderRoleCopyItem Include="@(None)" Condition="('%(None.CopyToOutputDirectory)' != '' and '%(None.CopyToOutputDirectory)' != 'Never') or ('%(None.CopyToPublishDirectory)' != '' and '%(None.CopyToPublishDirectory)' != 'Never')" />
+      <Content Remove="@(_SunderRoleCopyItem)" />
+      <None Remove="@(_SunderRoleCopyItem)" />
+      <AvaloniaXaml Include="@(_SunderRoleResources)" Condition="'%(_SunderRoleResources.ResourceKind)' == 'AvaloniaXaml'" />
+      <AvaloniaResource Include="@(_SunderRoleResources)" Condition="'%(_SunderRoleResources.ResourceKind)' == 'AvaloniaResource'" />
+      <EmbeddedResource Include="@(_SunderRoleResources)" Condition="'%(_SunderRoleResources.ResourceKind)' == 'EmbeddedResource'" />
+      <Content Include="@(_SunderRoleResources)" Condition="'%(_SunderRoleResources.ResourceKind)' == 'Content'" />
+      <None Include="@(_SunderRoleResources)" Condition="'%(_SunderRoleResources.ResourceKind)' == 'None'" />
+      <_SunderRoleAppContent Include="@(_SunderRoleResources)"
+          Condition="'$(SunderPackageCompilationRole)' == 'app' and ('%(_SunderRoleResources.ResourceKind)' == 'Content' or '%(_SunderRoleResources.ResourceKind)' == 'None') and '%(_SunderRoleResources.CopyToPublishDirectory)' != 'Never'" />
+    </ItemGroup>
+    <OnError ExecuteTargets="_ReleaseSunderRpcGeneratedOutputLock" />
+  </Target>
+
+  <Target Name="_ReadSunderPackageCompilationRole" BeforeTargets="CoreCompile"
+          DependsOnTargets="_ReadSunderPackageRoleDependencies;ResolveReferences"
+          Condition="'$(SunderPackageCompilationRole)' != '' and '$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_SunderRoleSdkAssemblyAttributes Include="$(GeneratedAssemblyInfoFile);$(TargetFrameworkMonikerAssemblyAttributesPath);$(AssemblyAttributesPath)" />
+      <_SunderRoleAuthoredCompile Include="@(Compile)" Exclude="@(_SunderRoleSdkAssemblyAttributes)" Condition="'%(Compile.AutoGen)' != 'true'" />
+    </ItemGroup>
+    <ReadSunderPackageRoleInputsTask PlanPath="$(SunderPackageRolePlanPath)" ExpectedSha256="$(SunderPackageRolePlanSha256)"
+                                    ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                                    RuntimeIdentifier="$(RuntimeIdentifier)" PackageVersion="$(Version)"
+                                    SourceFiles="@(_SunderRoleAuthoredCompile)" ProjectDirectory="$(MSBuildProjectDirectory)" DefineConstants="$(DefineConstants)"
+                                    Role="$(SunderPackageCompilationRole)" OutputLockLeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)" />
+    <ItemGroup>
+      <!-- SDK assembly attributes are role-local. All other inputs come from the
+           validated source plan, including its projected global using directives. -->
+      <Compile Remove="@(_SunderRoleAuthoredCompile)" />
+      <Compile Include="@(_SunderRoleCompile)" />
+      <Analyzer Remove="@(_SunderRoleExcludedGenerators)" MatchOnMetadata="Filename;Extension" />
+      <_SunderExcludedRoleReference Include="@(ReferencePath)" Exclude="@(_SunderRoleReferences);@(_SunderRoleCompileAssets)" />
+      <ReferencePath Remove="@(_SunderExcludedRoleReference)" />
+      <ReferencePathWithRefAssemblies Remove="@(_SunderExcludedRoleReference)" />
+      <_ReferenceAssemblies Remove="@(_SunderExcludedRoleReference)" />
+      <_SunderExcludedRoleRuntime Include="@(ReferenceCopyLocalPaths);@(ReferenceDependencyPaths)" Exclude="@(_SunderRoleRuntimeReferences);@(_SunderRoleRuntimeAssets)" />
+      <ReferenceCopyLocalPaths Remove="@(_SunderExcludedRoleRuntime)" />
+      <ReferenceDependencyPaths Remove="@(_SunderExcludedRoleRuntime)" />
+      <UserRuntimeAssembly Remove="@(_SunderExcludedRoleRuntime)" />
+      <_SunderRoleCompileOnlyReference Include="@(ReferencePath)" Exclude="@(_SunderRoleRuntimeReferences);@(_SunderRoleRuntimeAssets)" />
+      <ReferencePath Remove="@(_SunderRoleCompileOnlyReference)" />
+      <ReferencePath Include="@(_SunderRoleCompileOnlyReference)" CopyLocal="false" IncludeRuntimeDependency="false" />
+    </ItemGroup>
+    <OnError ExecuteTargets="_ReleaseSunderRpcGeneratedOutputLock" />
+  </Target>
+
+  <Import Project="$(MSBuildThisFileDirectory)Sunder.Package.Build.Authoring.Outer.targets"
+          Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(SunderPackageCompilationRole)' == '' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'" />
+
+  <Target Name="_CleanSunderPackageRoleDevOutput" AfterTargets="Clean" DependsOnTargets="_PrepareSunderPackageBuildTasks"
+          Condition="'$(SunderPackageCompilationRole)' != '' and '$(DesignTimeBuild)' != 'true'">
+    <CleanSunderPackageOutputTask IsTargetLeaf="true" OutputPath="$([System.IO.Path]::Combine('$(TargetDir)', 'sunder-dev'))"
+                                  OutputDiscoveryRoot="$(TargetDir)" ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(TargetDir)" />
+  </Target>
+  <Target Name="_GetSunderPackageAppPreviewInput" Returns="@(_SunderPackageAppPreviewInput)"
+          Condition="'$(SunderPackageCompilationRole)' == 'app' and '$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_SunderPackageAppPreviewInput Include="$(TargetPath)" DepsFile="$(TargetDir)$(AssemblyName).deps.json"
+          RuntimeConfigFile="$(TargetDir)$(AssemblyName).runtimeconfig.json" PreviewerTool="$(AvaloniaPreviewerNetCoreToolPath)"
+          TargetFramework="$(TargetFramework)" RuntimeIdentifier="$(RuntimeIdentifier)" />
+    </ItemGroup>
+  </Target>
+</Project>

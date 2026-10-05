@@ -13,6 +13,7 @@ internal sealed class PackageDependencyExtractor(string packageVersion)
                 PackageId = PackageMetadataDecoder.GetNamedString(attribute, nameof(SunderPackageDependencyAttribute.PackageId)) ?? string.Empty,
                 VersionRange = ExpandVersionProperties(
                     PackageMetadataDecoder.GetNamedString(attribute, nameof(SunderPackageDependencyAttribute.VersionRange)) ?? string.Empty),
+                Presence = "required",
             })
             .ToArray();
 

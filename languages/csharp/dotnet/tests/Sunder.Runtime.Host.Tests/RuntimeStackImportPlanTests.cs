@@ -547,7 +547,7 @@ public sealed class RuntimeStackImportPlanTests
 
         private ActiveLoadedPackage CreatePackage(TestContributor contributor)
         {
-            var descriptor = SunderStackContributorRpc.Descriptor;
+            var descriptor = StackTransport.CoreStackContract.Descriptor;
             var providerId = contributor.PackageId + ".stack";
             var declaration = new SunderPackageProviderManifest
             {
@@ -568,6 +568,9 @@ public sealed class RuntimeStackImportPlanTests
                 [
                     new SunderPackageContractBundleManifest
                     {
+                        Source = "owned",
+                        AuthorityKind = "package",
+                        AuthorityId = contributor.PackageId,
                         ContractId = descriptor.ContractId,
                         Version = descriptor.Version,
                         DescriptorPath = "contracts/sunder.stack.contributor.rpc.json",

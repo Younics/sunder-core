@@ -299,6 +299,7 @@ public partial class App : Application
                     }
                 },
                 cancellationToken);
+            AppStartupTrace.RecordShellRevealed(openCoreShell);
 
             var serviceProvider =
                 Interlocked.Exchange(ref _serviceProvider, null)

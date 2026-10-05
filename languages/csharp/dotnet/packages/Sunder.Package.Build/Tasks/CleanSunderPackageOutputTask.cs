@@ -16,6 +16,8 @@ public sealed class CleanSunderPackageOutputTask : Microsoft.Build.Utilities.Tas
     [Required]
     public string TargetDirectory { get; set; } = string.Empty;
 
+    public bool IsTargetLeaf { get; set; }
+
     public override bool Execute()
     {
         try
@@ -32,7 +34,8 @@ public sealed class CleanSunderPackageOutputTask : Microsoft.Build.Utilities.Tas
                 return false;
             }
 
-            var markerPath = output + AggregateSunderPackageTask.MarkerFileSuffix;
+            var markerPath = IsTargetLeaf ? ValidateSunderDevOutputPathTask.GetOwnershipMarkerPath(output)
+                : output + AggregateSunderPackageTask.MarkerFileSuffix;
             var discoveryKey = GeneratedOutputLock.TargetLeafDiscoveryKey(OutputDiscoveryRoot, output);
             using var outputLock = GeneratedOutputLock.Acquire([discoveryKey], [output]);
             GeneratedOutputTransaction.RecoverAndCleanup(output, markerPath);

@@ -37,7 +37,7 @@ public sealed class SunderRpcContractDescriptorTests
     {
         var fixturePath = Path.Combine(
             AppContext.BaseDirectory,
-            "RpcV2Conformance",
+            "RpcV1Conformance",
             "valid",
             "complete.rpc.json");
         var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(fixturePath));
@@ -96,10 +96,6 @@ public sealed class SunderRpcContractDescriptorTests
             "\"additionalProperties\":true",
             StringComparison.Ordinal));
         AssertRejected(descriptor.Replace(
-            ",\"maxLength\":128",
-            string.Empty,
-            StringComparison.Ordinal));
-        AssertRejected(descriptor.Replace(
             "\"maxLength\":128",
             "\"maxLength\":128,\"pattern\":\".*\"",
             StringComparison.Ordinal));
@@ -119,9 +115,11 @@ public sealed class SunderRpcContractDescriptorTests
         var descriptor = Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":1,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.union",
               "version":"1.0.0",
-              "services":[{"serviceId":"union","methods":[{"methodId":"read","kind":"unary","requestSchema":{"$ref":"#/$defs/Union"},"responseSchema":{"$ref":"#/$defs/A"}}]}],
+              "errors":{},
+              "services":{"union":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Union"},"responseSchema":{"$ref":"#/$defs/A"}}}}},
               "$defs":{
                 "Union":{"oneOf":[{"$ref":"#/$defs/A"},{"$ref":"#/$defs/B"}]},
                 "A":{"type":"object","properties":{"value":{"type":"string","minLength":0,"maxLength":10}},"required":["value"],"additionalProperties":false},
@@ -150,7 +148,7 @@ public sealed class SunderRpcContractDescriptorTests
         Assert.Contains("public const string ContractId = \"example.messages\";", first, StringComparison.Ordinal);
         Assert.Contains("public const string ContractVersion = \"1.2.3\";", first, StringComparison.Ordinal);
         Assert.Contains($"public const string DescriptorSha256 = \"{descriptor.Sha256}\";", first, StringComparison.Ordinal);
-        Assert.Contains("public const string? AbiSha256 = null;", first, StringComparison.Ordinal);
+        Assert.Contains($"public const string AbiSha256 = \"{descriptor.AbiSha256}\";", first, StringComparison.Ordinal);
         Assert.Contains("public sealed class Request", first, StringComparison.Ordinal);
         Assert.Contains("public interface IMessagesProvider", first, StringComparison.Ordinal);
         Assert.Contains("public sealed class MessagesClient", first, StringComparison.Ordinal);
@@ -161,9 +159,11 @@ public sealed class SunderRpcContractDescriptorTests
         var taggedUnion = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":1,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.union",
               "version":"1.0.0",
-              "services":[{"serviceId":"union","methods":[{"methodId":"read","kind":"unary","requestSchema":{"$ref":"#/$defs/Command"},"responseSchema":{"$ref":"#/$defs/Response"}}]}],
+              "errors":{},
+              "services":{"union":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Command"},"responseSchema":{"$ref":"#/$defs/Response"}}}}},
               "$defs":{
                 "Command":{"oneOf":[{"$ref":"#/$defs/Create"},{"$ref":"#/$defs/Delete"}]},
                 "Create":{"type":"object","properties":{"kind":{"type":"string","minLength":6,"maxLength":6,"const":"create"}},"required":["kind"],"additionalProperties":false},
@@ -174,10 +174,10 @@ public sealed class SunderRpcContractDescriptorTests
             """));
         var taggedUnionSource = SunderRpcCSharpGenerator.Generate(taggedUnion, "Example.Generated");
         Assert.Contains(
-            "global::System.Threading.Tasks.ValueTask<Response> ReadAsync(global::System.Text.Json.JsonElement request",
+            "global::System.Threading.Tasks.ValueTask<Response> ReadAsync(global::Sunder.Sdk.Rpc.SunderRpcInvocationContext context, Command request",
             taggedUnionSource,
             StringComparison.Ordinal);
-        Assert.DoesNotContain("class Command", taggedUnionSource, StringComparison.Ordinal);
+        Assert.Contains("public abstract record Command", taggedUnionSource, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -199,10 +199,10 @@ public sealed class SunderRpcContractDescriptorTests
         var publicHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(publicSource))).ToLowerInvariant();
         var internalHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(internalSource))).ToLowerInvariant();
         Assert.True(
-            string.Equals("2e5f144fa3a221ad88edd36e93658d5b8b86c784432db8299768c64247c49d9c", publicHash, StringComparison.Ordinal),
+            string.Equals("ac3789caa5aaf6c78b4c7e96c7a3de08301ab044a0d3fe6f712e3cae113211bf", publicHash, StringComparison.Ordinal),
             $"Public generator golden changed to {publicHash}.");
         Assert.True(
-            string.Equals("b9d735e57bbb94c6b4be7cc6b16d7bda51bba6bec2dc06fa4c6dc55cc4991d03", internalHash, StringComparison.Ordinal),
+            string.Equals("8fe9485ad4225feac2f3f9759f396b33b135eb29f615364983bf87dbe1bc3254", internalHash, StringComparison.Ordinal),
             $"Internal generator golden changed to {internalHash}.");
         Assert.Equal(
             internalSource,
@@ -247,9 +247,11 @@ public sealed class SunderRpcContractDescriptorTests
         var second = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":1,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.other",
               "version":"1.0.0",
-              "services":[{"serviceId":"other","methods":[{"methodId":"read","kind":"unary","requestSchema":{"$ref":"#/$defs/OtherRequest"},"responseSchema":{"$ref":"#/$defs/OtherResponse"}}]}],
+              "errors":{},
+              "services":{"other":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/OtherRequest"},"responseSchema":{"$ref":"#/$defs/OtherResponse"}}}}},
               "$defs":{
                 "OtherRequest":{"type":"object","properties":{},"required":[],"additionalProperties":false},
                 "OtherResponse":{"type":"object","properties":{"accepted":{"type":"boolean"}},"required":["accepted"],"additionalProperties":false}
@@ -263,16 +265,18 @@ public sealed class SunderRpcContractDescriptorTests
     }
 
     [Fact]
-    public void CSharpGenerator_CompilesMapsOmittedRequiredCollisionsKeywordsAndControlLiterals()
+    public void CSharpGenerator_RejectsDefinitionNameCollisions()
     {
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":1,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.generator",
               "version":"1.0.0",
+              "errors":{},
               "services":{"foo-bar":{"methods":{
-                "do-it":{"kind":"unary","requestSchema":"#/$defs/foo-bar","responseSchema":"#/$defs/foo_bar"},
-                "do_it":{"kind":"server-stream","requestSchema":"#/$defs/StringMap","eventSchema":"#/$defs/Empty"}
+                "do-it":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/foo-bar"},"responseSchema":{"$ref":"#/$defs/foo_bar"}},
+                "do_it":{"kind":"server-stream","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/StringMap"},"eventSchema":{"$ref":"#/$defs/Empty"}}
               }}},
               "$defs":{
                 "Empty":{"type":"object","properties":{},"required":[],"additionalProperties":false},
@@ -283,18 +287,15 @@ public sealed class SunderRpcContractDescriptorTests
             }
             """));
 
-        var source = SunderRpcCSharpGenerator.Generate(descriptor, "namespace.Generated");
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => SunderRpcCSharpGenerator.Generate(descriptor, "namespace.Generated"));
 
-        Assert.Contains("namespace @namespace.Generated;", source, StringComparison.Ordinal);
-        Assert.Contains("IReadOnlyDictionary<string, string>", source, StringComparison.Ordinal);
-        Assert.Contains("public sealed class FooBar2", source, StringComparison.Ordinal);
-        Assert.Contains("DoItAsync2", source, StringComparison.Ordinal);
-        Assert.Contains("JsonPropertyName(\"line\\u0001break\")", source, StringComparison.Ordinal);
-        AssertCompiles(source);
+        Assert.Contains("rpc-authoring.generated-name-collision", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("FooBar", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void CSharpGenerator_CompilesWhenDescriptorSymbolsShadowInfrastructureAndGeneratedSymbols()
+    public void CSharpGenerator_RejectsDescriptorSymbolsThatShadowGeneratedSymbols()
     {
         const string contractId = "example.collisions";
         const string version = "2.0.0";
@@ -303,7 +304,7 @@ public sealed class SunderRpcContractDescriptorTests
         var identityName = "SunderRpcContractIdentity_" + identityHash;
         var descriptorJson = """
             {
-              "descriptorVersion":2,
+              "descriptorVersion":1,
               "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"CONTRACT_ID",
               "version":"CONTRACT_VERSION",
@@ -324,7 +325,7 @@ public sealed class SunderRpcContractDescriptorTests
                 "CancellationToken":{"type":"object","properties":{},"required":[],"additionalProperties":false},
                 "IAsyncEnumerable":{"type":"object","properties":{},"required":[],"additionalProperties":false},
                 "JsonSerializer":{"type":"object","properties":{},"required":[],"additionalProperties":false},
-                "SunderRpcV2JsonConverterFactory":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "SunderRpcJsonConverterFactory":{"type":"object","properties":{},"required":[],"additionalProperties":false},
                 "SunderRpcClientExtensions":{"type":"object","properties":{},"required":[],"additionalProperties":false},
                 "IValueTaskProvider":{"type":"object","properties":{},"required":[],"additionalProperties":false},
                 "ExampleCollisionsRpcHandler":{"type":"object","properties":{},"required":[],"additionalProperties":false},
@@ -337,21 +338,18 @@ public sealed class SunderRpcContractDescriptorTests
             .Replace("IDENTITY_NAME", identityName, StringComparison.Ordinal);
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes(descriptorJson));
 
-        var source = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated.Collisions");
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated.Collisions"));
 
-        Assert.Contains($"public static class {identityName}", source, StringComparison.Ordinal);
-        Assert.Contains("public sealed class IValueTaskProvider2", source, StringComparison.Ordinal);
-        Assert.Contains("public sealed class ExampleCollisionsRpcHandler2", source, StringComparison.Ordinal);
-        Assert.Contains("public sealed class ExampleCollisionsRpcHandler", source, StringComparison.Ordinal);
-        AssertCompiles(source);
+        Assert.Contains("rpc-authoring.generated-name-collision", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void CSharpGenerator_CompilesCompleteV2FixtureWithFormatsAndBinary64Types()
+    public void CSharpGenerator_CompilesCompleteV1FixtureWithFormatsAndBinary64Types()
     {
         var fixturePath = Path.Combine(
             AppContext.BaseDirectory,
-            "RpcV2Conformance",
+            "RpcV1Conformance",
             "valid",
             "complete.rpc.json");
         var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(fixturePath));
@@ -360,8 +358,8 @@ public sealed class SunderRpcContractDescriptorTests
         var sourceHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant();
 
         Assert.True(
-            string.Equals("7a931339b6e43629e23687af5dccf75b29f0ad67f854462e66ba12f02f23eaf0", sourceHash, StringComparison.Ordinal),
-            $"Complete V2 generator golden changed to {sourceHash}.");
+            string.Equals("c5cb04142eea3db84eb85c51e3b884552bf73d70908999333476cf91056ab786", sourceHash, StringComparison.Ordinal),
+            $"Complete V1 generator golden changed to {sourceHash}.");
         Assert.Contains("public required global::System.Guid CorrelationId", source, StringComparison.Ordinal);
         Assert.Contains(
             "public required global::Sunder.Sdk.Rpc.SunderRpcOffsetDateTime ObservedAt",
@@ -370,9 +368,8 @@ public sealed class SunderRpcContractDescriptorTests
         Assert.Contains("public required global::Sunder.Sdk.Rpc.SunderRpcContentReference Content", source, StringComparison.Ordinal);
         Assert.Contains("public required double Ratio", source, StringComparison.Ordinal);
         Assert.Contains("public global::Sunder.Sdk.Rpc.SunderRpcOptional<string?> OptionalNote", source, StringComparison.Ordinal);
-        Assert.Contains("Converters = { new global::Sunder.Sdk.Rpc.SunderRpcV2JsonConverterFactory() }", source, StringComparison.Ordinal);
+        Assert.Contains("Converters = { new global::Sunder.Sdk.Rpc.SunderRpcJsonConverterFactory() }", source, StringComparison.Ordinal);
         Assert.Contains($"public const string AbiSha256 = \"{descriptor.AbiSha256}\";", source, StringComparison.Ordinal);
-        Assert.Contains("useV2WireFormat: true", source, StringComparison.Ordinal);
         Assert.Contains("ISunderRpcDeclaredErrorMetadata", source, StringComparison.Ordinal);
         Assert.Contains("public static class ExampleNotFoundRpcError", source, StringComparison.Ordinal);
         Assert.Contains("public static global::Sunder.Sdk.Rpc.SunderRpcException Create(ErrorDetails details", source, StringComparison.Ordinal);
@@ -410,11 +407,11 @@ public sealed class SunderRpcContractDescriptorTests
     }
 
     [Fact]
-    public void V2JsonConverters_PreserveExactLogicalWireForms()
+    public void JsonConverters_PreserveExactLogicalWireForms()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
-            Converters = { new SunderRpcV2JsonConverterFactory() },
+            Converters = { new SunderRpcJsonConverterFactory() },
         };
         var uuid = Guid.Parse("0192c4f0-8d3c-7a61-9b3f-6a9b89f4b8d2");
         var expiresAt = new DateTimeOffset(2030, 1, 2, 3, 4, 5, TimeSpan.FromHours(2));
@@ -458,13 +455,13 @@ public sealed class SunderRpcContractDescriptorTests
     }
 
     [Fact]
-    public void CSharpGenerator_V2OffsetDateTimeRoundTripsNineFractionalDigits()
+    public void CSharpGenerator_OffsetDateTimeRoundTripsNineFractionalDigits()
     {
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
-              "descriptorVersion":2,
+              "descriptorVersion":1,
               "schemaProfile":"sunder.rpc.values.v1",
-              "contractId":"example.rpc.v2.instant",
+              "contractId":"example.rpc.v1.instant",
               "version":"2.0.0",
               "errors":{},
               "services":{"instant":{"methods":{"echo":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Payload"},"responseSchema":{"$ref":"#/$defs/Payload"}}}}},
@@ -495,14 +492,16 @@ public sealed class SunderRpcContractDescriptorTests
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":1,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.profile",
               "version":"1.0.0",
-              "services":[{"serviceId":"profile","methods":[{"methodId":"apply","kind":"unary","requestSchema":{"$ref":"#/$defs/Command"},"responseSchema":{"$ref":"#/$defs/Details"}}]}],
+              "errors":{},
+              "services":{"profile":{"methods":{"apply":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Command"},"responseSchema":{"$ref":"#/$defs/Details"}}}}},
               "$defs":{
                 "Command":{"oneOf":[{"$ref":"#/$defs/Create"},{"$ref":"#/$defs/Delete"}]},
                 "Create":{"type":"object","properties":{"kind":{"type":"string","minLength":6,"maxLength":6,"const":"create"},"name":{"type":"string","minLength":1,"maxLength":32}},"required":["kind","name"],"additionalProperties":false},
                 "Delete":{"type":"object","properties":{"kind":{"type":"string","minLength":6,"maxLength":6,"const":"delete"},"name":{"type":"string","minLength":1,"maxLength":32}},"required":["kind","name"],"additionalProperties":false},
-                "Details":{"type":"object","properties":{"count":{"type":"integer","minimum":0,"maximum":100},"score":{"type":"number","minimum":0,"maximum":100},"enabled":{"type":"boolean"},"nothing":{"type":"null"},"flags":{"type":"array","items":{"type":"boolean"},"minItems":0,"maxItems":4},"labels":{"type":"object","additionalProperties":{"type":"string","minLength":0,"maxLength":20},"propertyNames":{"type":"string","minLength":1,"maxLength":20},"minProperties":0,"maxProperties":4}},"required":["count","score","enabled","nothing","flags","labels"],"additionalProperties":false}
+                "Details":{"type":"object","properties":{"count":{"type":"integer","minimum":0,"maximum":100},"score":{"type":"number","format":"float64","minimum":0,"maximum":100},"enabled":{"type":"boolean"},"nothing":{"type":"null"},"flags":{"type":"array","items":{"type":"boolean"},"minItems":0,"maxItems":4},"labels":{"type":"object","additionalProperties":{"type":"string","minLength":0,"maxLength":20},"propertyNames":{"type":"string","minLength":1,"maxLength":20},"minProperties":0,"maxProperties":4}},"required":["count","score","enabled","nothing","flags","labels"],"additionalProperties":false}
               }
             }
             """));
@@ -514,7 +513,7 @@ public sealed class SunderRpcContractDescriptorTests
         Assert.True(descriptor.IsValid("#/$defs/Details", details.RootElement, out var detailsError), detailsError);
         Assert.False(descriptor.IsValid("#/$defs/Command", wrongTag.RootElement, out _));
         Assert.Contains(
-            "public required decimal Score",
+            "public required double Score",
             SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated"),
             StringComparison.Ordinal);
     }
@@ -525,9 +524,11 @@ public sealed class SunderRpcContractDescriptorTests
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "descriptorVersion":1,
+              "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.nullable",
               "version":"1.0.0",
-              "services":[{"serviceId":"nullable","methods":[{"methodId":"read","kind":"unary","requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Request"}}]}],
+              "errors":{},
+              "services":{"nullable":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Request"}}}}},
               "$defs":{
                 "NullableText":{"oneOf":[{"type":"null"},{"type":"string","minLength":0,"maxLength":20}]},
                 "Request":{"type":"object","properties":{"value":{"$ref":"#/$defs/NullableText"}},"required":["value"],"additionalProperties":false}
@@ -546,13 +547,13 @@ public sealed class SunderRpcContractDescriptorTests
     }
 
     [Fact]
-    public void CSharpGenerator_V2OptionalNullableMembersRoundTripAllPresenceStates()
+    public void CSharpGenerator_OptionalNullableMembersRoundTripAllPresenceStates()
     {
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
-              "descriptorVersion":2,
+              "descriptorVersion":1,
               "schemaProfile":"sunder.rpc.values.v1",
-              "contractId":"example.rpc.v2.optional",
+              "contractId":"example.rpc.v1.optional",
               "version":"2.0.0",
               "errors":{},
               "services":{"optional":{"methods":{"echo":{"kind":"unary","idempotency":"idempotent","errors":[],"requestSchema":{"$ref":"#/$defs/Payload"},"responseSchema":{"$ref":"#/$defs/Payload"}}}}},
@@ -601,163 +602,6 @@ public sealed class SunderRpcContractDescriptorTests
         Assert.Equal("text", valueState.Value);
     }
 
-    [Fact]
-    public async Task CSharpGenerator_CompilesAndRoundTripsExplicitNullWithoutEmittingOptionalFields()
-    {
-        var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
-            {
-              "descriptorVersion":1,
-              "contractId":"example.nullable",
-              "version":"1.0.0",
-              "services":[{"serviceId":"nullable","methods":[
-                {"methodId":"bad-response","kind":"unary","requestSchema":{"$ref":"#/$defs/Payload"},"responseSchema":{"$ref":"#/$defs/Payload"}},
-                {"methodId":"echo","kind":"unary","requestSchema":{"$ref":"#/$defs/Payload"},"responseSchema":{"$ref":"#/$defs/Payload"}},
-                {"methodId":"echo-root","kind":"unary","requestSchema":{"$ref":"#/$defs/NullableText"},"responseSchema":{"$ref":"#/$defs/NullableText"}},
-                {"methodId":"echo-stream","kind":"server-stream","requestSchema":{"$ref":"#/$defs/NullableText"},"eventSchema":{"$ref":"#/$defs/NullableText"}}
-              ]}],
-              "$defs":{
-                "Null":{"type":"null"},
-                "NullableText":{"oneOf":[{"$ref":"#/$defs/Null"},{"type":"string","minLength":0,"maxLength":20}]},
-                "Payload":{"type":"object","properties":{"requiredValue":{"$ref":"#/$defs/NullableText"},"optionalValue":{"$ref":"#/$defs/NullableText"}},"required":["requiredValue"],"additionalProperties":false}
-              }
-            }
-            """));
-        var source = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated");
-
-        Assert.Contains(
-            "[global::System.Text.Json.Serialization.JsonIgnore(Condition = global::System.Text.Json.Serialization.JsonIgnoreCondition.Never)]\n    public required string? RequiredValue",
-            source,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "[global::System.Text.Json.Serialization.JsonIgnore(Condition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]\n    public string? OptionalValue",
-            source,
-            StringComparison.Ordinal);
-        Assert.Contains("requestAllowsNull: true", source, StringComparison.Ordinal);
-        Assert.Contains("responseAllowsNull: true", source, StringComparison.Ordinal);
-        Assert.Contains("eventAllowsNull: true", source, StringComparison.Ordinal);
-        Assert.Contains("Deserialize<string?>(request, allowsNull: true)", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("SunderRpcOptional", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("useV2WireFormat", source, StringComparison.Ordinal);
-
-        var assembly = CompileAndLoad(source, """
-            #nullable enable
-            using System;
-            using System.Collections.Generic;
-            using System.Runtime.CompilerServices;
-            using System.Threading;
-            using System.Threading.Tasks;
-            using Sunder.Sdk.Rpc;
-
-            namespace Example.Generated;
-
-            public sealed class RoundTripProvider : INullableProvider
-            {
-                public ValueTask<Payload> BadResponseAsync(
-                    SunderRpcInvocationContext context,
-                    Payload request,
-                    CancellationToken cancellationToken = default)
-                    => ValueTask.FromResult<Payload>(null!);
-
-                public ValueTask<Payload> EchoAsync(
-                    SunderRpcInvocationContext context,
-                    Payload request,
-                    CancellationToken cancellationToken = default)
-                    => ValueTask.FromResult(request);
-
-                public ValueTask<string?> EchoRootAsync(
-                    SunderRpcInvocationContext context,
-                    string? request,
-                    CancellationToken cancellationToken = default)
-                    => ValueTask.FromResult(request);
-
-                public async IAsyncEnumerable<string?> EchoStreamAsync(
-                    SunderRpcInvocationContext context,
-                    string? request,
-                    [EnumeratorCancellation] CancellationToken cancellationToken = default)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await Task.CompletedTask;
-                    yield return request;
-                }
-            }
-
-            public static class RoundTripHarness
-            {
-                public static ISunderRpcServiceHandler CreateHandler()
-                    => new ExampleNullableRpcHandler(new RoundTripProvider());
-
-                public static async Task<bool> RunAsync(ISunderRpcCallScope scope)
-                {
-                    var client = new NullableClient(scope, new SunderRpcEndpointReference("loopback"));
-                    var payload = await client.EchoAsync(new Payload { RequiredValue = null });
-                    var root = await client.EchoRootAsync(null);
-                    var eventCount = 0;
-                    var eventWasNull = false;
-                    await foreach (var item in client.EchoStreamAsync(null))
-                    {
-                        eventCount++;
-                        eventWasNull = item is null;
-                    }
-
-                    var rejectedNullRequest = false;
-                    try
-                    {
-                        _ = await client.EchoAsync(null!);
-                    }
-                    catch (ArgumentNullException)
-                    {
-                        rejectedNullRequest = true;
-                    }
-
-                    var rejectedNullResponse = false;
-                    try
-                    {
-                        _ = await client.BadResponseAsync(new Payload { RequiredValue = null });
-                    }
-                    catch (SunderRpcException exception) when (exception.Error.Code == "rpc.binding.null-response")
-                    {
-                        rejectedNullResponse = true;
-                    }
-
-                    return payload.RequiredValue is null
-                           && payload.OptionalValue is null
-                           && root is null
-                           && eventCount == 1
-                           && eventWasNull
-                           && rejectedNullRequest
-                           && rejectedNullResponse;
-                }
-            }
-            """);
-        var harness = assembly.GetType("Example.Generated.RoundTripHarness", throwOnError: true)!;
-        var handler = (ISunderRpcServiceHandler)harness.GetMethod("CreateHandler")!.Invoke(null, null)!;
-        var scope = new LoopbackRpcCallScope(handler);
-
-        var result = (Task<bool>)harness.GetMethod("RunAsync")!.Invoke(null, [scope])!;
-        Assert.True(await result);
-
-        var payloadRequest = Assert.Single(scope.Requests, static item => item.MethodId == "echo").Value;
-        var payloadResponse = Assert.Single(scope.Responses, static item => item.MethodId == "echo").Value;
-        AssertExplicitNullWithOptionalOmitted(payloadRequest);
-        AssertExplicitNullWithOptionalOmitted(payloadResponse);
-        Assert.Equal(
-            JsonValueKind.Null,
-            Assert.Single(scope.Requests, static item => item.MethodId == "echo-root").Value.ValueKind);
-        Assert.Equal(
-            JsonValueKind.Null,
-            Assert.Single(scope.Responses, static item => item.MethodId == "echo-root").Value.ValueKind);
-        Assert.Equal(
-            JsonValueKind.Null,
-            Assert.Single(scope.Requests, static item => item.MethodId == "echo-stream").Value.ValueKind);
-        Assert.Equal(
-            JsonValueKind.Null,
-            Assert.Single(scope.Responses, static item => item.MethodId == "echo-stream").Value.ValueKind);
-        Assert.Equal(
-            JsonValueKind.Null,
-            Assert.Single(scope.Responses, static item => item.MethodId == "bad-response").Value.ValueKind);
-        Assert.Equal(4, scope.Requests.Count);
-    }
-
     private static void AssertCompiles(string source)
     {
         var compilation = CreateCompilation([source]);
@@ -795,14 +639,6 @@ public sealed class SunderRpcContractDescriptorTests
                 generalDiagnosticOption: warningsAsErrors ? ReportDiagnostic.Error : ReportDiagnostic.Default));
     }
 
-    private static void AssertExplicitNullWithOptionalOmitted(JsonElement value)
-    {
-        Assert.Equal(JsonValueKind.Object, value.ValueKind);
-        Assert.True(value.TryGetProperty("requiredValue", out var required));
-        Assert.Equal(JsonValueKind.Null, required.ValueKind);
-        Assert.False(value.TryGetProperty("optionalValue", out _));
-    }
-
     private static void AssertRejected(string json)
         => Assert.Throws<SunderRpcDescriptorException>(() =>
             SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes(json)));
@@ -811,110 +647,12 @@ public sealed class SunderRpcContractDescriptorTests
     {
         var json = reordered
             ? """
-              {"version":"1.2.3","services":[{"methods":[{"responseSchema":{"$ref":"#/$defs/Response"},"requestSchema":{"$ref":"#/$defs/Request"},"kind":"unary","methodId":"send"}],"serviceId":"messages"}],"contractId":"example.messages","descriptorVersion":1,"$defs":{"Response":{"required":["accepted"],"properties":{"accepted":{"type":"boolean"}},"additionalProperties":false,"type":"object"},"Request":{"required":["message"],"additionalProperties":false,"properties":{"message":{"maxLength":128,"minLength":1,"type":"string"}},"type":"object"}}}
+              {"version":"1.2.3","services":{"messages":{"methods":{"send":{"responseSchema":{"$ref":"#/$defs/Response"},"requestSchema":{"$ref":"#/$defs/Request"},"errors":[],"idempotency":"none","kind":"unary"}}}},"schemaProfile":"sunder.rpc.values.v1","errors":{},"contractId":"example.messages","descriptorVersion":1,"$defs":{"Response":{"required":["accepted"],"properties":{"accepted":{"type":"boolean"}},"additionalProperties":false,"type":"object"},"Request":{"required":["message"],"additionalProperties":false,"properties":{"message":{"maxLength":128,"minLength":1,"type":"string"}},"type":"object"}}}
               """
             : """
-              {"descriptorVersion":1,"contractId":"example.messages","version":"1.2.3","services":[{"serviceId":"messages","methods":[{"methodId":"send","kind":"unary","requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Response"}}]}],"$defs":{"Request":{"type":"object","properties":{"message":{"type":"string","minLength":1,"maxLength":128}},"required":["message"],"additionalProperties":false},"Response":{"type":"object","properties":{"accepted":{"type":"boolean"}},"required":["accepted"],"additionalProperties":false}}}
+              {"descriptorVersion":1,"schemaProfile":"sunder.rpc.values.v1","contractId":"example.messages","version":"1.2.3","errors":{},"services":{"messages":{"methods":{"send":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Response"}}}}},"$defs":{"Request":{"type":"object","properties":{"message":{"type":"string","minLength":1,"maxLength":128}},"required":["message"],"additionalProperties":false},"Response":{"type":"object","properties":{"accepted":{"type":"boolean"}},"required":["accepted"],"additionalProperties":false}}}
               """;
         return Encoding.UTF8.GetBytes(json);
     }
 
-    private sealed class LoopbackRpcCallScope(ISunderRpcServiceHandler handler) : ISunderRpcCallScope
-    {
-        public DateTimeOffset DeadlineUtc => DateTimeOffset.MaxValue;
-
-        public List<CapturedRpcValue> Requests { get; } = [];
-
-        public List<CapturedRpcValue> Responses { get; } = [];
-
-        public ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(
-            SunderRpcCallOptions? options = null,
-            CancellationToken cancellationToken = default)
-            => ValueTask.FromResult<ISunderRpcCallScope>(this);
-
-        public ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
-            SunderRpcEndpointReference endpoint,
-            CancellationToken cancellationToken = default)
-            => ValueTask.FromResult<SunderRpcProviderSnapshot?>(null);
-
-        public ValueTask<bool> TryReportInvariantViolationAsync(
-            SunderRpcEndpointReference endpoint,
-            Exception exception,
-            CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(false);
-
-        public ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
-            string contractId,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(
-            long afterRevision,
-            long afterSequence,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public async ValueTask<JsonElement> InvokeAsync(
-            SunderRpcEndpointReference endpoint,
-            string serviceId,
-            string methodId,
-            JsonElement request,
-            SunderRpcCallOptions? options = null,
-            CancellationToken cancellationToken = default)
-        {
-            Requests.Add(new CapturedRpcValue(methodId, request.Clone()));
-            var response = await handler.InvokeUnaryAsync(
-                null!,
-                serviceId,
-                methodId,
-                request,
-                cancellationToken).ConfigureAwait(false);
-            Responses.Add(new CapturedRpcValue(methodId, response.Clone()));
-            return response;
-        }
-
-        public async IAsyncEnumerable<JsonElement> SubscribeAsync(
-            SunderRpcEndpointReference endpoint,
-            string serviceId,
-            string methodId,
-            JsonElement request,
-            SunderRpcCallOptions? options = null,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            Requests.Add(new CapturedRpcValue(methodId, request.Clone()));
-            await foreach (var response in handler.InvokeServerStreamAsync(
-                               null!,
-                               serviceId,
-                               methodId,
-                               request,
-                               cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
-            {
-                Responses.Add(new CapturedRpcValue(methodId, response.Clone()));
-                yield return response;
-            }
-        }
-
-        public ValueTask<SunderRpcContentReference> RegisterContentAsync(
-            SunderRpcEndpointReference endpoint,
-            Stream source,
-            SunderRpcContentRegistrationOptions options,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public ValueTask<SunderRpcContentReference> RegisterContentFileAsync(
-            SunderRpcEndpointReference endpoint,
-            string filePath,
-            SunderRpcContentRegistrationOptions options,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public ValueTask<Stream> OpenContentAsync(
-            SunderRpcContentReference reference,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed record CapturedRpcValue(string MethodId, JsonElement Value);
 }

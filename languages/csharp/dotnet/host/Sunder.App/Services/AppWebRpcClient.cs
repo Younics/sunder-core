@@ -132,6 +132,7 @@ internal sealed class AppWebRpcContractCatalog
         SunderPackageManifest manifest,
         SunderPackageContentIndex contentIndex)
     {
+        AppPackageManifestReader.EnsureSupported(manifest);
         if (contentIndex.SchemaVersion != SunderPackageFormat.CurrentContentIndexVersion)
         {
             throw new InvalidDataException("The web package content index version is invalid.");
@@ -181,11 +182,21 @@ internal sealed class AppWebRpcContractCatalog
                 throw new InvalidDataException(
                     $"Web package RPC contract descriptor '{bundle.DescriptorPath}' failed its content-index integrity check.");
             }
-            var descriptor = SunderRpcContractDescriptor.Parse(bytes);
-            if (descriptor.DescriptorVersion != SunderRpcProtocol.DescriptorVersionV2)
+            SunderRpcContractDescriptor descriptor;
+            try
+            {
+                descriptor = SunderRpcContractDescriptor.Parse(bytes);
+            }
+            catch (SunderRpcDescriptorException exception)
             {
                 throw new InvalidDataException(
-                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' must use descriptorVersion {SunderRpcProtocol.DescriptorVersionV2}.");
+                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' is invalid: {exception.Message}",
+                    exception);
+            }
+            if (descriptor.DescriptorVersion != SunderRpcProtocol.DescriptorVersion)
+            {
+                throw new InvalidDataException(
+                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' must use descriptorVersion {SunderRpcProtocol.DescriptorVersion}.");
             }
             if (!string.Equals(descriptor.ContractId, bundle.ContractId, StringComparison.Ordinal)
                 || !string.Equals(descriptor.Version, bundle.Version, StringComparison.Ordinal))

@@ -6,7 +6,26 @@ internal sealed record VersionCommand : CliCommand;
 internal sealed record ShowConfigCommand : CliCommand;
 internal sealed record RuntimeStatusCommand : CliCommand;
 internal sealed record RuntimeLifecycleCommand(RuntimeLifecycleAction Action) : CliCommand;
-internal sealed record RuntimeResetCommand(bool Yes) : CliCommand;
+internal enum RuntimeResetScope
+{
+    All,
+    StartupCache,
+}
+
+internal sealed record RuntimeResetCommand(
+    bool Yes,
+    RuntimeResetScope Scope = RuntimeResetScope.All) : CliCommand;
+internal sealed record ListExecutionRuntimesCommand : CliCommand;
+internal sealed record ShowExecutionRuntimeCommand(CliExecutionRuntimeIdentity Identity) : CliCommand;
+internal sealed record EnsureExecutionRuntimeCommand(
+    string RuntimeId,
+    string VersionRange,
+    string ModuleAbi,
+    string? RegistryOrigin) : CliCommand;
+internal sealed record ImportExecutionRuntimeCommand(string File) : CliCommand;
+internal sealed record VerifyExecutionRuntimeCommand(CliExecutionRuntimeIdentity Identity) : CliCommand;
+internal sealed record RepairExecutionRuntimeCommand(CliExecutionRuntimeIdentity Identity) : CliCommand;
+internal sealed record GarbageCollectExecutionRuntimesCommand : CliCommand;
 internal sealed record AuthLoginCommand : CliCommand;
 internal sealed record AuthStatusCommand : CliCommand;
 internal sealed record AuthLogoutCommand : CliCommand;
@@ -14,9 +33,21 @@ internal sealed record SearchPackagesCommand(string? Query, int Skip, int Take) 
 internal sealed record PackageInfoCommand(string PackageId, string? Version) : CliCommand;
 internal sealed record ListInstalledCommand : CliCommand;
 internal sealed record PackageStatusCommand(string PackageId) : CliCommand;
-internal sealed record InstallRegistryPackageCommand(string PackageId, string? Version, string? Tag, bool AllowDowngrade, bool Reinstall, bool ApproveSensitiveCapabilities = false) : CliCommand;
+internal sealed record InstallRegistryPackageCommand(
+    string PackageId,
+    string? Version,
+    string? Tag,
+    bool AllowDowngrade,
+    bool Reinstall,
+    bool ApproveSensitiveCapabilities = false,
+    bool DryRun = false) : CliCommand;
 internal sealed record InstallLocalPackageCommand(string File, bool AllowDowngrade, bool Reinstall, bool ApproveSensitiveCapabilities = false) : CliCommand;
-internal sealed record UpdatePackagesCommand(string? PackageId, bool IncludePrerelease, string? RegistryOrigin, bool ApproveSensitiveCapabilities = false) : CliCommand;
+internal sealed record UpdatePackagesCommand(
+    string? PackageId,
+    bool IncludePrerelease,
+    string? RegistryOrigin,
+    bool ApproveSensitiveCapabilities = false,
+    bool DryRun = false) : CliCommand;
 internal sealed record AdoptPackageSourceCommand(
     string PackageId,
     string RegistryOrigin,
@@ -43,7 +74,11 @@ internal sealed record UnsetPackageSecretCommand(string PackageId, string Key) :
 internal sealed record PackageAuthStatusCommand(string PackageId) : CliCommand;
 internal sealed record PackageAuthLoginCommand(string PackageId) : CliCommand;
 internal sealed record PackageAuthLogoutCommand(string PackageId) : CliCommand;
-internal sealed record ValidatePackageCommand(string File) : CliCommand;
+internal sealed record ValidatePackageCommand(string File, string? ApiOutput = null) : CliCommand;
+internal sealed record RunDevPackageCommand(string Folder, bool Watch) : CliCommand;
+internal sealed record PrepareDevPackageImportsCommand(string Folder, string? RegistryOrigin,
+    IReadOnlyList<string>? CandidateArchives = null, string? PlatformCatalogPath = null) : CliCommand;
+internal sealed record SmokeDevPackageCommand(string Folder) : CliCommand;
 internal sealed record PublishPackageCommand(
     string File,
     bool? SetLatest,
@@ -68,7 +103,7 @@ internal sealed record PublishStackCommand(
     string File,
     bool DevLocal,
     RegistryCredentialSource CredentialSource = RegistryCredentialSource.Runtime) : CliCommand;
-internal sealed record DeleteStackCommand(string StackId) : CliCommand;
+internal sealed record SetStackVisibilityCommand(string StackId, bool Listed) : CliCommand;
 internal sealed record OpenStackCommand(string StackId) : CliCommand;
 internal sealed record ValidateStackCommand(string File) : CliCommand;
 
@@ -84,6 +119,13 @@ internal enum PackageSecretSource
     Environment,
     StandardInput,
 }
+
+internal sealed record CliExecutionRuntimeIdentity(
+    string RuntimeId,
+    string Version,
+    int PackagingRevision,
+    string Rid,
+    string ModuleAbi);
 
 [Flags]
 internal enum CliConfigurationRequirements
@@ -119,13 +161,23 @@ internal sealed record CliCommandPlan(
             CliConfigurationRequirements.None,
             CliClientRequirements.None,
             UseRequestTimeout: false),
+        RunDevPackageCommand => new(
+            CliConfigurationRequirements.Runtime,
+            CliClientRequirements.Host | CliClientRequirements.Runtime,
+            UseRequestTimeout: false),
+        SmokeDevPackageCommand or PrepareDevPackageImportsCommand => new(
+            CliConfigurationRequirements.Runtime,
+            CliClientRequirements.Host | CliClientRequirements.Runtime),
         RuntimeStatusCommand => new(
             CliConfigurationRequirements.Runtime,
             CliClientRequirements.Host | CliClientRequirements.Runtime),
         RuntimeLifecycleCommand => new(
             CliConfigurationRequirements.Runtime,
             CliClientRequirements.Host),
-        RuntimeResetCommand or ListInstalledCommand or PackageStatusCommand or InstallLocalPackageCommand
+        RuntimeResetCommand or ListExecutionRuntimesCommand or ShowExecutionRuntimeCommand
+            or ImportExecutionRuntimeCommand or VerifyExecutionRuntimeCommand or RepairExecutionRuntimeCommand
+            or GarbageCollectExecutionRuntimesCommand
+            or ListInstalledCommand or PackageStatusCommand or InstallLocalPackageCommand
             or UpdatePackagesCommand or AdoptPackageSourceCommand
             or SetPackageEnabledCommand or UninstallPackageCommand
             or ShowPackageConfigSchemaCommand or ListPackageConfigCommand or GetPackageConfigCommand
@@ -134,6 +186,9 @@ internal sealed record CliCommandPlan(
             or PackageAuthStatusCommand or PackageAuthLoginCommand or PackageAuthLogoutCommand
             or ImportStackCommand or ExportStackCommand => new(
             CliConfigurationRequirements.Runtime,
+            CliClientRequirements.Runtime),
+        EnsureExecutionRuntimeCommand => new(
+            CliConfigurationRequirements.RegistryApi | CliConfigurationRequirements.Runtime,
             CliClientRequirements.Runtime),
         InstallRegistryPackageCommand => new(
             CliConfigurationRequirements.RegistryApi | CliConfigurationRequirements.Runtime,
@@ -147,7 +202,7 @@ internal sealed record CliCommandPlan(
                 CliClientRequirements.Registry),
         AuthStatusCommand or AuthLogoutCommand or SetYankCommand or SetDeprecationCommand or SetDistTagCommand
             or PublishPackageCommand { DevLocal: false } or PublishStackCommand { DevLocal: false }
-            or DeleteStackCommand => new(
+            or SetStackVisibilityCommand => new(
                 CliConfigurationRequirements.RegistryApi | CliConfigurationRequirements.Runtime,
                 CliClientRequirements.Runtime),
         SearchPackagesCommand or PackageInfoCommand or SearchStacksCommand or StackInfoCommand

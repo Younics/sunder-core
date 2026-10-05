@@ -1,0 +1,28 @@
+{
+  "type": "about:blank",
+  "title": "A required provider is unavailable in the requested graph.",
+  "status": 409,
+  "detail": "A required provider is unavailable in the requested graph.",
+  "instance": "/api/v1/packages/example.consumer/activate",
+  "code": "rpc.required-provider-unsatisfied",
+  "traceId": "trace-policy-1",
+  "correlationId": "correlation-policy-1",
+  "details": {
+    "predicates": [
+      {
+        "consumerPackageId": "example.consumer",
+        "consumerRole": "runtime",
+        "contract": {
+          "contractId": "example.agent.tools",
+          "contractVersion": "1.0.0",
+          "descriptorSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "abiSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "actions": [
+          "discover",
+          "invoke"
+        ]
+      }
+    ]
+  }
+}

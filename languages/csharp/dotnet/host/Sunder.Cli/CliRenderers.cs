@@ -112,10 +112,14 @@ internal static class CliRenderers
         output.Line($"Artifact Size: {(stack.Artifact.Size is { } stackSize ? $"{stackSize} bytes" : "unknown")}");
     }
 
-    public static int RegistryPackageChange(CliOutput output, RuntimeRegistryPackageChangeResult result)
+    public static int RegistryPackageChange(
+        CliOutput output,
+        RuntimeRegistryPackageChangeResult result,
+        bool includePlan = true,
+        bool writeData = true)
     {
-        output.Data(CliJsonData.RegistryPackageChange(result));
-        if (result.PlanItems.Count > 0)
+        if (writeData) output.Data(CliJsonData.RegistryPackageChange(result));
+        if (includePlan && result.PlanItems.Count > 0)
         {
             output.Info("Install plan:");
             foreach (var item in result.PlanItems.OrderBy(item => item.PackageId, StringComparer.OrdinalIgnoreCase))
@@ -124,7 +128,7 @@ internal static class CliRenderers
                 output.Line($"  {item.PackageId} {action}");
             }
         }
-        CapabilityConsents(output, result.RequiredCapabilityConsents, approved: false);
+        if (includePlan) CapabilityConsents(output, result.RequiredCapabilityConsents, approved: false);
         foreach (var warning in result.Warnings) output.Warning(warning);
         if (!result.Success)
         {
@@ -134,6 +138,117 @@ internal static class CliRenderers
         }
         output.Success(result.Message);
         return CliExitCodes.Success;
+    }
+
+    public static int RegistryPackagePreflight(
+        CliOutput output,
+        CliPackageChangePreflight preflight,
+        bool capabilitiesApproved,
+        string? completionMessage)
+    {
+        output.Info("Package change preflight:");
+        output.Line($"  package downloads: {Bytes(preflight.PackageDownloadBytes)}");
+        output.Line($"  shared runtime downloads (full): {Bytes(preflight.FullRuntimeDownloadBytes)}");
+        output.Line($"  shared runtime downloads (incremental on this Runtime): {Bytes(preflight.IncrementalRuntimeDownloadBytes)}");
+        output.Line($"  shared runtime bytes already installed and healthy: {Bytes(preflight.ReusedRuntimeBytes)}");
+        output.Line($"  total incremental download: {Bytes(preflight.IncrementalDownloadBytes)}");
+
+        if (preflight.PlanExpectations.Count > 0)
+        {
+            output.Info("Registry plan fences:");
+            foreach (var expectation in preflight.PlanExpectations)
+            {
+                output.Line(
+                    $"  {expectation.RegistryOrigin} "
+                    + $"({(expectation.IncludePrerelease ? "prerelease allowed" : "stable only")}): "
+                    + expectation.ExpectedResolutionFingerprint);
+            }
+        }
+
+        output.Info("Plan:");
+        foreach (var item in preflight.Items)
+        {
+            var action = item.CurrentVersion is null
+                ? item.Version ?? "-"
+                : $"{item.CurrentVersion} -> {item.Version ?? "-"}";
+            output.Line($"  {item.PackageId} {item.ActionKind}: {action}");
+        }
+        if (preflight.Items.Count == 0) output.Line("  no package changes");
+
+        if (preflight.RuntimeDownloads.Count > 0)
+        {
+            output.Info("Shared execution runtimes:");
+            foreach (var download in preflight.RuntimeDownloads)
+            {
+                var identity = download.Artifact.Identity;
+                output.Line(
+                    $"  {identity.RuntimeId} {identity.Version} r{identity.PackagingRevision} "
+                    + $"{identity.Rid} {identity.ModuleAbi}: "
+                    + (download.AlreadyInstalled
+                        ? $"0 incremental bytes ({Bytes(download.Artifact.ArtifactSize)} already installed and healthy)"
+                        : $"{Bytes(download.Artifact.ArtifactSize)} incremental"));
+                output.Line($"    lifecycle: {download.Artifact.Lifecycle.State}");
+            }
+        }
+
+        foreach (var conflict in preflight.Conflicts)
+        {
+            output.Error(
+                string.IsNullOrWhiteSpace(conflict.Message)
+                    ? $"Package '{conflict.PackageId}' conflicts with the requested change."
+                    : conflict.Message,
+                conflict.ErrorCode);
+        }
+        foreach (var conflict in preflight.RuntimeConflicts)
+        {
+            output.Error(conflict.Message, conflict.Code);
+        }
+        foreach (var warning in preflight.Warnings) output.Warning(warning);
+        foreach (var error in preflight.Errors) output.Error(error, "runtime.registry.conflict");
+        CapabilityConsents(output, preflight.RequiredCapabilityConsents, capabilitiesApproved);
+
+        if (!preflight.Success || preflight.HasConflicts)
+        {
+            return CliExitCodes.Conflict;
+        }
+        if (!string.IsNullOrWhiteSpace(completionMessage)) output.Info(completionMessage);
+        return CliExitCodes.Success;
+    }
+
+    public static void PackageRuntimeStatus(
+        CliOutput output,
+        IReadOnlyList<CliPackageRuntimeStatus> runtimes)
+    {
+        output.Line("Execution runtimes:");
+        if (runtimes.Count == 0)
+        {
+            output.Line("  none");
+            return;
+        }
+
+        foreach (var status in runtimes)
+        {
+            var binding = status.Binding;
+            output.Line($"  Target: {binding.Role}/{binding.Rid}");
+            output.Line(
+                $"    Requirement: {binding.Requirement.RuntimeId} {binding.Requirement.VersionRange} "
+                + $"(ABI {binding.Requirement.ModuleAbi})");
+            output.Line(
+                $"    Binding: {binding.Runtime.RuntimeId} {binding.Runtime.Version} "
+                + $"r{binding.Runtime.PackagingRevision} / {binding.Runtime.Rid} / ABI {binding.Runtime.ModuleAbi}");
+            output.Line($"    Health: {status.InstalledRuntime?.Health.Status ?? "missing"}");
+            output.Line($"    Lifecycle: {status.Lifecycle.State}");
+            output.Line($"    Package impact: {string.Join(", ", status.ImpactedPackageIds)}");
+            output.Line($"    Action: {status.ActionMessage}");
+            if (status.EnsureCommand is not null) output.Line($"      {status.EnsureCommand}");
+            if (status.RepairCommand is not null) output.Line($"      {status.RepairCommand}");
+            if (status.RebindPreflightCommand is not null) output.Line($"      preview: {status.RebindPreflightCommand}");
+            if (status.RebindApplyCommand is not null) output.Line($"      apply: {status.RebindApplyCommand}");
+            if (!string.IsNullOrWhiteSpace(status.InstalledRuntime?.Health.Message))
+                output.Warning(status.InstalledRuntime.Health.Message);
+            if (!string.IsNullOrWhiteSpace(status.Lifecycle.PolicyMessage))
+                output.Warning(status.Lifecycle.PolicyMessage);
+        }
     }
 
     public static void CapabilityConsents(
@@ -260,4 +375,16 @@ internal static class CliRenderers
         if (success) output.Success(message);
         else output.Error(message);
     }
+
+    private static string Bytes(long value)
+        => $"{value} bytes ({FormatBytes(value)})";
+
+    private static string FormatBytes(long bytes)
+        => bytes switch
+        {
+            >= 1024L * 1024L * 1024L => $"{bytes / (1024d * 1024d * 1024d):0.##} GB",
+            >= 1024L * 1024L => $"{bytes / (1024d * 1024d):0.##} MB",
+            >= 1024L => $"{bytes / 1024d:0.##} KB",
+            _ => $"{bytes} bytes",
+        };
 }

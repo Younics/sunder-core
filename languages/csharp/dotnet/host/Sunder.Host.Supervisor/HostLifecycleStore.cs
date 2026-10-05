@@ -8,7 +8,8 @@ internal sealed record HostLifecyclePersistentState(
     HostRuntimeDesiredState DesiredState,
     long DeploymentGeneration,
     string? ActiveOperationId,
-    IReadOnlyList<HostOperationDescriptor> Operations)
+    IReadOnlyList<HostOperationDescriptor> Operations,
+    bool ResetRequired = false)
 {
     public static HostLifecyclePersistentState Initial { get; } = new(
         HostRuntimeDesiredState.Running,
@@ -19,7 +20,8 @@ internal sealed record HostLifecyclePersistentState(
 
 internal sealed class HostLifecycleStore : IDisposable
 {
-    private const int FormatVersion = 1;
+    private const int FormatVersion = 2;
+    private const int LegacyFormatVersion = 1;
     private const int MaximumTextLength = 2048;
     private const UnixFileMode PrivateDirectoryMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
@@ -79,10 +81,11 @@ internal sealed class HostLifecycleStore : IDisposable
                 File.ReadAllText(_statePath),
                 JsonOptions);
             if (document is null
-                || document.Version != FormatVersion
+                || document.Version is not (LegacyFormatVersion or FormatVersion)
                 || document.DesiredState is null
                 || document.DeploymentGeneration is null
-                || document.Operations is null)
+                || document.Operations is null
+                || document.Version == FormatVersion && document.ResetRequired is null)
             {
                 throw new InvalidDataException("Sunder Host lifecycle state has an unsupported format.");
             }
@@ -91,7 +94,8 @@ internal sealed class HostLifecycleStore : IDisposable
                 document.DesiredState.Value,
                 document.DeploymentGeneration.Value,
                 document.ActiveOperationId,
-                Array.AsReadOnly(document.Operations));
+                Array.AsReadOnly(document.Operations),
+                document.Version == FormatVersion && document.ResetRequired!.Value);
             Validate(state);
             return state;
         }
@@ -112,7 +116,8 @@ internal sealed class HostLifecycleStore : IDisposable
             state.DesiredState,
             state.DeploymentGeneration,
             state.ActiveOperationId,
-            state.Operations.ToArray());
+            state.Operations.ToArray(),
+            state.ResetRequired);
         try
         {
             var options = new FileStreamOptions
@@ -159,6 +164,10 @@ internal sealed class HostLifecycleStore : IDisposable
         if (!Enum.IsDefined(state.DesiredState) || state.DeploymentGeneration < 0)
         {
             throw new InvalidDataException("Sunder Host lifecycle state contains invalid Runtime state.");
+        }
+        if (state.ResetRequired && state.DesiredState != HostRuntimeDesiredState.Stopped)
+        {
+            throw new InvalidDataException("Sunder Host lifecycle state cannot require reset while Runtime startup is desired.");
         }
         var operationIds = new HashSet<string>(StringComparer.Ordinal);
         var mutationIds = new HashSet<Guid>();
@@ -247,7 +256,8 @@ internal sealed class HostLifecycleStore : IDisposable
         HostRuntimeDesiredState? DesiredState,
         long? DeploymentGeneration,
         string? ActiveOperationId,
-        HostOperationDescriptor[]? Operations);
+        HostOperationDescriptor[]? Operations,
+        bool? ResetRequired = null);
 
     private static class NativeMethods
     {

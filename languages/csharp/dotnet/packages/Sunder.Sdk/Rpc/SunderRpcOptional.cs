@@ -8,8 +8,8 @@ using Sunder.Sdk.Compatibility;
 namespace Sunder.Sdk.Rpc;
 
 /// <summary>Preserves whether an optional RPC member was absent or carried a value, including null.</summary>
-[JsonConverter(typeof(SunderRpcV2JsonConverterFactory))]
-[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+[JsonConverter(typeof(SunderRpcJsonConverterFactory))]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
 public readonly struct SunderRpcOptional<T>
 {
     private readonly T? _value;
@@ -41,9 +41,9 @@ public readonly struct SunderRpcOptional<T>
     public static implicit operator SunderRpcOptional<T>(T value) => new(value);
 }
 
-/// <summary>Provides the converters required by generated RPC V2 bindings.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
-public sealed class SunderRpcV2JsonConverterFactory : JsonConverterFactory
+/// <summary>Provides the converters required by generated RPC bindings.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+public sealed class SunderRpcJsonConverterFactory : JsonConverterFactory
 {
     /// <inheritdoc />
     public override bool CanConvert(Type typeToConvert)
@@ -203,7 +203,8 @@ public sealed class SunderRpcV2JsonConverterFactory : JsonConverterFactory
                 _ => throw new JsonException("An RPC content reference has invalid repeatability."),
             };
             var lengthElement = value.GetProperty("length");
-            if (!lengthElement.TryGetInt64(out var length)
+            if (lengthElement.ValueKind != JsonValueKind.Number
+                || !SunderRpcSafeIntegerJsonConverter.TryParseSafeInteger(lengthElement.GetRawText(), out var length)
                 || length is < 0 or > 9_007_199_254_740_991)
             {
                 throw new JsonException("An RPC content reference has invalid length.");

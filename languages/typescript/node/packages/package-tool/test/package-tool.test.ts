@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readlink, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { chmod, copyFile, mkdir, open, readFile, readlink, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { inflateRawSync } from "node:zlib";
 import { canonicalizeDescriptor, parseRpcContractDescriptor, type JsonValue } from "@sunder/sdk";
-import { downloadBoundedFile, fetchBoundedText } from "../src/download";
 import { currentRid, SUPPORTED_RIDS, SUPPORTED_WORKER_CAPABILITIES } from "../src/model";
-import { hashFile, verifyCachedNode, writeNodeCacheVerification } from "../src/node-cache";
+import { buildModuleTarget, smokeModuleTarget } from "../src/module";
 import { classifyBundlerVirtualPackage, resolveRolldownPackageJsonFromVite } from "../src/notices";
 import { targetLeafDiscoveryKey, withOutputLocks } from "../src/output";
 import {
@@ -28,38 +28,43 @@ import {
   type PreparedProject,
 } from "../src/package";
 
-test("dev output uses explicit adjacent current-Node metadata outside the canonical tree", async () => {
+test("dev output uses the canonical runtime-backed Node module shape without launch metadata", async () => {
   const root = await createFixture();
   try {
     await addWorkerDependency(root);
     await buildDevPackage({ projectPath: root, watch: false });
     const devRoot = resolve(root, "dist", "sunder-dev");
     const manifest = JSON.parse(await readFile(resolve(devRoot, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
-    assert.equal(manifest.manifestVersion, 3);
+    assert.equal(manifest.manifestVersion, 1);
+    const contractBundle = assertSingle(manifest.contractBundles);
+    assert.equal(contractBundle.source, "owned");
+    assert.equal(contractBundle.authorityKind, "package");
+    assert.equal(contractBundle.authorityId, manifest.id);
     const target = assertSingle(manifest.targets);
     assert.equal(target.kind, "worker");
     assert.equal(target.rid, currentRid());
-    assert.equal(target.entryPoint, "worker.cjs");
+    assert.equal(target.entryPoint, "bin/worker.cjs");
+    assert.deepEqual(target.executionRuntime, {
+      id: "sunder.runtime.node",
+      versionRange: ">=24.18.1 <25.0.0",
+      moduleAbi: "sunder.node-worker-module.v1",
+    });
     const sdkPackage = JSON.parse(await readFile(resolve(__dirname, "..", "..", "..", "sdk", "package.json"), "utf8")) as { readonly version: string };
     assert.equal(target.sdkVersion, sdkPackage.version);
     assert.ok(target.requiredHostCapabilities.includes("sdk-baseline-1-1.v1"));
-    assert.ok(target.requiredHostCapabilities.includes("rpc.v2"));
-    assert.ok(target.requiredHostCapabilities.includes("worker-protocol.v3"));
-    assert.ok(!target.requiredHostCapabilities.includes("rpc.v1"));
-    assert.equal(await exists(resolve(devRoot, "worker.cjs.sunder-node-dev.json")), false);
+    assert.ok(target.requiredHostCapabilities.includes("core.v1"));
+    assert.ok(target.requiredHostCapabilities.includes("execution-runtime.v1"));
+    assert.ok(target.requiredHostCapabilities.includes("rpc.v1"));
+    assert.ok(target.requiredHostCapabilities.includes("worker-protocol.v1"));
     const metadataPath = `${devRoot}.sunder-node-dev.json`;
-    const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<string, unknown>;
-    assert.equal(metadata.nodePath, process.execPath);
-    assert.equal(metadata.nodeVersion, process.version);
-    assert.equal(metadata.packageId, "test.node.package");
-    assert.match(String(metadata.contentIdentity), /^[0-9a-f]{64}$/u);
+    assert.equal(await exists(metadataPath), false);
     const contract = (await prepareProject(root)).contracts[0]!;
-    const bundlePath = resolve(devRoot, "payload", "runtime", currentRid(), "worker.cjs");
+    const bundlePath = resolve(devRoot, "payload", "runtime", "shared", "bin", "worker.cjs");
     const bundle = await readFile(bundlePath, "utf8");
     assert.match(bundle, new RegExp(contract.descriptorSha256, "u"));
-    assert.equal(await exists(resolve(devRoot, "payload", "runtime", currentRid(), "worker.cjs.map")), false);
+    assert.equal(await exists(resolve(devRoot, "payload", "runtime", "shared", "bin", "worker.cjs.map")), false);
     const workerNotice = await readFile(
-      resolve(devRoot, "payload", "runtime", currentRid(), "THIRD-PARTY-NOTICES", "Bundled-Worker-Dependencies.txt"),
+      resolve(devRoot, "payload", "runtime", "shared", "THIRD-PARTY-NOTICES", "Bundled-Worker-Dependencies.txt"),
       "utf8",
     );
     assert.match(workerNotice, /@sunder\/sdk@1\.1\.0/u);
@@ -83,6 +88,38 @@ test("dev output uses explicit adjacent current-Node metadata outside the canoni
   }
 });
 
+test("smoke builds the canonical dev package and delegates to the managed Sunder CLI", async () => {
+  const root = await createFixture();
+  const marker = resolve(root, "smoke-handoff.json");
+  const previousCli = process.env.SUNDER_CLI;
+  const previousMarker = process.env.SUNDER_SMOKE_HANDOFF_MARKER;
+  try {
+    await writeFile(resolve(root, "dev"), [
+      "const { existsSync, writeFileSync } = require('node:fs');",
+      "const { resolve } = require('node:path');",
+      "const args = process.argv.slice(2);",
+      "if (args[0] !== 'package' || args[1] !== 'smoke' || !existsSync(resolve(args[2], 'manifest', 'sunder-package.json'))) process.exit(2);",
+      "writeFileSync(process.env.SUNDER_SMOKE_HANDOFF_MARKER, JSON.stringify(args));",
+    ].join("\n"), "utf8");
+    process.env.SUNDER_CLI = process.execPath;
+    process.env.SUNDER_SMOKE_HANDOFF_MARKER = marker;
+
+    await smokeModuleTarget(root);
+
+    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), [
+      "package",
+      "smoke",
+      resolve(root, "dist", "sunder-dev"),
+    ]);
+  } finally {
+    if (previousCli === undefined) delete process.env.SUNDER_CLI;
+    else process.env.SUNDER_CLI = previousCli;
+    if (previousMarker === undefined) delete process.env.SUNDER_SMOKE_HANDOFF_MARKER;
+    else process.env.SUNDER_SMOKE_HANDOFF_MARKER = previousMarker;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("worker capabilities are explicit, closed, canonical, and stamped on every worker target", async () => {
   const root = await createFixture();
   try {
@@ -100,17 +137,19 @@ test("worker capabilities are explicit, closed, canonical, and stamped on every 
     assert.deepEqual(assertSingle(manifest.targets).requiredHostCapabilities, [
       "auth.v1",
       "callbacks.v1",
+      "core.v1",
+      "execution-runtime.v1",
       "logging.v1",
       "role-local-workspace.v1",
       "rpc.extended-deadline.v1",
-      "rpc.v2",
+      "rpc.v1",
       "sdk-baseline-1-1.v1",
       "secrets.v1",
       "settings.schema.v1",
       "settings.v1",
       "storage.key-migration.v1",
       "storage.v1",
-      "worker-protocol.v3",
+      "worker-protocol.v1",
     ]);
 
     await writeFile(configPath, `${JSON.stringify({ ...baseline, workerCapabilities: ["auth.v1"] }, null, 2)}\n`, "utf8");
@@ -132,7 +171,7 @@ test("worker capabilities are explicit, closed, canonical, and stamped on every 
   }
 });
 
-test("aggregation accepts only Manifest V3 worker Runtime leaves with exact Worker V3 capabilities", async () => {
+test("aggregation accepts only Manifest V1 runtime-backed Worker leaves with exact Worker V1 capabilities", async () => {
   const root = await createFixture();
   try {
     const configPath = resolve(root, "sunder.package.json");
@@ -140,13 +179,12 @@ test("aggregation accepts only Manifest V3 worker Runtime leaves with exact Work
     config.workerCapabilities = ["logging.v1"];
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
     const project = await prepareProject(root);
-    const executable = resolve(root, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
     const writeLeaf = () => writeTargetLeaf({
       project,
       rid: currentRid(),
-      executablePath: executable,
-      nodeNoticePath: noticePath(root),
+      modulePath: module,
       workerNoticePath: workerNoticePath(root),
       discoveryRoot: targetDiscoveryRoot(project),
     });
@@ -155,12 +193,12 @@ test("aggregation accepts only Manifest V3 worker Runtime leaves with exact Work
       readonly update: (manifest: PackageManifest) => void;
       readonly expected: RegExp;
     }> = [
-      ...[1, 2].map((manifestVersion) => ({
+      ...[2, 3].map((manifestVersion) => ({
         name: `manifestVersion ${manifestVersion}`,
         update: (manifest: PackageManifest) => {
           (manifest as unknown as { manifestVersion: number }).manifestVersion = manifestVersion;
         },
-        expected: /must declare manifestVersion 3/u,
+        expected: /must declare manifestVersion 1/u,
       })),
       ...["dotnet", "process"].map((kind) => ({
         name: `legacy Runtime kind ${kind}`,
@@ -169,8 +207,8 @@ test("aggregation accepts only Manifest V3 worker Runtime leaves with exact Work
         },
         expected: new RegExp(`Runtime target kind '${kind}'.*must use 'worker'`, "u"),
       })),
-      ...["rpc.v1", "worker-protocol.v1"].map((capability) => ({
-        name: `legacy capability ${capability}`,
+      ...["rpc.v2", "worker-protocol.v3"].map((capability) => ({
+        name: `unsupported capability ${capability}`,
         update: (manifest: PackageManifest) => {
           const target = assertSingle(manifest.targets) as unknown as { requiredHostCapabilities: string[] };
           target.requiredHostCapabilities = [...target.requiredHostCapabilities, capability].sort();
@@ -178,8 +216,10 @@ test("aggregation accepts only Manifest V3 worker Runtime leaves with exact Work
         expected: /requiredHostCapabilities must exactly match/u,
       })),
       ...[
-        { name: "missing rpc.v2", remove: "rpc.v2" },
-        { name: "missing worker-protocol.v3", remove: "worker-protocol.v3" },
+        { name: "missing core.v1", remove: "core.v1" },
+        { name: "missing execution-runtime.v1", remove: "execution-runtime.v1" },
+        { name: "missing rpc.v1", remove: "rpc.v1" },
+        { name: "missing worker-protocol.v1", remove: "worker-protocol.v1" },
         { name: "missing truthful feature capability", remove: "logging.v1" },
       ].map(({ name, remove }) => ({
         name,
@@ -222,50 +262,69 @@ test("aggregation accepts only Manifest V3 worker Runtime leaves with exact Work
     const validLeaf = await writeLeaf();
     const result = await aggregateAndPack(root, [leafSource(project, validLeaf)]);
     const manifest = JSON.parse(await readFile(resolve(result.packageRoot, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
-    assert.equal(manifest.manifestVersion, 3);
+    assert.equal(manifest.manifestVersion, 1);
     assert.deepEqual(assertSingle(manifest.targets).requiredHostCapabilities, [
+      "core.v1",
+      "execution-runtime.v1",
       "logging.v1",
-      "rpc.v2",
+      "rpc.v1",
       "sdk-baseline-1-1.v1",
-      "worker-protocol.v3",
+      "worker-protocol.v1",
     ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("target leaves are AggregateSunderPackageTask-compatible and production archives exclude dev code and metadata", async () => {
+test("target leaves are AggregateSunderPackageTask-compatible thin runtime-backed modules", async () => {
   const root = await createFixture();
   try {
     const project = await prepareProject(root);
-    const executable = resolve(root, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
-      executablePath: executable,
-      nodeNoticePath: noticePath(root),
+      modulePath: module,
       workerNoticePath: workerNoticePath(root),
       discoveryRoot: targetDiscoveryRoot(project),
     });
     const manifest = JSON.parse(await readFile(resolve(leaf, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
     assert.equal(manifest.archiveFormatVersion, 1);
-    assert.equal(manifest.manifestVersion, 3);
+    assert.equal(manifest.manifestVersion, 1);
     const target = assertSingle(manifest.targets);
     assert.equal(target.kind, "worker");
-    assert.deepEqual(target.requiredHostCapabilities, ["rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"]);
+    assert.deepEqual(target.requiredHostCapabilities, [
+      "core.v1",
+      "execution-runtime.v1",
+      "rpc.v1",
+      "sdk-baseline-1-1.v1",
+      "worker-protocol.v1",
+    ]);
+    assert.equal(target.entryPoint, "bin/worker.cjs");
+    assert.deepEqual(target.executionRuntime, {
+      id: "sunder.runtime.node",
+      versionRange: ">=24.18.1 <25.0.0",
+      moduleAbi: "sunder.node-worker-module.v1",
+    });
     assert.equal(manifest.contractBundles.length, 1);
     assert.equal(manifest.provides.length, 1);
     const contractBytes = await readFile(resolve(leaf, "payload", "shared", "contracts", "example.rpc.json"));
     const contract = assertSingle(manifest.contractBundles);
     assert.deepEqual(Object.keys(contract).sort(), [
       "abiSha256",
+      "authorityId",
+      "authorityKind",
       "contractId",
       "descriptorPath",
       "descriptorSha256",
       "exposure",
+      "source",
       "version",
     ]);
+    assert.equal(contract.source, "owned");
+    assert.equal(contract.authorityKind, "package");
+    assert.equal(contract.authorityId, project.config.id);
     assert.equal(sha256(contractBytes), contract.descriptorSha256);
     const provider = assertSingle(manifest.provides);
     assert.deepEqual(Object.keys(provider).sort(), [
@@ -295,11 +354,10 @@ test("target leaves are AggregateSunderPackageTask-compatible and production arc
     assert.equal(entries.find((entry) => entry.name === "payload/shared/contracts/example.rpc.json")?.data.toString("utf8"), contractBytes.toString("utf8"));
     const entryNames = entries.map((entry) => entry.name);
     assert.ok(entryNames.includes("manifest/sunder-package.json"));
-    assert.ok(entryNames.some((entry) => entry.startsWith("payload/") && entry.includes("/bin/test.node.package")));
+    assert.ok(entryNames.includes("payload/runtime/shared/bin/worker.cjs"));
     assert.ok(entryNames.includes("payload/shared/contracts/example.rpc.json"));
-    assert.ok(entryNames.includes("payload/shared/THIRD-PARTY-NOTICES/Bundled-Worker-Dependencies.txt"));
-    assert.ok(entryNames.includes("payload/shared/THIRD-PARTY-NOTICES/Node.js-LICENSE.txt"));
-    assert.equal(entryNames.some((entry) => entry.endsWith("worker.cjs") || entry.endsWith(".map") || entry.includes("sunder-node-dev")), false);
+    assert.ok(entryNames.includes("payload/runtime/shared/THIRD-PARTY-NOTICES/Bundled-Worker-Dependencies.txt"));
+    assert.equal(entryNames.some((entry) => entry.endsWith(".exe") || entry.endsWith(".map") || entry.includes("sunder-node-dev") || entry.includes("Node.js-LICENSE")), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -321,34 +379,35 @@ test("Vite web leaf aggregates with a Node Runtime leaf and preserves declarativ
     ];
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
     const project = await prepareProject(root);
-    const executable = resolve(root, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
     const runtimeLeaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
-      executablePath: executable,
-      nodeNoticePath: noticePath(root),
+      modulePath: module,
       workerNoticePath: workerNoticePath(root),
       discoveryRoot: targetDiscoveryRoot(project),
     });
     const runtimeManifest = JSON.parse(await readFile(resolve(runtimeLeaf, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
-    assert.equal(runtimeManifest.manifestVersion, 3);
+    assert.equal(runtimeManifest.manifestVersion, 1);
     assert.deepEqual(runtimeManifest.provides.map((provider) => provider.role), ["runtime"]);
     assert.deepEqual(runtimeManifest.usesContracts.map((use) => use.role), ["runtime"]);
     const appLeaf = await buildWebTarget(root, currentRid());
     assert.notEqual(appLeaf, null);
     const appManifest = JSON.parse(await readFile(resolve(appLeaf!, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
-    assert.equal(appManifest.manifestVersion, 3);
+    assert.equal(appManifest.manifestVersion, 1);
     const appTarget = assertSingle(appManifest.targets);
     assert.equal(appTarget.kind, "web");
     assert.equal(appTarget.views?.[0]?.viewId, "test.node.package.main");
-    assert.deepEqual(appTarget.requiredHostCapabilities, ["rpc.v2", "sdk-baseline-1-1.v1", "views.v1"]);
+    assert.deepEqual(appTarget.requiredHostCapabilities, ["core.v1", "rpc.v1", "sdk-baseline-1-1.v1", "views.v1"]);
+    assert.equal(appTarget.executionRuntime, undefined);
+    assert.deepEqual(appManifest.contractBundles, runtimeManifest.contractBundles);
     assert.deepEqual(appManifest.provides, []);
     assert.deepEqual(appManifest.usesContracts.map((use) => use.role), ["app"]);
 
     const result = await aggregateAndPack(root, [leafSource(project, runtimeLeaf), leafSource(project, appLeaf!)]);
     const manifest = JSON.parse(await readFile(resolve(result.packageRoot, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
-    assert.equal(manifest.manifestVersion, 3);
+    assert.equal(manifest.manifestVersion, 1);
     assert.deepEqual(manifest.targets.map((target) => target.kind).sort(), ["web", "worker"]);
     assert.deepEqual(manifest.provides.map((provider) => `${provider.role}/${provider.providerId}`), ["runtime/example.provider"]);
     assert.deepEqual(manifest.usesContracts.map((use) => `${use.role}/${use.contractId}`), [
@@ -358,7 +417,7 @@ test("Vite web leaf aggregates with a Node Runtime leaf and preserves declarativ
     const entries = zipEntryNames(await readFile(result.archivePath));
     assert.ok(entries.includes("payload/app/shared/index.html"));
     assert.equal(entries.some((entry) => entry.endsWith(".svg") || entry.endsWith(".map")), false);
-    assert.ok(entries.includes("payload/runtime/shared/THIRD-PARTY-NOTICES/Node.js-LICENSE.txt"));
+    assert.ok(entries.includes("payload/runtime/shared/bin/worker.cjs"));
     assert.ok(entries.includes("payload/runtime/shared/THIRD-PARTY-NOTICES/Bundled-Worker-Dependencies.txt"));
     const webNoticeEntry = entries.find((entry) => entry === "payload/app/shared/THIRD-PARTY-NOTICES/Bundled-Web-Dependencies.txt");
     assert.notEqual(webNoticeEntry, undefined);
@@ -523,19 +582,25 @@ test("Rolldown attribution resolves from Vite's nested dependency context", asyn
   }
 });
 
-test("SEA toolchain versions and all six Node distribution hashes remain exact pins", async () => {
+test("public package tooling contains no embedded Node or SEA production surface", async () => {
   const packageRoot = resolve(__dirname, "..", "..");
-  const metadata = JSON.parse(await readFile(resolve(packageRoot, "node-distributions.json"), "utf8")) as DistributionMetadata;
-  assert.equal(metadata.nodeVersion, "24.18.1");
-  assert.equal(metadata.notice.sha256, "148eacf7863ef4329224a29398623077200a27194aa075569faf4a0a85566ca5");
-  assert.deepEqual(Object.keys(metadata.targets), ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"]);
-  for (const target of Object.values(metadata.targets)) assert.match(target.sha256, /^[0-9a-f]{64}$/u);
   const lock = JSON.parse(await readFile(resolve(packageRoot, "..", "..", "package-lock.json"), "utf8")) as PackageLock;
   assert.equal(lock.packages["node_modules/esbuild"]?.version, "0.28.1");
-  assert.equal(lock.packages["node_modules/postject"]?.version, "1.0.0-alpha.6");
+  assert.equal(lock.packages["node_modules/postject"], undefined);
   assert.equal(lock.packages["node_modules/vite"]?.version, "8.2.0");
   assert.equal((await readFile(resolve(packageRoot, "..", "..", ".nvmrc"), "utf8")).trim(), "24.18.1");
   const toolPackage = JSON.parse(await readFile(resolve(packageRoot, "package.json"), "utf8")) as PackageJson;
+  assert.equal(toolPackage.dependencies?.postject, undefined);
+  assert.equal(toolPackage.files?.includes("node-distributions.json"), false);
+  assert.equal(await exists(resolve(packageRoot, "node-distributions.json")), false);
+  assert.equal(await exists(resolve(packageRoot, "src", "sea.ts")), false);
+  assert.equal(await exists(resolve(packageRoot, "src", "download.ts")), false);
+  assert.equal(await exists(resolve(packageRoot, "src", "node-cache.ts")), false);
+  for (const moduleName of ["sea", "download", "node-cache"]) {
+    assert.equal(await exists(resolve(packageRoot, "dist", `${moduleName}.js`)), false);
+    assert.equal(await exists(resolve(packageRoot, "dist", `${moduleName}.d.ts`)), false);
+    assert.equal(await exists(resolve(packageRoot, "dist", `${moduleName}.js.map`)), false);
+  }
   const createPackage = JSON.parse(await readFile(resolve(packageRoot, "..", "create-sunder-package", "package.json"), "utf8")) as PackageJson;
   assert.equal(toolPackage.dependencies?.["@sunder/sdk"], ">=1.1.0 <1.2.0");
   assert.equal(createPackage.dependencies?.["@sunder/sdk"], ">=1.1.0 <1.2.0");
@@ -548,21 +613,21 @@ test("SEA toolchain versions and all six Node distribution hashes remain exact p
     };
     assert.deepEqual(config.workerCapabilities, []);
   }
-  const seaFixture = JSON.parse(await readFile(resolve(packageRoot, "..", "..", "fixtures", "sea-smoke", "sunder.package.json"), "utf8")) as {
+  const moduleFixture = JSON.parse(await readFile(resolve(packageRoot, "..", "..", "fixtures", "runtime-backed-worker", "sunder.package.json"), "utf8")) as {
     readonly summary: string;
     readonly workerCapabilities: readonly string[];
   };
-  assert.match(seaFixture.summary, /Worker V3/u);
-  assert.deepEqual(seaFixture.workerCapabilities, []);
+  assert.match(moduleFixture.summary, /runtime-backed Node Worker V1/iu);
+  assert.deepEqual(moduleFixture.workerCapabilities, []);
 });
 
 test("aggregation rejects non-canonical external target leaf paths", async () => {
   const root = await createFixture();
   try {
     const project = await prepareProject(root);
-    const executable = resolve(root, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
-    const leaf = await writeTargetLeaf({ project, rid: currentRid(), executablePath: executable, nodeNoticePath: noticePath(root), workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) });
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    const leaf = await writeTargetLeaf({ project, rid: currentRid(), modulePath: module, workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) });
     const indexPath = resolve(leaf, "manifest", "content-index.json");
     const index = JSON.parse(await readFile(indexPath, "utf8")) as { files: Array<{ path: string }> };
     const payload = index.files.find((item) => item.path.startsWith("payload/"));
@@ -580,13 +645,12 @@ test("aggregation rejects unknown external target and view properties", async ()
   const targetRoot = await createFixture();
   try {
     const project = await prepareProject(targetRoot);
-    const executable = resolve(targetRoot, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
+    const module = resolve(targetRoot, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
-      executablePath: executable,
-      nodeNoticePath: noticePath(targetRoot),
+      modulePath: module,
       workerNoticePath: workerNoticePath(targetRoot),
       discoveryRoot: targetDiscoveryRoot(project),
     });
@@ -650,16 +714,15 @@ test("local descriptors use the strict parser and contract uses require exact ve
   }
 });
 
-test("Manifest V3 package builds reject valid RPC descriptor V1", async () => {
+test("Manifest V1 package builds reject non-V1 RPC descriptors", async () => {
   const root = await createFixture();
   try {
-    const source = `${JSON.stringify(v1Descriptor, null, 2)}\n`;
-    assert.equal(parseRpcContractDescriptor(source).descriptorVersion, 1);
+    const source = `${JSON.stringify({ ...descriptor, descriptorVersion: 2 }, null, 2)}\n`;
     await writeFile(resolve(root, "contracts", "example.rpc.json"), source, "utf8");
 
     await assert.rejects(
       () => buildDevPackage({ projectPath: root, watch: false }),
-      /Contract descriptor 'contracts\/example\.rpc\.json' uses descriptorVersion 1; Package Manifest V3 requires RPC descriptorVersion 2\./u,
+      /descriptorVersion must be exactly 1/u,
     );
     assert.equal(await exists(resolve(root, "dist", "sunder-dev", "manifest", "sunder-package.json")), false);
   } finally {
@@ -667,7 +730,7 @@ test("Manifest V3 package builds reject valid RPC descriptor V1", async () => {
   }
 });
 
-test("Manifest V3 emits exact derived RPC fields and preserves complete SemVer build metadata", async () => {
+test("Manifest V1 emits exact derived RPC fields and preserves complete SemVer build metadata", async () => {
   const root = await createFixture();
   try {
     const contractVersion = "2.3.4-rc.1+build.7";
@@ -692,25 +755,29 @@ test("Manifest V3 emits exact derived RPC fields and preserves complete SemVer b
       actions: ["discover", "invoke", "subscribe"],
     }];
     config.dependencies = [{ packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0" }];
-    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    const configSource = `${JSON.stringify(config, null, 2)}\n`;
+    await writeFile(configPath, configSource, "utf8");
 
     const project = await prepareProject(root);
+    assert.deepEqual(project.config.dependencies, config.dependencies);
     const loaded = assertSingle(project.contracts);
-    const executable = resolve(root, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
-      executablePath: executable,
-      nodeNoticePath: noticePath(root),
+      modulePath: module,
       workerNoticePath: workerNoticePath(root),
       discoveryRoot: targetDiscoveryRoot(project),
     });
     const manifest = JSON.parse(await readFile(resolve(leaf, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
 
     assert.equal(manifest.archiveFormatVersion, 1);
-    assert.equal(manifest.manifestVersion, 3);
-    assert.deepEqual(manifest.dependsOn, [{ packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0" }]);
+    assert.equal(manifest.manifestVersion, 1);
+    assert.deepEqual(manifest.dependsOn, [{ packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0", presence: "required" }]);
+    for (const field of ["packageArtifactImports", "packageApiImports", "providerImports", "platformImports"] as const) {
+      assert.deepEqual(manifest[field], [], field);
+    }
     assert.deepEqual(manifest.contractBundles, [{
       contractId: "example.rpc",
       version: contractVersion,
@@ -718,6 +785,9 @@ test("Manifest V3 emits exact derived RPC fields and preserves complete SemVer b
       descriptorSha256: loaded.descriptorSha256,
       abiSha256: loaded.abiSha256,
       exposure: "package",
+      source: "owned",
+      authorityKind: "package",
+      authorityId: project.config.id,
     }]);
     assert.deepEqual(manifest.usesContracts, [{
       role: "runtime",
@@ -745,6 +815,22 @@ test("Manifest V3 emits exact derived RPC fields and preserves complete SemVer b
       "role",
     ]);
 
+    await buildDevPackage({ projectPath: root, watch: false });
+    const packed = await aggregateAndPack(root, [leafSource(project, leaf)]);
+    for (const outputRoot of [leaf, resolve(root, "dist", "sunder-dev"), packed.packageRoot]) {
+      const manifestBytes = await readFile(resolve(outputRoot, "manifest", "sunder-package.json"));
+      assert.deepEqual(JSON.parse(manifestBytes.toString("utf8")), manifest);
+      const index = JSON.parse(await readFile(resolve(outputRoot, "manifest", "content-index.json"), "utf8")) as {
+        readonly files: readonly { readonly path: string; readonly sha256: string; readonly size: number }[];
+      };
+      assert.deepEqual(index.files.find((entry) => entry.path === "manifest/sunder-package.json"), {
+        path: "manifest/sunder-package.json",
+        sha256: sha256(manifestBytes),
+        size: manifestBytes.byteLength,
+      });
+    }
+    assert.equal(await readFile(configPath, "utf8"), configSource);
+
     config.usesContracts = [{
       role: "runtime",
       contractId: "example.rpc",
@@ -759,13 +845,334 @@ test("Manifest V3 emits exact derived RPC fields and preserves complete SemVer b
   }
 });
 
-test("V2 descriptor annotations change only descriptor identity while structural changes alter both hashes", async () => {
+test("dependency range policy applies before builds and during target leaf admission without changing authored ranges", async () => {
+  const root = await createFixture();
+  try {
+    const configPath = resolve(root, "sunder.package.json");
+    const configSource = await readFile(configPath, "utf8");
+    const config = JSON.parse(configSource) as Record<string, unknown>;
+    const project = await prepareProject(root);
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    const writeLeaf = (configured: PreparedProject) => writeTargetLeaf({
+      project: configured,
+      rid: currentRid(),
+      modulePath: module,
+      workerNoticePath: workerNoticePath(root),
+      discoveryRoot: targetDiscoveryRoot(configured),
+    });
+    const boundedCore = "1".repeat(250) + ".0.0";
+    const maximum = "9".repeat(252) + ".9.9";
+    const adjacent: ReadonlyArray<readonly [string, string]> = [
+      ["1.0.0", "1.0.1-0"],
+      ["1.0.0-alpha", "1.0.0-alpha.0"],
+      ["1.0.0+" + "b".repeat(250), "1.0.1-0"],
+      ["1.0.0-" + "a".repeat(250), "1.0.0-" + "a".repeat(249) + "b"],
+      [`${boundedCore}-9`, `${boundedCore}--`],
+      [`${boundedCore}--`, `${boundedCore}-A`],
+      ["1.0." + "9".repeat(252), "1.1.0-0"],
+      ["1." + "9".repeat(252) + ".9", "2.0.0-0"],
+    ];
+    const cases: ReadonlyArray<{ readonly range: string; readonly expected?: RegExp }> = [
+      ...["1.2.3+reviewed", ">=1.0.0 <=1.0.0", "=1.2.3+first =1.2.3+second",
+        ">=1.0.0+z <=1.0.0+a", ">1.0.0 <1.0.1", ">1.0.0-alpha.9 <1.0.0-alpha.10",
+        "<=0.0.0-0", `>=${maximum}`].map((range) => ({ range })),
+      ...[">=2.0.0 <1.0.0", ">1.0.0 <=1.0.0", "=1.0.0 =2.0.0",
+        ">1.0.0+first <=1.0.0+second", ">=1.0.0-alpha.10 <=1.0.0-alpha.9",
+        "<0.0.0-0", `>${maximum}`].map((range) => ({ range, expected: /permits no semantic version/u })),
+      ...["", "^1.0.0", "1.0.0 <2.0.0", ">=1.0.0  <2.0.0", ">=1.0.0\t<2.0.0",
+        " >=1.0.0 <2.0.0", ">=1.0.0 <2.0.0 "].map((range) => ({
+        range,
+        expected: /unsupported or noncanonical|must be a non-empty bounded string/u,
+      })),
+      ...adjacent.flatMap(([lower, successor]) => [
+        { range: `>${lower} <${successor}`, expected: /permits no semantic version/u },
+        { range: `>${lower} <=${successor}` },
+      ]),
+    ];
+    for (const { range, expected } of cases) {
+      const dependency = { packageId: "example.dependency", versionRange: range };
+      await writeFile(configPath, `${JSON.stringify({ ...config, dependencies: [dependency] }, null, 2)}\n`, "utf8");
+      if (expected !== undefined) {
+        await assert.rejects(() => buildDevPackage({ projectPath: root, watch: false }), expected, range);
+        assert.equal(await exists(resolve(project.outputRoot, "sunder-dev")), false, range);
+        await writeFile(configPath, configSource, "utf8");
+        const leaf = await writeLeaf(project);
+        await rewriteLeafManifest(leaf, (manifest) => {
+          (manifest as unknown as Record<string, unknown>).dependsOn = [{ ...dependency, presence: "required" }];
+        });
+        await assert.rejects(() => aggregateAndPack(root, [leafSource(project, leaf)]), expected, range);
+      } else {
+        const configured = await prepareProject(root);
+        assert.deepEqual(configured.config.dependencies, [dependency], range);
+        const leaf = await writeLeaf(configured);
+        const packed = await aggregateAndPack(root, [leafSource(configured, leaf)]);
+        const manifest = JSON.parse(await readFile(resolve(packed.packageRoot, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
+        assert.deepEqual(manifest.dependsOn, [{ ...dependency, presence: "required" }], range);
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Manifest V1 aggregation requires explicit owned bundle provenance and rejects imported bundles", async () => {
+  const root = await createFixture();
+  try {
+    const project = await prepareProject(root);
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    const writeLeaf = () => writeTargetLeaf({
+      project,
+      rid: currentRid(),
+      modulePath: module,
+      workerNoticePath: workerNoticePath(root),
+      discoveryRoot: targetDiscoveryRoot(project),
+    });
+    const cases: ReadonlyArray<{
+      readonly name: string;
+      readonly update: (bundle: Record<string, unknown>) => void;
+      readonly expected: RegExp;
+    }> = [
+      ...[
+        { field: "source", canonical: "owned", unknown: "borrowed" },
+        { field: "authorityKind", canonical: "package", unknown: "organization" },
+        { field: "authorityId", canonical: project.config.id, unknown: "invalid authority" },
+      ].flatMap(({ field, canonical, unknown }) => [
+        {
+          name: `missing ${field}`,
+          update: (bundle: Record<string, unknown>) => { delete bundle[field]; },
+          expected: /contractBundles\[0\] must contain exactly/u,
+        },
+        ...[null, "", unknown, canonical.toUpperCase(), ` ${canonical}`, `${canonical} `, false, {}, []].map((value) => ({
+          name: `${field} = ${JSON.stringify(value)}`,
+          update: (bundle: Record<string, unknown>) => { bundle[field] = value; },
+          expected: /must declare canonical source, authorityKind, and authorityId provenance/u,
+        })),
+        {
+          name: `case-variant ${field} property`,
+          update: (bundle: Record<string, unknown>) => {
+            bundle[field.toUpperCase()] = bundle[field];
+            delete bundle[field];
+          },
+          expected: new RegExp(`contains unknown property '${field.toUpperCase()}'`, "u"),
+        },
+      ]),
+      {
+        name: "unknown provenance property",
+        update: (bundle) => { bundle.futureProvenance = "owned"; },
+        expected: /contains unknown property 'futureProvenance'/u,
+      },
+      {
+        name: "contract identity is not package ownership",
+        update: (bundle) => { bundle.authorityId = bundle.contractId; },
+        expected: /owned bundles require authorityKind 'package' and authorityId equal to the manifest package id/u,
+      },
+      {
+        name: "owned platform authority",
+        update: (bundle) => { bundle.authorityKind = "platform"; bundle.authorityId = "sunder.core"; },
+        expected: /owned bundles require authorityKind 'package' and authorityId equal to the manifest package id/u,
+      },
+      ...[
+        { field: "selectedAuthorityRelease", canonical: "1.2.3+release.4" },
+        { field: "selectedAuthorityContentIdentity", canonical: "a".repeat(64) },
+      ].flatMap(({ field, canonical }) => [
+        ...[canonical, null].map((value) => ({
+          name: `owned bundle forbids ${field} = ${JSON.stringify(value)}`,
+          update: (bundle: Record<string, unknown>) => { bundle[field] = value; },
+          expected: new RegExp(`contains unknown property '${field}'`, "u"),
+        })),
+        ...[undefined, null, "invalid"].map((value) => ({
+          name: `imported bundle requires ${field} = ${JSON.stringify(value)}`,
+          update: (bundle: Record<string, unknown>) => {
+            bundle.source = "imported";
+            bundle.selectedAuthorityRelease = "1.2.3+release.4";
+            bundle.selectedAuthorityContentIdentity = "a".repeat(64);
+            if (value === undefined) delete bundle[field];
+            else bundle[field] = value;
+          },
+          expected: value === undefined
+            ? /contractBundles\[0\] must contain exactly/u
+            : /imported bundles require a canonical selectedAuthorityRelease and selectedAuthorityContentIdentity/u,
+        })),
+      ]),
+      ...["package", "platform"].map((authorityKind) => ({
+        name: `unsupported imported ${authorityKind} bundle`,
+        update: (bundle: Record<string, unknown>) => {
+          bundle.source = "imported";
+          bundle.exposure = "public";
+          bundle.authorityKind = authorityKind;
+          bundle.authorityId = authorityKind === "package" ? "example.owner" : "sunder.core";
+          bundle.selectedAuthorityRelease = "1.2.3+release.4";
+          bundle.selectedAuthorityContentIdentity = "a".repeat(64);
+        },
+        expected: /imported bundles are not supported by descriptor-first Node package tooling/u,
+      })),
+      ...["catalogSigningKeyId", "catalogTrustGeneration", "catalogTrustFingerprint"].flatMap(field =>
+        ["package", "platform"].map(authorityKind => ({
+          name: `${authorityKind} bundle rejects retired ${field}`,
+          update: (bundle: Record<string, unknown>) => {
+            Object.assign(bundle, {
+              source: "imported",
+              authorityKind,
+              authorityId: authorityKind === "package" ? "example.owner" : "sunder.core",
+              selectedAuthorityRelease: "1.2.3+release.4",
+              selectedAuthorityContentIdentity: "a".repeat(64),
+              [field]: "obsolete",
+            });
+          },
+          expected: new RegExp(`contains unknown property '${field}'`, "u"),
+        }))),
+    ];
+    const validLeaf = await writeLeaf();
+    const packed = await aggregateAndPack(root, [leafSource(project, validLeaf)]);
+    const preservedPaths = [
+      packed.archivePath,
+      packed.evidencePath,
+      resolve(packed.packageRoot, "manifest", "sunder-package.json"),
+      resolve(packed.packageRoot, "manifest", "content-index.json"),
+    ];
+    const preservedBytes = await Promise.all(preservedPaths.map((path) => readFile(path)));
+    for (const candidate of cases) {
+      const leaf = await writeLeaf();
+      await rewriteLeafManifest(leaf, (manifest) => {
+        candidate.update(assertSingle(manifest.contractBundles) as unknown as Record<string, unknown>);
+      });
+      await assert.rejects(() => aggregateAndPack(root, [leafSource(project, leaf)]), candidate.expected, candidate.name);
+      assert.deepEqual(await Promise.all(preservedPaths.map((path) => readFile(path))), preservedBytes, candidate.name);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Manifest V1 aggregation accepts empty import groups but rejects nonempty or malformed groups and invalid dependencies", async () => {
+  const root = await createFixture();
+  try {
+    const configPath = resolve(root, "sunder.package.json");
+    const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+    config.dependencies = [{ packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0" }];
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    const project = await prepareProject(root);
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    const writeLeaf = () => writeTargetLeaf({
+      project,
+      rid: currentRid(),
+      modulePath: module,
+      workerNoticePath: workerNoticePath(root),
+      discoveryRoot: targetDiscoveryRoot(project),
+    });
+    const dependency = { packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0", presence: "required" };
+    const cases: ReadonlyArray<{
+      readonly name: string;
+      readonly update: (manifest: Record<string, unknown>) => void;
+      readonly expected: RegExp;
+    }> = [
+      ...[undefined, null, "", "unknown", "Required", "OPTIONAL", " required", "required ", false, {}, []].map((presence) => ({
+        name: `dependency presence = ${JSON.stringify(presence)}`,
+        update: (manifest: Record<string, unknown>) => { manifest.dependsOn = [{ ...dependency, presence }]; },
+        expected: presence === undefined
+          ? /dependsOn\[0\] must contain exactly packageId, versionRange, presence/u
+          : /presence 'required' or 'optional'/u,
+      })),
+      {
+        name: "optional dependency",
+        update: (manifest) => { manifest.dependsOn = [{ ...dependency, presence: "optional" }]; },
+        expected: /optional dependencies are not supported by descriptor-first Node package tooling/u,
+      },
+      {
+        name: "case-variant dependency presence property",
+        update: (manifest) => {
+          manifest.dependsOn = [{ packageId: dependency.packageId, versionRange: dependency.versionRange, Presence: "required" }];
+        },
+        expected: /dependsOn\[0\] contains unknown property 'Presence'/u,
+      },
+      {
+        name: "unknown dependency property",
+        update: (manifest) => { manifest.dependsOn = [{ ...dependency, futureField: true }]; },
+        expected: /dependsOn\[0\] contains unknown property 'futureField'/u,
+      },
+      ...[
+        { packageId: "Example.Dependency" },
+        { packageId: null },
+        { versionRange: "invalid" },
+        { versionRange: null },
+      ].map((value) => ({
+        name: `non-canonical dependency ${JSON.stringify(value)}`,
+        update: (manifest: Record<string, unknown>) => { manifest.dependsOn = [{ ...dependency, ...value }]; },
+        expected: value.versionRange === "invalid"
+          ? /versionRange 'invalid' is unsupported or noncanonical/u
+          : /must declare a canonical package id, version range, and presence/u,
+      })),
+      {
+        name: "duplicate dependency",
+        update: (manifest) => { manifest.dependsOn = [dependency, dependency]; },
+        expected: /declares dependency package id 'example.dependency' more than once/u,
+      },
+      {
+        name: "null dependency",
+        update: (manifest) => { manifest.dependsOn = [null]; },
+        expected: /dependsOn\[0\] must be an object/u,
+      },
+      ...[null, {}, Array.from({ length: 129 }, () => dependency)].map((dependsOn) => ({
+        name: `invalid dependency array (${Array.isArray(dependsOn) ? dependsOn.length : JSON.stringify(dependsOn)})`,
+        update: (manifest: Record<string, unknown>) => { manifest.dependsOn = dependsOn; },
+        expected: /dependsOn must be an array with at most 128 entries/u,
+      })),
+      ...["packageArtifactImports", "packageApiImports", "providerImports", "platformImports"].flatMap((field) => [
+        ...[[{}], [null], null, {}, false, 0, "[]"].map((value) => ({
+          name: `${field} = ${JSON.stringify(value)}`,
+          update: (manifest: Record<string, unknown>) => { manifest[field] = value; },
+          expected: new RegExp(`${field} ${Array.isArray(value)
+            ? "is not supported by descriptor-first Node package tooling"
+            : "must be an array when present"}`, "u"),
+        })),
+        {
+          name: `case-variant ${field} property`,
+          update: (manifest: Record<string, unknown>) => { manifest[field.toUpperCase()] = []; },
+          expected: new RegExp(`contains unknown property '${field.toUpperCase()}'`, "u"),
+        },
+        {
+          name: `missing canonical ${field} still differs in the metadata fingerprint`,
+          update: (manifest: Record<string, unknown>) => { delete manifest[field]; },
+          expected: /do not match the configured package identity and metadata/u,
+        },
+      ]),
+      {
+        name: "unknown manifest property",
+        update: (manifest) => { manifest.futureField = true; },
+        expected: /contains unknown property 'futureField'/u,
+      },
+    ];
+    for (const candidate of cases) {
+      const leaf = await writeLeaf();
+      await rewriteLeafManifest(leaf, (manifest) => candidate.update(manifest as unknown as Record<string, unknown>));
+      await assert.rejects(() => aggregateAndPack(root, [leafSource(project, leaf)]), candidate.expected, candidate.name);
+      assert.equal(await exists(resolve(project.outputRoot, "package")), false, candidate.name);
+      assert.equal(await exists(resolve(project.outputRoot, `${project.config.id}.${project.config.version}.sunderpkg`)), false, candidate.name);
+      assert.equal(await exists(resolve(project.outputRoot, `${project.config.id}.${project.config.version}.package-evidence.json`)), false, candidate.name);
+    }
+    const validLeaf = await writeLeaf();
+    const packed = await aggregateAndPack(root, [leafSource(project, validLeaf)]);
+    const leafManifest = JSON.parse(await readFile(resolve(validLeaf, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
+    const packedManifest = JSON.parse(await readFile(resolve(packed.packageRoot, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
+    assert.deepEqual(packedManifest, leafManifest);
+    for (const field of ["packageArtifactImports", "packageApiImports", "providerImports", "platformImports"] as const) {
+      assert.deepEqual(packedManifest[field], [], field);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("V1 descriptor annotations change only descriptor identity while structural changes alter both hashes", async () => {
   const root = await createFixture();
   try {
     const descriptorPath = resolve(root, "contracts", "example.rpc.json");
     const original = await prepareProject(root);
     const initial = assertSingle(original.contracts);
-    assert.equal(initial.descriptor.descriptorVersion, 2);
+    assert.equal(initial.descriptor.descriptorVersion, 1);
     assert.equal(initial.exposure, "package");
     assert.equal(initial.canonicalBytes.toString("utf8"), initial.canonical);
     assert.equal(sha256(initial.canonicalBytes), initial.descriptorSha256);
@@ -801,13 +1208,26 @@ test("schema V2 rejects schema V1 and closed-shape V1 aliases with migration dia
       () => prepareProject(root),
       /schemaVersion 1 is no longer supported; migrate RPC package authoring to schemaVersion 2/u,
     );
-    await writeFile(configPath, `${JSON.stringify({ ...baseline, schemaVersion: 3 }, null, 2)}\n`, "utf8");
+    await writeFile(configPath, `${JSON.stringify({ ...baseline, schemaVersion: 4 }, null, 2)}\n`, "utf8");
     await assert.rejects(
       () => prepareProject(root),
       /schemaVersion must be exactly 2/u,
     );
 
     const invalid: ReadonlyArray<{ readonly value: Partial<Record<string, unknown>>; readonly expected: RegExp }> = [
+      ...["source", "authorityKind", "authorityId", "selectedAuthorityRelease", "selectedAuthorityContentIdentity",
+        "catalogSigningKeyId", "catalogTrustGeneration", "catalogTrustFingerprint"].map((field) => ({
+        value: { contracts: [{ path: "contracts/example.rpc.json", exposure: "package", [field]: "unsupported" }] },
+        expected: new RegExp(`unknown property '${field}'`, "u"),
+      })),
+      ...["required", "optional"].map((presence) => ({
+        value: { dependencies: [{ packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0", presence }] },
+        expected: /unknown property 'presence'/u,
+      })),
+      ...["packageArtifactImports", "packageApiImports", "providerImports", "platformImports"].map((field) => ({
+        value: { [field]: [] },
+        expected: new RegExp(`unknown property '${field}'`, "u"),
+      })),
       {
         value: { contracts: [{ path: "contracts/example.rpc.json" }] },
         expected: /contracts\[0\]\.exposure must be one of/u,
@@ -851,7 +1271,7 @@ test("schema V2 rejects schema V1 and closed-shape V1 aliases with migration dia
   }
 });
 
-test("contract exposure and provider audience enforce Manifest V3 owner/public visibility policy", async () => {
+test("contract exposure and provider audience enforce Manifest V1 owner/public visibility policy", async () => {
   const root = await createFixture();
   try {
     const configPath = resolve(root, "sunder.package.json");
@@ -935,13 +1355,12 @@ test("strict target leaf validation rejects App-role providers", async () => {
   const root = await createFixture();
   try {
     const project = await prepareProject(root);
-    const executable = resolve(root, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
-      executablePath: executable,
-      nodeNoticePath: noticePath(root),
+      modulePath: module,
       workerNoticePath: workerNoticePath(root),
       discoveryRoot: targetDiscoveryRoot(project),
     });
@@ -975,17 +1394,350 @@ test("aggregation retains one deterministic universal package for all six exact 
   const root = await createFixture();
   try {
     const project = await prepareProject(root);
-    const executable = resolve(root, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
     const leaves: string[] = [];
     for (const rid of SUPPORTED_RIDS) {
-      leaves.push(await writeTargetLeaf({ project, rid, executablePath: executable, nodeNoticePath: noticePath(root), workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) }));
+      leaves.push(await writeTargetLeaf({ project, rid, modulePath: module, workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) }));
     }
     const result = await aggregateAndPack(root, leaves.map((leaf) => leafSource(project, leaf)));
     const manifest = JSON.parse(await readFile(resolve(result.packageRoot, "manifest", "sunder-package.json"), "utf8")) as PackageManifest;
     assert.deepEqual(manifest.targets.map((target) => target.rid), [...SUPPORTED_RIDS]);
     const entries = zipEntryNames(await readFile(result.archivePath));
-    assert.equal(entries.filter((entry) => entry.endsWith("THIRD-PARTY-NOTICES/Node.js-LICENSE.txt")).length, 1);
+    assert.equal(entries.filter((entry) => entry === "payload/runtime/shared/bin/worker.cjs").length, 1);
+    assert.equal(entries.some((entry) => entry.endsWith(".exe") || entry.includes("Node.js-LICENSE")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("package CLI builds all six exact-RID leaves before aggregation", async () => {
+  const root = await createFixture();
+  try {
+    const cli = resolve(__dirname, "..", "..", "dist", "cli.js");
+    const result = spawnSync(process.execPath, [cli, "package", "--project", root], {
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const manifest = JSON.parse(await readFile(
+      resolve(root, "dist", "package", "manifest", "sunder-package.json"),
+      "utf8",
+    )) as PackageManifest;
+    assert.deepEqual(manifest.targets.map((target) => target.rid), [...SUPPORTED_RIDS]);
+    for (const rid of SUPPORTED_RIDS) {
+      assert.equal(await exists(resolve(root, "dist", "targets", rid)), true);
+    }
+    assert.equal(await exists(resolve(root, "dist", "test.node.package.1.0.0.sunderpkg")), true);
+    assert.equal(await exists(resolve(root, "dist", "test.node.package.1.0.0.package-evidence.json")), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("configured package-owned native assets remain in their exact RID layers", async () => {
+  const root = await createFixture();
+  try {
+    const configPath = resolve(root, "sunder.package.json");
+    const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+    config.nativeAssets = Object.fromEntries(await Promise.all(SUPPORTED_RIDS.map(async (rid) => {
+      const sourcePath = `native/${rid}/sqlite.node`;
+      await mkdir(resolve(root, "native", rid), { recursive: true });
+      await writeFile(resolve(root, ...sourcePath.split("/")), `native-${rid}\n`, "utf8");
+      return [rid, [{ sourcePath, targetPath: "native/sqlite.node" }]];
+    })));
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    const project = await prepareProject(root);
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    const leaves = [];
+    for (const rid of SUPPORTED_RIDS) {
+      const leaf = await writeTargetLeaf({
+        project,
+        rid,
+        modulePath: module,
+        workerNoticePath: workerNoticePath(root),
+        discoveryRoot: targetDiscoveryRoot(project),
+      });
+      assert.equal(
+        await readFile(resolve(leaf, "payload", "runtime", rid, "native", "sqlite.node"), "utf8"),
+        `native-${rid}\n`,
+      );
+      leaves.push(leaf);
+    }
+
+    const first = await aggregateAndPack(root, leaves.map((leaf) => leafSource(project, leaf)));
+    const firstHash = await hashFile(first.archivePath);
+    const firstEvidence = await readFile(first.evidencePath);
+    const entries = zipEntries(await readFile(first.archivePath));
+    assert.equal(entries.some((entry) => entry.name === "payload/runtime/shared/native/sqlite.node"), false);
+    for (const rid of SUPPORTED_RIDS) {
+      assert.equal(
+        entries.find((entry) => entry.name === `payload/runtime/${rid}/native/sqlite.node`)?.data.toString("utf8"),
+        `native-${rid}\n`,
+      );
+    }
+    const evidence = JSON.parse(firstEvidence.toString("utf8")) as PackageOwnershipEvidence;
+    assert.equal(evidence.schemaVersion, 1);
+    assert.equal(evidence.archiveSha256, firstHash);
+    assert.equal(
+      evidence.metadataBytes,
+      (await stat(resolve(first.packageRoot, "manifest", "sunder-package.json"))).size
+        + (await stat(resolve(first.packageRoot, "manifest", "content-index.json"))).size,
+    );
+    assert.ok(evidence.payloadBytes > 0);
+    assert.equal(evidence.runtimeClosureFileCount, 0);
+    assert.equal(evidence.runtimeClosureBytes, 0);
+    assert.deepEqual(evidence.targets.map((target) => target.rid), [...SUPPORTED_RIDS]);
+    for (const target of evidence.targets) {
+      assert.equal(target.runtimeClosureBytes, 0);
+      assert.equal(target.nativeAssets.length, 1);
+      assert.equal(target.nativeAssets[0]?.path, "native/sqlite.node");
+      assert.ok(target.ownership.exactRidBytes > 0);
+      assert.ok(target.ownership.roleSharedBytes > 0);
+    }
+    const second = await aggregateAndPack(root, leaves.map((leaf) => leafSource(project, leaf)));
+    assert.equal(await hashFile(second.archivePath), firstHash);
+    assert.deepEqual(await readFile(second.evidencePath), firstEvidence);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("renamed exact and format-mutated active Node executables are rejected independent of executable mode", async () => {
+  const root = await createFixture();
+  try {
+    const nativeRoot = resolve(root, "native", currentRid());
+    await mkdir(nativeRoot, { recursive: true });
+    const disguisedNode = resolve(nativeRoot, "sqlite.node");
+    await copyFile(process.execPath, disguisedNode);
+    if (process.platform !== "win32") await chmod(disguisedNode, 0o600);
+    await configureNativeAsset(root, currentRid(), `native/${currentRid()}/sqlite.node`);
+    const project = await prepareProject(root);
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    const input = {
+      project,
+      rid: currentRid(),
+      modulePath: module,
+      workerNoticePath: workerNoticePath(root),
+      discoveryRoot: targetDiscoveryRoot(project),
+    } as const;
+
+    await assert.rejects(
+      () => writeTargetLeaf(input),
+      /forbidden execution-runtime closure.*executable image/u,
+    );
+
+    const handle = await open(disguisedNode, "r+");
+    try {
+      const magic = Buffer.alloc(1);
+      assert.equal((await handle.read(magic, 0, 1, 0)).bytesRead, 1);
+      magic[0] = magic[0]! ^ 0xff;
+      await handle.write(magic, 0, 1, 0);
+    } finally {
+      await handle.close();
+    }
+    await assert.rejects(
+      () => writeTargetLeaf(input),
+      /active Node executable's header-independent content identity/u,
+    );
+    assert.equal(await exists(resolve(root, "dist", "targets", currentRid())), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("aggregate admission rejects a forged renamed Node executable before zero-closure evidence is emitted", async () => {
+  const root = await createFixture();
+  try {
+    const rid = currentRid();
+    const sourcePath = `native/${rid}/sqlite.node`;
+    await mkdir(resolve(root, "native", rid), { recursive: true });
+    await writeFile(resolve(root, ...sourcePath.split("/")), "package-owned native fixture\n", "utf8");
+    await configureNativeAsset(root, rid, sourcePath);
+    const project = await prepareProject(root);
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    const leaf = await writeTargetLeaf({
+      project,
+      rid,
+      modulePath: module,
+      workerNoticePath: workerNoticePath(root),
+      discoveryRoot: targetDiscoveryRoot(project),
+    });
+    const forgedPath = `payload/runtime/${rid}/native/sqlite.node`;
+    await copyFile(process.execPath, resolve(leaf, ...forgedPath.split("/")));
+    await rewriteLeafFileIndex(leaf, forgedPath);
+
+    await assert.rejects(
+      () => aggregateAndPack(root, [leafSource(project, leaf)]),
+      /forbidden execution-runtime closure.*executable image/u,
+    );
+    assert.equal(await exists(resolve(root, "dist", "test.node.package.1.0.0.package-evidence.json")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("binary metadata admits target-compatible shared libraries for every supported RID", async () => {
+  const root = await createFixture();
+  try {
+    await configureNativeAssetMatrix(root, (rid) => nativeBinaryFixture(rid, "shared-library"));
+    const project = await prepareProject(root);
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    const leaves = [];
+    for (const rid of SUPPORTED_RIDS) {
+      leaves.push(await writeTargetLeaf({
+        project,
+        rid,
+        modulePath: module,
+        workerNoticePath: workerNoticePath(root),
+        discoveryRoot: targetDiscoveryRoot(project),
+      }));
+    }
+
+    const result = await aggregateAndPack(root, leaves.map((leaf) => leafSource(project, leaf)));
+    const evidence = JSON.parse(await readFile(result.evidencePath, "utf8")) as PackageOwnershipEvidence;
+    assert.equal(evidence.runtimeClosureFileCount, 0);
+    assert.equal(evidence.runtimeClosureBytes, 0);
+    assert.deepEqual(evidence.targets.map((target) => target.rid), [...SUPPORTED_RIDS]);
+    assert.ok(evidence.targets.every((target) => target.runtimeClosureFileCount === 0
+      && target.runtimeClosureBytes === 0
+      && target.nativeAssets[0]?.path === "native/sqlite.node"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("binary metadata rejects renamed executables for every supported RID", async () => {
+  const root = await createFixture();
+  try {
+    await configureNativeAssetMatrix(root, (rid) => nativeBinaryFixture(rid, "executable"));
+    const project = await prepareProject(root);
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    for (const rid of SUPPORTED_RIDS) {
+      await assert.rejects(
+        () => writeTargetLeaf({
+          project,
+          rid,
+          modulePath: module,
+          workerNoticePath: workerNoticePath(root),
+          discoveryRoot: targetDiscoveryRoot(project),
+        }),
+        /forbidden execution-runtime closure.*executable image/u,
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("binary ownership rejects managed BCL, object toolchain, runtime fingerprints, and foreign formats when renamed", async () => {
+  const root = await createFixture();
+  try {
+    const cases: ReadonlyArray<{
+      readonly rid: typeof SUPPORTED_RIDS[number];
+      readonly bytes: Buffer;
+      readonly expected: RegExp;
+    }> = [
+      { rid: "win-x64", bytes: peBinaryFixture("x64", "managed-assembly"), expected: /managed PE\/CLR assembly/u },
+      { rid: "linux-x64", bytes: elfBinaryFixture("x64", "toolchain"), expected: /ELF relocatable object/u },
+      {
+        rid: "linux-arm64",
+        bytes: Buffer.concat([
+          elfBinaryFixture("arm64", "shared-library"),
+          Buffer.from("NODE_OPTIONS NODE_EXTRA_CA_CERTS node::Start process.binding", "ascii"),
+        ]),
+        expected: /Node runtime content in a native asset/u,
+      },
+      { rid: "osx-arm64", bytes: peBinaryFixture("arm64", "shared-library"), expected: /foreign to osx-arm64/u },
+      { rid: "win-arm64", bytes: peBinaryFixture("x64", "shared-library"), expected: /does not contain the arm64 architecture/u },
+      { rid: "osx-x64", bytes: machBinaryFixture("x64", "mutated-executable"), expected: /Mach-O executable image/u },
+    ];
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    for (const [index, item] of cases.entries()) {
+      const sourcePath = `native/case-${index}/sqlite.node`;
+      await mkdir(resolve(root, "native", `case-${index}`), { recursive: true });
+      await writeFile(resolve(root, ...sourcePath.split("/")), item.bytes);
+      await configureNativeAsset(root, item.rid, sourcePath);
+      const project = await prepareProject(root);
+      await assert.rejects(
+        () => writeTargetLeaf({
+          project,
+          rid: item.rid,
+          modulePath: module,
+          workerNoticePath: workerNoticePath(root),
+          discoveryRoot: targetDiscoveryRoot(project),
+        }),
+        item.expected,
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("native asset authoring rejects RID ambiguity, payload collisions, and execution-runtime files", async () => {
+  const root = await createFixture();
+  try {
+    const configPath = resolve(root, "sunder.package.json");
+    const baseline = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+    await mkdir(resolve(root, "native"), { recursive: true });
+    await writeFile(resolve(root, "native", "addon.node"), "native-addon\n", "utf8");
+
+    await writeFile(configPath, `${JSON.stringify({
+      ...baseline,
+      nativeAssets: { "freebsd-x64": [{ sourcePath: "native/addon.node", targetPath: "native/addon.node" }] },
+    }, null, 2)}\n`, "utf8");
+    await assert.rejects(() => prepareProject(root), /unknown property 'freebsd-x64'/u);
+
+    await writeFile(configPath, `${JSON.stringify({
+      ...baseline,
+      nativeAssets: { [currentRid()]: [{ sourcePath: "native/addon.node", targetPath: "bin/worker.cjs" }] },
+    }, null, 2)}\n`, "utf8");
+    await assert.rejects(() => prepareProject(root), /collides with generated Worker entry point/u);
+
+    await writeFile(resolve(root, "native", "node"), "renamed runtime fixture\n", "utf8");
+    await writeFile(configPath, `${JSON.stringify({
+      ...baseline,
+      nativeAssets: { [currentRid()]: [{ sourcePath: "native/node", targetPath: "native/runtime.bin" }] },
+    }, null, 2)}\n`, "utf8");
+    await assert.rejects(() => prepareProject(root), /must not include a Node or \.NET execution runtime or toolchain asset/u);
+
+    await writeFile(resolve(root, "native", "hostpolicy.dll"), "renamed .NET runtime fixture\n", "utf8");
+    await writeFile(configPath, `${JSON.stringify({
+      ...baseline,
+      nativeAssets: { [currentRid()]: [{ sourcePath: "native/hostpolicy.dll", targetPath: "native/runtime.bin" }] },
+    }, null, 2)}\n`, "utf8");
+    await assert.rejects(() => prepareProject(root), /must not include a Node or \.NET execution runtime or toolchain asset/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("module builds are deterministic and RID-neutral across all six exact target records", async () => {
+  const root = await createFixture();
+  try {
+    const results = [];
+    for (const rid of SUPPORTED_RIDS) results.push(await buildModuleTarget({ projectPath: root, rid }));
+    const moduleHashes = await Promise.all(results.map(async (result) => hashFile(result.modulePath)));
+    assert.equal(new Set(moduleHashes).size, 1);
+    for (const [index, result] of results.entries()) {
+      assert.equal(
+        await readFile(resolve(result.leafPath, "payload", "runtime", SUPPORTED_RIDS[index]!, "bin", "worker.cjs"), "utf8"),
+        await readFile(results[0]!.modulePath, "utf8"),
+      );
+    }
+
+    const project = await prepareProject(root);
+    const aggregate = await aggregateAndPack(root, results.map((result) => leafSource(project, result.leafPath)));
+    const entries = zipEntryNames(await readFile(aggregate.archivePath));
+    assert.equal(entries.filter((entry) => entry === "payload/runtime/shared/bin/worker.cjs").length, 1);
+    assert.equal(entries.some((entry) => entry.endsWith(".exe") || entry.includes("sea-prep") || entry.includes("NODE_SEA")), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1009,13 +1761,12 @@ test("aggregation rejects conflicting same-role RID uses and providers", async (
       }
       await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
       const firstProject = await prepareProject(root);
-      const executable = resolve(root, "fake-sea");
-      await writeFile(executable, "self-contained-sea", "utf8");
+      const module = resolve(root, "worker.cjs");
+      await writeFile(module, "module.exports = {};\n", "utf8");
       const firstLeaf = await writeTargetLeaf({
         project: firstProject,
         rid: SUPPORTED_RIDS[0],
-        executablePath: executable,
-        nodeNoticePath: noticePath(root),
+        modulePath: module,
         workerNoticePath: workerNoticePath(root),
         discoveryRoot: targetDiscoveryRoot(firstProject),
       });
@@ -1042,8 +1793,7 @@ test("aggregation rejects conflicting same-role RID uses and providers", async (
       const secondLeaf = await writeTargetLeaf({
         project: secondProject,
         rid: SUPPORTED_RIDS[1],
-        executablePath: executable,
-        nodeNoticePath: noticePath(root),
+        modulePath: module,
         workerNoticePath: workerNoticePath(root),
         discoveryRoot: targetDiscoveryRoot(secondProject),
       });
@@ -1076,13 +1826,12 @@ test("aggregation rejects same-role RID declaration omissions", async () => {
       const configuredDeclarations = kind === "use" ? config.usesContracts : config.providers;
       await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
       const firstProject = await prepareProject(root);
-      const executable = resolve(root, "fake-sea");
-      await writeFile(executable, "self-contained-sea", "utf8");
+      const module = resolve(root, "worker.cjs");
+      await writeFile(module, "module.exports = {};\n", "utf8");
       const firstLeaf = await writeTargetLeaf({
         project: firstProject,
         rid: SUPPORTED_RIDS[0],
-        executablePath: executable,
-        nodeNoticePath: noticePath(root),
+        modulePath: module,
         workerNoticePath: workerNoticePath(root),
         discoveryRoot: targetDiscoveryRoot(firstProject),
       });
@@ -1094,8 +1843,7 @@ test("aggregation rejects same-role RID declaration omissions", async () => {
       const secondLeaf = await writeTargetLeaf({
         project: secondProject,
         rid: SUPPORTED_RIDS[1],
-        executablePath: executable,
-        nodeNoticePath: noticePath(root),
+        modulePath: module,
         workerNoticePath: workerNoticePath(root),
         discoveryRoot: targetDiscoveryRoot(secondProject),
       });
@@ -1117,13 +1865,12 @@ test("aggregation rejects a role-scoped RPC declaration missing from all target 
   const root = await createFixture();
   try {
     const project = await prepareProject(root);
-    const executable = resolve(root, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
-      executablePath: executable,
-      nodeNoticePath: noticePath(root),
+      modulePath: module,
       workerNoticePath: workerNoticePath(root),
       discoveryRoot: targetDiscoveryRoot(project),
     });
@@ -1155,12 +1902,12 @@ test("recursive target discovery holds its configured root across a nested atomi
   let packageTask: Promise<Awaited<ReturnType<typeof aggregateAndPack>>> | undefined;
   try {
     const project = await prepareProject(root);
-    const executable = resolve(root, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
     const discoveryRoot = project.outputRoot;
     const leaves: string[] = [];
     for (const rid of SUPPORTED_RIDS.slice(0, 2)) {
-      leaves.push(await writeTargetLeaf({ project, rid, executablePath: executable, nodeNoticePath: noticePath(root), workerNoticePath: workerNoticePath(root), discoveryRoot }));
+      leaves.push(await writeTargetLeaf({ project, rid, modulePath: module, workerNoticePath: workerNoticePath(root), discoveryRoot }));
     }
     const targetsRoot = resolve(root, "dist", "targets");
     const hiddenLeaf = leaves[0]!;
@@ -1205,9 +1952,9 @@ test("streaming package writes enforce the configured compressed artifact limit"
   const root = await createFixture();
   try {
     const project = await prepareProject(root);
-    const executable = resolve(root, "fake-sea");
-    await writeFile(executable, "self-contained-sea", "utf8");
-    const leaf = await writeTargetLeaf({ project, rid: currentRid(), executablePath: executable, nodeNoticePath: noticePath(root), workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) });
+    const module = resolve(root, "worker.cjs");
+    await writeFile(module, "module.exports = {};\n", "utf8");
+    const leaf = await writeTargetLeaf({ project, rid: currentRid(), modulePath: module, workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) });
     const configPath = resolve(root, "sunder.package.json");
     const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
     config.maximumPackageBytes = 536870913;
@@ -1226,40 +1973,37 @@ test("generated directories and archives preserve prior valid outputs across fai
   const root = await createFixture();
   try {
     const project = await prepareProject(root);
-    const firstExecutable = resolve(root, "fake-sea-first");
-    const secondExecutable = resolve(root, "fake-sea-second");
-    await writeFile(firstExecutable, "first-sea", "utf8");
-    await writeFile(secondExecutable, "second-sea", "utf8");
+    const firstModule = resolve(root, "worker-first.cjs");
+    const secondModule = resolve(root, "worker-second.cjs");
+    await writeFile(firstModule, "first-module", "utf8");
+    await writeFile(secondModule, "second-module", "utf8");
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
-      executablePath: firstExecutable,
-      nodeNoticePath: noticePath(root),
+      modulePath: firstModule,
       workerNoticePath: workerNoticePath(root),
       discoveryRoot: targetDiscoveryRoot(project),
     });
-    const executableName = `test.node.package${currentRid().startsWith("win-") ? ".exe" : ""}`;
-    const outputExecutable = resolve(leaf, "payload", "runtime", currentRid(), "bin", executableName);
+    const outputModule = resolve(leaf, "payload", "runtime", currentRid(), "bin", "worker.cjs");
     const originalManifest = await readFile(resolve(leaf, "manifest", "sunder-package.json"));
     await assert.rejects(
       writeTargetLeaf({
         project,
         rid: currentRid(),
-        executablePath: resolve(root, "missing-sea"),
-        nodeNoticePath: noticePath(root),
+        modulePath: resolve(root, "missing-module"),
         workerNoticePath: workerNoticePath(root),
         discoveryRoot: targetDiscoveryRoot(project),
       }),
       /ENOENT/u,
     );
-    assert.equal(await readFile(outputExecutable, "utf8"), "first-sea");
+    assert.equal(await readFile(outputModule, "utf8"), "first-module");
     assert.deepEqual(await readFile(resolve(leaf, "manifest", "sunder-package.json")), originalManifest);
 
     await Promise.all([
-      writeTargetLeaf({ project, rid: currentRid(), executablePath: firstExecutable, nodeNoticePath: noticePath(root), workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) }),
-      writeTargetLeaf({ project, rid: currentRid(), executablePath: secondExecutable, nodeNoticePath: noticePath(root), workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) }),
+      writeTargetLeaf({ project, rid: currentRid(), modulePath: firstModule, workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) }),
+      writeTargetLeaf({ project, rid: currentRid(), modulePath: secondModule, workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) }),
     ]);
-    assert.ok(["first-sea", "second-sea"].includes(await readFile(outputExecutable, "utf8")));
+    assert.ok(["first-module", "second-module"].includes(await readFile(outputModule, "utf8")));
     const targetEntries = await readdir(resolve(root, "dist", "targets"));
     assert.equal(targetEntries.some((name) => /\.(?:stage|backup)-/u.test(name)), false);
 
@@ -1334,13 +2078,12 @@ test("separate CLI processes contend safely and recover a killed owner during an
     }
 
     const project = await prepareProject(root);
-    const executable = resolve(root, "fake-contention-sea");
-    await writeFile(executable, "contention sea\n", "utf8");
+    const module = resolve(root, "contention-worker.cjs");
+    await writeFile(module, "module.exports = 'contention';\n", "utf8");
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
-      executablePath: executable,
-      nodeNoticePath: noticePath(root),
+      modulePath: module,
       workerNoticePath: workerNoticePath(root),
       discoveryRoot: targetDiscoveryRoot(project),
     });
@@ -1683,7 +2426,7 @@ test("watch recreates immutable build context and App watcher after structural c
     watchProcess.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
     watchProcess.stderr.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
     const devRoot = resolve(root, "dist", "sunder-dev");
-    const bundlePath = resolve(devRoot, "payload", "runtime", currentRid(), "worker.cjs");
+    const bundlePath = resolve(devRoot, "payload", "runtime", "shared", "bin", "worker.cjs");
     await waitUntil(async () => await exists(bundlePath), "initial watch output", () => output);
 
     await mkdir(resolve(root, "app-next"), { recursive: true });
@@ -1740,73 +2483,125 @@ test("watch recreates immutable build context and App watcher after structural c
   }
 });
 
-test("bounded downloads retain prior files and cached Node verification binds executable bytes to the pinned archive", async () => {
-  const root = resolve(tmpdir(), "sunder-node-tool-tests", randomUUID());
-  try {
-    await mkdir(root, { recursive: true });
-    const outputPath = resolve(root, "download.bin");
-    await writeFile(outputPath, "prior-valid", "utf8");
-    const oversizedFetch = (async () => new Response(new Uint8Array(32))) as typeof fetch;
-    await assert.rejects(() => fetchBoundedText("https://example.invalid/text", {
-      label: "test text",
-      maximumBytes: 8,
-      timeoutMilliseconds: 1_000,
-      fetchImplementation: oversizedFetch,
-    }), /byte limit/u);
-    await assert.rejects(() => downloadBoundedFile("https://example.invalid/file", outputPath, {
-      label: "test file",
-      maximumBytes: 8,
-      timeoutMilliseconds: 1_000,
-      fetchImplementation: oversizedFetch,
-    }), /byte limit/u);
-    assert.equal(await readFile(outputPath, "utf8"), "prior-valid");
+async function configureNativeAsset(
+  root: string,
+  rid: (typeof SUPPORTED_RIDS)[number],
+  sourcePath: string,
+): Promise<void> {
+  const configPath = resolve(root, "sunder.package.json");
+  const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+  config.nativeAssets = { [rid]: [{ sourcePath, targetPath: "native/sqlite.node" }] };
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
 
-    const timeoutFetch = ((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolvePromise, reject) => {
-      const signal = init?.signal;
-      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
-    })) as typeof fetch;
-    await assert.rejects(() => fetchBoundedText("https://example.invalid/timeout", {
-      label: "test timeout",
-      maximumBytes: 8,
-      timeoutMilliseconds: 20,
-      fetchImplementation: timeoutFetch,
-    }), /timed out/u);
+async function configureNativeAssetMatrix(
+  root: string,
+  createBytes: (rid: (typeof SUPPORTED_RIDS)[number]) => Buffer,
+): Promise<void> {
+  const configPath = resolve(root, "sunder.package.json");
+  const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+  config.nativeAssets = Object.fromEntries(await Promise.all(SUPPORTED_RIDS.map(async (rid) => {
+    const sourcePath = `native/${rid}/sqlite.node`;
+    await mkdir(resolve(root, "native", rid), { recursive: true });
+    await writeFile(resolve(root, ...sourcePath.split("/")), createBytes(rid));
+    return [rid, [{ sourcePath, targetPath: "native/sqlite.node" }]];
+  })));
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
 
-    const archivePath = resolve(root, "node.tar.gz");
-    const executablePath = resolve(root, "node");
-    const verificationPath = resolve(root, "verified.json");
-    await writeFile(archivePath, "verified archive", "utf8");
-    await writeFile(executablePath, "verified executable", "utf8");
-    const archiveSha256 = await hashFile(archivePath);
-    const executableSha256 = await hashFile(executablePath);
-    await writeNodeCacheVerification(verificationPath, {
-      schemaVersion: 1,
-      version: "24.18.1",
-      file: "node.tar.gz",
-      archiveSha256,
-      executable: "node",
-      executableSha256,
-    });
-    let versionChecks = 0;
-    const verify = () => verifyCachedNode({
-      verificationPath,
-      archivePath,
-      executablePath,
-      expectedVersion: "24.18.1",
-      expectedFile: "node.tar.gz",
-      expectedArchiveSha256: archiveSha256,
-      expectedExecutable: "node",
-      verifyVersion: async () => { versionChecks += 1; },
-    });
-    assert.equal(await verify(), true);
-    assert.equal(versionChecks, 1);
-    await writeFile(executablePath, "tampered executable", "utf8");
-    assert.equal(await verify(), false);
-    assert.equal(versionChecks, 1);
-  } finally {
-    await rm(root, { recursive: true, force: true });
+function nativeBinaryFixture(
+  rid: (typeof SUPPORTED_RIDS)[number],
+  kind: "shared-library" | "executable",
+): Buffer {
+  const architecture = rid.endsWith("-x64") ? "x64" : "arm64";
+  if (rid.startsWith("win-")) return peBinaryFixture(architecture, kind);
+  if (rid.startsWith("linux-")) return elfBinaryFixture(architecture, kind);
+  if (kind === "shared-library") return fatMachSharedLibraryFixture();
+  return machBinaryFixture(architecture, kind);
+}
+
+function peBinaryFixture(
+  architecture: "x64" | "arm64",
+  kind: "shared-library" | "executable" | "managed-assembly",
+): Buffer {
+  const peOffset = 0x80;
+  const optionalHeaderBytes = 0xf0;
+  const bytes = Buffer.alloc(peOffset + 24 + optionalHeaderBytes + 40);
+  bytes[0] = 0x4d;
+  bytes[1] = 0x5a;
+  bytes.writeUInt32LE(peOffset, 0x3c);
+  bytes.write("PE\0\0", peOffset, "binary");
+  bytes.writeUInt16LE(architecture === "x64" ? 0x8664 : 0xaa64, peOffset + 4);
+  bytes.writeUInt16LE(1, peOffset + 6);
+  bytes.writeUInt16LE(optionalHeaderBytes, peOffset + 20);
+  bytes.writeUInt16LE(kind === "executable" ? 0x0022 : 0x2022, peOffset + 22);
+  const optionalOffset = peOffset + 24;
+  bytes.writeUInt16LE(0x20b, optionalOffset);
+  bytes.writeUInt32LE(kind === "executable" ? 0x1000 : 0, optionalOffset + 16);
+  bytes.writeUInt32LE(16, optionalOffset + 108);
+  if (kind === "managed-assembly") {
+    bytes.writeUInt32LE(0x2000, optionalOffset + 112 + 14 * 8);
+    bytes.writeUInt32LE(0x48, optionalOffset + 112 + 14 * 8 + 4);
   }
-});
+  return bytes;
+}
+
+function elfBinaryFixture(
+  architecture: "x64" | "arm64",
+  kind: "shared-library" | "executable" | "toolchain",
+): Buffer {
+  const bytes = Buffer.alloc(kind === "toolchain" ? 64 : 120);
+  bytes.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1], 0);
+  bytes.writeUInt16LE(kind === "toolchain" ? 1 : 3, 16);
+  bytes.writeUInt16LE(architecture === "x64" ? 62 : 183, 18);
+  bytes.writeUInt32LE(1, 20);
+  bytes.writeBigUInt64LE(BigInt(kind === "executable" ? 0x1000 : 0), 24);
+  bytes.writeBigUInt64LE(64n, 32);
+  bytes.writeUInt16LE(64, 52);
+  bytes.writeUInt16LE(56, 54);
+  bytes.writeUInt16LE(kind === "toolchain" ? 0 : 1, 56);
+  if (kind !== "toolchain") bytes.writeUInt32LE(kind === "executable" ? 3 : 1, 64);
+  return bytes;
+}
+
+function machBinaryFixture(
+  architecture: "x64" | "arm64",
+  kind: "shared-library" | "executable" | "mutated-executable",
+): Buffer {
+  const hasMainCommand = kind === "mutated-executable";
+  const bytes = Buffer.alloc(hasMainCommand ? 56 : 32);
+  bytes.set([0xcf, 0xfa, 0xed, 0xfe], 0);
+  bytes.writeUInt32LE(architecture === "x64" ? 0x01000007 : 0x0100000c, 4);
+  bytes.writeUInt32LE(kind === "executable" ? 2 : 8, 12);
+  bytes.writeUInt32LE(hasMainCommand ? 1 : 0, 16);
+  bytes.writeUInt32LE(hasMainCommand ? 24 : 0, 20);
+  if (hasMainCommand) {
+    bytes.writeUInt32LE(0x80000028, 32);
+    bytes.writeUInt32LE(24, 36);
+  }
+  return bytes;
+}
+
+function fatMachSharedLibraryFixture(): Buffer {
+  const slices = [
+    { cpu: 0x01000007, bytes: machBinaryFixture("x64", "shared-library") },
+    { cpu: 0x0100000c, bytes: machBinaryFixture("arm64", "shared-library") },
+  ];
+  const headerBytes = 8 + slices.length * 20;
+  const bytes = Buffer.alloc(headerBytes + slices.reduce((total, slice) => total + slice.bytes.length, 0));
+  bytes.set([0xca, 0xfe, 0xba, 0xbe], 0);
+  bytes.writeUInt32BE(slices.length, 4);
+  let sliceOffset = headerBytes;
+  for (const [index, slice] of slices.entries()) {
+    const recordOffset = 8 + index * 20;
+    bytes.writeUInt32BE(slice.cpu, recordOffset);
+    bytes.writeUInt32BE(sliceOffset, recordOffset + 8);
+    bytes.writeUInt32BE(slice.bytes.length, recordOffset + 12);
+    slice.bytes.copy(bytes, sliceOffset);
+    sliceOffset += slice.bytes.length;
+  }
+  return bytes;
+}
 
 async function createFixture(): Promise<string> {
   const root = resolve(tmpdir(), "sunder-node-tool-tests", randomUUID());
@@ -1828,14 +2623,13 @@ async function createFixture(): Promise<string> {
       }
     }] }));
   `, "utf8");
-  await writeFile(noticePath(root), "Node.js test distribution notice\n", "utf8");
   await writeFile(workerNoticePath(root), "Sunder Bundled Worker Dependency Notices\n\n@sunder/sdk@1.1.0\n", "utf8");
   await writeFile(resolve(root, "contracts", "example.rpc.json"), `${JSON.stringify(descriptor, null, 2)}\n`, "utf8");
   await writeFile(resolve(root, "sunder.package.json"), `${JSON.stringify({
     schemaVersion: 2,
     id: "test.node.package",
     name: "Test Node Package",
-    summary: "Node Worker V3 package test fixture.",
+    summary: "Runtime-backed Node Worker V1 package test fixture.",
     version: "1.0.0",
     entry: "src/worker.ts",
     workerCapabilities: [],
@@ -2063,10 +2857,6 @@ function zipEntries(archive: Buffer): ZipEntry[] {
   return output;
 }
 
-function noticePath(root: string): string {
-  return resolve(root, "Node.js-LICENSE.txt");
-}
-
 function workerNoticePath(root: string): string {
   return resolve(root, "Bundled-Worker-Dependencies.txt");
 }
@@ -2087,6 +2877,25 @@ function assertDocumentProperties(document: Record<string, unknown>, specificati
 
 function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+async function hashFile(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
+async function rewriteLeafFileIndex(leaf: string, archivePath: string): Promise<void> {
+  const fullPath = resolve(leaf, ...archivePath.split("/"));
+  const indexPath = resolve(leaf, "manifest", "content-index.json");
+  const index = JSON.parse(await readFile(indexPath, "utf8")) as {
+    files: Array<{ path: string; sha256: string; size: number }>;
+  };
+  const entry = index.files.find((item) => item.path === archivePath);
+  if (entry === undefined) throw new Error(`Fixture content index entry '${archivePath}' is missing.`);
+  entry.sha256 = await hashFile(fullPath);
+  entry.size = (await stat(fullPath)).size;
+  await writeFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, "utf8");
 }
 
 async function rewriteLeafManifest(leaf: string, update: (manifest: PackageManifest) => void): Promise<void> {
@@ -2120,7 +2929,7 @@ async function exists(path: string): Promise<boolean> {
 }
 
 const descriptor = {
-  descriptorVersion: 2,
+  descriptorVersion: 1,
   schemaProfile: "sunder.rpc.values.v1",
   contractId: "example.rpc",
   version: "1.0.0",
@@ -2151,28 +2960,11 @@ const descriptor = {
   },
 };
 
-const v1Descriptor = {
-  descriptorVersion: 1,
-  contractId: "example.rpc",
-  version: "1.0.0",
-  services: [{
-    serviceId: "example",
-    methods: [{
-      methodId: "invoke",
-      kind: "unary",
-      requestSchema: { $ref: "#/$defs/Empty" },
-      responseSchema: { $ref: "#/$defs/Empty" },
-    }],
-  }],
-  $defs: {
-    Empty: { type: "object", properties: {}, required: [], additionalProperties: false },
-  },
-};
-
 interface PackageManifest {
   readonly archiveFormatVersion: number;
   readonly manifestVersion: number;
-  readonly dependsOn: readonly { readonly packageId: string; readonly versionRange: string }[];
+  readonly id: string;
+  readonly dependsOn: readonly { readonly packageId: string; readonly versionRange: string; readonly presence: string }[];
   readonly targets: ReadonlyArray<{
     readonly role: string;
     readonly kind: string;
@@ -2180,6 +2972,11 @@ interface PackageManifest {
     readonly entryPoint: string;
     readonly sdkVersion: string;
     readonly requiredHostCapabilities: readonly string[];
+    readonly executionRuntime?: {
+      readonly id: string;
+      readonly versionRange: string;
+      readonly moduleAbi: string;
+    };
     readonly views?: readonly { readonly viewId: string }[];
   }>;
   readonly contractBundles: readonly {
@@ -2189,6 +2986,9 @@ interface PackageManifest {
     readonly descriptorSha256: string;
     readonly abiSha256: string;
     readonly exposure: string;
+    readonly source: string;
+    readonly authorityKind: string;
+    readonly authorityId: string;
   }[];
   readonly usesContracts: readonly {
     readonly role: string;
@@ -2207,6 +3007,10 @@ interface PackageManifest {
     readonly abiSha256: string;
     readonly audience: string;
   }[];
+  readonly packageArtifactImports: readonly unknown[];
+  readonly packageApiImports: readonly unknown[];
+  readonly providerImports: readonly unknown[];
+  readonly platformImports: readonly unknown[];
 }
 
 interface OutputDocumentSpecification {
@@ -2224,12 +3028,6 @@ interface OutputDocumentCorpus {
   };
 }
 
-interface DistributionMetadata {
-  readonly nodeVersion: string;
-  readonly notice: { readonly sha256: string };
-  readonly targets: Readonly<Record<string, { readonly sha256: string }>>;
-}
-
 interface ZipEntry {
   readonly name: string;
   readonly method: number;
@@ -2241,6 +3039,27 @@ interface PackageLock {
 }
 
 interface PackageJson {
+  readonly files?: readonly string[];
   readonly dependencies?: Readonly<Record<string, string>>;
   readonly devDependencies?: Readonly<Record<string, string>>;
+}
+
+interface PackageOwnershipEvidence {
+  readonly schemaVersion: number;
+  readonly archiveSha256: string;
+  readonly metadataBytes: number;
+  readonly payloadBytes: number;
+  readonly runtimeClosureFileCount: number;
+  readonly runtimeClosureBytes: number;
+  readonly targets: readonly {
+    readonly rid: string;
+    readonly runtimeClosureFileCount: number;
+    readonly runtimeClosureBytes: number;
+    readonly ownership: {
+      readonly packageSharedBytes: number;
+      readonly roleSharedBytes: number;
+      readonly exactRidBytes: number;
+    };
+    readonly nativeAssets: readonly { readonly path: string }[];
+  }[];
 }

@@ -44,13 +44,26 @@ internal static class SystemEndpoints
             (RuntimeResetChallengeService challenges) =>
             {
                 var challenge = challenges.Create();
-                return Results.Ok(new RuntimeResetChallengeResponse(challenge.Challenge, challenge.ExpiresAtUtc));
+                return Results.Ok(new RuntimeResetChallengeResponse(challenge.Challenge, challenge.ExpiresAtUtc)
+                {
+                    SupportsBoundStateRoot = true,
+                });
             });
 
         group.MapPost(
             "reset/drain",
-            (RuntimeResetConfirmRequest request, RuntimeResetChallengeService challenges, HttpResponse response, IHostApplicationLifetime lifetime) =>
+            (RuntimeResetConfirmRequest request, RuntimeResetChallengeService challenges, RuntimePackagePaths paths, HttpResponse response, IHostApplicationLifetime lifetime) =>
             {
+                if (!request.RequireBoundStateRoot)
+                {
+                    throw new RuntimeConflictException(
+                        "The Runtime reset client must bind deletion to the Runtime-owned state root.");
+                }
+                if (request.RequireHostExecutedReset)
+                {
+                    throw new RuntimeConflictException(
+                        "Standalone Runtime cannot execute reset while retaining its state-root lease.");
+                }
                 if (!challenges.TryConsume(request.Challenge))
                 {
                     throw new RuntimeConflictException(
@@ -64,7 +77,11 @@ internal static class SystemEndpoints
                 });
 
                 return Results.Ok(new RuntimeResetDrainResponse(
-                    RuntimeV1StateDescriptor.ResetCategories.Select(static category => category.Id).ToArray()));
+                    RuntimeV1StateDescriptor.ResetCategories.Select(static category => category.Id).ToArray())
+                {
+                    RuntimeStateRootPath = paths.RootPath,
+                    RuntimeStateRootIdentity = RuntimeOwnedFileSystem.GetMutableDirectoryIdentity(paths.RootPath),
+                });
             });
 
         return endpoints;

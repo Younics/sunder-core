@@ -198,6 +198,10 @@ internal sealed class RuntimeGateway : IDisposable
         {
             return RuntimeRequestSizeLimits.StackMediaUploadMaxRequestBodyBytes;
         }
+        if (string.Equals(path, "/api/v1/uploads/execution-runtimes", StringComparison.OrdinalIgnoreCase))
+        {
+            return RuntimeRequestSizeLimits.ExecutionRuntimeUploadMaxRequestBodyBytes;
+        }
 
         return RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes;
     }

@@ -1,0 +1,13 @@
+{
+  "package": {
+    "packageId": "example.agent",
+    "version": "2.0.0",
+    "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "packageState": "Unknown",
+  "versionAvailability": "Unknown",
+  "disposition": "PolicyRequired",
+  "errorCode": "package.policy-required",
+  "publicReason": null,
+  "platformDependencies": []
+}

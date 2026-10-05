@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\tools\Sunder.ExecutionRuntime.Build\Sunder.ExecutionRuntime.Build.csproj" />
+    <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
+    <ProjectReference Include="..\..\libraries\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\..\..\..\eng\execution-runtimes\execution-runtime-lock.schema.json"
+          Link="Fixtures\execution-runtime-lock.schema.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\eng\execution-runtimes\test-fixtures.lock.json"
+          Link="Fixtures\test-fixtures.lock.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures\archive-goldens.sha256"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\packages\Sunder.Sdk.Stacks\Contracts\sunder.stack.contributor.rpc.json"
+          Link="Fixtures\PlatformCatalog\real-stack.rpc.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tools\Sunder.ExecutionRuntime.Build\Sunder.ExecutionRuntime.Build.csproj"
+          Link="Fixtures\PlatformCatalog\BuildTool.csproj"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\packages\Sunder.Sdk.Stacks\*.cs"
+          Link="Fixtures\PlatformSources\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\eng\platform-contracts\sunder-contracts.owned.json"
+          Link="Fixtures\PlatformCatalog\sunder-contracts.owned.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\packages\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj"
+          Link="Fixtures\PlatformCatalog\SdkStacks.csproj"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,2998 @@
+{
+  "formatVersion": 1,
+  "status": "normative-preimplementation",
+  "implementationStatus": "This corpus does not execute production imports. The descriptor-only in-memory C# prepass is implemented/tested; compilation and generated execution tests passed in the 61-test focused package-build run. It is not wired to production, which still rejects nonempty imports until receipt/manifest cutover. Direct platform imports remain fail-closed.",
+  "oracleScope": {
+    "sourceFrontendExecution": "deferred",
+    "currentlyExecutable": [
+      "source byte length and SHA-256",
+      "source syntax and duplicate-key hygiene",
+      "canonical descriptor and ABI identity",
+      "metadata projections and referenced artifact shapes",
+      "language-neutral source-limit materialization",
+      "package-tool command grammar and selected-provider outcome vectors",
+      "package presence projection, dependency coalescing, and readiness outcomes",
+      "Compatible Installation reviewed-range and exact-RPC outcome vectors",
+      "artifact-local source and exact ultimate-provenance coalescing"
+    ],
+    "deferredUntilFrontendsExist": [
+      "C# authoring source compilation",
+      "TypeScript/JavaScript authoring static analysis",
+      "frontend diagnostic emission",
+      "frontend visited-node counter equivalence",
+      "package-tool command execution",
+      "selected-package provider resolver execution",
+      "package presence command, solver, and readiness execution",
+      "production Compatible Installation and unreviewed-authority-range migration"
+    ]
+  },
+  "documentEncoding": {
+    "encoding": "utf-8",
+    "bom": false,
+    "lineEnding": "lf",
+    "terminalLf": true,
+    "indentSpaces": 2
+  },
+  "languageBaselines": {
+    "csharpLanguageVersion": "14.0",
+    "typescriptVersion": "6.0.3",
+    "ecmascriptTarget": "ES2023",
+    "keywordFixture": "../../conformance/identifier-keywords.json"
+  },
+  "identityOracles": {
+    "csharp": "SunderRpcContractDescriptor.Parse/GetCanonicalUtf8/GetCanonicalAbiProjectionUtf8",
+    "node": "parseRpcContractDescriptor/canonicalRpcDescriptorBytes/canonicalRpcAbiProjectionBytes",
+    "independentlyVerifiedEqual": true
+  },
+  "validFixtures": [
+    {
+      "id": "complete",
+      "packageId": "example.authoring",
+      "packageVersion": "1.0.0",
+      "sources": {
+        "csharp": "valid/complete.cs",
+        "typescript": "valid/complete.ts",
+        "javascript": "valid/complete.js"
+      },
+      "contracts": [
+        {
+          "contractKey": "parity",
+          "contractId": "example.authoring.parity",
+          "contractVersion": "1.0.0",
+          "exposure": "package",
+          "canonicalDescriptorBase64": "eyIkZGVmcyI6eyJBbnlKc29uIjp7fSwiQmlnTnVtYmVyIjp7ImZvcm1hdCI6ImJpZy1pbnRlZ2VyIiwibWF4RGlnaXRzIjo0MCwidHlwZSI6InN0cmluZyIsInZhbHVlRXhjbHVzaXZlTWF4aW11bSI6Ijk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTkiLCJ2YWx1ZU1pbmltdW0iOiItOTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OSJ9LCJCbG9iIjp7ImNvbnRlbnRFbmNvZGluZyI6ImJhc2U2NCIsIm1heERlY29kZWRCeXRlcyI6NDA5NiwidHlwZSI6InN0cmluZyJ9LCJCb3VuZGVkVGV4dCI6eyJkZXNjcmlwdGlvbiI6IlRleHQgd2l0aCBleHBsaWNpdCBzY2FsYXItbGVuZ3RoIGJvdW5kcy4iLCJtYXhMZW5ndGgiOjEyOCwibWluTGVuZ3RoIjoxLCJ0aXRsZSI6IkJvdW5kZWQgdGV4dCIsInR5cGUiOiJzdHJpbmcifSwiQ2hvaWNlIjp7ImRlc2NyaXB0aW9uIjoiQSBzb3VyY2UtbGV2ZWwgdW50YWdnZWQgdW5pb24uIiwib25lT2YiOlt7IiRyZWYiOiIjLyRkZWZzL1RleHRDaG9pY2UifSx7IiRyZWYiOiIjLyRkZWZzL0NvdW50Q2hvaWNlIn1dLCJ0aXRsZSI6IkNob2ljZSJ9LCJDb250ZW50Ijp7ImxvZ2ljYWxUeXBlIjoiY29udGVudC1yZWZlcmVuY2UiLCJ0eXBlIjoib2JqZWN0In0sIkNvdW50Q2hvaWNlIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJjb3VudCI6eyIkcmVmIjoiIy8kZGVmcy9TYWZlQ291bnQifSwia2luZCI6eyJjb25zdCI6ImNvdW50IiwidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsia2luZCIsImNvdW50Il0sInR5cGUiOiJvYmplY3QifSwiRGF0ZVZhbHVlIjp7ImZvcm1hdCI6ImRhdGUiLCJ0eXBlIjoic3RyaW5nIn0sIkRlY2ltYWxOdW1iZXIiOnsiZm9ybWF0IjoiZGVjaW1hbCIsIm1heFByZWNpc2lvbiI6MjAsIm1heFNjYWxlIjo4LCJ0eXBlIjoic3RyaW5nIiwidmFsdWVFeGNsdXNpdmVNaW5pbXVtIjoiLTEwMDAwMDAwMDAuMTI1IiwidmFsdWVNYXhpbXVtIjoiMTAwMDAwMDAwMC4xMjUifSwiRXJyb3JEZXRhaWxzIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJmaWVsZCI6eyIkcmVmIjoiIy8kZGVmcy9Cb3VuZGVkVGV4dCJ9LCJyZWFzb24iOnsiJHJlZiI6IiMvJGRlZnMvQm91bmRlZFRleHQifX0sInJlcXVpcmVkIjpbImZpZWxkIiwicmVhc29uIl0sInR5cGUiOiJvYmplY3QifSwiRXZlbnQiOnsiZGVzY3JpcHRpb24iOiJBIHRhZ2dlZCBzdHJlYW0gZXZlbnQuIiwib25lT2YiOlt7IiRyZWYiOiIjLyRkZWZzL1Byb2dyZXNzRXZlbnQifSx7IiRyZWYiOiIjLyRkZWZzL0ZpbmlzaGVkRXZlbnQifV0sInRpdGxlIjoiUGFyaXR5IGV2ZW50In0sIkV4YWN0UmF0aW8iOnsiY29uc3QiOjAuNSwiZm9ybWF0IjoiZmxvYXQ2NCIsInR5cGUiOiJudW1iZXIifSwiRmluaXNoZWRFdmVudCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsia2luZCI6eyJjb25zdCI6ImZpbmlzaGVkIiwidHlwZSI6InN0cmluZyJ9LCJyZXN1bHQiOnsiJHJlZiI6IiMvJGRlZnMvUmVzdWx0In19LCJyZXF1aXJlZCI6WyJraW5kIiwicmVzdWx0Il0sInR5cGUiOiJvYmplY3QifSwiRmxvYXQzMlZhbHVlIjp7ImV4Y2x1c2l2ZU1pbmltdW0iOi0xMDAwLjI1LCJmb3JtYXQiOiJmbG9hdDMyIiwibWF4aW11bSI6MTAwMC4yNSwidHlwZSI6Im51bWJlciJ9LCJGbG9hdDY0VmFsdWUiOnsiZXhjbHVzaXZlTWF4aW11bSI6MTAwMDAwMDAwMDAwMDAwMDAwMDAwLCJmb3JtYXQiOiJmbG9hdDY0IiwibWluaW11bSI6LTEwMDAwMDAwMDAwMDAwMDAwMDAwMCwidHlwZSI6Im51bWJlciJ9LCJJZGVudGlmaWVyIjp7ImZvcm1hdCI6InV1aWQiLCJ0eXBlIjoic3RyaW5nIn0sIkludGVnZXJNYXAiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOnsidHlwZSI6ImludGVnZXIifSwiZGVzY3JpcHRpb24iOiJBIGJvdW5kZWQgdHJhbnNwYXJlbnQgc3RyaW5nLWtleWVkIG1hcC4iLCJtYXhQcm9wZXJ0aWVzIjoxNiwibWluUHJvcGVydGllcyI6MCwicHJvcGVydHlOYW1lcyI6eyJtYXhMZW5ndGgiOjY0LCJtaW5MZW5ndGgiOjEsInR5cGUiOiJzdHJpbmcifSwidGl0bGUiOiJJbnRlZ2VyIG1hcCIsInR5cGUiOiJvYmplY3QifSwiSnNvbk9iamVjdCI6eyJtYXhQcm9wZXJ0aWVzIjoxNiwidHlwZSI6Im9iamVjdCJ9LCJMaW5rIjp7ImZvcm1hdCI6InVyaSIsInR5cGUiOiJzdHJpbmcifSwiTW9tZW50Ijp7ImZvcm1hdCI6ImRhdGUtdGltZSIsInR5cGUiOiJzdHJpbmcifSwiTm9kZSI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiY2hpbGRyZW4iOnsiaXRlbXMiOnsiJHJlZiI6IiMvJGRlZnMvTm9kZSJ9LCJ0eXBlIjoiYXJyYXkifSwibmV4dCI6eyIkcmVmIjoiIy8kZGVmcy9Ob2RlIn0sInZhbHVlIjp7IiRyZWYiOiIjLyRkZWZzL0JvdW5kZWRUZXh0In19LCJyZXF1aXJlZCI6WyJ2YWx1ZSIsImNoaWxkcmVuIl0sInR5cGUiOiJvYmplY3QifSwiTnVtZXJpY1ByaW9yaXR5Ijp7ImVudW0iOlstMSwyLDEwXSwibWF4aW11bSI6MTAsIm1pbmltdW0iOi0xLCJ0eXBlIjoiaW50ZWdlciJ9LCJQYXJpdHlDb21iaW5lUmVxdWVzdCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsibGVmdCI6eyJtYXhMZW5ndGgiOjMyLCJtaW5MZW5ndGgiOjEsInR5cGUiOiJzdHJpbmcifSwicmlnaHQiOnsibWF4aW11bSI6MTAwLCJtaW5pbXVtIjowLCJ0eXBlIjoiaW50ZWdlciJ9fSwicmVxdWlyZWQiOlsibGVmdCIsInJpZ2h0Il0sInR5cGUiOiJvYmplY3QifSwiUGF5bG9hZCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsImRlc2NyaXB0aW9uIjoiRXhlcmNpc2VzIHRoZSBjb21wbGV0ZSBWMSB2YWx1ZSBwcm9maWxlLiIsIm1heFByb3BlcnRpZXMiOjMxLCJtaW5Qcm9wZXJ0aWVzIjoyOSwicHJvcGVydGllcyI6eyJiaWdJbnRlZ2VyIjp7IiRyZWYiOiIjLyRkZWZzL0JpZ051bWJlciJ9LCJieXRlcyI6eyIkcmVmIjoiIy8kZGVmcy9CbG9iIn0sImNob2ljZSI6eyIkcmVmIjoiIy8kZGVmcy9DaG9pY2UifSwiY29udGVudCI6eyIkcmVmIjoiIy8kZGVmcy9Db250ZW50In0sImNvdW50Ijp7IiRyZWYiOiIjLyRkZWZzL1NhZmVDb3VudCJ9LCJkYXRlIjp7IiRyZWYiOiIjLyRkZWZzL0RhdGVWYWx1ZSJ9LCJkZWNpbWFsIjp7IiRyZWYiOiIjLyRkZWZzL0RlY2ltYWxOdW1iZXIifSwiZHVyYXRpb24iOnsiJHJlZiI6IiMvJGRlZnMvVGltZVNwYW5WYWx1ZSJ9LCJldmVudCI6eyIkcmVmIjoiIy8kZGVmcy9FdmVudCJ9LCJleGFjdFJhdGlvIjp7IiRyZWYiOiIjLyRkZWZzL0V4YWN0UmF0aW8ifSwiZmxhZyI6eyJ0eXBlIjoiYm9vbGVhbiJ9LCJmbG9hdDMyIjp7IiRyZWYiOiIjLyRkZWZzL0Zsb2F0MzJWYWx1ZSJ9LCJmbG9hdDY0Ijp7IiRyZWYiOiIjLyRkZWZzL0Zsb2F0NjRWYWx1ZSJ9LCJpZCI6eyIkcmVmIjoiIy8kZGVmcy9JZGVudGlmaWVyIn0sImpzb24iOnsiJHJlZiI6IiMvJGRlZnMvQW55SnNvbiJ9LCJqc29uT2JqZWN0Ijp7IiRyZWYiOiIjLyRkZWZzL0pzb25PYmplY3QifSwibm9kZSI6eyIkcmVmIjoiIy8kZGVmcy9Ob2RlIn0sIm9wdGlvbmFsTnVsbGFibGVUZXh0Ijp7Im9uZU9mIjpbeyJ0eXBlIjoibnVsbCJ9LHsibWF4TGVuZ3RoIjoxMjgsIm1pbkxlbmd0aCI6MSwidHlwZSI6InN0cmluZyJ9XX0sIm9wdGlvbmFsVGV4dCI6eyJtYXhMZW5ndGgiOjEyOCwibWluTGVuZ3RoIjoxLCJ0eXBlIjoic3RyaW5nIn0sInByaW9yaXR5Ijp7IiRyZWYiOiIjLyRkZWZzL051bWVyaWNQcmlvcml0eSJ9LCJyZXF1aXJlZE51bGxhYmxlVGV4dCI6eyJvbmVPZiI6W3sidHlwZSI6Im51bGwifSx7Im1heExlbmd0aCI6MTI4LCJtaW5MZW5ndGgiOjEsInR5cGUiOiJzdHJpbmcifV19LCJyZXF1aXJlZFRleHQiOnsibWF4TGVuZ3RoIjoxMjgsIm1pbkxlbmd0aCI6MSwidHlwZSI6InN0cmluZyJ9LCJzY2FsYXJJZCI6eyIkcmVmIjoiIy8kZGVmcy9TY2FsYXJJZCJ9LCJzY29yZXMiOnsiJHJlZiI6IiMvJGRlZnMvSW50ZWdlck1hcCJ9LCJzdGF0dXMiOnsiJHJlZiI6IiMvJGRlZnMvU3RyaW5nU3RhdHVzIn0sInRhZ3MiOnsiJHJlZiI6IiMvJGRlZnMvU3RyaW5nTGlzdCJ9LCJ0aW1lc3RhbXAiOnsiJHJlZiI6IiMvJGRlZnMvTW9tZW50In0sInVuYm91bmRlZEJ5dGVzIjp7IiRyZWYiOiIjLyRkZWZzL1VuYm91bmRlZEJ5dGVzIn0sInVuYm91bmRlZExpc3QiOnsiJHJlZiI6IiMvJGRlZnMvVW5ib3VuZGVkTGlzdCJ9LCJ1bmJvdW5kZWRNYXAiOnsiJHJlZiI6IiMvJGRlZnMvVW5ib3VuZGVkTWFwIn0sInVuYm91bmRlZFRleHQiOnsiJHJlZiI6IiMvJGRlZnMvVW5ib3VuZGVkVGV4dCJ9LCJ1cmkiOnsiJHJlZiI6IiMvJGRlZnMvTGluayJ9fSwicmVxdWlyZWQiOlsicmVxdWlyZWRUZXh0IiwicmVxdWlyZWROdWxsYWJsZVRleHQiLCJ1bmJvdW5kZWRUZXh0IiwiZmxhZyIsImNvdW50IiwiZmxvYXQzMiIsImZsb2F0NjQiLCJleGFjdFJhdGlvIiwiaWQiLCJkYXRlIiwidGltZXN0YW1wIiwiZHVyYXRpb24iLCJ1cmkiLCJiaWdJbnRlZ2VyIiwiZGVjaW1hbCIsImJ5dGVzIiwidW5ib3VuZGVkQnl0ZXMiLCJjb250ZW50IiwianNvbiIsImpzb25PYmplY3QiLCJ0YWdzIiwidW5ib3VuZGVkTGlzdCIsInNjb3JlcyIsInVuYm91bmRlZE1hcCIsInN0YXR1cyIsInByaW9yaXR5Iiwic2NhbGFySWQiLCJub2RlIiwiZXZlbnQiLCJjaG9pY2UiXSwidGl0bGUiOiJQYXJpdHkgcGF5bG9hZCIsInR5cGUiOiJvYmplY3QifSwiUGluZ1Jlc3VsdCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsib2siOnsidHlwZSI6ImJvb2xlYW4ifX0sInJlcXVpcmVkIjpbIm9rIl0sInR5cGUiOiJvYmplY3QifSwiUHJvZ3Jlc3NFdmVudCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsia2luZCI6eyJjb25zdCI6InByb2dyZXNzIiwidHlwZSI6InN0cmluZyJ9LCJyYXRpbyI6eyIkcmVmIjoiIy8kZGVmcy9FeGFjdFJhdGlvIn0sInNlcXVlbmNlIjp7IiRyZWYiOiIjLyRkZWZzL1NhZmVDb3VudCJ9fSwicmVxdWlyZWQiOlsia2luZCIsInNlcXVlbmNlIiwicmF0aW8iXSwidHlwZSI6Im9iamVjdCJ9LCJSZXN1bHQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImFjY2VwdGVkIjp7InR5cGUiOiJib29sZWFuIn0sIm5vdGUiOnsib25lT2YiOlt7InR5cGUiOiJudWxsIn0seyJ0eXBlIjoic3RyaW5nIn1dfX0sInJlcXVpcmVkIjpbImFjY2VwdGVkIl0sInR5cGUiOiJvYmplY3QifSwiU2FmZUNvdW50Ijp7Im1heGltdW0iOjkwMDcxOTkyNTQ3NDA5OTEsIm1pbmltdW0iOjAsInR5cGUiOiJpbnRlZ2VyIn0sIlNjYWxhcklkIjp7Im1heExlbmd0aCI6NjQsIm1pbkxlbmd0aCI6MSwidHlwZSI6InN0cmluZyJ9LCJTdHJpbmdMaXN0Ijp7ImRlc2NyaXB0aW9uIjoiQSBib3VuZGVkIHRyYW5zcGFyZW50IGFycmF5LiIsIml0ZW1zIjp7IiRyZWYiOiIjLyRkZWZzL0JvdW5kZWRUZXh0In0sIm1heEl0ZW1zIjozMiwibWluSXRlbXMiOjAsInRpdGxlIjoiU3RyaW5nIGxpc3QiLCJ0eXBlIjoiYXJyYXkifSwiU3RyaW5nU3RhdHVzIjp7ImRlc2NyaXB0aW9uIjoiRGVjbGFyYXRpb24gb3JkZXIgaXMgd2lyZS1zaWduaWZpY2FudC4iLCJlbnVtIjpbInpldGEiLCJhbHBoYSIsIm1pZGRsZSJdLCJ0aXRsZSI6IlN0cmluZyBzdGF0dXMiLCJ0eXBlIjoic3RyaW5nIn0sIlRleHRDaG9pY2UiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImtpbmQiOnsiY29uc3QiOiJ0ZXh0IiwidHlwZSI6InN0cmluZyJ9LCJ0ZXh0Ijp7IiRyZWYiOiIjLyRkZWZzL0JvdW5kZWRUZXh0In19LCJyZXF1aXJlZCI6WyJraW5kIiwidGV4dCJdLCJ0eXBlIjoib2JqZWN0In0sIlRpbWVTcGFuVmFsdWUiOnsiZm9ybWF0IjoiZHVyYXRpb24iLCJ0eXBlIjoic3RyaW5nIn0sIlVuYm91bmRlZEJ5dGVzIjp7ImNvbnRlbnRFbmNvZGluZyI6ImJhc2U2NCIsInR5cGUiOiJzdHJpbmcifSwiVW5ib3VuZGVkTGlzdCI6eyJpdGVtcyI6eyJ0eXBlIjoiYm9vbGVhbiJ9LCJ0eXBlIjoiYXJyYXkifSwiVW5ib3VuZGVkTWFwIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjp7InR5cGUiOiJzdHJpbmcifSwicHJvcGVydHlOYW1lcyI6eyJ0eXBlIjoic3RyaW5nIn0sInR5cGUiOiJvYmplY3QifSwiVW5ib3VuZGVkVGV4dCI6eyJ0eXBlIjoic3RyaW5nIn0sIlVuaXQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7fSwicmVxdWlyZWQiOltdLCJ0eXBlIjoib2JqZWN0In0sIldhdGNoUmVxdWVzdCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiY3Vyc29yIjp7IiRyZWYiOiIjLyRkZWZzL0JvdW5kZWRUZXh0In19LCJyZXF1aXJlZCI6W10sInR5cGUiOiJvYmplY3QifX0sImNvbnRyYWN0SWQiOiJleGFtcGxlLmF1dGhvcmluZy5wYXJpdHkiLCJkZXNjcmlwdG9yVmVyc2lvbiI6MSwiZXJyb3JzIjp7ImNvbmZsaWN0Ijp7ImRlc2NyaXB0aW9uIjoiVGhlIG9wZXJhdGlvbiBjb25mbGljdHMgd2l0aCBjdXJyZW50IHN0YXRlLiJ9LCJ2YWx1ZS1pbnZhbGlkIjp7ImRlc2NyaXB0aW9uIjoiVGhlIHN1cHBsaWVkIHZhbHVlIGlzIGludmFsaWQuIiwiZGV0YWlsc1NjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9FcnJvckRldGFpbHMifX19LCJzY2hlbWFQcm9maWxlIjoic3VuZGVyLnJwYy52YWx1ZXMudjEiLCJzZXJ2aWNlcyI6eyJwYXJpdHkiOnsibWV0aG9kcyI6eyJjb21iaW5lIjp7ImVycm9ycyI6W10sImlkZW1wb3RlbmN5Ijoibm9uZSIsImtpbmQiOiJ1bmFyeSIsInJlcXVlc3RTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvUGFyaXR5Q29tYmluZVJlcXVlc3QifSwicmVzcG9uc2VTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvUmVzdWx0In19LCJwaW5nIjp7ImVycm9ycyI6W10sImlkZW1wb3RlbmN5Ijoibm9uZSIsImtpbmQiOiJ1bmFyeSIsInJlcXVlc3RTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvVW5pdCJ9LCJyZXNwb25zZVNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9QaW5nUmVzdWx0In19LCJyb3VuZC10cmlwIjp7ImVycm9ycyI6WyJ2YWx1ZS1pbnZhbGlkIiwiY29uZmxpY3QiXSwiaWRlbXBvdGVuY3kiOiJpZGVtcG90ZW50Iiwia2luZCI6InVuYXJ5IiwicmVxdWVzdFNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9QYXlsb2FkIn0sInJlc3BvbnNlU2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL1BheWxvYWQifX0sIndhdGNoIjp7ImVycm9ycyI6WyJ2YWx1ZS1pbnZhbGlkIl0sImV2ZW50U2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL0V2ZW50In0sImlkZW1wb3RlbmN5Ijoibm9uZSIsImtpbmQiOiJzZXJ2ZXItc3RyZWFtIiwicmVxdWVzdFNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9XYXRjaFJlcXVlc3QifX19fX0sInZlcnNpb24iOiIxLjAuMCJ9",
+          "canonicalDescriptorBytes": 7443,
+          "descriptorSha256": "ed55315e62632955f98d7990d63b7688f31bafb7365f0395111d74b939a11c0e",
+          "canonicalAbiProjectionBase64": "eyIkZGVmcyI6eyJBbnlKc29uIjp7fSwiQmlnTnVtYmVyIjp7ImZvcm1hdCI6ImJpZy1pbnRlZ2VyIiwibWF4RGlnaXRzIjo0MCwidHlwZSI6InN0cmluZyIsInZhbHVlRXhjbHVzaXZlTWF4aW11bSI6Ijk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTkiLCJ2YWx1ZU1pbmltdW0iOiItOTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OSJ9LCJCbG9iIjp7ImNvbnRlbnRFbmNvZGluZyI6ImJhc2U2NCIsIm1heERlY29kZWRCeXRlcyI6NDA5NiwidHlwZSI6InN0cmluZyJ9LCJCb3VuZGVkVGV4dCI6eyJtYXhMZW5ndGgiOjEyOCwibWluTGVuZ3RoIjoxLCJ0eXBlIjoic3RyaW5nIn0sIkNob2ljZSI6eyJvbmVPZiI6W3siJHJlZiI6IiMvJGRlZnMvQ291bnRDaG9pY2UifSx7IiRyZWYiOiIjLyRkZWZzL1RleHRDaG9pY2UifV19LCJDb250ZW50Ijp7ImxvZ2ljYWxUeXBlIjoiY29udGVudC1yZWZlcmVuY2UiLCJ0eXBlIjoib2JqZWN0In0sIkNvdW50Q2hvaWNlIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJjb3VudCI6eyIkcmVmIjoiIy8kZGVmcy9TYWZlQ291bnQifSwia2luZCI6eyJjb25zdCI6ImNvdW50IiwidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY291bnQiLCJraW5kIl0sInR5cGUiOiJvYmplY3QifSwiRGF0ZVZhbHVlIjp7ImZvcm1hdCI6ImRhdGUiLCJ0eXBlIjoic3RyaW5nIn0sIkRlY2ltYWxOdW1iZXIiOnsiZm9ybWF0IjoiZGVjaW1hbCIsIm1heFByZWNpc2lvbiI6MjAsIm1heFNjYWxlIjo4LCJ0eXBlIjoic3RyaW5nIiwidmFsdWVFeGNsdXNpdmVNaW5pbXVtIjoiLTEwMDAwMDAwMDAuMTI1IiwidmFsdWVNYXhpbXVtIjoiMTAwMDAwMDAwMC4xMjUifSwiRXJyb3JEZXRhaWxzIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJmaWVsZCI6eyIkcmVmIjoiIy8kZGVmcy9Cb3VuZGVkVGV4dCJ9LCJyZWFzb24iOnsiJHJlZiI6IiMvJGRlZnMvQm91bmRlZFRleHQifX0sInJlcXVpcmVkIjpbImZpZWxkIiwicmVhc29uIl0sInR5cGUiOiJvYmplY3QifSwiRXZlbnQiOnsib25lT2YiOlt7IiRyZWYiOiIjLyRkZWZzL0ZpbmlzaGVkRXZlbnQifSx7IiRyZWYiOiIjLyRkZWZzL1Byb2dyZXNzRXZlbnQifV19LCJFeGFjdFJhdGlvIjp7ImNvbnN0IjowLjUsImZvcm1hdCI6ImZsb2F0NjQiLCJ0eXBlIjoibnVtYmVyIn0sIkZpbmlzaGVkRXZlbnQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImtpbmQiOnsiY29uc3QiOiJmaW5pc2hlZCIsInR5cGUiOiJzdHJpbmcifSwicmVzdWx0Ijp7IiRyZWYiOiIjLyRkZWZzL1Jlc3VsdCJ9fSwicmVxdWlyZWQiOlsia2luZCIsInJlc3VsdCJdLCJ0eXBlIjoib2JqZWN0In0sIkZsb2F0MzJWYWx1ZSI6eyJleGNsdXNpdmVNaW5pbXVtIjotMTAwMC4yNSwiZm9ybWF0IjoiZmxvYXQzMiIsIm1heGltdW0iOjEwMDAuMjUsInR5cGUiOiJudW1iZXIifSwiRmxvYXQ2NFZhbHVlIjp7ImV4Y2x1c2l2ZU1heGltdW0iOjEwMDAwMDAwMDAwMDAwMDAwMDAwMCwiZm9ybWF0IjoiZmxvYXQ2NCIsIm1pbmltdW0iOi0xMDAwMDAwMDAwMDAwMDAwMDAwMDAsInR5cGUiOiJudW1iZXIifSwiSWRlbnRpZmllciI6eyJmb3JtYXQiOiJ1dWlkIiwidHlwZSI6InN0cmluZyJ9LCJJbnRlZ2VyTWFwIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjp7InR5cGUiOiJpbnRlZ2VyIn0sIm1heFByb3BlcnRpZXMiOjE2LCJtaW5Qcm9wZXJ0aWVzIjowLCJwcm9wZXJ0eU5hbWVzIjp7Im1heExlbmd0aCI6NjQsIm1pbkxlbmd0aCI6MSwidHlwZSI6InN0cmluZyJ9LCJ0eXBlIjoib2JqZWN0In0sIkpzb25PYmplY3QiOnsibWF4UHJvcGVydGllcyI6MTYsInR5cGUiOiJvYmplY3QifSwiTGluayI6eyJmb3JtYXQiOiJ1cmkiLCJ0eXBlIjoic3RyaW5nIn0sIk1vbWVudCI6eyJmb3JtYXQiOiJkYXRlLXRpbWUiLCJ0eXBlIjoic3RyaW5nIn0sIk5vZGUiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImNoaWxkcmVuIjp7Iml0ZW1zIjp7IiRyZWYiOiIjLyRkZWZzL05vZGUifSwidHlwZSI6ImFycmF5In0sIm5leHQiOnsiJHJlZiI6IiMvJGRlZnMvTm9kZSJ9LCJ2YWx1ZSI6eyIkcmVmIjoiIy8kZGVmcy9Cb3VuZGVkVGV4dCJ9fSwicmVxdWlyZWQiOlsiY2hpbGRyZW4iLCJ2YWx1ZSJdLCJ0eXBlIjoib2JqZWN0In0sIk51bWVyaWNQcmlvcml0eSI6eyJlbnVtIjpbLTEsMTAsMl0sIm1heGltdW0iOjEwLCJtaW5pbXVtIjotMSwidHlwZSI6ImludGVnZXIifSwiUGFyaXR5Q29tYmluZVJlcXVlc3QiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImxlZnQiOnsibWF4TGVuZ3RoIjozMiwibWluTGVuZ3RoIjoxLCJ0eXBlIjoic3RyaW5nIn0sInJpZ2h0Ijp7Im1heGltdW0iOjEwMCwibWluaW11bSI6MCwidHlwZSI6ImludGVnZXIifX0sInJlcXVpcmVkIjpbImxlZnQiLCJyaWdodCJdLCJ0eXBlIjoib2JqZWN0In0sIlBheWxvYWQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJtYXhQcm9wZXJ0aWVzIjozMSwibWluUHJvcGVydGllcyI6MjksInByb3BlcnRpZXMiOnsiYmlnSW50ZWdlciI6eyIkcmVmIjoiIy8kZGVmcy9CaWdOdW1iZXIifSwiYnl0ZXMiOnsiJHJlZiI6IiMvJGRlZnMvQmxvYiJ9LCJjaG9pY2UiOnsiJHJlZiI6IiMvJGRlZnMvQ2hvaWNlIn0sImNvbnRlbnQiOnsiJHJlZiI6IiMvJGRlZnMvQ29udGVudCJ9LCJjb3VudCI6eyIkcmVmIjoiIy8kZGVmcy9TYWZlQ291bnQifSwiZGF0ZSI6eyIkcmVmIjoiIy8kZGVmcy9EYXRlVmFsdWUifSwiZGVjaW1hbCI6eyIkcmVmIjoiIy8kZGVmcy9EZWNpbWFsTnVtYmVyIn0sImR1cmF0aW9uIjp7IiRyZWYiOiIjLyRkZWZzL1RpbWVTcGFuVmFsdWUifSwiZXZlbnQiOnsiJHJlZiI6IiMvJGRlZnMvRXZlbnQifSwiZXhhY3RSYXRpbyI6eyIkcmVmIjoiIy8kZGVmcy9FeGFjdFJhdGlvIn0sImZsYWciOnsidHlwZSI6ImJvb2xlYW4ifSwiZmxvYXQzMiI6eyIkcmVmIjoiIy8kZGVmcy9GbG9hdDMyVmFsdWUifSwiZmxvYXQ2NCI6eyIkcmVmIjoiIy8kZGVmcy9GbG9hdDY0VmFsdWUifSwiaWQiOnsiJHJlZiI6IiMvJGRlZnMvSWRlbnRpZmllciJ9LCJqc29uIjp7IiRyZWYiOiIjLyRkZWZzL0FueUpzb24ifSwianNvbk9iamVjdCI6eyIkcmVmIjoiIy8kZGVmcy9Kc29uT2JqZWN0In0sIm5vZGUiOnsiJHJlZiI6IiMvJGRlZnMvTm9kZSJ9LCJvcHRpb25hbE51bGxhYmxlVGV4dCI6eyJvbmVPZiI6W3sidHlwZSI6Im51bGwifSx7Im1heExlbmd0aCI6MTI4LCJtaW5MZW5ndGgiOjEsInR5cGUiOiJzdHJpbmcifV19LCJvcHRpb25hbFRleHQiOnsibWF4TGVuZ3RoIjoxMjgsIm1pbkxlbmd0aCI6MSwidHlwZSI6InN0cmluZyJ9LCJwcmlvcml0eSI6eyIkcmVmIjoiIy8kZGVmcy9OdW1lcmljUHJpb3JpdHkifSwicmVxdWlyZWROdWxsYWJsZVRleHQiOnsib25lT2YiOlt7InR5cGUiOiJudWxsIn0seyJtYXhMZW5ndGgiOjEyOCwibWluTGVuZ3RoIjoxLCJ0eXBlIjoic3RyaW5nIn1dfSwicmVxdWlyZWRUZXh0Ijp7Im1heExlbmd0aCI6MTI4LCJtaW5MZW5ndGgiOjEsInR5cGUiOiJzdHJpbmcifSwic2NhbGFySWQiOnsiJHJlZiI6IiMvJGRlZnMvU2NhbGFySWQifSwic2NvcmVzIjp7IiRyZWYiOiIjLyRkZWZzL0ludGVnZXJNYXAifSwic3RhdHVzIjp7IiRyZWYiOiIjLyRkZWZzL1N0cmluZ1N0YXR1cyJ9LCJ0YWdzIjp7IiRyZWYiOiIjLyRkZWZzL1N0cmluZ0xpc3QifSwidGltZXN0YW1wIjp7IiRyZWYiOiIjLyRkZWZzL01vbWVudCJ9LCJ1bmJvdW5kZWRCeXRlcyI6eyIkcmVmIjoiIy8kZGVmcy9VbmJvdW5kZWRCeXRlcyJ9LCJ1bmJvdW5kZWRMaXN0Ijp7IiRyZWYiOiIjLyRkZWZzL1VuYm91bmRlZExpc3QifSwidW5ib3VuZGVkTWFwIjp7IiRyZWYiOiIjLyRkZWZzL1VuYm91bmRlZE1hcCJ9LCJ1bmJvdW5kZWRUZXh0Ijp7IiRyZWYiOiIjLyRkZWZzL1VuYm91bmRlZFRleHQifSwidXJpIjp7IiRyZWYiOiIjLyRkZWZzL0xpbmsifX0sInJlcXVpcmVkIjpbImJpZ0ludGVnZXIiLCJieXRlcyIsImNob2ljZSIsImNvbnRlbnQiLCJjb3VudCIsImRhdGUiLCJkZWNpbWFsIiwiZHVyYXRpb24iLCJldmVudCIsImV4YWN0UmF0aW8iLCJmbGFnIiwiZmxvYXQzMiIsImZsb2F0NjQiLCJpZCIsImpzb24iLCJqc29uT2JqZWN0Iiwibm9kZSIsInByaW9yaXR5IiwicmVxdWlyZWROdWxsYWJsZVRleHQiLCJyZXF1aXJlZFRleHQiLCJzY2FsYXJJZCIsInNjb3JlcyIsInN0YXR1cyIsInRhZ3MiLCJ0aW1lc3RhbXAiLCJ1bmJvdW5kZWRCeXRlcyIsInVuYm91bmRlZExpc3QiLCJ1bmJvdW5kZWRNYXAiLCJ1bmJvdW5kZWRUZXh0IiwidXJpIl0sInR5cGUiOiJvYmplY3QifSwiUGluZ1Jlc3VsdCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsib2siOnsidHlwZSI6ImJvb2xlYW4ifX0sInJlcXVpcmVkIjpbIm9rIl0sInR5cGUiOiJvYmplY3QifSwiUHJvZ3Jlc3NFdmVudCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsia2luZCI6eyJjb25zdCI6InByb2dyZXNzIiwidHlwZSI6InN0cmluZyJ9LCJyYXRpbyI6eyIkcmVmIjoiIy8kZGVmcy9FeGFjdFJhdGlvIn0sInNlcXVlbmNlIjp7IiRyZWYiOiIjLyRkZWZzL1NhZmVDb3VudCJ9fSwicmVxdWlyZWQiOlsia2luZCIsInJhdGlvIiwic2VxdWVuY2UiXSwidHlwZSI6Im9iamVjdCJ9LCJSZXN1bHQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImFjY2VwdGVkIjp7InR5cGUiOiJib29sZWFuIn0sIm5vdGUiOnsib25lT2YiOlt7InR5cGUiOiJudWxsIn0seyJ0eXBlIjoic3RyaW5nIn1dfX0sInJlcXVpcmVkIjpbImFjY2VwdGVkIl0sInR5cGUiOiJvYmplY3QifSwiU2FmZUNvdW50Ijp7Im1heGltdW0iOjkwMDcxOTkyNTQ3NDA5OTEsIm1pbmltdW0iOjAsInR5cGUiOiJpbnRlZ2VyIn0sIlNjYWxhcklkIjp7Im1heExlbmd0aCI6NjQsIm1pbkxlbmd0aCI6MSwidHlwZSI6InN0cmluZyJ9LCJTdHJpbmdMaXN0Ijp7Iml0ZW1zIjp7IiRyZWYiOiIjLyRkZWZzL0JvdW5kZWRUZXh0In0sIm1heEl0ZW1zIjozMiwibWluSXRlbXMiOjAsInR5cGUiOiJhcnJheSJ9LCJTdHJpbmdTdGF0dXMiOnsiZW51bSI6WyJhbHBoYSIsIm1pZGRsZSIsInpldGEiXSwidHlwZSI6InN0cmluZyJ9LCJUZXh0Q2hvaWNlIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJraW5kIjp7ImNvbnN0IjoidGV4dCIsInR5cGUiOiJzdHJpbmcifSwidGV4dCI6eyIkcmVmIjoiIy8kZGVmcy9Cb3VuZGVkVGV4dCJ9fSwicmVxdWlyZWQiOlsia2luZCIsInRleHQiXSwidHlwZSI6Im9iamVjdCJ9LCJUaW1lU3BhblZhbHVlIjp7ImZvcm1hdCI6ImR1cmF0aW9uIiwidHlwZSI6InN0cmluZyJ9LCJVbmJvdW5kZWRCeXRlcyI6eyJjb250ZW50RW5jb2RpbmciOiJiYXNlNjQiLCJ0eXBlIjoic3RyaW5nIn0sIlVuYm91bmRlZExpc3QiOnsiaXRlbXMiOnsidHlwZSI6ImJvb2xlYW4ifSwidHlwZSI6ImFycmF5In0sIlVuYm91bmRlZE1hcCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6eyJ0eXBlIjoic3RyaW5nIn0sInByb3BlcnR5TmFtZXMiOnsidHlwZSI6InN0cmluZyJ9LCJ0eXBlIjoib2JqZWN0In0sIlVuYm91bmRlZFRleHQiOnsidHlwZSI6InN0cmluZyJ9LCJVbml0Ijp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6e30sInJlcXVpcmVkIjpbXSwidHlwZSI6Im9iamVjdCJ9LCJXYXRjaFJlcXVlc3QiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImN1cnNvciI6eyIkcmVmIjoiIy8kZGVmcy9Cb3VuZGVkVGV4dCJ9fSwicmVxdWlyZWQiOltdLCJ0eXBlIjoib2JqZWN0In19LCJjb250cmFjdElkIjoiZXhhbXBsZS5hdXRob3JpbmcucGFyaXR5IiwiZGVzY3JpcHRvclZlcnNpb24iOjEsImVycm9ycyI6eyJjb25mbGljdCI6e30sInZhbHVlLWludmFsaWQiOnsiZGV0YWlsc1NjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9FcnJvckRldGFpbHMifX19LCJzY2hlbWFQcm9maWxlIjoic3VuZGVyLnJwYy52YWx1ZXMudjEiLCJzZXJ2aWNlcyI6eyJwYXJpdHkiOnsibWV0aG9kcyI6eyJjb21iaW5lIjp7ImVycm9ycyI6W10sImlkZW1wb3RlbmN5Ijoibm9uZSIsImtpbmQiOiJ1bmFyeSIsInJlcXVlc3RTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvUGFyaXR5Q29tYmluZVJlcXVlc3QifSwicmVzcG9uc2VTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvUmVzdWx0In19LCJwaW5nIjp7ImVycm9ycyI6W10sImlkZW1wb3RlbmN5Ijoibm9uZSIsImtpbmQiOiJ1bmFyeSIsInJlcXVlc3RTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvVW5pdCJ9LCJyZXNwb25zZVNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9QaW5nUmVzdWx0In19LCJyb3VuZC10cmlwIjp7ImVycm9ycyI6WyJjb25mbGljdCIsInZhbHVlLWludmFsaWQiXSwiaWRlbXBvdGVuY3kiOiJpZGVtcG90ZW50Iiwia2luZCI6InVuYXJ5IiwicmVxdWVzdFNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9QYXlsb2FkIn0sInJlc3BvbnNlU2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL1BheWxvYWQifX0sIndhdGNoIjp7ImVycm9ycyI6WyJ2YWx1ZS1pbnZhbGlkIl0sImV2ZW50U2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL0V2ZW50In0sImlkZW1wb3RlbmN5Ijoibm9uZSIsImtpbmQiOiJzZXJ2ZXItc3RyZWFtIiwicmVxdWVzdFNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9XYXRjaFJlcXVlc3QifX19fX19",
+          "canonicalAbiProjectionBytes": 6807,
+          "abiSha256": "234bc843a82abc44b8a99ad8e64460a9bad0af4354ad245cb1bda1bc13c26c8e"
+        }
+      ],
+      "providers": [
+        {
+          "providerId": "example.authoring.parity.provider",
+          "role": "runtime",
+          "audience": "owner",
+          "contractKey": "parity"
+        }
+      ],
+      "uses": [],
+      "generatedBindings": [
+        {
+          "contractKey": "parity",
+          "csharpLogicalName": "Sunder.Generated.Rpc.Parity"
+        }
+      ]
+    },
+    {
+      "id": "provider-forms",
+      "packageId": "example.authoring.extensions",
+      "packageVersion": "1.0.0",
+      "sources": {
+        "csharp": "valid/provider-forms.cs",
+        "typescript": "valid/provider-forms.ts",
+        "javascript": "valid/provider-forms.js"
+      },
+      "contracts": [
+        {
+          "contractKey": "audit",
+          "contractId": "example.authoring.extensions.audit",
+          "contractVersion": "1.0.0",
+          "exposure": "public",
+          "canonicalDescriptorBase64": "eyIkZGVmcyI6eyJBdWRpdEV2ZW50Ijp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJzZXF1ZW5jZSI6eyJ0eXBlIjoiaW50ZWdlciJ9fSwicmVxdWlyZWQiOlsic2VxdWVuY2UiXSwidHlwZSI6Im9iamVjdCJ9LCJBdWRpdFJlcXVlc3QiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImN1cnNvciI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6W10sInR5cGUiOiJvYmplY3QifX0sImNvbnRyYWN0SWQiOiJleGFtcGxlLmF1dGhvcmluZy5leHRlbnNpb25zLmF1ZGl0IiwiZGVzY3JpcHRvclZlcnNpb24iOjEsImVycm9ycyI6e30sInNjaGVtYVByb2ZpbGUiOiJzdW5kZXIucnBjLnZhbHVlcy52MSIsInNlcnZpY2VzIjp7ImF1ZGl0Ijp7Im1ldGhvZHMiOnsib2JzZXJ2ZSI6eyJlcnJvcnMiOltdLCJldmVudFNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9BdWRpdEV2ZW50In0sImlkZW1wb3RlbmN5Ijoibm9uZSIsImtpbmQiOiJzZXJ2ZXItc3RyZWFtIiwicmVxdWVzdFNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9BdWRpdFJlcXVlc3QifX19fX0sInZlcnNpb24iOiIxLjAuMCJ9",
+          "canonicalDescriptorBytes": 594,
+          "descriptorSha256": "6b0e6d628fb5459cb27e9d5aa3496d5a760fc023bfeb4c40f0797a29e84b62c6",
+          "canonicalAbiProjectionBase64": "eyIkZGVmcyI6eyJBdWRpdEV2ZW50Ijp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJzZXF1ZW5jZSI6eyJ0eXBlIjoiaW50ZWdlciJ9fSwicmVxdWlyZWQiOlsic2VxdWVuY2UiXSwidHlwZSI6Im9iamVjdCJ9LCJBdWRpdFJlcXVlc3QiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImN1cnNvciI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6W10sInR5cGUiOiJvYmplY3QifX0sImNvbnRyYWN0SWQiOiJleGFtcGxlLmF1dGhvcmluZy5leHRlbnNpb25zLmF1ZGl0IiwiZGVzY3JpcHRvclZlcnNpb24iOjEsImVycm9ycyI6e30sInNjaGVtYVByb2ZpbGUiOiJzdW5kZXIucnBjLnZhbHVlcy52MSIsInNlcnZpY2VzIjp7ImF1ZGl0Ijp7Im1ldGhvZHMiOnsib2JzZXJ2ZSI6eyJlcnJvcnMiOltdLCJldmVudFNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9BdWRpdEV2ZW50In0sImlkZW1wb3RlbmN5Ijoibm9uZSIsImtpbmQiOiJzZXJ2ZXItc3RyZWFtIiwicmVxdWVzdFNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9BdWRpdFJlcXVlc3QifX19fX19",
+          "canonicalAbiProjectionBytes": 576,
+          "abiSha256": "38119190582a0539ca8b6d2c2467336d7163ca420f4c6cc7f4e9fbda045d7cfd"
+        },
+        {
+          "contractKey": "clock",
+          "contractId": "example.authoring.extensions.clock",
+          "contractVersion": "1.0.0",
+          "exposure": "public",
+          "canonicalDescriptorBase64": "eyIkZGVmcyI6eyJDbG9ja1Jlc3VsdCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsidGltZXN0YW1wIjp7ImZvcm1hdCI6ImRhdGUtdGltZSIsInR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbInRpbWVzdGFtcCJdLCJ0eXBlIjoib2JqZWN0In0sIlVuaXQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7fSwicmVxdWlyZWQiOltdLCJ0eXBlIjoib2JqZWN0In19LCJjb250cmFjdElkIjoiZXhhbXBsZS5hdXRob3JpbmcuZXh0ZW5zaW9ucy5jbG9jayIsImRlc2NyaXB0b3JWZXJzaW9uIjoxLCJlcnJvcnMiOnt9LCJzY2hlbWFQcm9maWxlIjoic3VuZGVyLnJwYy52YWx1ZXMudjEiLCJzZXJ2aWNlcyI6eyJjbG9jayI6eyJtZXRob2RzIjp7Im5vdyI6eyJlcnJvcnMiOltdLCJpZGVtcG90ZW5jeSI6ImlkZW1wb3RlbnQiLCJraW5kIjoidW5hcnkiLCJyZXF1ZXN0U2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL1VuaXQifSwicmVzcG9uc2VTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvQ2xvY2tSZXN1bHQifX19fX0sInZlcnNpb24iOiIxLjAuMCJ9",
+          "canonicalDescriptorBytes": 573,
+          "descriptorSha256": "e590768863cbbba70902f87eddbbcc78761afeb1479685535ec7a0feaea64277",
+          "canonicalAbiProjectionBase64": "eyIkZGVmcyI6eyJDbG9ja1Jlc3VsdCI6eyJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsidGltZXN0YW1wIjp7ImZvcm1hdCI6ImRhdGUtdGltZSIsInR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbInRpbWVzdGFtcCJdLCJ0eXBlIjoib2JqZWN0In0sIlVuaXQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7fSwicmVxdWlyZWQiOltdLCJ0eXBlIjoib2JqZWN0In19LCJjb250cmFjdElkIjoiZXhhbXBsZS5hdXRob3JpbmcuZXh0ZW5zaW9ucy5jbG9jayIsImRlc2NyaXB0b3JWZXJzaW9uIjoxLCJlcnJvcnMiOnt9LCJzY2hlbWFQcm9maWxlIjoic3VuZGVyLnJwYy52YWx1ZXMudjEiLCJzZXJ2aWNlcyI6eyJjbG9jayI6eyJtZXRob2RzIjp7Im5vdyI6eyJlcnJvcnMiOltdLCJpZGVtcG90ZW5jeSI6ImlkZW1wb3RlbnQiLCJraW5kIjoidW5hcnkiLCJyZXF1ZXN0U2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL1VuaXQifSwicmVzcG9uc2VTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvQ2xvY2tSZXN1bHQifX19fX19",
+          "canonicalAbiProjectionBytes": 555,
+          "abiSha256": "d04d9b080e6e8c7db60628d2f57c17689dee2dd98fe17141092efe66087ea361"
+        }
+      ],
+      "providers": [
+        {
+          "providerId": "example.authoring.extensions.clock.owner",
+          "role": "runtime",
+          "audience": "owner",
+          "contractKey": "clock"
+        },
+        {
+          "providerId": "example.authoring.extensions.clock.primary",
+          "role": "runtime",
+          "audience": "public",
+          "contractKey": "clock"
+        }
+      ],
+      "uses": [],
+      "generatedBindings": [
+        {
+          "contractKey": "audit",
+          "csharpLogicalName": "Sunder.Generated.Rpc.Audit"
+        },
+        {
+          "contractKey": "clock",
+          "csharpLogicalName": "Sunder.Generated.Rpc.Clock"
+        }
+      ]
+    },
+    {
+      "id": "naming-defaults",
+      "packageId": "example.naming",
+      "packageVersion": "1.0.0",
+      "sources": {
+        "csharp": "valid/naming-defaults.cs",
+        "typescript": "valid/naming-defaults.ts",
+        "javascript": "valid/naming-defaults.js"
+      },
+      "contracts": [
+        {
+          "contractKey": "o-auth2",
+          "contractId": "example.naming.o.auth2",
+          "contractVersion": "1.0.0",
+          "exposure": "package",
+          "canonicalDescriptorBase64": "eyIkZGVmcyI6eyJPQXV0aDJSZXN1bHQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7Im9rIjp7InR5cGUiOiJib29sZWFuIn19LCJyZXF1aXJlZCI6WyJvayJdLCJ0eXBlIjoib2JqZWN0In0sIlVuaXQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7fSwicmVxdWlyZWQiOltdLCJ0eXBlIjoib2JqZWN0In19LCJjb250cmFjdElkIjoiZXhhbXBsZS5uYW1pbmcuby5hdXRoMiIsImRlc2NyaXB0b3JWZXJzaW9uIjoxLCJlcnJvcnMiOnt9LCJzY2hlbWFQcm9maWxlIjoic3VuZGVyLnJwYy52YWx1ZXMudjEiLCJzZXJ2aWNlcyI6eyJvLWF1dGgyIjp7Im1ldGhvZHMiOnsicnVuIjp7ImVycm9ycyI6W10sImlkZW1wb3RlbmN5Ijoibm9uZSIsImtpbmQiOiJ1bmFyeSIsInJlcXVlc3RTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvVW5pdCJ9LCJyZXNwb25zZVNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9PQXV0aDJSZXN1bHQifX19fX0sInZlcnNpb24iOiIxLjAuMCJ9",
+          "canonicalDescriptorBytes": 525,
+          "descriptorSha256": "85f986d77fb0e054c2075ffcd0a458986263bf3627d3450542fea1c4bf246d31",
+          "canonicalAbiProjectionBase64": "eyIkZGVmcyI6eyJPQXV0aDJSZXN1bHQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7Im9rIjp7InR5cGUiOiJib29sZWFuIn19LCJyZXF1aXJlZCI6WyJvayJdLCJ0eXBlIjoib2JqZWN0In0sIlVuaXQiOnsiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7fSwicmVxdWlyZWQiOltdLCJ0eXBlIjoib2JqZWN0In19LCJjb250cmFjdElkIjoiZXhhbXBsZS5uYW1pbmcuby5hdXRoMiIsImRlc2NyaXB0b3JWZXJzaW9uIjoxLCJlcnJvcnMiOnt9LCJzY2hlbWFQcm9maWxlIjoic3VuZGVyLnJwYy52YWx1ZXMudjEiLCJzZXJ2aWNlcyI6eyJvLWF1dGgyIjp7Im1ldGhvZHMiOnsicnVuIjp7ImVycm9ycyI6W10sImlkZW1wb3RlbmN5Ijoibm9uZSIsImtpbmQiOiJ1bmFyeSIsInJlcXVlc3RTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvVW5pdCJ9LCJyZXNwb25zZVNjaGVtYSI6eyIkcmVmIjoiIy8kZGVmcy9PQXV0aDJSZXN1bHQifX19fX19",
+          "canonicalAbiProjectionBytes": 507,
+          "abiSha256": "80aa14fbba22337b99fa925deb4f609af3ce053ebe73a48343eed1bde7d14799"
+        },
+        {
+          "contractKey": "url-lookup",
+          "contractId": "example.naming.url.lookup",
+          "contractVersion": "1.0.0",
+          "exposure": "package",
+          "canonicalDescriptorBase64": "eyIkZGVmcyI6eyJOYW1pbmdSZXF1ZXN0Ijp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJvQXV0aFRva2VuIjp7InR5cGUiOiJzdHJpbmcifSwidXJsVmFsdWUiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsidXJsVmFsdWUiLCJvQXV0aFRva2VuIl0sInR5cGUiOiJvYmplY3QifSwiTmFtaW5nUmVzdWx0Ijp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJ1cmxWYWx1ZSI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJ1cmxWYWx1ZSJdLCJ0eXBlIjoib2JqZWN0In19LCJjb250cmFjdElkIjoiZXhhbXBsZS5uYW1pbmcudXJsLmxvb2t1cCIsImRlc2NyaXB0b3JWZXJzaW9uIjoxLCJlcnJvcnMiOnt9LCJzY2hlbWFQcm9maWxlIjoic3VuZGVyLnJwYy52YWx1ZXMudjEiLCJzZXJ2aWNlcyI6eyJ1cmwtbG9va3VwIjp7Im1ldGhvZHMiOnsiZ2V0LXVybCI6eyJlcnJvcnMiOltdLCJpZGVtcG90ZW5jeSI6Im5vbmUiLCJraW5kIjoidW5hcnkiLCJyZXF1ZXN0U2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL05hbWluZ1JlcXVlc3QifSwicmVzcG9uc2VTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvTmFtaW5nUmVzdWx0In19fX19LCJ2ZXJzaW9uIjoiMS4wLjAifQ==",
+          "canonicalDescriptorBytes": 646,
+          "descriptorSha256": "80f0574ef0588c7b4aa636c4ad50046d23ae44eff36a0152b70d3ae4ac3e36f4",
+          "canonicalAbiProjectionBase64": "eyIkZGVmcyI6eyJOYW1pbmdSZXF1ZXN0Ijp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJvQXV0aFRva2VuIjp7InR5cGUiOiJzdHJpbmcifSwidXJsVmFsdWUiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsib0F1dGhUb2tlbiIsInVybFZhbHVlIl0sInR5cGUiOiJvYmplY3QifSwiTmFtaW5nUmVzdWx0Ijp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJ1cmxWYWx1ZSI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJ1cmxWYWx1ZSJdLCJ0eXBlIjoib2JqZWN0In19LCJjb250cmFjdElkIjoiZXhhbXBsZS5uYW1pbmcudXJsLmxvb2t1cCIsImRlc2NyaXB0b3JWZXJzaW9uIjoxLCJlcnJvcnMiOnt9LCJzY2hlbWFQcm9maWxlIjoic3VuZGVyLnJwYy52YWx1ZXMudjEiLCJzZXJ2aWNlcyI6eyJ1cmwtbG9va3VwIjp7Im1ldGhvZHMiOnsiZ2V0LXVybCI6eyJlcnJvcnMiOltdLCJpZGVtcG90ZW5jeSI6Im5vbmUiLCJraW5kIjoidW5hcnkiLCJyZXF1ZXN0U2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL05hbWluZ1JlcXVlc3QifSwicmVzcG9uc2VTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvTmFtaW5nUmVzdWx0In19fX19fQ==",
+          "canonicalAbiProjectionBytes": 628,
+          "abiSha256": "10b10c67575e5fdc68ebef738941135e4687b9635914e4efa4ea4f7a836f9ea8"
+        }
+      ],
+      "providers": [
+        {
+          "providerId": "example.naming.o.auth2.provider",
+          "role": "runtime",
+          "audience": "owner",
+          "contractKey": "o-auth2"
+        },
+        {
+          "providerId": "example.naming.url.lookup.provider",
+          "role": "runtime",
+          "audience": "owner",
+          "contractKey": "url-lookup"
+        }
+      ],
+      "uses": [],
+      "generatedBindings": [
+        {
+          "contractKey": "o-auth2",
+          "csharpLogicalName": "Sunder.Generated.Rpc.OAuth2"
+        },
+        {
+          "contractKey": "url-lookup",
+          "csharpLogicalName": "Sunder.Generated.Rpc.UrlLookup"
+        }
+      ]
+    },
+    {
+      "id": "identity-limits",
+      "packageId": "example.boundary",
+      "packageVersion": "1.0.0",
+      "sources": {
+        "csharp": "valid/identity-limits.cs",
+        "typescript": "valid/identity-limits.ts",
+        "javascript": "valid/identity-limits.js"
+      },
+      "contracts": [
+        {
+          "contractKey": "contract-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contractId": "example.boundary.contract.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contractVersion": "1.0.0",
+          "exposure": "package",
+          "canonicalDescriptorBase64": "eyIkZGVmcyI6eyJCb3VuZGFyeVZhbHVlIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJvayI6eyJ0eXBlIjoiYm9vbGVhbiJ9fSwicmVxdWlyZWQiOlsib2siXSwidHlwZSI6Im9iamVjdCJ9fSwiY29udHJhY3RJZCI6ImV4YW1wbGUuYm91bmRhcnkuY29udHJhY3QuYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwiZGVzY3JpcHRvclZlcnNpb24iOjEsImVycm9ycyI6e30sInNjaGVtYVByb2ZpbGUiOiJzdW5kZXIucnBjLnZhbHVlcy52MSIsInNlcnZpY2VzIjp7ImNvbnRyYWN0LWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSI6eyJtZXRob2RzIjp7InJ1biI6eyJlcnJvcnMiOltdLCJpZGVtcG90ZW5jeSI6Im5vbmUiLCJraW5kIjoidW5hcnkiLCJyZXF1ZXN0U2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL0JvdW5kYXJ5VmFsdWUifSwicmVzcG9uc2VTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvQm91bmRhcnlWYWx1ZSJ9fX19fSwidmVyc2lvbiI6IjEuMC4wIn0=",
+          "canonicalDescriptorBytes": 662,
+          "descriptorSha256": "826f2e97ee41c658c502d713ae1bc3251a0b73a4adcf049335a0f60298e3ddb4",
+          "canonicalAbiProjectionBase64": "eyIkZGVmcyI6eyJCb3VuZGFyeVZhbHVlIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJvayI6eyJ0eXBlIjoiYm9vbGVhbiJ9fSwicmVxdWlyZWQiOlsib2siXSwidHlwZSI6Im9iamVjdCJ9fSwiY29udHJhY3RJZCI6ImV4YW1wbGUuYm91bmRhcnkuY29udHJhY3QuYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwiZGVzY3JpcHRvclZlcnNpb24iOjEsImVycm9ycyI6e30sInNjaGVtYVByb2ZpbGUiOiJzdW5kZXIucnBjLnZhbHVlcy52MSIsInNlcnZpY2VzIjp7ImNvbnRyYWN0LWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSI6eyJtZXRob2RzIjp7InJ1biI6eyJlcnJvcnMiOltdLCJpZGVtcG90ZW5jeSI6Im5vbmUiLCJraW5kIjoidW5hcnkiLCJyZXF1ZXN0U2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL0JvdW5kYXJ5VmFsdWUifSwicmVzcG9uc2VTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvQm91bmRhcnlWYWx1ZSJ9fX19fX0=",
+          "canonicalAbiProjectionBytes": 644,
+          "abiSha256": "135c41877ad80cccaf006b1fe907153aa3aa4fab37968f584292a9af82cf4bb1"
+        },
+        {
+          "contractKey": "provider-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contractId": "example.boundary.provider.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contractVersion": "1.0.0",
+          "exposure": "package",
+          "canonicalDescriptorBase64": "eyIkZGVmcyI6eyJCb3VuZGFyeVZhbHVlIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJvayI6eyJ0eXBlIjoiYm9vbGVhbiJ9fSwicmVxdWlyZWQiOlsib2siXSwidHlwZSI6Im9iamVjdCJ9fSwiY29udHJhY3RJZCI6ImV4YW1wbGUuYm91bmRhcnkucHJvdmlkZXIuYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwiZGVzY3JpcHRvclZlcnNpb24iOjEsImVycm9ycyI6e30sInNjaGVtYVByb2ZpbGUiOiJzdW5kZXIucnBjLnZhbHVlcy52MSIsInNlcnZpY2VzIjp7InByb3ZpZGVyLWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSI6eyJtZXRob2RzIjp7InJ1biI6eyJlcnJvcnMiOltdLCJpZGVtcG90ZW5jeSI6Im5vbmUiLCJraW5kIjoidW5hcnkiLCJyZXF1ZXN0U2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL0JvdW5kYXJ5VmFsdWUifSwicmVzcG9uc2VTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvQm91bmRhcnlWYWx1ZSJ9fX19fSwidmVyc2lvbiI6IjEuMC4wIn0=",
+          "canonicalDescriptorBytes": 644,
+          "descriptorSha256": "06f941b061d368860ef760333bd799fae61d8dce9cad515f680eab9a06ec9c7b",
+          "canonicalAbiProjectionBase64": "eyIkZGVmcyI6eyJCb3VuZGFyeVZhbHVlIjp7ImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJvayI6eyJ0eXBlIjoiYm9vbGVhbiJ9fSwicmVxdWlyZWQiOlsib2siXSwidHlwZSI6Im9iamVjdCJ9fSwiY29udHJhY3RJZCI6ImV4YW1wbGUuYm91bmRhcnkucHJvdmlkZXIuYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwiZGVzY3JpcHRvclZlcnNpb24iOjEsImVycm9ycyI6e30sInNjaGVtYVByb2ZpbGUiOiJzdW5kZXIucnBjLnZhbHVlcy52MSIsInNlcnZpY2VzIjp7InByb3ZpZGVyLWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSI6eyJtZXRob2RzIjp7InJ1biI6eyJlcnJvcnMiOltdLCJpZGVtcG90ZW5jeSI6Im5vbmUiLCJraW5kIjoidW5hcnkiLCJyZXF1ZXN0U2NoZW1hIjp7IiRyZWYiOiIjLyRkZWZzL0JvdW5kYXJ5VmFsdWUifSwicmVzcG9uc2VTY2hlbWEiOnsiJHJlZiI6IiMvJGRlZnMvQm91bmRhcnlWYWx1ZSJ9fX19fX0=",
+          "canonicalAbiProjectionBytes": 626,
+          "abiSha256": "9f303ee73a74f4069d1cb0b8985adea09c8753cddd7c42e3d14fcec3e284947d"
+        }
+      ],
+      "providers": [
+        {
+          "providerId": "example.boundary.provider.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.provider",
+          "role": "runtime",
+          "audience": "owner",
+          "contractKey": "provider-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "uses": [],
+      "generatedBindings": [
+        {
+          "contractKey": "contract-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "csharpLogicalName": "Sunder.Generated.Rpc.ContractAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "contractKey": "provider-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "csharpLogicalName": "Sunder.Generated.Rpc.ProviderAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "boundaries": {
+        "contractId": {
+          "sourceContractKey": "contract-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "value": "example.boundary.contract.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "characters": 128,
+          "providerDeclared": false
+        },
+        "providerId": {
+          "sourceContractKey": "provider-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "value": "example.boundary.provider.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.provider",
+          "characters": 128
+        }
+      }
+    }
+  ],
+  "sourceOrdering": {
+    "descriptorArrayRules": {
+      "sourceOrderPreserved": [
+        "string-enum",
+        "untagged-union-variants",
+        "tagged-union-variants",
+        "method-errors"
+      ],
+      "ascendingNumericValue": [
+        "numeric-enum"
+      ]
+    },
+    "abiSetLikeArrays": [
+      "method.errors",
+      "closed-record.required",
+      "primitive.enum",
+      "nullable.oneOf",
+      "tagged.oneOf"
+    ],
+    "completeVectors": {
+      "stringEnum": {
+        "sourceAndDescriptor": [
+          "zeta",
+          "alpha",
+          "middle"
+        ],
+        "abi": [
+          "alpha",
+          "middle",
+          "zeta"
+        ]
+      },
+      "numericEnum": {
+        "source": [
+          10,
+          -1,
+          2
+        ],
+        "descriptor": [
+          -1,
+          2,
+          10
+        ],
+        "abiCanonicalJsonByteOrder": [
+          -1,
+          10,
+          2
+        ]
+      },
+      "genericUnionWithExplicitDiscriminator": {
+        "sourceAndDescriptorTags": [
+          "text",
+          "count"
+        ],
+        "abiTags": [
+          "count",
+          "text"
+        ]
+      },
+      "taggedUnionWithSynthesizedDiscriminator": {
+        "sourceAndDescriptorTags": [
+          "progress",
+          "finished"
+        ],
+        "abiTags": [
+          "finished",
+          "progress"
+        ]
+      },
+      "methodErrors": {
+        "sourceAndDescriptor": [
+          "value-invalid",
+          "conflict"
+        ],
+        "abi": [
+          "conflict",
+          "value-invalid"
+        ]
+      }
+    }
+  },
+  "namingAndDefaults": {
+    "identityDefaults": {
+      "contractId": "<canonical-package-id>.<service-contract-suffix>",
+      "serviceId": "<service-key>",
+      "methodId": "<method-key>",
+      "providerId": "<contract-id>.provider",
+      "newContractVersion": "1.0.0",
+      "methodIdempotency": "none",
+      "methodErrors": [],
+      "zeroWireParameterRequestDefinition": "Unit",
+      "multiParameterRequestDefinition": "<ServiceDefinitionKey><MethodDefinitionKey>Request",
+      "implicitValueDefaults": false
+    },
+    "frozenVectors": [
+      {
+        "source": "URLLookupService",
+        "stripped": "URLLookup",
+        "lowerKebab": "url-lookup",
+        "pascal": "UrlLookup",
+        "camel": "urlLookup",
+        "tokenDot": "url.lookup"
+      },
+      {
+        "source": "OAuth2Service",
+        "stripped": "OAuth2",
+        "lowerKebab": "o-auth2",
+        "pascal": "OAuth2",
+        "camel": "oAuth2",
+        "tokenDot": "o.auth2"
+      },
+      {
+        "source": "GetURLAsync",
+        "stripped": "GetURL",
+        "lowerKebab": "get-url",
+        "pascal": "GetUrl",
+        "camel": "getUrl",
+        "tokenDot": "get.url"
+      },
+      {
+        "source": "URLValue",
+        "stripped": "URLValue",
+        "lowerKebab": "url-value",
+        "pascal": "UrlValue",
+        "camel": "urlValue",
+        "tokenDot": "url.value"
+      },
+      {
+        "source": "OAuthToken",
+        "stripped": "OAuthToken",
+        "lowerKebab": "o-auth-token",
+        "pascal": "OAuthToken",
+        "camel": "oAuthToken",
+        "tokenDot": "o.auth.token"
+      }
+    ],
+    "keywordEscaping": {
+      "authoritativeArrays": [
+        "csharpReservedKeywords",
+        "csharpContextualKeywords",
+        "ecmascriptStrictModuleBindingRestrictions"
+      ],
+      "csharpPrefix": "@",
+      "typescriptJavaScriptPrefix": "_",
+      "wireIdentityChanges": false,
+      "examples": [
+        {
+          "sourceSymbol": "class",
+          "csharp": "@class",
+          "typescriptJavaScript": "_class"
+        },
+        {
+          "sourceSymbol": "await",
+          "csharp": "@await",
+          "typescriptJavaScript": "_await"
+        },
+        {
+          "sourceSymbol": "record",
+          "csharp": "@record",
+          "typescriptJavaScript": "record"
+        },
+        {
+          "sourceSymbol": "arguments",
+          "csharp": "arguments",
+          "typescriptJavaScript": "_arguments"
+        }
+      ]
+    },
+    "generatedApiVectors": {
+      "csharpNamespace": "Sunder.Generated.Rpc",
+      "packageLocalName": {
+        "input": "weather",
+        "output": "WeatherPackageApi"
+      },
+      "providerImportKey": {
+        "input": "weatherForecast",
+        "output": "IWeatherForecastService"
+      },
+      "importedContractNaming": {
+        "contractKey": "canonical-contract-id",
+        "perContractAliases": false,
+        "ignoredInputs": ["packageLocalName", "providerImportKey", "packageVersion", "packageContentIdentity"],
+        "encoding": "C + uppercase-first-character-per-dot-segment + underscore-join",
+        "vectors": [
+          { "contractId": "1example.2rpc.v1", "symbol": "C1example_2rpc_V1" },
+          { "contractId": "example.a.bc", "symbol": "CExample_A_Bc" },
+          { "contractId": "example.ab.c", "symbol": "CExample_Ab_C" },
+          { "contractId": "example.rpc.v1.minimal", "symbol": "CExample_Rpc_V1_Minimal" },
+          { "contractId": "sunder.stack.contributor", "symbol": "CSunder_Stack_Contributor" }
+        ]
+      },
+      "csharpApiShape": {
+        "facadeKind": "namespace-level-class",
+        "bindingNamespace": "Sunder.Generated.Rpc.Imports.<contractSymbol>",
+        "contractProperty": "<contractSymbol>",
+        "contractPropertyType": "Sunder.Generated.Rpc.ImportApis.<contractSymbol>.Contract",
+        "types": ["Provider", "CatalogSnapshot", "CatalogEvent", "Client", "Contract"],
+        "providerImmutable": true,
+        "providerExposesEndpoint": false,
+        "catalogSnapshotMembers": ["Revision", "Sequence", "ResetRequired", "IReadOnlyList<Provider> Providers"],
+        "catalogEventMembers": ["Revision", "Sequence", "Kind", "Provider? Provider"],
+        "clientServiceProperties": "S + UpperInitial(serviceId), then escape original _ as _5f, . as _2e, - as _2d",
+        "providerInterfaceInherits": "all-descriptor-service-provider-interfaces",
+        "contractSignatures": [
+          "ValueTask<CatalogSnapshot> ListAsync(CancellationToken cancellationToken = default)",
+          "ValueTask<Provider?> GetAsync(Provider provider, CancellationToken cancellationToken = default)",
+          "IAsyncEnumerable<CatalogEvent> WatchAsync(long afterRevision, long afterSequence, CancellationToken cancellationToken = default)",
+          "Client CreateClient(ISunderRpcCallScope scope, Provider provider)",
+          "ValueTask<Provider> ResolveSelectedPackageAsync(CancellationToken cancellationToken = default)"
+        ],
+        "getRevalidates": "exact-activation-endpoint-no-replacement",
+        "watchPreserves": ["revision", "sequence", "resets", "lifecycle-events"],
+        "clientCreatesScope": false,
+        "clientDisposesScope": false
+      },
+      "clientServiceNameVectors": [
+        { "serviceId": "1.foo", "symbol": "S1_2efoo" },
+        { "serviceId": "example", "symbol": "SExample" },
+        { "serviceId": "weather--forecast", "symbol": "SWeather_2d_2dforecast" },
+        { "serviceId": "weather-forecast", "symbol": "SWeather_2dforecast" },
+        { "serviceId": "weather..forecast", "symbol": "SWeather_2e_2eforecast" },
+        { "serviceId": "weather.forecast", "symbol": "SWeather_2eforecast" },
+        { "serviceId": "weather_2dforecast", "symbol": "SWeather_5f2dforecast" },
+        { "serviceId": "weather_2eforecast", "symbol": "SWeather_5f2eforecast" },
+        { "serviceId": "weather_5fforecast", "symbol": "SWeather_5f5fforecast" },
+        { "serviceId": "weather__forecast", "symbol": "SWeather_5f_5fforecast" },
+        { "serviceId": "weather_forecast", "symbol": "SWeather_5fforecast" },
+        { "serviceId": "weatherforecast", "symbol": "SWeatherforecast" }
+      ],
+      "csharpContractMembers": [
+        "ListAsync",
+        "GetAsync",
+        "WatchAsync",
+        "CreateClient",
+        "ResolveSelectedPackageAsync"
+      ],
+      "nodeModuleExports": [
+        "packageApis",
+        "rpcImports"
+      ],
+      "nodeContractMembers": [
+        "list",
+        "get",
+        "watch",
+        "createClient",
+        "resolveSelectedPackage"
+      ]
+    },
+    "collisionFixtureIds": [
+      "collision-namespace-duplicate",
+      "collision-ascii-case",
+      "collision-suffix-service",
+      "collision-suffix-async",
+      "collision-synthetic-request"
+    ],
+    "sourceValidationPrecedenceFixtureIds": [
+      "collision-post-escape-reserved"
+    ]
+  },
+  "packageToolCommandUx": {
+    "status": "command-grammar-oracle",
+    "toolExecution": "deferred",
+    "commandOwner": "package-tools",
+    "excludedOwner": "Sunder.Cli",
+    "commands": [
+      {
+        "family": "api",
+        "operation": "add",
+        "positionals": [{ "name": "package", "cardinality": "required" }],
+        "syntax": "sunder-package api add <package>",
+        "msbuildTarget": "AddSunderPackageApi"
+      },
+      {
+        "family": "api",
+        "operation": "update",
+        "positionals": [{ "name": "package", "cardinality": "optional" }],
+        "syntax": "sunder-package api update [package]",
+        "msbuildTarget": "UpdateSunderPackageApi"
+      },
+      {
+        "family": "api",
+        "operation": "remove",
+        "positionals": [{ "name": "package", "cardinality": "required" }],
+        "syntax": "sunder-package api remove <package>",
+        "msbuildTarget": "RemoveSunderPackageApi"
+      },
+      {
+        "family": "api",
+        "operation": "list",
+        "positionals": [],
+        "syntax": "sunder-package api list",
+        "msbuildTarget": "ListSunderPackageApis"
+      },
+      {
+        "family": "api",
+        "operation": "require",
+        "positionals": [
+          { "name": "package", "cardinality": "required" },
+          { "name": "contract", "cardinality": "required" }
+        ],
+        "syntax": "sunder-package api require <package> <contract>",
+        "msbuildTarget": "RequireSunderPackageApi"
+      },
+      {
+        "family": "api",
+        "operation": "unrequire",
+        "positionals": [
+          { "name": "package", "cardinality": "required" },
+          { "name": "contract", "cardinality": "required" }
+        ],
+        "syntax": "sunder-package api unrequire <package> <contract>",
+        "msbuildTarget": "UnrequireSunderPackageApi"
+      },
+      {
+        "family": "api",
+        "operation": "implement",
+        "positionals": [
+          { "name": "package", "cardinality": "required" },
+          { "name": "contract", "cardinality": "required" }
+        ],
+        "syntax": "sunder-package api implement <package> <contract>",
+        "msbuildTarget": "ImplementSunderPackageApi"
+      },
+      {
+        "family": "api",
+        "operation": "unimplement",
+        "positionals": [
+          { "name": "package", "cardinality": "required" },
+          { "name": "contract", "cardinality": "required" }
+        ],
+        "syntax": "sunder-package api unimplement <package> <contract>",
+        "msbuildTarget": "UnimplementSunderPackageApi"
+      },
+      {
+        "family": "platform",
+        "operation": "implement",
+        "positionals": [{ "name": "contract", "cardinality": "required" }],
+        "syntax": "sunder-package platform implement <contract>",
+        "msbuildTarget": "ImplementSunderPlatformApi"
+      },
+      {
+        "family": "platform",
+        "operation": "update",
+        "positionals": [{ "name": "contract", "cardinality": "optional" }],
+        "syntax": "sunder-package platform update [contract]",
+        "msbuildTarget": "UpdateSunderPlatformApi"
+      },
+      {
+        "family": "platform",
+        "operation": "unimplement",
+        "positionals": [{ "name": "contract", "cardinality": "required" }],
+        "syntax": "sunder-package platform unimplement <contract>",
+        "msbuildTarget": "UnimplementSunderPlatformApi"
+      },
+      {
+        "family": "platform",
+        "operation": "list",
+        "positionals": [],
+        "syntax": "sunder-package platform list",
+        "msbuildTarget": "ListSunderPlatformApis"
+      },
+      {
+        "family": "contracts",
+        "operation": "restore",
+        "positionals": [],
+        "syntax": "sunder-package contracts restore",
+        "msbuildTarget": "RestoreSunderContracts"
+      },
+      {
+        "family": "contracts",
+        "operation": "check",
+        "positionals": [],
+        "syntax": "sunder-package contracts check",
+        "msbuildTarget": "CheckSunderContracts"
+      },
+      {
+        "family": "contracts",
+        "operation": "accept",
+        "positionals": [{ "name": "contract-key", "cardinality": "optional" }],
+        "syntax": "sunder-package contracts accept [contract-key]",
+        "msbuildTarget": "AcceptSunderContracts"
+      },
+      {
+        "family": "contracts",
+        "operation": "freeze",
+        "positionals": [{ "name": "contract-key", "cardinality": "optional" }],
+        "syntax": "sunder-package contracts freeze [contract-key]",
+        "msbuildTarget": "FreezeSunderContracts"
+      },
+      {
+        "family": "contracts",
+        "operation": "publication import",
+        "positionals": [{ "name": "contract-key", "cardinality": "optional" }],
+        "syntax": "sunder-package contracts publication import [contract-key]",
+        "msbuildTarget": "ImportSunderContractPublication"
+      }
+    ],
+    "packageSelectionOptions": [
+      "--version",
+      "--registry",
+      "--candidate",
+      "--local-name",
+      "--presence",
+      "--include-prerelease",
+      "--exclude-prerelease"
+    ],
+    "msbuildProperties": [
+      "SunderPackageId",
+      "SunderContractId",
+      "SunderContractKey",
+      "SunderPackageVersionRange",
+      "SunderPackageIncludePrerelease",
+      "SunderRegistryOrigin",
+      "SunderPackageCandidatePath",
+      "SunderPlatformCatalogPath",
+      "SunderPackageApiLocalName",
+      "SunderPackageApiPresence",
+      "SunderContractCurrentVersion",
+      "SunderContractNextVersion",
+      "SunderAcknowledgeBreakingChange"
+    ],
+    "selectionRules": {
+      "newRegistryBackedSelection": {
+        "requiredOption": "--registry",
+        "requiredProperty": "SunderRegistryOrigin",
+        "candidateOption": "--candidate",
+        "candidateWaivesRegistryRequirement": false
+      },
+      "lockedOrigin": {
+        "operations": ["update", "restore"],
+        "overrideOption": "--registry",
+        "overrideProperty": "SunderRegistryOrigin",
+        "overrideAllowed": false
+      },
+      "globalUpdate": {
+        "command": "sunder-package api update",
+        "rejectedOptionCategories": ["version", "prerelease", "origin", "candidate", "local-name", "presence"],
+        "rejectedOptions": [
+          "--version",
+          "--registry",
+          "--candidate",
+          "--local-name",
+          "--presence",
+          "--include-prerelease",
+          "--exclude-prerelease"
+        ]
+      },
+      "prerelease": {
+        "includeOption": "--include-prerelease",
+        "excludeOption": "--exclude-prerelease",
+        "optionsMutuallyExclusive": true,
+        "msbuildProperty": "SunderPackageIncludePrerelease",
+        "updateOmission": "retain-locked-policy",
+        "createOmission": false
+      },
+      "presence": {
+        "operations": ["api add <package>", "api update <package>"],
+        "option": "--presence",
+        "allowedValues": ["required", "optional"],
+        "msbuildProperty": "SunderPackageApiPresence",
+        "addOmission": "write-required",
+        "targetedUpdateOmission": "retain-locked-value",
+        "globalUpdate": "reject",
+        "missingLockMember": "invalid-no-default",
+        "requiredContractsIndependent": true
+      },
+      "nullableMsbuildPropertyOmission": "absent"
+    }
+  },
+  "selectedPackageProviderResolution": {
+    "status": "outcome-oracle",
+    "frontendExecution": "deferred",
+    "resolverMembers": {
+      "csharp": "ResolveSelectedPackageAsync",
+      "node": "resolveSelectedPackage"
+    },
+    "filter": {
+      "packageId": "exact",
+      "packageVersion": "requestedVersionRange-semver-precedence",
+      "prerelease": "includePrerelease-explicit-opt-in",
+      "state": "Active",
+      "exactContractFields": ["contractId", "contractVersion", "descriptorSha256", "abiSha256"],
+      "packageContentIdentity": "not-a-routing-filter"
+    },
+    "discovery": "all-authorized-exact-contract-providers-without-package-range-or-active-filter",
+    "restoreEvidence": "exact-selected-artifact-content-and-inventory-not-runtime-routing",
+    "selection": {
+      "packageId": "example.dependency",
+      "requestedVersionRange": ">=1.0.0 <2.0.0",
+      "includePrerelease": false,
+      "selectedPackageVersion": "1.2.3",
+      "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+      "contractId": "example.rpc.v1.minimal",
+      "contractVersion": "2.0.0",
+      "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42"
+    },
+    "baseProvider": {
+      "authorized": true,
+      "packageId": "example.dependency",
+      "packageVersion": "1.2.3",
+      "packageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+      "state": "Active",
+      "contractId": "example.rpc.v1.minimal",
+      "contractVersion": "2.0.0",
+      "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42"
+    },
+    "predicateVectors": [
+      { "id": "exact", "providerOverrides": {}, "discoverable": true, "selected": true },
+      { "id": "content-is-not-routing", "providerOverrides": { "packageContentIdentity": "2222222222222222222222222222222222222222222222222222222222222222" }, "discoverable": true, "selected": true },
+      { "id": "range-not-restore-version", "providerOverrides": { "packageVersion": "1.9.0" }, "discoverable": true, "selected": true },
+      { "id": "lower-bound", "providerOverrides": { "packageVersion": "1.0.0" }, "discoverable": true, "selected": true },
+      { "id": "below-range", "providerOverrides": { "packageVersion": "0.9.9" }, "discoverable": true, "selected": false },
+      { "id": "upper-bound", "providerOverrides": { "packageVersion": "2.0.0" }, "discoverable": true, "selected": false },
+      { "id": "build-metadata-precedence", "requestedVersionRange": "1.2.3+restored", "providerOverrides": { "packageVersion": "1.2.3+different-build" }, "discoverable": true, "selected": true },
+      { "id": "prerelease-excluded", "providerOverrides": { "packageVersion": "1.3.0-beta.2" }, "discoverable": true, "selected": false },
+      { "id": "prerelease-included", "includePrerelease": true, "providerOverrides": { "packageVersion": "1.3.0-beta.2" }, "discoverable": true, "selected": true },
+      { "id": "explicit-prerelease-still-needs-opt-in", "requestedVersionRange": "1.3.0-beta.2", "providerOverrides": { "packageVersion": "1.3.0-beta.2" }, "discoverable": true, "selected": false },
+      { "id": "numeric-prerelease-precedence", "requestedVersionRange": ">=1.3.0-beta.2 <1.3.0", "includePrerelease": true, "providerOverrides": { "packageVersion": "1.3.0-beta.10" }, "discoverable": true, "selected": true },
+      { "id": "prerelease-opt-in-does-not-bypass-range", "includePrerelease": true, "providerOverrides": { "packageVersion": "2.1.0-beta.1" }, "discoverable": true, "selected": false },
+      { "id": "other-package", "providerOverrides": { "packageId": "example.alternate" }, "discoverable": true, "selected": false },
+      { "id": "package-id-is-exact", "providerOverrides": { "packageId": "Example.Dependency" }, "discoverable": true, "selected": false },
+      { "id": "inactive-lifecycle-visible", "providerOverrides": { "state": "Inactive" }, "discoverable": true, "selected": false },
+      { "id": "faulted-lifecycle-visible", "providerOverrides": { "state": "Faulted" }, "discoverable": true, "selected": false },
+      { "id": "unauthorized", "providerOverrides": { "authorized": false }, "discoverable": false, "selected": false },
+      { "id": "contract-id-exact", "providerOverrides": { "contractId": "example.rpc.v1.other" }, "discoverable": false, "selected": false },
+      { "id": "contract-version-exact-not-precedence", "providerOverrides": { "contractVersion": "2.0.0+other" }, "discoverable": false, "selected": false },
+      { "id": "descriptor-hash-exact", "providerOverrides": { "descriptorSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }, "discoverable": false, "selected": false },
+      { "id": "abi-hash-exact", "providerOverrides": { "abiSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }, "discoverable": false, "selected": false }
+    ],
+    "outcomes": [
+      {
+        "matchCardinality": "zero",
+        "minimumMatches": 0,
+        "maximumMatches": 0,
+        "result": "error",
+        "diagnosticId": "rpc.provider-not-found",
+        "selection": "none"
+      },
+      {
+        "matchCardinality": "one",
+        "minimumMatches": 1,
+        "maximumMatches": 1,
+        "result": "success",
+        "diagnosticId": null,
+        "selection": "sole-match"
+      },
+      {
+        "matchCardinality": "multiple",
+        "minimumMatches": 2,
+        "maximumMatches": null,
+        "result": "error",
+        "diagnosticId": "rpc.provider-ambiguous",
+        "selection": "none"
+      }
+    ],
+    "neverChooseAmongMultipleMatches": true,
+    "retry": false
+  },
+  "packagePresenceAndReadiness": {
+    "status": "outcome-and-projection-oracle",
+    "frontendExecution": "deferred",
+    "allowedPresence": ["required", "optional"],
+    "lockToReceiptProjection": {
+      "lockPath": "../conformance/valid/mixed-contract-lock.json",
+      "receiptPath": "../conformance/valid/authoring-receipt-mixed.json",
+      "packageId": "example.dependency",
+      "lockPresence": "optional",
+      "receiptPresence": "optional",
+      "lockSha256": "4d2c20ba9591c04449ee4fe1e48fbbd1664642807e039a6984245317a9735c1d"
+    },
+    "dependencyCoalescing": {
+      "agreementRequired": ["packageId", "exactRpcIdentity"],
+      "rangeRule": "all-reviewed-ranges-must-hold",
+      "normalizedRangeRepresentation": "oracle-conjunction-not-manifest-shape",
+      "contentIdentityScope": "restore-provenance-only-not-install-coalescing",
+      "contributors": [
+        {
+          "source": "package-api-selected-artifact",
+          "packageId": "example.dependency",
+          "versionRange": ">=1.0.0 <2.0.0",
+          "reviewedRange": true,
+          "selectedPackageVersion": "1.2.3",
+          "contentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+          "exactRpcIdentity": {
+            "contractId": "example.rpc.v1.minimal",
+            "contractVersion": "2.0.0",
+            "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+            "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42"
+          },
+          "presence": "optional"
+        },
+        {
+          "source": "package-api-ultimate-authority",
+          "packageId": "example.reexport",
+          "versionRange": ">=2.0.0 <3.0.0",
+          "reviewedRange": true,
+          "selectedPackageVersion": "2.4.0",
+          "contentIdentity": "2222222222222222222222222222222222222222222222222222222222222222",
+          "exactRpcIdentity": {
+            "contractId": "example.rpc.v1.minimal",
+            "contractVersion": "2.0.0",
+            "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+            "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42"
+          },
+          "presence": "optional"
+        },
+        {
+          "source": "provider-import",
+          "packageId": "example.dependency",
+          "versionRange": ">=1.2.0 <1.4.0",
+          "reviewedRange": true,
+          "selectedPackageVersion": "1.2.4",
+          "contentIdentity": "3333333333333333333333333333333333333333333333333333333333333333",
+          "exactRpcIdentity": {
+            "contractId": "example.rpc.v1.minimal",
+            "contractVersion": "2.0.0",
+            "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+            "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42"
+          },
+          "presence": "required"
+        }
+      ],
+      "normalized": [
+        {
+          "packageId": "example.dependency",
+          "versionRanges": [">=1.0.0 <2.0.0", ">=1.2.0 <1.4.0"],
+          "presence": "required"
+        },
+        {
+          "packageId": "example.reexport",
+          "versionRanges": [">=2.0.0 <3.0.0"],
+          "presence": "optional"
+        }
+      ],
+      "rule": "required-wins",
+      "sourcePackageApiPresenceAfterCoalescing": [
+        {
+          "source": "package-api-selected-artifact",
+          "packageId": "example.dependency",
+          "presence": "optional"
+        },
+        {
+          "source": "package-api-ultimate-authority",
+          "packageId": "example.reexport",
+          "presence": "optional"
+        }
+      ]
+    },
+    "outcomes": [
+      {
+        "packagePresence": "required",
+        "providerRequired": false,
+        "packageDisposition": "included",
+        "authorizedProviderAvailable": false,
+        "activation": "ready",
+        "selectedPackageIntegration": "unavailable"
+      },
+      {
+        "packagePresence": "required",
+        "providerRequired": true,
+        "packageDisposition": "included",
+        "authorizedProviderAvailable": false,
+        "activation": "blocked",
+        "selectedPackageIntegration": "unavailable"
+      },
+      {
+        "packagePresence": "optional",
+        "providerRequired": false,
+        "packageDisposition": "omitted-absent-or-incompatible",
+        "authorizedProviderAvailable": false,
+        "activation": "ready",
+        "selectedPackageIntegration": "unavailable"
+      },
+      {
+        "packagePresence": "optional",
+        "providerRequired": true,
+        "packageDisposition": "omitted-absent-or-incompatible",
+        "authorizedProviderAvailable": false,
+        "activation": "blocked",
+        "selectedPackageIntegration": "unavailable"
+      }
+    ],
+    "optionalProviderContinuity": [
+      {
+        "id": "omitted-branch-independent-selected-package-provider",
+        "packagePresence": "optional",
+        "providerRequired": true,
+        "selectedPackageDisposition": "omitted",
+        "providerOverrides": { "packageVersion": "1.2.4", "packageContentIdentity": "2222222222222222222222222222222222222222222222222222222222222222" },
+        "activation": "ready",
+        "selectedPackageResolutionDiagnosticId": null
+      },
+      {
+        "id": "omitted-branch-other-package-provider-readiness-only",
+        "packagePresence": "optional",
+        "providerRequired": true,
+        "selectedPackageDisposition": "omitted",
+        "providerOverrides": { "packageId": "example.alternate" },
+        "activation": "ready",
+        "selectedPackageResolutionDiagnosticId": "rpc.provider-not-found"
+      },
+      {
+        "id": "omitted-branch-out-of-range-provider-readiness-only",
+        "packagePresence": "optional",
+        "providerRequired": true,
+        "selectedPackageDisposition": "omitted",
+        "providerOverrides": { "packageVersion": "2.0.0" },
+        "activation": "ready",
+        "selectedPackageResolutionDiagnosticId": "rpc.provider-not-found"
+      },
+      {
+        "id": "omitted-branch-does-not-authorize-provider",
+        "packagePresence": "optional",
+        "providerRequired": true,
+        "selectedPackageDisposition": "omitted",
+        "providerOverrides": { "authorized": false },
+        "activation": "blocked",
+        "selectedPackageResolutionDiagnosticId": "rpc.provider-not-found"
+      },
+      {
+        "id": "omitted-branch-inactive-provider",
+        "packagePresence": "optional",
+        "providerRequired": true,
+        "selectedPackageDisposition": "omitted",
+        "providerOverrides": { "state": "Inactive" },
+        "activation": "blocked",
+        "selectedPackageResolutionDiagnosticId": "rpc.provider-not-found"
+      },
+      {
+        "id": "optional-readiness-does-not-authorize-provider",
+        "packagePresence": "optional",
+        "providerRequired": false,
+        "selectedPackageDisposition": "omitted",
+        "providerOverrides": { "authorized": false },
+        "activation": "ready",
+        "selectedPackageResolutionDiagnosticId": "rpc.provider-not-found"
+      }
+    ]
+  },
+  "compatiblePackageInstallation": {
+    "status": "outcome-oracle",
+    "productionExecution": "deferred",
+    "decision": "user-selected-compatible-installation",
+    "scope": "one-candidate-and-contract-family-for-included-dependency-requirements",
+    "selectionSource": "selectedPackageProviderResolution",
+    "baseRequirement": { "reviewedRange": true, "presence": "required" },
+    "exactRpcFields": ["contractId", "contractVersion", "descriptorSha256", "abiSha256"],
+    "restoreOnlyFields": ["selectedPackageVersion", "selectedPackageContentIdentity"],
+    "executionRuntimePins": "unchanged",
+    "platformAuthentication": "fail-closed-pending-authentication",
+    "vectors": [
+      {
+        "id": "compatible-patch-same-exact-rpc",
+        "requirementOverrides": [{}],
+        "candidateOverrides": { "packageVersion": "1.2.4", "packageContentIdentity": "2222222222222222222222222222222222222222222222222222222222222222" },
+        "expected": { "result": "success", "reason": null, "presence": "required" }
+      },
+      {
+        "id": "schema-drift",
+        "requirementOverrides": [{}],
+        "candidateOverrides": { "descriptorSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "abiSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+        "expected": { "result": "rejected", "reason": "rpc-identity-mismatch", "presence": "required" }
+      },
+      {
+        "id": "descriptor-drift-even-with-equal-abi",
+        "requirementOverrides": [{}],
+        "candidateOverrides": { "descriptorSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+        "expected": { "result": "rejected", "reason": "rpc-identity-mismatch", "presence": "required" }
+      },
+      {
+        "id": "abi-drift",
+        "requirementOverrides": [{}],
+        "candidateOverrides": { "abiSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+        "expected": { "result": "rejected", "reason": "rpc-identity-mismatch", "presence": "required" }
+      },
+      {
+        "id": "contract-version-is-exact",
+        "requirementOverrides": [{}],
+        "candidateOverrides": { "contractVersion": "2.0.0+other" },
+        "expected": { "result": "rejected", "reason": "rpc-identity-mismatch", "presence": "required" }
+      },
+      {
+        "id": "contract-id-is-exact",
+        "requirementOverrides": [{}],
+        "candidateOverrides": { "contractId": "example.rpc.v1.other" },
+        "expected": { "result": "rejected", "reason": "rpc-identity-mismatch", "presence": "required" }
+      },
+      {
+        "id": "incompatible-range",
+        "requirementOverrides": [{}],
+        "candidateOverrides": { "packageVersion": "2.0.0" },
+        "expected": { "result": "rejected", "reason": "package-range-mismatch", "presence": "required" }
+      },
+      {
+        "id": "package-id-is-exact",
+        "requirementOverrides": [{}],
+        "candidateOverrides": { "packageId": "example.other" },
+        "expected": { "result": "rejected", "reason": "package-id-mismatch", "presence": "required" }
+      },
+      {
+        "id": "prerelease-needs-reviewed-opt-in",
+        "requirementOverrides": [{}],
+        "candidateOverrides": { "packageVersion": "1.3.0-beta.2" },
+        "expected": { "result": "rejected", "reason": "package-range-mismatch", "presence": "required" }
+      },
+      {
+        "id": "reviewed-prerelease-opt-in",
+        "requirementOverrides": [{ "includePrerelease": true }],
+        "candidateOverrides": { "packageVersion": "1.3.0-beta.2" },
+        "expected": { "result": "success", "reason": null, "presence": "required" }
+      },
+      {
+        "id": "multiple-requirements-exact-rpc-conflict",
+        "requirementOverrides": [{}, { "descriptorSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+        "candidateOverrides": {},
+        "expected": { "result": "rejected", "reason": "rpc-requirement-conflict", "presence": "required" }
+      },
+      {
+        "id": "multiple-requirements-range-conflict",
+        "requirementOverrides": [{ "requestedVersionRange": ">=1.0.0 <1.2.4" }, { "requestedVersionRange": ">=1.2.4 <2.0.0", "selectedPackageVersion": "1.2.4", "selectedPackageContentIdentity": "2222222222222222222222222222222222222222222222222222222222222222" }],
+        "candidateOverrides": { "packageVersion": "1.2.4" },
+        "expected": { "result": "rejected", "reason": "package-range-mismatch", "presence": "required" }
+      },
+      {
+        "id": "multiple-requirements-different-restore-artifacts",
+        "requirementOverrides": [{ "presence": "optional" }, { "requestedVersionRange": ">=1.2.0 <1.4.0", "selectedPackageVersion": "1.2.4", "selectedPackageContentIdentity": "2222222222222222222222222222222222222222222222222222222222222222" }],
+        "candidateOverrides": { "packageVersion": "1.2.5", "packageContentIdentity": "3333333333333333333333333333333333333333333333333333333333333333" },
+        "expected": { "result": "success", "reason": null, "presence": "required" }
+      },
+      {
+        "id": "optional-included-compatible-patch",
+        "requirementOverrides": [{ "presence": "optional" }],
+        "candidateOverrides": { "packageVersion": "1.2.4" },
+        "expected": { "result": "success", "reason": null, "presence": "optional" }
+      },
+      {
+        "id": "unreviewed-ultimate-authority-range-fails-closed",
+        "requirementOverrides": [{ "reviewedRange": false, "requestedVersionRange": null }],
+        "candidateOverrides": {},
+        "expected": { "result": "rejected", "reason": "unreviewed-authority-range", "presence": "required" }
+      }
+    ]
+  },
+  "artifactLocalProvenanceCoalescing": {
+    "status": "outcome-oracle",
+    "productionExecution": "deferred",
+    "inventoryPath": "../conformance/valid/package-public-inventory-nonempty.json",
+    "agreementRequired": ["contractId", "contractVersion", "descriptorBytes", "descriptorSha256", "abiSha256", "authorityKind", "authorityId", "selectedAuthorityRelease", "selectedAuthorityContentIdentity"],
+    "artifactSourceScope": "local-to-each-selected-artifact",
+    "reexportArtifact": {
+      "packageId": "example.reexport",
+      "packageVersion": "2.4.0",
+      "packageContentIdentity": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "vectors": [
+      { "id": "owner-owned-reexport-imported", "recordOverrides": {}, "coalesces": true },
+      { "id": "reexport-cannot-claim-owned", "recordOverrides": { "artifactSource": "owned" }, "coalesces": false },
+      { "id": "descriptor-drift", "recordOverrides": { "descriptorSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }, "coalesces": false },
+      { "id": "ultimate-release-drift", "recordOverrides": { "selectedAuthorityRelease": "1.2.4" }, "coalesces": false },
+      { "id": "ultimate-content-drift", "recordOverrides": { "selectedAuthorityContentIdentity": "3333333333333333333333333333333333333333333333333333333333333333" }, "coalesces": false }
+    ]
+  },
+  "executableShapes": [
+    {
+      "id": "same-package-app-use",
+      "status": "artifact-and-projection-oracle",
+      "frontendExecution": "deferred",
+      "input": {
+        "sourceFixture": {
+          "fixtureId": "complete",
+          "contractKey": "parity"
+        },
+        "projectExportSchema": "../package-project-export.schema.json",
+        "appPolicy": {
+          "role": "app",
+          "required": true,
+          "actions": [
+            "discover",
+            "invoke",
+            "subscribe"
+          ],
+          "contractKey": "parity"
+        }
+      },
+      "expectedProjectExportContracts": [
+        {
+          "contractKey": "parity",
+          "contractId": "example.authoring.parity",
+          "contractVersion": "1.0.0",
+          "exposure": "package",
+          "source": "owned",
+          "authorityKind": "package",
+          "authorityId": "example.authoring",
+          "descriptorBytes": 7443,
+          "canonicalDescriptor": "{\"$defs\":{\"AnyJson\":{},\"BigNumber\":{\"format\":\"big-integer\",\"maxDigits\":40,\"type\":\"string\",\"valueExclusiveMaximum\":\"9999999999999999999999999999999999999999\",\"valueMinimum\":\"-9999999999999999999999999999999999999999\"},\"Blob\":{\"contentEncoding\":\"base64\",\"maxDecodedBytes\":4096,\"type\":\"string\"},\"BoundedText\":{\"description\":\"Text with explicit scalar-length bounds.\",\"maxLength\":128,\"minLength\":1,\"title\":\"Bounded text\",\"type\":\"string\"},\"Choice\":{\"description\":\"A source-level untagged union.\",\"oneOf\":[{\"$ref\":\"#/$defs/TextChoice\"},{\"$ref\":\"#/$defs/CountChoice\"}],\"title\":\"Choice\"},\"Content\":{\"logicalType\":\"content-reference\",\"type\":\"object\"},\"CountChoice\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"$ref\":\"#/$defs/SafeCount\"},\"kind\":{\"const\":\"count\",\"type\":\"string\"}},\"required\":[\"kind\",\"count\"],\"type\":\"object\"},\"DateValue\":{\"format\":\"date\",\"type\":\"string\"},\"DecimalNumber\":{\"format\":\"decimal\",\"maxPrecision\":20,\"maxScale\":8,\"type\":\"string\",\"valueExclusiveMinimum\":\"-1000000000.125\",\"valueMaximum\":\"1000000000.125\"},\"ErrorDetails\":{\"additionalProperties\":false,\"properties\":{\"field\":{\"$ref\":\"#/$defs/BoundedText\"},\"reason\":{\"$ref\":\"#/$defs/BoundedText\"}},\"required\":[\"field\",\"reason\"],\"type\":\"object\"},\"Event\":{\"description\":\"A tagged stream event.\",\"oneOf\":[{\"$ref\":\"#/$defs/ProgressEvent\"},{\"$ref\":\"#/$defs/FinishedEvent\"}],\"title\":\"Parity event\"},\"ExactRatio\":{\"const\":0.5,\"format\":\"float64\",\"type\":\"number\"},\"FinishedEvent\":{\"additionalProperties\":false,\"properties\":{\"kind\":{\"const\":\"finished\",\"type\":\"string\"},\"result\":{\"$ref\":\"#/$defs/Result\"}},\"required\":[\"kind\",\"result\"],\"type\":\"object\"},\"Float32Value\":{\"exclusiveMinimum\":-1000.25,\"format\":\"float32\",\"maximum\":1000.25,\"type\":\"number\"},\"Float64Value\":{\"exclusiveMaximum\":100000000000000000000,\"format\":\"float64\",\"minimum\":-100000000000000000000,\"type\":\"number\"},\"Identifier\":{\"format\":\"uuid\",\"type\":\"string\"},\"IntegerMap\":{\"additionalProperties\":{\"type\":\"integer\"},\"description\":\"A bounded transparent string-keyed map.\",\"maxProperties\":16,\"minProperties\":0,\"propertyNames\":{\"maxLength\":64,\"minLength\":1,\"type\":\"string\"},\"title\":\"Integer map\",\"type\":\"object\"},\"JsonObject\":{\"maxProperties\":16,\"type\":\"object\"},\"Link\":{\"format\":\"uri\",\"type\":\"string\"},\"Moment\":{\"format\":\"date-time\",\"type\":\"string\"},\"Node\":{\"additionalProperties\":false,\"properties\":{\"children\":{\"items\":{\"$ref\":\"#/$defs/Node\"},\"type\":\"array\"},\"next\":{\"$ref\":\"#/$defs/Node\"},\"value\":{\"$ref\":\"#/$defs/BoundedText\"}},\"required\":[\"value\",\"children\"],\"type\":\"object\"},\"NumericPriority\":{\"enum\":[-1,2,10],\"maximum\":10,\"minimum\":-1,\"type\":\"integer\"},\"ParityCombineRequest\":{\"additionalProperties\":false,\"properties\":{\"left\":{\"maxLength\":32,\"minLength\":1,\"type\":\"string\"},\"right\":{\"maximum\":100,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"left\",\"right\"],\"type\":\"object\"},\"Payload\":{\"additionalProperties\":false,\"description\":\"Exercises the complete V1 value profile.\",\"maxProperties\":31,\"minProperties\":29,\"properties\":{\"bigInteger\":{\"$ref\":\"#/$defs/BigNumber\"},\"bytes\":{\"$ref\":\"#/$defs/Blob\"},\"choice\":{\"$ref\":\"#/$defs/Choice\"},\"content\":{\"$ref\":\"#/$defs/Content\"},\"count\":{\"$ref\":\"#/$defs/SafeCount\"},\"date\":{\"$ref\":\"#/$defs/DateValue\"},\"decimal\":{\"$ref\":\"#/$defs/DecimalNumber\"},\"duration\":{\"$ref\":\"#/$defs/TimeSpanValue\"},\"event\":{\"$ref\":\"#/$defs/Event\"},\"exactRatio\":{\"$ref\":\"#/$defs/ExactRatio\"},\"flag\":{\"type\":\"boolean\"},\"float32\":{\"$ref\":\"#/$defs/Float32Value\"},\"float64\":{\"$ref\":\"#/$defs/Float64Value\"},\"id\":{\"$ref\":\"#/$defs/Identifier\"},\"json\":{\"$ref\":\"#/$defs/AnyJson\"},\"jsonObject\":{\"$ref\":\"#/$defs/JsonObject\"},\"node\":{\"$ref\":\"#/$defs/Node\"},\"optionalNullableText\":{\"oneOf\":[{\"type\":\"null\"},{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"}]},\"optionalText\":{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"},\"priority\":{\"$ref\":\"#/$defs/NumericPriority\"},\"requiredNullableText\":{\"oneOf\":[{\"type\":\"null\"},{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"}]},\"requiredText\":{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"},\"scalarId\":{\"$ref\":\"#/$defs/ScalarId\"},\"scores\":{\"$ref\":\"#/$defs/IntegerMap\"},\"status\":{\"$ref\":\"#/$defs/StringStatus\"},\"tags\":{\"$ref\":\"#/$defs/StringList\"},\"timestamp\":{\"$ref\":\"#/$defs/Moment\"},\"unboundedBytes\":{\"$ref\":\"#/$defs/UnboundedBytes\"},\"unboundedList\":{\"$ref\":\"#/$defs/UnboundedList\"},\"unboundedMap\":{\"$ref\":\"#/$defs/UnboundedMap\"},\"unboundedText\":{\"$ref\":\"#/$defs/UnboundedText\"},\"uri\":{\"$ref\":\"#/$defs/Link\"}},\"required\":[\"requiredText\",\"requiredNullableText\",\"unboundedText\",\"flag\",\"count\",\"float32\",\"float64\",\"exactRatio\",\"id\",\"date\",\"timestamp\",\"duration\",\"uri\",\"bigInteger\",\"decimal\",\"bytes\",\"unboundedBytes\",\"content\",\"json\",\"jsonObject\",\"tags\",\"unboundedList\",\"scores\",\"unboundedMap\",\"status\",\"priority\",\"scalarId\",\"node\",\"event\",\"choice\"],\"title\":\"Parity payload\",\"type\":\"object\"},\"PingResult\":{\"additionalProperties\":false,\"properties\":{\"ok\":{\"type\":\"boolean\"}},\"required\":[\"ok\"],\"type\":\"object\"},\"ProgressEvent\":{\"additionalProperties\":false,\"properties\":{\"kind\":{\"const\":\"progress\",\"type\":\"string\"},\"ratio\":{\"$ref\":\"#/$defs/ExactRatio\"},\"sequence\":{\"$ref\":\"#/$defs/SafeCount\"}},\"required\":[\"kind\",\"sequence\",\"ratio\"],\"type\":\"object\"},\"Result\":{\"additionalProperties\":false,\"properties\":{\"accepted\":{\"type\":\"boolean\"},\"note\":{\"oneOf\":[{\"type\":\"null\"},{\"type\":\"string\"}]}},\"required\":[\"accepted\"],\"type\":\"object\"},\"SafeCount\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"},\"ScalarId\":{\"maxLength\":64,\"minLength\":1,\"type\":\"string\"},\"StringList\":{\"description\":\"A bounded transparent array.\",\"items\":{\"$ref\":\"#/$defs/BoundedText\"},\"maxItems\":32,\"minItems\":0,\"title\":\"String list\",\"type\":\"array\"},\"StringStatus\":{\"description\":\"Declaration order is wire-significant.\",\"enum\":[\"zeta\",\"alpha\",\"middle\"],\"title\":\"String status\",\"type\":\"string\"},\"TextChoice\":{\"additionalProperties\":false,\"properties\":{\"kind\":{\"const\":\"text\",\"type\":\"string\"},\"text\":{\"$ref\":\"#/$defs/BoundedText\"}},\"required\":[\"kind\",\"text\"],\"type\":\"object\"},\"TimeSpanValue\":{\"format\":\"duration\",\"type\":\"string\"},\"UnboundedBytes\":{\"contentEncoding\":\"base64\",\"type\":\"string\"},\"UnboundedList\":{\"items\":{\"type\":\"boolean\"},\"type\":\"array\"},\"UnboundedMap\":{\"additionalProperties\":{\"type\":\"string\"},\"propertyNames\":{\"type\":\"string\"},\"type\":\"object\"},\"UnboundedText\":{\"type\":\"string\"},\"Unit\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"type\":\"object\"},\"WatchRequest\":{\"additionalProperties\":false,\"properties\":{\"cursor\":{\"$ref\":\"#/$defs/BoundedText\"}},\"required\":[],\"type\":\"object\"}},\"contractId\":\"example.authoring.parity\",\"descriptorVersion\":1,\"errors\":{\"conflict\":{\"description\":\"The operation conflicts with current state.\"},\"value-invalid\":{\"description\":\"The supplied value is invalid.\",\"detailsSchema\":{\"$ref\":\"#/$defs/ErrorDetails\"}}},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"parity\":{\"methods\":{\"combine\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/ParityCombineRequest\"},\"responseSchema\":{\"$ref\":\"#/$defs/Result\"}},\"ping\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Unit\"},\"responseSchema\":{\"$ref\":\"#/$defs/PingResult\"}},\"round-trip\":{\"errors\":[\"value-invalid\",\"conflict\"],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Payload\"},\"responseSchema\":{\"$ref\":\"#/$defs/Payload\"}},\"watch\":{\"errors\":[\"value-invalid\"],\"eventSchema\":{\"$ref\":\"#/$defs/Event\"},\"idempotency\":\"none\",\"kind\":\"server-stream\",\"requestSchema\":{\"$ref\":\"#/$defs/WatchRequest\"}}}}},\"version\":\"1.0.0\"}",
+          "descriptorSha256": "ed55315e62632955f98d7990d63b7688f31bafb7365f0395111d74b939a11c0e",
+          "abiSha256": "234bc843a82abc44b8a99ad8e64460a9bad0af4354ad245cb1bda1bc13c26c8e"
+        }
+      ],
+      "expectedRecords": {
+        "contracts": [
+          {
+            "contractKey": "parity",
+            "contractId": "example.authoring.parity",
+            "contractVersion": "1.0.0",
+            "exposure": "package",
+            "descriptorBytes": 7443,
+            "canonicalDescriptor": "{\"$defs\":{\"AnyJson\":{},\"BigNumber\":{\"format\":\"big-integer\",\"maxDigits\":40,\"type\":\"string\",\"valueExclusiveMaximum\":\"9999999999999999999999999999999999999999\",\"valueMinimum\":\"-9999999999999999999999999999999999999999\"},\"Blob\":{\"contentEncoding\":\"base64\",\"maxDecodedBytes\":4096,\"type\":\"string\"},\"BoundedText\":{\"description\":\"Text with explicit scalar-length bounds.\",\"maxLength\":128,\"minLength\":1,\"title\":\"Bounded text\",\"type\":\"string\"},\"Choice\":{\"description\":\"A source-level untagged union.\",\"oneOf\":[{\"$ref\":\"#/$defs/TextChoice\"},{\"$ref\":\"#/$defs/CountChoice\"}],\"title\":\"Choice\"},\"Content\":{\"logicalType\":\"content-reference\",\"type\":\"object\"},\"CountChoice\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"$ref\":\"#/$defs/SafeCount\"},\"kind\":{\"const\":\"count\",\"type\":\"string\"}},\"required\":[\"kind\",\"count\"],\"type\":\"object\"},\"DateValue\":{\"format\":\"date\",\"type\":\"string\"},\"DecimalNumber\":{\"format\":\"decimal\",\"maxPrecision\":20,\"maxScale\":8,\"type\":\"string\",\"valueExclusiveMinimum\":\"-1000000000.125\",\"valueMaximum\":\"1000000000.125\"},\"ErrorDetails\":{\"additionalProperties\":false,\"properties\":{\"field\":{\"$ref\":\"#/$defs/BoundedText\"},\"reason\":{\"$ref\":\"#/$defs/BoundedText\"}},\"required\":[\"field\",\"reason\"],\"type\":\"object\"},\"Event\":{\"description\":\"A tagged stream event.\",\"oneOf\":[{\"$ref\":\"#/$defs/ProgressEvent\"},{\"$ref\":\"#/$defs/FinishedEvent\"}],\"title\":\"Parity event\"},\"ExactRatio\":{\"const\":0.5,\"format\":\"float64\",\"type\":\"number\"},\"FinishedEvent\":{\"additionalProperties\":false,\"properties\":{\"kind\":{\"const\":\"finished\",\"type\":\"string\"},\"result\":{\"$ref\":\"#/$defs/Result\"}},\"required\":[\"kind\",\"result\"],\"type\":\"object\"},\"Float32Value\":{\"exclusiveMinimum\":-1000.25,\"format\":\"float32\",\"maximum\":1000.25,\"type\":\"number\"},\"Float64Value\":{\"exclusiveMaximum\":100000000000000000000,\"format\":\"float64\",\"minimum\":-100000000000000000000,\"type\":\"number\"},\"Identifier\":{\"format\":\"uuid\",\"type\":\"string\"},\"IntegerMap\":{\"additionalProperties\":{\"type\":\"integer\"},\"description\":\"A bounded transparent string-keyed map.\",\"maxProperties\":16,\"minProperties\":0,\"propertyNames\":{\"maxLength\":64,\"minLength\":1,\"type\":\"string\"},\"title\":\"Integer map\",\"type\":\"object\"},\"JsonObject\":{\"maxProperties\":16,\"type\":\"object\"},\"Link\":{\"format\":\"uri\",\"type\":\"string\"},\"Moment\":{\"format\":\"date-time\",\"type\":\"string\"},\"Node\":{\"additionalProperties\":false,\"properties\":{\"children\":{\"items\":{\"$ref\":\"#/$defs/Node\"},\"type\":\"array\"},\"next\":{\"$ref\":\"#/$defs/Node\"},\"value\":{\"$ref\":\"#/$defs/BoundedText\"}},\"required\":[\"value\",\"children\"],\"type\":\"object\"},\"NumericPriority\":{\"enum\":[-1,2,10],\"maximum\":10,\"minimum\":-1,\"type\":\"integer\"},\"ParityCombineRequest\":{\"additionalProperties\":false,\"properties\":{\"left\":{\"maxLength\":32,\"minLength\":1,\"type\":\"string\"},\"right\":{\"maximum\":100,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"left\",\"right\"],\"type\":\"object\"},\"Payload\":{\"additionalProperties\":false,\"description\":\"Exercises the complete V1 value profile.\",\"maxProperties\":31,\"minProperties\":29,\"properties\":{\"bigInteger\":{\"$ref\":\"#/$defs/BigNumber\"},\"bytes\":{\"$ref\":\"#/$defs/Blob\"},\"choice\":{\"$ref\":\"#/$defs/Choice\"},\"content\":{\"$ref\":\"#/$defs/Content\"},\"count\":{\"$ref\":\"#/$defs/SafeCount\"},\"date\":{\"$ref\":\"#/$defs/DateValue\"},\"decimal\":{\"$ref\":\"#/$defs/DecimalNumber\"},\"duration\":{\"$ref\":\"#/$defs/TimeSpanValue\"},\"event\":{\"$ref\":\"#/$defs/Event\"},\"exactRatio\":{\"$ref\":\"#/$defs/ExactRatio\"},\"flag\":{\"type\":\"boolean\"},\"float32\":{\"$ref\":\"#/$defs/Float32Value\"},\"float64\":{\"$ref\":\"#/$defs/Float64Value\"},\"id\":{\"$ref\":\"#/$defs/Identifier\"},\"json\":{\"$ref\":\"#/$defs/AnyJson\"},\"jsonObject\":{\"$ref\":\"#/$defs/JsonObject\"},\"node\":{\"$ref\":\"#/$defs/Node\"},\"optionalNullableText\":{\"oneOf\":[{\"type\":\"null\"},{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"}]},\"optionalText\":{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"},\"priority\":{\"$ref\":\"#/$defs/NumericPriority\"},\"requiredNullableText\":{\"oneOf\":[{\"type\":\"null\"},{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"}]},\"requiredText\":{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"},\"scalarId\":{\"$ref\":\"#/$defs/ScalarId\"},\"scores\":{\"$ref\":\"#/$defs/IntegerMap\"},\"status\":{\"$ref\":\"#/$defs/StringStatus\"},\"tags\":{\"$ref\":\"#/$defs/StringList\"},\"timestamp\":{\"$ref\":\"#/$defs/Moment\"},\"unboundedBytes\":{\"$ref\":\"#/$defs/UnboundedBytes\"},\"unboundedList\":{\"$ref\":\"#/$defs/UnboundedList\"},\"unboundedMap\":{\"$ref\":\"#/$defs/UnboundedMap\"},\"unboundedText\":{\"$ref\":\"#/$defs/UnboundedText\"},\"uri\":{\"$ref\":\"#/$defs/Link\"}},\"required\":[\"requiredText\",\"requiredNullableText\",\"unboundedText\",\"flag\",\"count\",\"float32\",\"float64\",\"exactRatio\",\"id\",\"date\",\"timestamp\",\"duration\",\"uri\",\"bigInteger\",\"decimal\",\"bytes\",\"unboundedBytes\",\"content\",\"json\",\"jsonObject\",\"tags\",\"unboundedList\",\"scores\",\"unboundedMap\",\"status\",\"priority\",\"scalarId\",\"node\",\"event\",\"choice\"],\"title\":\"Parity payload\",\"type\":\"object\"},\"PingResult\":{\"additionalProperties\":false,\"properties\":{\"ok\":{\"type\":\"boolean\"}},\"required\":[\"ok\"],\"type\":\"object\"},\"ProgressEvent\":{\"additionalProperties\":false,\"properties\":{\"kind\":{\"const\":\"progress\",\"type\":\"string\"},\"ratio\":{\"$ref\":\"#/$defs/ExactRatio\"},\"sequence\":{\"$ref\":\"#/$defs/SafeCount\"}},\"required\":[\"kind\",\"sequence\",\"ratio\"],\"type\":\"object\"},\"Result\":{\"additionalProperties\":false,\"properties\":{\"accepted\":{\"type\":\"boolean\"},\"note\":{\"oneOf\":[{\"type\":\"null\"},{\"type\":\"string\"}]}},\"required\":[\"accepted\"],\"type\":\"object\"},\"SafeCount\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"},\"ScalarId\":{\"maxLength\":64,\"minLength\":1,\"type\":\"string\"},\"StringList\":{\"description\":\"A bounded transparent array.\",\"items\":{\"$ref\":\"#/$defs/BoundedText\"},\"maxItems\":32,\"minItems\":0,\"title\":\"String list\",\"type\":\"array\"},\"StringStatus\":{\"description\":\"Declaration order is wire-significant.\",\"enum\":[\"zeta\",\"alpha\",\"middle\"],\"title\":\"String status\",\"type\":\"string\"},\"TextChoice\":{\"additionalProperties\":false,\"properties\":{\"kind\":{\"const\":\"text\",\"type\":\"string\"},\"text\":{\"$ref\":\"#/$defs/BoundedText\"}},\"required\":[\"kind\",\"text\"],\"type\":\"object\"},\"TimeSpanValue\":{\"format\":\"duration\",\"type\":\"string\"},\"UnboundedBytes\":{\"contentEncoding\":\"base64\",\"type\":\"string\"},\"UnboundedList\":{\"items\":{\"type\":\"boolean\"},\"type\":\"array\"},\"UnboundedMap\":{\"additionalProperties\":{\"type\":\"string\"},\"propertyNames\":{\"type\":\"string\"},\"type\":\"object\"},\"UnboundedText\":{\"type\":\"string\"},\"Unit\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"type\":\"object\"},\"WatchRequest\":{\"additionalProperties\":false,\"properties\":{\"cursor\":{\"$ref\":\"#/$defs/BoundedText\"}},\"required\":[],\"type\":\"object\"}},\"contractId\":\"example.authoring.parity\",\"descriptorVersion\":1,\"errors\":{\"conflict\":{\"description\":\"The operation conflicts with current state.\"},\"value-invalid\":{\"description\":\"The supplied value is invalid.\",\"detailsSchema\":{\"$ref\":\"#/$defs/ErrorDetails\"}}},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"parity\":{\"methods\":{\"combine\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/ParityCombineRequest\"},\"responseSchema\":{\"$ref\":\"#/$defs/Result\"}},\"ping\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Unit\"},\"responseSchema\":{\"$ref\":\"#/$defs/PingResult\"}},\"round-trip\":{\"errors\":[\"value-invalid\",\"conflict\"],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Payload\"},\"responseSchema\":{\"$ref\":\"#/$defs/Payload\"}},\"watch\":{\"errors\":[\"value-invalid\"],\"eventSchema\":{\"$ref\":\"#/$defs/Event\"},\"idempotency\":\"none\",\"kind\":\"server-stream\",\"requestSchema\":{\"$ref\":\"#/$defs/WatchRequest\"}}}}},\"version\":\"1.0.0\"}",
+            "descriptorSha256": "ed55315e62632955f98d7990d63b7688f31bafb7365f0395111d74b939a11c0e",
+            "abiSha256": "234bc843a82abc44b8a99ad8e64460a9bad0af4354ad245cb1bda1bc13c26c8e"
+          }
+        ],
+        "packageArtifacts": [],
+        "bundles": [
+          {
+            "contractKey": "parity",
+            "source": "owned",
+            "authorityKind": "package",
+            "authorityId": "example.authoring"
+          }
+        ],
+        "packageArtifactImports": [],
+        "packageApiImports": [],
+        "providerImports": [],
+        "platformImports": [],
+        "providers": [],
+        "uses": [
+          {
+            "role": "app",
+            "required": true,
+            "actions": [
+              "discover",
+              "invoke",
+              "subscribe"
+            ],
+            "contractKey": "parity"
+          }
+        ],
+        "generatedPackageFacades": [],
+        "generatedBindings": [
+          {
+            "contractKey": "parity",
+            "logicalName": "Sunder.Generated.Rpc.Parity"
+          }
+        ]
+      }
+    },
+    {
+      "id": "whole-package-public-api-import",
+      "status": "artifact-and-projection-oracle",
+      "frontendExecution": "deferred",
+      "input": {
+        "lockPath": "../conformance/valid/package-api-mixed-authority-contract-lock.json",
+        "lockSchema": "../contract-lock.schema.json",
+        "publicInventoryPath": "../conformance/valid/package-public-inventory-mixed-authority.json",
+        "publicInventorySchema": "../package-public-inventory.schema.json",
+        "recordDonorReceiptPath": "../conformance/valid/authoring-receipt-mixed.json",
+        "receiptSchema": "../authoring-receipt.schema.json",
+        "consumerRole": "runtime"
+      },
+      "expectedRecords": {
+        "contracts": [
+          {
+            "contractKey": "example.rpc.v1.minimal",
+            "contractId": "example.rpc.v1.minimal",
+            "contractVersion": "2.0.0",
+            "exposure": "public",
+            "descriptorBytes": 487,
+            "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"example.rpc.v1.minimal\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0\"}",
+            "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+            "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42"
+          }
+        ],
+        "packageArtifacts": [
+          {
+            "packageId": "example.dependency",
+            "requestedVersionRange": ">=1.0.0 <2.0.0",
+            "includePrerelease": false,
+            "selectedPackageVersion": "1.2.3",
+            "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+            "registryOrigin": "https://registry.example/",
+            "publicContractCount": 2,
+            "publicInventorySha256": "6f69988fd727caa6b6eeab5a8f0635264a3c663b7a03cfd865784fa4ef022329",
+            "contracts": [
+              {
+                "contractId": "example.rpc.v1.minimal",
+                "artifactSource": "owned",
+                "authorityKind": "package",
+                "authorityId": "example.dependency",
+                "selectedAuthorityRelease": "1.2.3",
+                "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+                "resolvedContractVersion": "2.0.0",
+                "descriptorBytes": 487,
+                "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+                "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+                "etag": "\"709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371\""
+              },
+              {
+                "contractId": "sunder.stack.contributor",
+                "artifactSource": "imported",
+                "authorityKind": "platform",
+                "authorityId": "sunder.core",
+                "selectedAuthorityRelease": "1.1.0",
+                "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930",
+                "resolvedContractVersion": "2.0.0",
+                "descriptorBytes": 489,
+                "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+                "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+                "etag": "\"6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567\""
+              }
+            ]
+          }
+        ],
+        "bundles": [
+          {
+            "contractKey": "example.rpc.v1.minimal",
+            "source": "imported",
+            "authorityKind": "package",
+            "authorityId": "example.dependency",
+            "selectedAuthorityRelease": "1.2.3",
+            "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "packageArtifactImports": [
+          {
+            "packageId": "example.dependency",
+            "requestedVersionRange": ">=1.0.0 <2.0.0",
+            "includePrerelease": false,
+            "selectedPackageVersion": "1.2.3",
+            "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+            "publicContractCount": 2,
+            "publicInventorySha256": "6f69988fd727caa6b6eeab5a8f0635264a3c663b7a03cfd865784fa4ef022329",
+            "authorityConstraints": [
+              {
+                "authorityKind": "package",
+                "authorityId": "example.dependency",
+                "selectedAuthorityRelease": "1.2.3",
+                "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111"
+              },
+              {
+                "authorityKind": "platform",
+                "authorityId": "sunder.core",
+                "selectedAuthorityRelease": "1.1.0",
+                "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930"
+              }
+            ]
+          }
+        ],
+        "packageApiImports": [
+          {
+            "packageId": "example.dependency",
+            "presence": "optional",
+            "bundleRefs": [
+              {
+                "contractId": "example.rpc.v1.minimal",
+                "contractVersion": "2.0.0"
+              }
+            ],
+            "useRefs": [
+              {
+                "role": "runtime",
+                "contractId": "example.rpc.v1.minimal",
+                "contractVersion": "2.0.0"
+              }
+            ]
+          }
+        ],
+        "providerImports": [],
+        "platformImports": [],
+        "providers": [],
+        "uses": [
+          {
+            "role": "runtime",
+            "required": true,
+            "actions": [
+              "discover",
+              "invoke"
+            ],
+            "contractKey": "example.rpc.v1.minimal"
+          }
+        ],
+        "generatedPackageFacades": [
+          {
+            "packageId": "example.dependency",
+            "localName": "dependency",
+            "logicalName": "Sunder.Generated.Rpc.DependencyPackageApi"
+          }
+        ],
+        "generatedBindings": [
+          {
+            "contractKey": "example.rpc.v1.minimal",
+            "logicalName": "Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal"
+          }
+        ]
+      },
+      "excludedPublicInventoryContracts": [
+        {
+          "contractId": "sunder.stack.contributor",
+          "contractVersion": "2.0.0",
+          "descriptorBytes": 489,
+          "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+          "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+          "reason": "authorityKind=platform"
+        }
+      ]
+    },
+    {
+      "id": "explicit-package-provider-import",
+      "status": "artifact-and-projection-oracle",
+      "frontendExecution": "deferred",
+      "input": {
+        "lockBasePath": "../conformance/valid/package-api-contract-lock.json",
+        "lockSchema": "../contract-lock.schema.json",
+        "recordDonorReceiptPath": "../conformance/valid/authoring-receipt-mixed.json",
+        "receiptSchema": "../authoring-receipt.schema.json",
+        "lockTransformations": [
+          {
+            "operation": "remove",
+            "path": "/packageImports/example.dependency"
+          },
+          {
+            "operation": "set",
+            "path": "/providerImports/minimalProvider",
+            "value": {
+              "packageId": "example.dependency",
+              "contractId": "example.rpc.v1.minimal"
+            }
+          }
+        ],
+        "providerBinding": {
+          "key": "minimalProvider",
+          "providerId": "example.consumer.minimal.provider",
+          "role": "runtime",
+          "audience": "public"
+        }
+      },
+      "expectedRecords": {
+        "contracts": [
+          {
+            "contractKey": "example.rpc.v1.minimal",
+            "contractId": "example.rpc.v1.minimal",
+            "contractVersion": "2.0.0",
+            "exposure": "public",
+            "descriptorBytes": 487,
+            "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"example.rpc.v1.minimal\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0\"}",
+            "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+            "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42"
+          }
+        ],
+        "packageArtifacts": [
+          {
+            "packageId": "example.dependency",
+            "requestedVersionRange": ">=1.0.0 <2.0.0",
+            "includePrerelease": false,
+            "selectedPackageVersion": "1.2.3",
+            "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+            "registryOrigin": "https://registry.example/",
+            "publicContractCount": 1,
+            "publicInventorySha256": "1d1c5dbcae220e7052df3f87f9b4fe9e5feb3fd2a23c70f2b41453039ccb9fbe",
+            "contracts": [
+              {
+                "contractId": "example.rpc.v1.minimal",
+                "artifactSource": "owned",
+                "authorityKind": "package",
+                "authorityId": "example.dependency",
+                "selectedAuthorityRelease": "1.2.3",
+                "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+                "resolvedContractVersion": "2.0.0",
+                "descriptorBytes": 487,
+                "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+                "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+                "etag": "\"709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371\""
+              }
+            ]
+          }
+        ],
+        "bundles": [
+          {
+            "contractKey": "example.rpc.v1.minimal",
+            "source": "imported",
+            "authorityKind": "package",
+            "authorityId": "example.dependency",
+            "selectedAuthorityRelease": "1.2.3",
+            "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "packageArtifactImports": [
+          {
+            "packageId": "example.dependency",
+            "requestedVersionRange": ">=1.0.0 <2.0.0",
+            "includePrerelease": false,
+            "selectedPackageVersion": "1.2.3",
+            "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+            "publicContractCount": 1,
+            "publicInventorySha256": "1d1c5dbcae220e7052df3f87f9b4fe9e5feb3fd2a23c70f2b41453039ccb9fbe",
+            "authorityConstraints": [
+              {
+                "authorityKind": "package",
+                "authorityId": "example.dependency",
+                "selectedAuthorityRelease": "1.2.3",
+                "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111"
+              }
+            ]
+          }
+        ],
+        "packageApiImports": [],
+        "providerImports": [
+          {
+            "key": "minimalProvider",
+            "packageId": "example.dependency",
+            "contractId": "example.rpc.v1.minimal",
+            "contractVersion": "2.0.0",
+            "bundleRef": {
+              "contractId": "example.rpc.v1.minimal",
+              "contractVersion": "2.0.0"
+            },
+            "providerRefs": [
+              {
+                "role": "runtime",
+                "providerId": "example.consumer.minimal.provider",
+                "contractId": "example.rpc.v1.minimal",
+                "contractVersion": "2.0.0"
+              }
+            ]
+          }
+        ],
+        "platformImports": [],
+        "providers": [
+          {
+            "providerId": "example.consumer.minimal.provider",
+            "role": "runtime",
+            "audience": "public",
+            "contractKey": "example.rpc.v1.minimal"
+          }
+        ],
+        "uses": [],
+        "generatedPackageFacades": [],
+        "generatedBindings": [
+          {
+            "contractKey": "example.rpc.v1.minimal",
+            "logicalName": "Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal"
+          }
+        ]
+      }
+    },
+    {
+      "id": "explicit-platform-import",
+      "status": "artifact-and-projection-oracle",
+      "frontendExecution": "deferred",
+      "input": {
+        "lockPath": "../conformance/valid/mixed-contract-lock.json",
+        "lockSchema": "../contract-lock.schema.json",
+        "recordDonorReceiptPath": "../conformance/valid/authoring-receipt-mixed.json",
+        "receiptSchema": "../authoring-receipt.schema.json",
+        "lockKey": "stackContributor",
+        "lockTransformations": [
+          {
+            "operation": "remove",
+            "path": "/packageImports/example.dependency"
+          },
+          {
+            "operation": "remove",
+            "path": "/packageArtifacts/example.dependency"
+          }
+        ]
+      },
+      "expectedRecords": {
+        "contracts": [
+          {
+            "contractKey": "sunder.stack.contributor",
+            "contractId": "sunder.stack.contributor",
+            "contractVersion": "2.0.0",
+            "exposure": "public",
+            "descriptorBytes": 489,
+            "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"sunder.stack.contributor\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0\"}",
+            "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+            "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56"
+          }
+        ],
+        "packageArtifacts": [],
+        "bundles": [
+          {
+            "contractKey": "sunder.stack.contributor",
+            "source": "imported",
+            "authorityKind": "platform",
+            "authorityId": "sunder.core",
+            "selectedAuthorityRelease": "1.1.0",
+            "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930"
+          }
+        ],
+        "packageArtifactImports": [],
+        "packageApiImports": [],
+        "providerImports": [],
+        "platformImports": [
+          {
+            "key": "stackContributor",
+            "authorityKind": "platform",
+            "authorityId": "sunder.core",
+            "authorityReleaseRange": ">=1.0.0 <2.0.0",
+            "includePrerelease": false,
+            "selectedAuthorityRelease": "1.1.0",
+            "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930",
+            "contractId": "sunder.stack.contributor",
+            "contractVersion": "2.0.0",
+            "bundleRef": {
+              "contractId": "sunder.stack.contributor",
+              "contractVersion": "2.0.0"
+            },
+            "providerRefs": [
+              {
+                "role": "runtime",
+                "providerId": "example.consumer.stack",
+                "contractId": "sunder.stack.contributor",
+                "contractVersion": "2.0.0"
+              }
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "providerId": "example.consumer.stack",
+            "role": "runtime",
+            "audience": "public",
+            "contractKey": "sunder.stack.contributor"
+          }
+        ],
+        "uses": [],
+        "generatedPackageFacades": [],
+        "generatedBindings": [
+          {
+            "contractKey": "sunder.stack.contributor",
+            "logicalName": "Sunder.Generated.Rpc.Imports.CSunder_Stack_Contributor"
+          }
+        ]
+      }
+    }
+  ],
+  "sourceSpanConvention": {
+    "linesAndColumns": "one-based",
+    "end": "exclusive",
+    "columnUnit": "ASCII code unit"
+  },
+  "stableSourceDiagnosticIds": [
+    "rpc-authoring.service-invalid",
+    "rpc-authoring.method-invalid",
+    "rpc-authoring.value-invalid",
+    "rpc-authoring.provider-invalid",
+    "rpc-authoring.handler-incomplete",
+    "rpc-authoring.identity-collision",
+    "rpc-authoring.generated-name-collision",
+    "rpc-authoring.unsupported-source",
+    "rpc-authoring.source-limit-exceeded",
+    "rpc-authoring.baseline-drift"
+  ],
+  "invalidFixtures": [
+    {
+      "id": "service-invalid",
+      "diagnosticId": "rpc-authoring.service-invalid",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/service-invalid.cs",
+          "spans": [
+            {
+              "text": "EmptyService",
+              "startLine": 6,
+              "startColumn": 18,
+              "endLine": 6,
+              "endColumn": 30
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/service-invalid.ts",
+          "spans": [
+            {
+              "text": "no-methods",
+              "startLine": 14,
+              "startColumn": 10,
+              "endLine": 14,
+              "endColumn": 20
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/service-invalid.js",
+          "spans": [
+            {
+              "text": "no-methods",
+              "startLine": 16,
+              "startColumn": 10,
+              "endLine": 16,
+              "endColumn": 20
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "method-invalid",
+      "diagnosticId": "rpc-authoring.method-invalid",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/method-invalid.cs",
+          "spans": [
+            {
+              "text": "Run",
+              "startLine": 9,
+              "startColumn": 12,
+              "endLine": 9,
+              "endColumn": 15
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/method-invalid.ts",
+          "spans": [
+            {
+              "text": "run",
+              "startLine": 15,
+              "startColumn": 11,
+              "endLine": 15,
+              "endColumn": 14
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/method-invalid.js",
+          "spans": [
+            {
+              "text": "run",
+              "startLine": 17,
+              "startColumn": 11,
+              "endLine": 17,
+              "endColumn": 14
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "value-invalid",
+      "diagnosticId": "rpc-authoring.value-invalid",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/value-invalid.cs",
+          "spans": [
+            {
+              "text": "Name",
+              "startLine": 15,
+              "startColumn": 19,
+              "endLine": 15,
+              "endColumn": 23
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/value-invalid.ts",
+          "spans": [
+            {
+              "text": "name",
+              "startLine": 12,
+              "startColumn": 11,
+              "endLine": 12,
+              "endColumn": 15
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/value-invalid.js",
+          "spans": [
+            {
+              "text": "name",
+              "startLine": 14,
+              "startColumn": 11,
+              "endLine": 14,
+              "endColumn": 15
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "provider-invalid",
+      "diagnosticId": "rpc-authoring.provider-invalid",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/provider-invalid.cs",
+          "spans": [
+            {
+              "text": "Public",
+              "startLine": 8,
+              "startColumn": 57,
+              "endLine": 8,
+              "endColumn": 63
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/provider-invalid.ts",
+          "spans": [
+            {
+              "text": "public",
+              "startLine": 29,
+              "startColumn": 18,
+              "endLine": 29,
+              "endColumn": 24
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/provider-invalid.js",
+          "spans": [
+            {
+              "text": "public",
+              "startLine": 31,
+              "startColumn": 18,
+              "endLine": 31,
+              "endColumn": 24
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "handler-incomplete",
+      "diagnosticId": "rpc-authoring.handler-incomplete",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/handler-incomplete.cs",
+          "spans": [
+            {
+              "text": "IncompleteProvider",
+              "startLine": 18,
+              "startColumn": 29,
+              "endLine": 18,
+              "endColumn": 47
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/handler-incomplete.ts",
+          "spans": [
+            {
+              "text": "incomplete",
+              "startLine": 30,
+              "startColumn": 5,
+              "endLine": 30,
+              "endColumn": 15
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/handler-incomplete.js",
+          "spans": [
+            {
+              "text": "incomplete",
+              "startLine": 32,
+              "startColumn": 5,
+              "endLine": 32,
+              "endColumn": 15
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "collision-namespace-duplicate",
+      "collisionClass": "same-simple-name-in-different-namespaces-or-projects",
+      "diagnosticId": "rpc-authoring.identity-collision",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "languageTriggers": {
+        "csharp": "same-simple-name-in-different-namespaces",
+        "typescript": "duplicate-explicit-contract-id",
+        "javascript": "duplicate-explicit-contract-id"
+      },
+      "expectedIdentity": "example.collision.status",
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/collision-namespace-duplicate.cs",
+          "spans": [
+            {
+              "text": "StatusService",
+              "startLine": 16,
+              "startColumn": 22,
+              "endLine": 16,
+              "endColumn": 35
+            },
+            {
+              "text": "StatusService",
+              "startLine": 26,
+              "startColumn": 22,
+              "endLine": 26,
+              "endColumn": 35
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/collision-namespace-duplicate.ts",
+          "spans": [
+            {
+              "text": "example.collision.status",
+              "startLine": 9,
+              "startColumn": 20,
+              "endLine": 9,
+              "endColumn": 44
+            },
+            {
+              "text": "example.collision.status",
+              "startLine": 28,
+              "startColumn": 20,
+              "endLine": 28,
+              "endColumn": 44
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/collision-namespace-duplicate.js",
+          "spans": [
+            {
+              "text": "example.collision.status",
+              "startLine": 11,
+              "startColumn": 20,
+              "endLine": 11,
+              "endColumn": 44
+            },
+            {
+              "text": "example.collision.status",
+              "startLine": 30,
+              "startColumn": 20,
+              "endLine": 30,
+              "endColumn": 44
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "collision-ascii-case",
+      "collisionClass": "ascii-case-only-difference",
+      "diagnosticId": "rpc-authoring.identity-collision",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "comparison": "invariant ASCII A-Z to a-z, ordinal",
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/collision-ascii-case.cs",
+          "spans": [
+            {
+              "text": "Status",
+              "startLine": 13,
+              "startColumn": 23,
+              "endLine": 13,
+              "endColumn": 29
+            },
+            {
+              "text": "STATUS",
+              "startLine": 19,
+              "startColumn": 23,
+              "endLine": 19,
+              "endColumn": 29
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/collision-ascii-case.ts",
+          "spans": [
+            {
+              "text": "Status",
+              "startLine": 11,
+              "startColumn": 9,
+              "endLine": 11,
+              "endColumn": 15
+            },
+            {
+              "text": "STATUS",
+              "startLine": 14,
+              "startColumn": 9,
+              "endLine": 14,
+              "endColumn": 15
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/collision-ascii-case.js",
+          "spans": [
+            {
+              "text": "Status",
+              "startLine": 13,
+              "startColumn": 9,
+              "endLine": 13,
+              "endColumn": 15
+            },
+            {
+              "text": "STATUS",
+              "startLine": 16,
+              "startColumn": 9,
+              "endLine": 16,
+              "endColumn": 15
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "collision-suffix-service",
+      "collisionClass": "terminal-service-suffix",
+      "diagnosticId": "rpc-authoring.identity-collision",
+      "applicableLanguages": ["csharp"],
+      "nonApplicableControls": {
+        "typescript": "Node contract keys are already canonical and do not strip a Service suffix.",
+        "javascript": "Node contract keys are already canonical and do not strip a Service suffix."
+      },
+      "expectedIdentity": "example.collision.status",
+      "normalizedSources": [
+        "Status",
+        "StatusService"
+      ],
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/collision-suffix-service.cs",
+          "spans": [
+            {
+              "text": "Status",
+              "startLine": 7,
+              "startColumn": 18,
+              "endLine": 7,
+              "endColumn": 24
+            },
+            {
+              "text": "StatusService",
+              "startLine": 14,
+              "startColumn": 18,
+              "endLine": 14,
+              "endColumn": 31
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/collision-suffix-service.ts",
+          "spans": []
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/collision-suffix-service.js",
+          "spans": []
+        }
+      ]
+    },
+    {
+      "id": "collision-suffix-async",
+      "collisionClass": "terminal-async-suffix",
+      "diagnosticId": "rpc-authoring.identity-collision",
+      "applicableLanguages": ["csharp"],
+      "nonApplicableControls": {
+        "typescript": "Node method keys are already canonical and do not strip an Async suffix.",
+        "javascript": "Node method keys are already canonical and do not strip an Async suffix."
+      },
+      "expectedMethodId": "run",
+      "normalizedSources": [
+        "Run",
+        "RunAsync"
+      ],
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/collision-suffix-async.cs",
+          "spans": [
+            {
+              "text": "Run",
+              "startLine": 10,
+              "startColumn": 26,
+              "endLine": 10,
+              "endColumn": 29
+            },
+            {
+              "text": "RunAsync",
+              "startLine": 13,
+              "startColumn": 26,
+              "endLine": 13,
+              "endColumn": 34
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/collision-suffix-async.ts",
+          "spans": []
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/collision-suffix-async.js",
+          "spans": []
+        }
+      ]
+    },
+    {
+      "id": "collision-synthetic-request",
+      "collisionClass": "synthetic-request-versus-authored-definition",
+      "diagnosticId": "rpc-authoring.generated-name-collision",
+      "applicableLanguages": ["csharp"],
+      "nonApplicableControls": {
+        "typescript": "Node methods reference one explicit request schema and do not synthesize multi-parameter requests.",
+        "javascript": "Node methods reference one explicit request schema and do not synthesize multi-parameter requests."
+      },
+      "expectedGeneratedName": "OrderCreateRequest",
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/collision-synthetic-request.cs",
+          "spans": [
+            {
+              "text": "CreateAsync",
+              "startLine": 10,
+              "startColumn": 30,
+              "endLine": 10,
+              "endColumn": 41
+            },
+            {
+              "text": "OrderCreateRequest",
+              "startLine": 13,
+              "startColumn": 23,
+              "endLine": 13,
+              "endColumn": 41
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/collision-synthetic-request.ts",
+          "spans": []
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/collision-synthetic-request.js",
+          "spans": []
+        }
+      ]
+    },
+    {
+      "id": "collision-post-escape-reserved",
+      "collisionClass": "invalid-initial-character-preempts-post-escape-collision",
+      "diagnosticId": "rpc-authoring.value-invalid",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "diagnosticPrecedence": "Source-name validation rejects a leading separator before generated-name collision analysis.",
+      "expectedInvalidSourceName": "_await",
+      "generatedNameVectors": {
+        "csharp": [
+          {
+            "source": "await",
+            "generated": "@await",
+            "outcome": "escaped-keyword"
+          },
+          {
+            "source": "_await",
+            "generated": null,
+            "outcome": "invalid-initial-character"
+          }
+        ],
+        "typescriptJavaScript": [
+          {
+            "source": "await",
+            "generated": "_await",
+            "outcome": "escaped-keyword"
+          },
+          {
+            "source": "_await",
+            "generated": null,
+            "outcome": "invalid-initial-character"
+          }
+        ]
+      },
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/collision-post-escape-reserved.cs",
+          "spans": [
+            {
+              "text": "_await",
+              "startLine": 10,
+              "startColumn": 57,
+              "endLine": 10,
+              "endColumn": 63
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/collision-post-escape-reserved.ts",
+          "spans": [
+            {
+              "text": "_await",
+              "startLine": 13,
+              "startColumn": 11,
+              "endLine": 13,
+              "endColumn": 17
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/collision-post-escape-reserved.js",
+          "spans": [
+            {
+              "text": "_await",
+              "startLine": 15,
+              "startColumn": 11,
+              "endLine": 15,
+              "endColumn": 17
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unsupported-source",
+      "diagnosticId": "rpc-authoring.unsupported-source",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/unsupported-source.cs",
+          "spans": [
+            {
+              "text": "EchoAsync",
+              "startLine": 10,
+              "startColumn": 13,
+              "endLine": 10,
+              "endColumn": 22
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/unsupported-source.ts",
+          "spans": [
+            {
+              "text": "makeSchema()",
+              "startLine": 12,
+              "startColumn": 23,
+              "endLine": 12,
+              "endColumn": 35
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/unsupported-source.js",
+          "spans": [
+            {
+              "text": "makeSchema()",
+              "startLine": 14,
+              "startColumn": 23,
+              "endLine": 14,
+              "endColumn": 35
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "source-limit-contract-identity",
+      "packageId": "example.boundary",
+      "packageVersion": "1.0.0",
+      "diagnosticId": "rpc-authoring.source-limit-exceeded",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "limit": {
+        "kind": "derived-contract-id-characters",
+        "sourceContractKey": "contract-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "maximum": 128,
+        "actual": 129,
+        "derivedIdentity": "example.boundary.contract.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/source-limit-contract-identity.cs",
+          "spans": [
+            {
+              "text": "ContractAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaService",
+              "startLine": 7,
+              "startColumn": 18,
+              "endLine": 7,
+              "endColumn": 136
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/source-limit-contract-identity.ts",
+          "spans": [
+            {
+              "text": "contract-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "startLine": 7,
+              "startColumn": 6,
+              "endLine": 7,
+              "endColumn": 118
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/source-limit-contract-identity.js",
+          "spans": [
+            {
+              "text": "contract-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "startLine": 9,
+              "startColumn": 6,
+              "endLine": 9,
+              "endColumn": 118
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "source-limit-package-id-derived-contract",
+      "packageId": "example.aaaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa",
+      "packageVersion": "1.0.0",
+      "diagnosticId": "rpc-authoring.source-limit-exceeded",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "packageIdBoundary": {
+        "kind": "canonical-package-id-characters",
+        "grammar": "lowercase-dot-separated-ascii",
+        "maximum": 128,
+        "actual": 128,
+        "expectedValid": true
+      },
+      "limit": {
+        "kind": "derived-contract-id-characters",
+        "sourceContractKey": "x",
+        "maximum": 128,
+        "actual": 130,
+        "derivedIdentity": "example.aaaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.x"
+      },
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/source-limit-package-id-derived-contract.cs",
+          "spans": [
+            {
+              "text": "XService",
+              "startLine": 7,
+              "startColumn": 18,
+              "endLine": 7,
+              "endColumn": 26
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/source-limit-package-id-derived-contract.ts",
+          "spans": [
+            {
+              "text": "x",
+              "startLine": 7,
+              "startColumn": 5,
+              "endLine": 7,
+              "endColumn": 6
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/source-limit-package-id-derived-contract.js",
+          "spans": [
+            {
+              "text": "x",
+              "startLine": 9,
+              "startColumn": 5,
+              "endLine": 9,
+              "endColumn": 6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "source-limit-provider-identity",
+      "packageId": "example.boundary",
+      "packageVersion": "1.0.0",
+      "diagnosticId": "rpc-authoring.source-limit-exceeded",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "limit": {
+        "kind": "derived-provider-id-characters",
+        "sourceContractKey": "provider-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "maximum": 128,
+        "actual": 129,
+        "derivedIdentity": "example.boundary.provider.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.provider"
+      },
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/source-limit-provider-identity.cs",
+          "spans": [
+            {
+              "text": "ProviderAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaService",
+              "startLine": 8,
+              "startColumn": 29,
+              "endLine": 8,
+              "endColumn": 138
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/source-limit-provider-identity.ts",
+          "spans": [
+            {
+              "text": "providerOverLimit",
+              "startLine": 26,
+              "startColumn": 5,
+              "endLine": 26,
+              "endColumn": 22
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/source-limit-provider-identity.js",
+          "spans": [
+            {
+              "text": "providerOverLimit",
+              "startLine": 28,
+              "startColumn": 5,
+              "endLine": 28,
+              "endColumn": 22
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "baseline-drift",
+      "diagnosticId": "rpc-authoring.baseline-drift",
+      "applicableLanguages": ["csharp", "typescript", "javascript"],
+      "context": {
+        "packageId": "example.invalid",
+        "acceptedContractId": "example.invalid.original",
+        "sourceDerivedContractId": "example.invalid.renamed"
+      },
+      "sources": [
+        {
+          "language": "csharp",
+          "path": "invalid/baseline-drift.cs",
+          "spans": [
+            {
+              "text": "RenamedService",
+              "startLine": 7,
+              "startColumn": 18,
+              "endLine": 7,
+              "endColumn": 32
+            }
+          ]
+        },
+        {
+          "language": "typescript",
+          "path": "invalid/baseline-drift.ts",
+          "spans": [
+            {
+              "text": "renamed",
+              "startLine": 7,
+              "startColumn": 5,
+              "endLine": 7,
+              "endColumn": 12
+            }
+          ]
+        },
+        {
+          "language": "javascript",
+          "path": "invalid/baseline-drift.js",
+          "spans": [
+            {
+              "text": "renamed",
+              "startLine": 9,
+              "startColumn": 5,
+              "endLine": 9,
+              "endColumn": 12
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sourceLimits": {
+    "diagnosticId": "rpc-authoring.source-limit-exceeded",
+    "inclusiveLimits": {
+      "normalizedRpcSignificantUtf8Bytes": 4194304,
+      "visitedSyntaxTypeExpressionNodes": 65536,
+      "traversalReferenceDepth": 64,
+      "resolvedLocalConstantBindings": 4096,
+      "contracts": 128,
+      "localProviderBindings": 128,
+      "contractOrProviderIdentityCharacters": 128
+    },
+    "recipeSemantics": {
+      "schemaVersion": 1,
+      "oracleKind": "deterministic-language-neutral-preimplementation-materialization",
+      "frontendExecution": "deferred",
+      "indexStart": 0,
+      "indexOrdering": "ascending zero-padded decimal",
+      "boundaryExpectedValid": true,
+      "overLimitExpectedDiagnosticId": "rpc-authoring.source-limit-exceeded",
+      "failurePrecedence": "The named counter is varied while every other counter is held at or below its inclusive limit.",
+      "sourceNormalization": "UTF-8 without BOM; CRLF and CR become LF; exactly one terminal LF"
+    },
+    "recipeFixtures": [
+      {
+        "id": "normalized-source-bytes",
+        "counter": "normalizedRpcSignificantUtf8Bytes",
+        "languages": [
+          "csharp",
+          "typescript",
+          "javascript"
+        ],
+        "recipe": {
+          "kind": "configured-source-file-ascii-padding",
+          "seedByLanguage": {
+            "csharp": "valid/complete.cs",
+            "typescript": "valid/complete.ts",
+            "javascript": "valid/complete.js"
+          },
+          "replacementByLanguage": {
+            "csharp": {
+              "findFirst": "throw new NotImplementedException()",
+              "replaceWith": "throw new NotImplementedException(\"<padding>\")"
+            },
+            "typescript": {
+              "findFirst": "throw new Error(\"fixture handler\")",
+              "replaceWith": "throw new Error(\"<padding>\")"
+            },
+            "javascript": {
+              "findFirst": "throw new Error(\"fixture handler\")",
+              "replaceWith": "throw new Error(\"<padding>\")"
+            }
+          },
+          "paddingByte": 120,
+          "padding": "Replace <padding> with exactly targetCounterValue minus the normalized UTF-8 byte count when <padding> is empty copies of paddingByte.",
+          "accounting": "Count the complete normalized configured source file; handler AST remains excluded from metadata traversal and execution."
+        },
+        "cases": [
+          {
+            "id": "boundary-valid",
+            "counterValue": 4194304,
+            "expectedValid": true,
+            "expectedDiagnosticId": null
+          },
+          {
+            "id": "over-limit",
+            "counterValue": 4194305,
+            "expectedValid": false,
+            "expectedDiagnosticId": "rpc-authoring.source-limit-exceeded"
+          }
+        ]
+      },
+      {
+        "id": "visited-nodes",
+        "counter": "visitedSyntaxTypeExpressionNodes",
+        "languages": [
+          "csharp",
+          "typescript",
+          "javascript"
+        ],
+        "recipe": {
+          "kind": "round-robin-indexed-logical-visit-stream",
+          "packageId": "example.limit",
+          "contractCount": 128,
+          "contractKeyFormat": "contract-{index:000}",
+          "visitKeyFormat": "Visit{index:00000}",
+          "assignmentRule": "For visit index i, contract index is i modulo contractCount and local ordinal is floor(i divided by contractCount).",
+          "accountingRule": "Materialize exactly counterValue visit records; each record contributes exactly one language-neutral logical visit.",
+          "isolation": "The projection has exactly 128 declaration-only contract buckets, no providers or local aliases, and shallow independent visits.",
+          "frontendMapping": "Deferred: each frontend must publish and test its syntax/type/expression-node mapping against this logical stream before claiming source-limit conformance."
+        },
+        "cases": [
+          {
+            "id": "boundary-valid",
+            "counterValue": 65536,
+            "expectedValid": true,
+            "expectedDiagnosticId": null
+          },
+          {
+            "id": "over-limit",
+            "counterValue": 65537,
+            "expectedValid": false,
+            "expectedDiagnosticId": "rpc-authoring.source-limit-exceeded"
+          }
+        ]
+      },
+      {
+        "id": "traversal-reference-depth",
+        "counter": "traversalReferenceDepth",
+        "languages": [
+          "csharp",
+          "typescript",
+          "javascript"
+        ],
+        "recipe": {
+          "kind": "indexed-named-definition-reference-chain",
+          "packageId": "example.limit",
+          "contractKey": "depth",
+          "definitionKeyFormat": "Depth{index:00}",
+          "chainRule": "Depth00 is the method request; each DepthNN record has one required next property referring to Depth(NN+1); the final definition has one required boolean value.",
+          "materializationRule": "Materialize definitions Depth00 through Depth(counterValue-1), exactly counterValue definitions and counterValue-1 next references.",
+          "counterRule": "counterValue is the number of entered language-neutral reference frames from the method request through the terminal definition",
+          "precedence": "Apply the source traversal limit before candidate descriptor graph validation."
+        },
+        "cases": [
+          {
+            "id": "boundary-valid",
+            "counterValue": 64,
+            "expectedValid": true,
+            "expectedDiagnosticId": null
+          },
+          {
+            "id": "over-limit",
+            "counterValue": 65,
+            "expectedValid": false,
+            "expectedDiagnosticId": "rpc-authoring.source-limit-exceeded"
+          }
+        ]
+      },
+      {
+        "id": "resolved-local-constants",
+        "counter": "resolvedLocalConstantBindings",
+        "languages": [
+          "typescript",
+          "javascript"
+        ],
+        "recipe": {
+          "kind": "indexed-schema-constant-forest",
+          "packageId": "example.limit",
+          "bindingFormat": "constant{index:0000}",
+          "bindingRule": "Each binding is a direct const initialized with s.string() and is used as one named definition value.",
+          "contractCount": 128,
+          "distribution": "For binding index i, contract index is i modulo contractCount and local ordinal is floor(i divided by contractCount).",
+          "accountingRule": "Materialize exactly counterValue uniquely indexed binding records and exactly one reference to each binding.",
+          "resolutionRule": "Resolve every indexed binding exactly once while walking each contract's definition map in source order.",
+          "isolation": "No providers or alias chains; traversal depth stays shallow and every descriptor stays below its independent schema-node limit."
+        },
+        "cases": [
+          {
+            "id": "boundary-valid",
+            "counterValue": 4096,
+            "expectedValid": true,
+            "expectedDiagnosticId": null
+          },
+          {
+            "id": "over-limit",
+            "counterValue": 4097,
+            "expectedValid": false,
+            "expectedDiagnosticId": "rpc-authoring.source-limit-exceeded"
+          }
+        ]
+      },
+      {
+        "id": "contract-count",
+        "counter": "contracts",
+        "languages": [
+          "csharp",
+          "typescript",
+          "javascript"
+        ],
+        "recipe": {
+          "kind": "indexed-declaration-only-contracts",
+          "packageId": "example.limit",
+          "contractKeyFormat": "contract-{index:000}",
+          "contractTemplate": "one public declaration-only unary service with named Unit and Result definitions and no local constants",
+          "providers": 0,
+          "accountingRule": "Materialize contract indices 0 through counterValue-1; each complete contract contributes exactly one contract."
+        },
+        "cases": [
+          {
+            "id": "boundary-valid",
+            "counterValue": 128,
+            "expectedValid": true,
+            "expectedDiagnosticId": null
+          },
+          {
+            "id": "over-limit",
+            "counterValue": 129,
+            "expectedValid": false,
+            "expectedDiagnosticId": "rpc-authoring.source-limit-exceeded"
+          }
+        ]
+      },
+      {
+        "id": "provider-count",
+        "counter": "localProviderBindings",
+        "languages": [
+          "csharp",
+          "typescript",
+          "javascript"
+        ],
+        "recipe": {
+          "kind": "indexed-provider-bindings",
+          "packageId": "example.limit",
+          "contractKey": "extension",
+          "providerIdFormat": "example.limit.extension.provider{index:000}",
+          "providerTemplate": "one complete runtime provider with an explicit indexed provider ID for the same public unary contract",
+          "contracts": 1,
+          "accountingRule": "Materialize provider indices 0 through counterValue-1; each complete provider contributes exactly one local provider binding."
+        },
+        "cases": [
+          {
+            "id": "boundary-valid",
+            "counterValue": 128,
+            "expectedValid": true,
+            "expectedDiagnosticId": null
+          },
+          {
+            "id": "over-limit",
+            "counterValue": 129,
+            "expectedValid": false,
+            "expectedDiagnosticId": "rpc-authoring.source-limit-exceeded"
+          }
+        ]
+      }
+    ],
+    "materializedIdentityFixtures": {
+      "counter": "contractOrProviderIdentityCharacters",
+      "derivation": {
+        "contractId": "packageId + '.' + sourceContractKey with '-' replaced by '.'",
+        "providerId": "derived contractId + '.provider'",
+        "characterUnit": "ASCII code unit"
+      },
+      "boundaryValid": "identity-limits",
+      "overLimit": [
+        "source-limit-contract-identity",
+        "source-limit-package-id-derived-contract",
+        "source-limit-provider-identity"
+      ]
+    }
+  },
+  "fileIndex": {
+    "root": "expectations.json",
+    "sourceFileCount": 60,
+    "validFixtureCount": 4,
+    "invalidFixtureCount": 16,
+    "canonicalOutputCount": 7,
+    "sourceFiles": [
+      { "path": "invalid/baseline-drift.cs", "byteLength": 366, "sha256": "8e9a85d59377e81311a807f256c6e3b778380e0a531d01ab19b2488c49198958" },
+      { "path": "invalid/baseline-drift.js", "byteLength": 540, "sha256": "25ee18c0ad3a9ff88743079195be336fcf7cbb8b7c29026a6c3893f733cda9a7" },
+      { "path": "invalid/baseline-drift.ts", "byteLength": 526, "sha256": "9829004b54df474d94993f4c7e8d5831edb964162c0bd5755edb033ba7a96ad7" },
+      { "path": "invalid/collision-ascii-case.cs", "byteLength": 452, "sha256": "a11ba52735b62871d58a5aef6cb8dc57cd25fbe7b2e3d269b15b7164686b41e1" },
+      { "path": "invalid/collision-ascii-case.js", "byteLength": 598, "sha256": "6e414478ba35d66f044701de5211764955fa86d3fa08e77af7e0a2c52ccb9112" },
+      { "path": "invalid/collision-ascii-case.ts", "byteLength": 584, "sha256": "7aacce048b5fffd7327e8293e703d1f42928dbeeff3b7bfe6608229eb6352f37" },
+      { "path": "invalid/collision-namespace-duplicate.cs", "byteLength": 752, "sha256": "dfe7bb864cf0df89a709a16a3dcc350dd9313aeecc14269b56013c0f70667dc3" },
+      { "path": "invalid/collision-namespace-duplicate.js", "byteLength": 1092, "sha256": "de475ee99725f76ff1da5e024b1e8779c40c9b6d03cf841a306f8140effb494a" },
+      { "path": "invalid/collision-namespace-duplicate.ts", "byteLength": 1078, "sha256": "a3390bb4e20b66c8bfa16ca43a159ff2c4bdd2367f50ebd42feeda6e9db79dea" },
+      { "path": "invalid/collision-post-escape-reserved.cs", "byteLength": 376, "sha256": "b0b1f8b4d651d2c5534df1592cb1c92ef39e52031777ec1328140efaf34d2224" },
+      { "path": "invalid/collision-post-escape-reserved.js", "byteLength": 680, "sha256": "dddf7a88541083a153249fff89ede00296ad1bd6a5bad787103dfb56bb511d2b" },
+      { "path": "invalid/collision-post-escape-reserved.ts", "byteLength": 666, "sha256": "64d0e4a5fcf3909b422f5e65cc1fc8247994822c4873696127ce69bc258d0a94" },
+      { "path": "invalid/collision-suffix-async.cs", "byteLength": 445, "sha256": "12410b2875a2e72278050f09fb43915dfb3aece158c5262a60476ea51e5a5328" },
+      { "path": "invalid/collision-suffix-async.js", "byteLength": 677, "sha256": "ab48057bd5dcaea8f0bdb5e621740d1ea3e10f24a8cf9b534a2fd3f0a4dd81f1" },
+      { "path": "invalid/collision-suffix-async.ts", "byteLength": 663, "sha256": "34489087d75a18a055da95e1373f2b479ad79b80a75972615537d66076ac7cc7" },
+      { "path": "invalid/collision-suffix-service.cs", "byteLength": 528, "sha256": "65498890d4c635e4e83a0a7d60f98d76f650f748cd39429f3ff6b1ba1921bd4e" },
+      { "path": "invalid/collision-suffix-service.js", "byteLength": 951, "sha256": "4b435dd11ad72765de073098fbbee4edf19c9bbfb6ff15a6acde5d8e106115b7" },
+      { "path": "invalid/collision-suffix-service.ts", "byteLength": 937, "sha256": "5e52837b922d76d543c6d271368961c05a225b80ed88ba243bee34b7f29d10a7" },
+      { "path": "invalid/collision-synthetic-request.cs", "byteLength": 433, "sha256": "998e65b9e9d03bfd7d8909cec18cd8b2ae96ba1c6c45118960b0ae4e70213d41" },
+      { "path": "invalid/collision-synthetic-request.js", "byteLength": 594, "sha256": "cf235c0b7b4f761029d39bb0b1786206223a18763cc837b83bdd18674efd2ecd" },
+      { "path": "invalid/collision-synthetic-request.ts", "byteLength": 580, "sha256": "36ebf79d4475f9cd11d57437096d78ee9a65cb261de6e1386ce8a78a1fff84dd" },
+      { "path": "invalid/handler-incomplete.cs", "byteLength": 665, "sha256": "a6f1e97f5e240c3e7149c7377168c36383b8b74d2042312ad3088a70abaa31c3" },
+      { "path": "invalid/handler-incomplete.js", "byteLength": 991, "sha256": "2ff877c0e9f8697321f6a5741d13db6c7c8143b972e791a3569151b07ea40dde" },
+      { "path": "invalid/handler-incomplete.ts", "byteLength": 977, "sha256": "f7eb8956b3ee15dc461aaf6da48a1b7be87ffebcf4960064a2410916e0ddc5ec" },
+      { "path": "invalid/method-invalid.cs", "byteLength": 174, "sha256": "e0aafae10b1b238d43dafb2ff634095aa63a7fe75ec28bafd0df442d8a5d982e" },
+      { "path": "invalid/method-invalid.js", "byteLength": 435, "sha256": "9f7d0d699979b2b032b3a2f36ee83ecf40126b859e730b4cb019e659d4ae5e92" },
+      { "path": "invalid/method-invalid.ts", "byteLength": 421, "sha256": "9216b5809c03387d0d31b942983ce45f42bfe8e0c273f8b6df6a4fb898975365" },
+      { "path": "invalid/provider-invalid.cs", "byteLength": 455, "sha256": "206bef786c98375a88bca8023a39ca220567ec9f142fe76084b78ca2220f6442" },
+      { "path": "invalid/provider-invalid.js", "byteLength": 855, "sha256": "1a359f365a75cc9e939f0aafffbf5c855fa8206af29db7164bf84714ed446f93" },
+      { "path": "invalid/provider-invalid.ts", "byteLength": 841, "sha256": "706165c190dc2069662cd4dbb2a893e6c203a5c6865db01c9031c495d74c23bf" },
+      { "path": "invalid/service-invalid.cs", "byteLength": 130, "sha256": "90b2c45d06e1617a99f54adee06f4f8401a1a6244bee9f4b6ebe5027dec40168" },
+      { "path": "invalid/service-invalid.js", "byteLength": 349, "sha256": "73cf815d628d5335740b15a77703aef0736a46eafbe5a4624a50e274ba169762" },
+      { "path": "invalid/service-invalid.ts", "byteLength": 335, "sha256": "638861a34f62c32d0b077509ab81a3f269610222056ba87b8ed4e028fdd003ec" },
+      { "path": "invalid/source-limit-contract-identity.cs", "byteLength": 469, "sha256": "90c7f1979e93aac2ea233616e99bdc3488922b4fa8b044bcf45a3a003a04e88e" },
+      { "path": "invalid/source-limit-contract-identity.js", "byteLength": 752, "sha256": "814e24adafb503a850f4a5edbffa859bb038a927214b3decfcd015cc5daf846a" },
+      { "path": "invalid/source-limit-contract-identity.ts", "byteLength": 738, "sha256": "2f7a310c1601e0e0080485bdb03cb91a6fc51598122fecc9b2d4bb1f2453c5a7" },
+      { "path": "invalid/source-limit-package-id-derived-contract.cs", "byteLength": 366, "sha256": "f597bb660be34dc38962f2f8cdebd8135504e8a8ff06ff10bd5451358c2c50d4" },
+      { "path": "invalid/source-limit-package-id-derived-contract.js", "byteLength": 526, "sha256": "e0628c8f8c734a7e8fac9d97b9e3f0b56441b641c3ee3358b5954a2c6f92928a" },
+      { "path": "invalid/source-limit-package-id-derived-contract.ts", "byteLength": 512, "sha256": "7b0291a74683ab72c1e0fd689aebafa27a83d12c24e2fec5944c3290fe152f27" },
+      { "path": "invalid/source-limit-provider-identity.cs", "byteLength": 531, "sha256": "7f75ff9114b717a7f8181f7559b05825f33af1e5b4e4cad85da834c99f8ce9ce" },
+      { "path": "invalid/source-limit-provider-identity.js", "byteLength": 1208, "sha256": "822720d61736c470cba7f03f7d48eeb1da0e36e65628b034bcc72a59a451dbb3" },
+      { "path": "invalid/source-limit-provider-identity.ts", "byteLength": 1194, "sha256": "8106f5de36f907eb04433f5055154c58f4faba43cb91a106fc84818b0ababa13" },
+      { "path": "invalid/unsupported-source.cs", "byteLength": 221, "sha256": "29f553b1c3c409fab2adc3fd25306231654cc6982dc336dcee35de0f179318ce" },
+      { "path": "invalid/unsupported-source.js", "byteLength": 524, "sha256": "83901571e73374a45ece242f73aed2eb1b1b7c0bf22fce66feaf6b038cc11cc2" },
+      { "path": "invalid/unsupported-source.ts", "byteLength": 510, "sha256": "8d8b5860576161d7eff5aeacdf14c39cce5c4626a6b05aff5ac73054d4394daa" },
+      { "path": "invalid/value-invalid.cs", "byteLength": 323, "sha256": "b4f2d3dc666040d9745d3c2a6aeb065fd2dd43f9be7f931566eb778d9ca24d1a" },
+      { "path": "invalid/value-invalid.js", "byteLength": 521, "sha256": "d1262a0289aeb115fbc4349275a100d2b07097127e4a92e7c1fc253fe83d2508" },
+      { "path": "invalid/value-invalid.ts", "byteLength": 507, "sha256": "87c9a40d34348b66cdbf437c8c65835b4a1c9b9fa49b012f71661b985c3649eb" },
+      { "path": "valid/complete.cs", "byteLength": 11122, "sha256": "955411414e98099581e536d5cf184af49a2d08440f274970c41d6781281b322a" },
+      { "path": "valid/complete.js", "byteLength": 7930, "sha256": "3723a4e18e27f539f851c91d7b30e275478c6b216e2f49c91b7f694356b8bcd5" },
+      { "path": "valid/complete.ts", "byteLength": 7917, "sha256": "6670ce856565da42c9a82a095b90b1ed2bcba39eda34689b668c31a301281a39" },
+      { "path": "valid/identity-limits.cs", "byteLength": 795, "sha256": "6ce058e1f49fa4fe94199165284d71ca95a9dd27e696437709e920b7bcbf7ea6" },
+      { "path": "valid/identity-limits.js", "byteLength": 1799, "sha256": "cd91d914235c09c8ca9a17f9d14115156ffd584465400a2968f8fdd5e0ceed87" },
+      { "path": "valid/identity-limits.ts", "byteLength": 1786, "sha256": "77f050bcb450ba0d93e1cdefd804e9b7e247ffac3a021c52fe5c3a59b80dedcf" },
+      { "path": "valid/naming-defaults.cs", "byteLength": 966, "sha256": "54111c3cf5da76208a2697e109af939caf108973eb409cc069619cc1b6972f0f" },
+      { "path": "valid/naming-defaults.js", "byteLength": 1652, "sha256": "0c31923c0ec4fd289d8ddf69bfe73d2a0e64bbf43e57007702e6753dbeb424a6" },
+      { "path": "valid/naming-defaults.ts", "byteLength": 1639, "sha256": "9a22c4eb1a4b04713a59491950a9d80e0fad16e404abc29f41dd2c9874e1a6a3" },
+      { "path": "valid/provider-forms.cs", "byteLength": 1884, "sha256": "3898716913ee2ce2e8a2aa72fe74cbdcd93557369896ef4bfd010fd51d7c661c" },
+      { "path": "valid/provider-forms.js", "byteLength": 1746, "sha256": "9a49ed33d578f8b96960a28b2c81ccfa5482755e897394b683bdf09127e16618" },
+      { "path": "valid/provider-forms.ts", "byteLength": 1733, "sha256": "6331cfc77cb7634c9f1bd2b28b588a02244f8bbee6c8f3f04bcd29e3d4d9d2fa" }
+    ],
+    "canonicalOutputs": [
+      { "fixtureId": "complete", "contractKey": "parity", "canonicalDescriptorBytes": 7443, "descriptorSha256": "ed55315e62632955f98d7990d63b7688f31bafb7365f0395111d74b939a11c0e", "canonicalAbiProjectionBytes": 6807, "abiSha256": "234bc843a82abc44b8a99ad8e64460a9bad0af4354ad245cb1bda1bc13c26c8e" },
+      { "fixtureId": "provider-forms", "contractKey": "audit", "canonicalDescriptorBytes": 594, "descriptorSha256": "6b0e6d628fb5459cb27e9d5aa3496d5a760fc023bfeb4c40f0797a29e84b62c6", "canonicalAbiProjectionBytes": 576, "abiSha256": "38119190582a0539ca8b6d2c2467336d7163ca420f4c6cc7f4e9fbda045d7cfd" },
+      { "fixtureId": "provider-forms", "contractKey": "clock", "canonicalDescriptorBytes": 573, "descriptorSha256": "e590768863cbbba70902f87eddbbcc78761afeb1479685535ec7a0feaea64277", "canonicalAbiProjectionBytes": 555, "abiSha256": "d04d9b080e6e8c7db60628d2f57c17689dee2dd98fe17141092efe66087ea361" },
+      { "fixtureId": "naming-defaults", "contractKey": "o-auth2", "canonicalDescriptorBytes": 525, "descriptorSha256": "85f986d77fb0e054c2075ffcd0a458986263bf3627d3450542fea1c4bf246d31", "canonicalAbiProjectionBytes": 507, "abiSha256": "80aa14fbba22337b99fa925deb4f609af3ce053ebe73a48343eed1bde7d14799" },
+      { "fixtureId": "naming-defaults", "contractKey": "url-lookup", "canonicalDescriptorBytes": 646, "descriptorSha256": "80f0574ef0588c7b4aa636c4ad50046d23ae44eff36a0152b70d3ae4ac3e36f4", "canonicalAbiProjectionBytes": 628, "abiSha256": "10b10c67575e5fdc68ebef738941135e4687b9635914e4efa4ea4f7a836f9ea8" },
+      { "fixtureId": "identity-limits", "contractKey": "contract-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "canonicalDescriptorBytes": 662, "descriptorSha256": "826f2e97ee41c658c502d713ae1bc3251a0b73a4adcf049335a0f60298e3ddb4", "canonicalAbiProjectionBytes": 644, "abiSha256": "135c41877ad80cccaf006b1fe907153aa3aa4fab37968f584292a9af82cf4bb1" },
+      { "fixtureId": "identity-limits", "contractKey": "provider-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "canonicalDescriptorBytes": 644, "descriptorSha256": "06f941b061d368860ef760333bd799fae61d8dce9cad515f680eab9a06ec9c7b", "canonicalAbiProjectionBytes": 626, "abiSha256": "9f303ee73a74f4069d1cb0b8985adea09c8753cddd7c42e3d14fcec3e284947d" }
+    ],
+    "valid": [
+      {
+        "fixtureId": "complete",
+        "sources": {
+          "csharp": "valid/complete.cs",
+          "typescript": "valid/complete.ts",
+          "javascript": "valid/complete.js"
+        }
+      },
+      {
+        "fixtureId": "provider-forms",
+        "sources": {
+          "csharp": "valid/provider-forms.cs",
+          "typescript": "valid/provider-forms.ts",
+          "javascript": "valid/provider-forms.js"
+        }
+      },
+      {
+        "fixtureId": "naming-defaults",
+        "sources": {
+          "csharp": "valid/naming-defaults.cs",
+          "typescript": "valid/naming-defaults.ts",
+          "javascript": "valid/naming-defaults.js"
+        }
+      },
+      {
+        "fixtureId": "identity-limits",
+        "sources": {
+          "csharp": "valid/identity-limits.cs",
+          "typescript": "valid/identity-limits.ts",
+          "javascript": "valid/identity-limits.js"
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "fixtureId": "service-invalid",
+        "diagnosticId": "rpc-authoring.service-invalid",
+        "sources": {
+          "csharp": "invalid/service-invalid.cs",
+          "typescript": "invalid/service-invalid.ts",
+          "javascript": "invalid/service-invalid.js"
+        }
+      },
+      {
+        "fixtureId": "method-invalid",
+        "diagnosticId": "rpc-authoring.method-invalid",
+        "sources": {
+          "csharp": "invalid/method-invalid.cs",
+          "typescript": "invalid/method-invalid.ts",
+          "javascript": "invalid/method-invalid.js"
+        }
+      },
+      {
+        "fixtureId": "value-invalid",
+        "diagnosticId": "rpc-authoring.value-invalid",
+        "sources": {
+          "csharp": "invalid/value-invalid.cs",
+          "typescript": "invalid/value-invalid.ts",
+          "javascript": "invalid/value-invalid.js"
+        }
+      },
+      {
+        "fixtureId": "provider-invalid",
+        "diagnosticId": "rpc-authoring.provider-invalid",
+        "sources": {
+          "csharp": "invalid/provider-invalid.cs",
+          "typescript": "invalid/provider-invalid.ts",
+          "javascript": "invalid/provider-invalid.js"
+        }
+      },
+      {
+        "fixtureId": "handler-incomplete",
+        "diagnosticId": "rpc-authoring.handler-incomplete",
+        "sources": {
+          "csharp": "invalid/handler-incomplete.cs",
+          "typescript": "invalid/handler-incomplete.ts",
+          "javascript": "invalid/handler-incomplete.js"
+        }
+      },
+      {
+        "fixtureId": "collision-namespace-duplicate",
+        "diagnosticId": "rpc-authoring.identity-collision",
+        "sources": {
+          "csharp": "invalid/collision-namespace-duplicate.cs",
+          "typescript": "invalid/collision-namespace-duplicate.ts",
+          "javascript": "invalid/collision-namespace-duplicate.js"
+        }
+      },
+      {
+        "fixtureId": "collision-ascii-case",
+        "diagnosticId": "rpc-authoring.identity-collision",
+        "sources": {
+          "csharp": "invalid/collision-ascii-case.cs",
+          "typescript": "invalid/collision-ascii-case.ts",
+          "javascript": "invalid/collision-ascii-case.js"
+        }
+      },
+      {
+        "fixtureId": "collision-suffix-service",
+        "diagnosticId": "rpc-authoring.identity-collision",
+        "sources": {
+          "csharp": "invalid/collision-suffix-service.cs",
+          "typescript": "invalid/collision-suffix-service.ts",
+          "javascript": "invalid/collision-suffix-service.js"
+        }
+      },
+      {
+        "fixtureId": "collision-suffix-async",
+        "diagnosticId": "rpc-authoring.identity-collision",
+        "sources": {
+          "csharp": "invalid/collision-suffix-async.cs",
+          "typescript": "invalid/collision-suffix-async.ts",
+          "javascript": "invalid/collision-suffix-async.js"
+        }
+      },
+      {
+        "fixtureId": "collision-synthetic-request",
+        "diagnosticId": "rpc-authoring.generated-name-collision",
+        "sources": {
+          "csharp": "invalid/collision-synthetic-request.cs",
+          "typescript": "invalid/collision-synthetic-request.ts",
+          "javascript": "invalid/collision-synthetic-request.js"
+        }
+      },
+      {
+        "fixtureId": "collision-post-escape-reserved",
+        "diagnosticId": "rpc-authoring.value-invalid",
+        "sources": {
+          "csharp": "invalid/collision-post-escape-reserved.cs",
+          "typescript": "invalid/collision-post-escape-reserved.ts",
+          "javascript": "invalid/collision-post-escape-reserved.js"
+        }
+      },
+      {
+        "fixtureId": "unsupported-source",
+        "diagnosticId": "rpc-authoring.unsupported-source",
+        "sources": {
+          "csharp": "invalid/unsupported-source.cs",
+          "typescript": "invalid/unsupported-source.ts",
+          "javascript": "invalid/unsupported-source.js"
+        }
+      },
+      {
+        "fixtureId": "source-limit-contract-identity",
+        "diagnosticId": "rpc-authoring.source-limit-exceeded",
+        "sources": {
+          "csharp": "invalid/source-limit-contract-identity.cs",
+          "typescript": "invalid/source-limit-contract-identity.ts",
+          "javascript": "invalid/source-limit-contract-identity.js"
+        }
+      },
+      {
+        "fixtureId": "source-limit-package-id-derived-contract",
+        "diagnosticId": "rpc-authoring.source-limit-exceeded",
+        "sources": {
+          "csharp": "invalid/source-limit-package-id-derived-contract.cs",
+          "typescript": "invalid/source-limit-package-id-derived-contract.ts",
+          "javascript": "invalid/source-limit-package-id-derived-contract.js"
+        }
+      },
+      {
+        "fixtureId": "source-limit-provider-identity",
+        "diagnosticId": "rpc-authoring.source-limit-exceeded",
+        "sources": {
+          "csharp": "invalid/source-limit-provider-identity.cs",
+          "typescript": "invalid/source-limit-provider-identity.ts",
+          "javascript": "invalid/source-limit-provider-identity.js"
+        }
+      },
+      {
+        "fixtureId": "baseline-drift",
+        "diagnosticId": "rpc-authoring.baseline-drift",
+        "sources": {
+          "csharp": "invalid/baseline-drift.cs",
+          "typescript": "invalid/baseline-drift.ts",
+          "javascript": "invalid/baseline-drift.js"
+        }
+      }
+    ]
+  }
+}

@@ -306,12 +306,7 @@ function dotnetPrerequisites(name, source, externalArguments) {
       requiredWhenSelected: true,
     });
     for (const variable of externalArguments.slice(1)) {
-      prerequisites.push({
-        kind: "environmentPath",
-        name: variable,
-        pathKind: externalInputPathKind(variable),
-        requiredWhenSelected: true,
-      });
+      prerequisites.push(externalInputPrerequisite(variable));
     }
   }
   return [...new Map(prerequisites.map((item) => [`${item.kind}:${item.name}:${item.pathKind ?? ""}`, item])).values()];
@@ -325,17 +320,27 @@ function operatingSystemsFor(attributes, name, source) {
   return ["Windows", "Linux", "MacOS"];
 }
 
-function externalInputPathKind(name) {
+function externalInputPrerequisite(name) {
   const kinds = {
     SUNDER_AGENT_UI_SNAPSHOT_DIR: "directory",
     SUNDER_AGENT_PACKAGE_ARCHIVE_DIR: "directory",
-    SUNDER_NODE_SEA_PACKAGE_PATH: "file",
-    SUNDER_NODE_SEA_LEAF_PATH: "directory",
+    SUNDER_NODE_MODULE_PACKAGE_PATH: "file",
+    SUNDER_NODE_MODULE_LEAF_PATH: "directory",
+    SUNDER_NODE_TEMPLATE_DEV_PATH: "directory",
     SUNDER_DOTNET_WORKER_ARCHIVE_PATH: "file",
+    SUNDER_DOTNET_TEMPLATE_DEV_PATH: "directory",
+    SUNDER_LIVE_PLATFORM_INPUT: "file",
+    SUNDER_LIVE_REGISTRY_IMPORTS_INPUT: "file",
+    SUNDER_LIVE_INSTALLATION_INPUT: "file",
+    SUNDER_LIVE_PLATFORM_PHASE: "environment",
+    SUNDER_LIVE_REGISTRY_IMPORTS_PHASE: "environment",
+    SUNDER_LIVE_INSTALLATION_PHASE: "environment",
   };
   const kind = kinds[name];
-  if (kind === undefined) throw new Error(`External artifact input '${name}' has no declared path kind.`);
-  return kind;
+  if (kind === undefined) throw new Error(`External artifact input '${name}' has no declared kind.`);
+  return kind === "environment"
+    ? { kind, name, requiredWhenSelected: true }
+    : { kind: "environmentPath", name, pathKind: kind, requiredWhenSelected: true };
 }
 
 function testSourceFiles(root) {

@@ -1,6 +1,6 @@
 # Data And Logging
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V3, .NET 10, and Runtime protocol revision 8.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
 Sunder separates user settings, opaque state, files, local-path workspaces, secrets, and logs. Choose the narrowest capability that matches the data.
 
@@ -68,7 +68,7 @@ State and file APIs are thread-safe. Mutations are atomic: cancellation before c
 
 ### Migrating Legacy Keys
 
-Worker V3 runs declared state and secret migrations automatically before activation. Declare every legacy physical-key shape in the immutable worker options:
+Worker V1 runs declared state and secret migrations automatically before activation. Declare every legacy physical-key shape in the immutable worker options:
 
 ```csharp
 return new SunderWorkerOptions(providers)
@@ -102,11 +102,11 @@ Use `RoleLocalWorkspace` only when an API needs a real local path:
 var databasePath = context.Storage.RoleLocalWorkspace.GetLocalPath("db/items.sqlite");
 ```
 
-App and Runtime workspace roots are different and never cross host APIs. The root persists, but the capability belongs to the current activation and package code must not dispose it. A returned path is lexical authorization only; packages remain responsible for links they create or pass to third-party filesystem APIs.
+App and Runtime workspace roots are different. A Runtime worker receives one stable workspace capability during configuration, but its root and path resolution remain unavailable until activation; first resolve paths from `OnActivated`, `ISunderWorkerLifecycleService.ActivateAsync`, or later active work. The Host binds the canonical root through the private Worker control plane only after the previous generation has stopped and rollback snapshots exist. The root persists, but the capability belongs to the current activation and package code must not dispose it. A returned path is lexical authorization only; packages remain responsible for links they create or pass to third-party filesystem APIs.
 
 ## Settings
 
-Worker V3 advertises at most one schema through its immutable options:
+Worker V1 advertises at most one schema through its immutable options:
 
 ```csharp
 return new SunderWorkerOptions(providers)
@@ -177,7 +177,7 @@ await context.Logging.Events.InformationAsync(
     cancellationToken);
 ```
 
-Runtime writes separate daily `runtime-YYYY-MM-DD.log` and `events-YYYY-MM-DD.log` files and retains seven days by default. Logging is thread-safe and best effort: an I/O failure disables that writer rather than failing package activation or execution. Worker V3 routes both logging APIs through a dedicated bounded Host-call lane, drains lifecycle logs before shutdown acknowledgement, and bounds each entry to 64 scalar attributes and five exception entries. Packages should still avoid high-volume loops.
+Runtime writes separate daily `runtime-YYYY-MM-DD.log` and `events-YYYY-MM-DD.log` files and retains seven days by default. Logging is thread-safe and best effort: an I/O failure disables that writer rather than failing package activation or execution. Worker V1 routes both logging APIs through a dedicated bounded Host-call lane, drains lifecycle logs before shutdown acknowledgement, and bounds each entry to 64 scalar attributes and five exception entries. Packages should still avoid high-volume loops.
 
 Runtime structured attribute values are redacted when the attribute key contains a normalized sensitive fragment such as `apikey`, `authorization`, `cookie`, `password`, `refresh`, `secret`, or `token`. This heuristic does not sanitize messages, exception text/stack traces, event names, categories, or unknown sensitive keys. Never rely on it as a secret boundary.
 

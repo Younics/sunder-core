@@ -1,0 +1,12 @@
+<Project>
+  <Import Project="$(_SunderPreviousCrossTargetingTargets)" Condition="'$(_SunderPreviousCrossTargetingTargets)' != '' and Exists('$(_SunderPreviousCrossTargetingTargets)')" />
+  <!-- SDK Build/Clean retain their normal framework dispatch. A Sunder archive
+       has one TFM for each exact role/RID, so Pack/preview need a selected TFM. -->
+  <Target Name="PackSunderPackage">
+    <Error Text="package-authoring.framework-required: Select TargetFramework when packing a multi-targeted package." />
+  </Target>
+  <Target Name="GetSunderPackageAppPreviewInputs">
+    <Error Text="package-authoring.framework-required: Select TargetFramework when previewing a multi-targeted package." />
+  </Target>
+  <Target Name="AvaloniaFilePreview" DependsOnTargets="GetSunderPackageAppPreviewInputs" />
+</Project>

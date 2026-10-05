@@ -175,6 +175,47 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
+    public async Task LoadInstalledWithDevOverlays_CancellationAfterFirstPreparationReleasesRuntimeRetention()
+    {
+        var rootPath = CreateTempDirectory();
+        var first = CreatePackageLayout(
+            rootPath,
+            "dev-a",
+            "a.package",
+            "1.0.0",
+            PackageSourceKind.Dev,
+            roles: [SunderPackageFormat.RuntimeHostRole]).InstallPath;
+        var second = CreatePackageLayout(
+            rootPath,
+            "dev-b",
+            "b.package",
+            "1.0.0",
+            PackageSourceKind.Dev,
+            roles: [SunderPackageFormat.RuntimeHostRole]).InstallPath;
+        using var cancellation = new CancellationTokenSource();
+        var bindingResolver = new CancellingBindingResolver(cancellation);
+        var loadService = new PackageSessionLoadService(
+            NullLogger.Instance,
+            executionRuntimeLaunchResolver: TestExecutionRuntimeLaunchResolver.Instance,
+            ephemeralExecutionRuntimeBindingResolver: bindingResolver);
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                loadService.LoadInstalledWithDevOverlaysAsync(
+                    [],
+                    [first, second],
+                    cancellationToken: cancellation.Token));
+
+            Assert.Equal(1, bindingResolver.CreatedRetentions);
+            Assert.Equal(1, bindingResolver.DisposedRetentions);
+        }
+        finally
+        {
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task DevPackageOverlayUnload_RestoresInstalledPackageWithSameId()
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
@@ -804,6 +845,44 @@ public sealed class PackageSessionOverlayTests
         public override DateTimeOffset GetUtcNow() => _now;
 
         public void Advance(TimeSpan value) => _now += value;
+    }
+
+    private sealed class CancellingBindingResolver(CancellationTokenSource cancellation)
+        : IEphemeralExecutionRuntimeBindingResolver
+    {
+        private int _createdRetentions;
+        private int _disposedRetentions;
+
+        public int CreatedRetentions => Volatile.Read(ref _createdRetentions);
+        public int DisposedRetentions => Volatile.Read(ref _disposedRetentions);
+
+        public async Task<ResolvedEphemeralExecutionRuntimeBinding> ResolveEphemeralBindingAsync(
+            SunderPackageTargetKey targetKey,
+            SunderPackageTargetManifest target,
+            CancellationToken cancellationToken)
+        {
+            var synthesized = await TestExecutionRuntimeLaunchResolver.Instance.ResolveEphemeralBindingAsync(
+                targetKey,
+                target,
+                cancellationToken);
+            await synthesized.DisposeAsync();
+            Interlocked.Increment(ref _createdRetentions);
+            cancellation.Cancel();
+            return new ResolvedEphemeralExecutionRuntimeBinding(
+                synthesized.Binding,
+                new CallbackAsyncDisposable(() => Interlocked.Increment(ref _disposedRetentions)));
+        }
+    }
+
+    private sealed class CallbackAsyncDisposable(Action dispose) : IAsyncDisposable
+    {
+        private Action? _dispose = dispose;
+
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Exchange(ref _dispose, null)?.Invoke();
+            return ValueTask.CompletedTask;
+        }
     }
 }
 

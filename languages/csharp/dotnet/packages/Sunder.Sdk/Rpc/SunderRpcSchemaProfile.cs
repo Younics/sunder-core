@@ -7,20 +7,16 @@ internal static partial class SunderRpcSchemaProfile
     private const int MaximumSchemaDepth = 64;
     private const int MaximumSchemaNodes = 4096;
     private const int MaximumProperties = 256;
-    private const int MaximumV1CollectionItems = 1_000_000;
-    private const int MaximumV1StringCharacters = 1_000_000;
     private const int MaximumUnionVariants = 16;
     private const int MaximumEnumValues = 256;
     private const long MaximumSafeInteger = 9_007_199_254_740_991;
     private static readonly string[] AnnotationProperties = ["title", "description"];
 
-    public static void ValidateDefinitions(
-        IReadOnlyDictionary<string, JsonElement> definitions,
-        int descriptorVersion)
+    public static void ValidateDefinitions(IReadOnlyDictionary<string, JsonElement> definitions)
     {
         try
         {
-            ValidateDefinitionsCore(definitions, descriptorVersion);
+            ValidateDefinitionsCore(definitions);
         }
         catch (SunderRpcDescriptorException exception)
             when (exception.ErrorCode == "descriptor-representation")

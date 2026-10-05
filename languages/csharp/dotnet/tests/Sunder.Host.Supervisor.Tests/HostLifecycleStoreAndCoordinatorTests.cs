@@ -29,7 +29,8 @@ public sealed partial class HostSupervisorFoundationTests
             HostRuntimeDesiredState.Stopped,
             3,
             null,
-            [operation]);
+            [operation],
+            ResetRequired: true);
         try
         {
             using (var store = new HostLifecycleStore(root))
@@ -45,6 +46,7 @@ public sealed partial class HostSupervisorFoundationTests
                 Assert.Equal(expected.DeploymentGeneration, actual.DeploymentGeneration);
                 Assert.Equal(expected.ActiveOperationId, actual.ActiveOperationId);
                 Assert.Equal(expected.Operations, actual.Operations);
+                Assert.True(actual.ResetRequired);
             }
 
             File.WriteAllText(Path.Combine(root, "runtime", "v1", "lifecycle.json"), "{\"version\":1}");
@@ -321,6 +323,129 @@ public sealed partial class HostSupervisorFoundationTests
         finally
         {
             Volatile.Write(ref leaseAvailable, 1);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RuntimeWorkerCoordinator_ResetBlocksRestartUntilTerminalReceipt()
+    {
+        var root = CreateTempDirectory();
+        var hostRoot = Path.Combine(root, "host");
+        var runtimeRoot = Path.Combine(root, "runtime");
+        using var resetStarted = new ManualResetEventSlim();
+        using var releaseReset = new ManualResetEventSlim();
+        try
+        {
+            RuntimeLocalState.EnsureInitialized(runtimeRoot);
+            using var store = new HostLifecycleStore(hostRoot);
+            await using var coordinator = new RuntimeWorkerCoordinator(
+                runtimeHostPath: null,
+                Path.Combine(root, "connection", "worker.json"),
+                TimeSpan.FromSeconds(5),
+                store,
+                isRuntimeLeaseAvailable: static () => true,
+                runtimeStateRoot: runtimeRoot);
+
+            var reset = Task.Run(() => coordinator.ResetRuntimeStateAsync(
+                startupCacheOnly: false,
+                afterStarted: () =>
+                {
+                    resetStarted.Set();
+                    if (!releaseReset.Wait(TimeSpan.FromSeconds(5)))
+                    {
+                        throw new TimeoutException("Timed out waiting to release the reset fixture.");
+                    }
+                }));
+            if (!resetStarted.Wait(TimeSpan.FromSeconds(2)) && reset.IsCompleted)
+            {
+                await reset;
+            }
+            Assert.True(resetStarted.IsSet);
+            var stopped = coordinator.GetStatus();
+            Assert.Equal(HostRuntimeDesiredState.Stopped, stopped.DesiredState);
+            Assert.Null(stopped.ActiveOperationId);
+
+            var start = coordinator.SubmitStartAsync(
+                new HostLifecycleRequest(Guid.NewGuid(), stopped.DeploymentGeneration));
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+            Assert.False(start.IsCompleted);
+
+            releaseReset.Set();
+            var resetResult = await reset.WaitAsync(TimeSpan.FromSeconds(2));
+            var startSubmission = await start.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.True(resetResult.Result.Success);
+            Assert.NotNull(resetResult.Result.ReceiptRelativePath);
+            Assert.Equal(
+                RuntimeOwnedFileSystem.GetMutableDirectoryIdentity(runtimeRoot),
+                resetResult.RootIdentity);
+            Assert.Equal(HostOperationKinds.RuntimeStart, startSubmission.Operation.Kind);
+        }
+        finally
+        {
+            releaseReset.Set();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RuntimeWorkerCoordinator_FailedResetFencesStartupUntilSuccessfulRetry()
+    {
+        var root = CreateTempDirectory();
+        var hostRoot = Path.Combine(root, "host");
+        var runtimeRoot = Path.Combine(root, "runtime");
+        var preservedRoot = Path.Combine(root, "preserved-runtime");
+        try
+        {
+            RuntimeLocalState.EnsureInitialized(runtimeRoot);
+            using var store = new HostLifecycleStore(hostRoot);
+            await using (var coordinator = new RuntimeWorkerCoordinator(
+                             runtimeHostPath: null,
+                             Path.Combine(root, "connection", "worker.json"),
+                             TimeSpan.FromSeconds(5),
+                             store,
+                             isRuntimeLeaseAvailable: static () => true,
+                             runtimeStateRoot: runtimeRoot))
+            {
+                await Assert.ThrowsAsync<AggregateException>(() => coordinator.ResetRuntimeStateAsync(
+                    startupCacheOnly: false,
+                    afterStarted: () =>
+                    {
+                        Directory.Move(runtimeRoot, preservedRoot);
+                        Directory.CreateDirectory(runtimeRoot);
+                    }));
+
+                var status = coordinator.GetStatus();
+                var conflict = await Assert.ThrowsAsync<HostLifecycleConflictException>(() =>
+                    coordinator.SubmitStartAsync(
+                        new HostLifecycleRequest(Guid.NewGuid(), status.DeploymentGeneration)));
+                Assert.Equal("host.runtime-reset-required", conflict.Code);
+                Assert.True(store.LoadOrCreate().ResetRequired);
+            }
+
+            await using (var recovered = new RuntimeWorkerCoordinator(
+                             runtimeHostPath: null,
+                             Path.Combine(root, "connection", "worker.json"),
+                             TimeSpan.FromSeconds(5),
+                             store,
+                             isRuntimeLeaseAvailable: static () => true,
+                             runtimeStateRoot: runtimeRoot))
+            {
+                var status = recovered.GetStatus();
+                var conflict = await Assert.ThrowsAsync<HostLifecycleConflictException>(() =>
+                    recovered.SubmitRestartAsync(
+                        new HostLifecycleRequest(Guid.NewGuid(), status.DeploymentGeneration)));
+                Assert.Equal("host.runtime-reset-required", conflict.Code);
+
+                var reset = await recovered.ResetRuntimeStateAsync(startupCacheOnly: false);
+
+                Assert.True(reset.Result.Success);
+                Assert.False(store.LoadOrCreate().ResetRequired);
+            }
+        }
+        finally
+        {
             Directory.Delete(root, recursive: true);
         }
     }

@@ -76,7 +76,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 : Task.FromResult(PackagePresentationResult.Unavailable(
                     "Sunder is running in the Core Shell without a live Runtime presentation."))
             : runtimeEventSubscription.WaitForPresentationAsync;
-        _registryPackageInstallService = new RegistryPackageInstallService(ConfirmPackageCapabilitiesAsync);
+        _registryPackageInstallService = new RegistryPackageInstallService(ConfirmPackageChangeAsync);
         _packageOperationService = new PackageOperationService(
             _backgroundProcessQueue,
             _runtimeApiClientFactory,
@@ -293,8 +293,8 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         return window;
     }
 
-    private Task<bool> ConfirmPackageCapabilitiesAsync(
-        IReadOnlyList<PackageCapabilityConsent> requirements,
+    private Task<bool> ConfirmPackageChangeAsync(
+        RegistryPackageChangePreflight preflight,
         CancellationToken cancellationToken)
         => _uiDispatcher.InvokeAsync(async () =>
         {
@@ -307,7 +307,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 return false;
             }
             var dialog = new PackageCapabilityConsentWindow(
-                new PackageCapabilityConsentViewModel(requirements));
+                new PackageCapabilityConsentViewModel(preflight));
             return await dialog.ShowDialog<bool>(owner);
         }).WaitAsync(cancellationToken);
 

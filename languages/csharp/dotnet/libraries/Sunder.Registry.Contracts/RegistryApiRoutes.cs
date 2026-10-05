@@ -2,8 +2,13 @@ namespace Sunder.Registry.Contracts;
 
 public static class RegistryApiRoutes
 {
+    public const string PublicationAuthorityPolicy = "/api/v1/me/publication-authority-policy";
     public const string Root = "/api/v1";
+    public const string PolicySynchronization = Root + "/policy/synchronize";
+    public const string PackageCohortAvailability = Root + "/me/package-cohorts/availability";
     public const string Contracts = Root + "/contracts";
+    public const string PlatformContracts = Root + "/platform-contracts/sunder.core";
+    public const string PlatformContractResolve = PlatformContracts + "/resolve";
     public const string CliAuth = Root + "/cli-auth";
     public const string CliAuthAuthorize = CliAuth + "/authorize";
     public const string CliAuthToken = CliAuth + "/token";
@@ -14,15 +19,26 @@ public static class RegistryApiRoutes
     public const string CurrentUserUsers = CurrentUser + "/users";
     public const string CurrentUserCliTokens = CurrentUser + "/tokens";
     public const string CurrentUserPublishTokens = CurrentUser + "/publish-tokens";
+    public const string CurrentUserPackageReservations = CurrentUser + "/package-reservations";
+    public const string CurrentUserStackReservations = CurrentUser + "/stack-reservations";
+    public const string CurrentUserContractAuthorities = CurrentUser + "/contract-authorities";
     public const string Packages = Root + "/packages";
     public const string PackageResolveUpdates = Packages + "/resolve-updates";
     public const string PackageResolveInstallPlan = Packages + "/resolve-install-plan";
     public const string PackageResolvePackageChanges = Packages + "/resolve-package-changes";
     public const string PackagePublish = Packages + "/publish";
+    public const string ExecutionRuntimes = Root + "/execution-runtimes";
+    public const string ExecutionRuntimeResolve = ExecutionRuntimes + "/resolve";
+    public const string AdministratorExecutionRuntimes = Root + "/admin/execution-runtimes";
+    public const string ExecutionRuntimeStages = AdministratorExecutionRuntimes + "/stages";
+    public const string ExecutionRuntimeStageLookup = ExecutionRuntimeStages + "/lookup";
     public const string Stacks = Root + "/stacks";
     public const string StackPublish = Stacks + "/publish";
     public const string DevelopmentPackages = Root + "/dev/packages";
     public const string DevelopmentPackagePublishLocal = DevelopmentPackages + "/publish/local";
+    public const string DevelopmentExecutionRuntimes = Root + "/dev/execution-runtimes";
+    public const string DevelopmentExecutionRuntimeStages = DevelopmentExecutionRuntimes + "/stages";
+    public const string DevelopmentExecutionRuntimeStageLookup = DevelopmentExecutionRuntimeStages + "/lookup";
     public const string DevelopmentStacks = Root + "/dev/stacks";
     public const string DevelopmentStackPublishLocal = DevelopmentStacks + "/publish/local";
 
@@ -43,6 +59,36 @@ public static class RegistryApiRoutes
 
     public static string CurrentUserPublishToken(Guid tokenId)
         => $"{CurrentUserPublishTokens}/{tokenId:D}";
+
+    public static string CurrentUserPackageReservation(string packageId)
+        => $"{CurrentUserPackageReservations}/{Segment(packageId, nameof(packageId))}";
+
+    public static string CurrentUserStackReservation(string stackId)
+        => $"{CurrentUserStackReservations}/{Segment(stackId, nameof(stackId))}";
+
+    public static string CurrentUserPackageReservationRenewal(string packageId)
+        => $"{CurrentUserPackageReservation(packageId)}/renew";
+
+    public static string CurrentUserPackageReservationCancellation(string packageId)
+        => $"{CurrentUserPackageReservation(packageId)}/cancel";
+
+    public static string CurrentUserStackReservationRenewal(string stackId)
+        => $"{CurrentUserStackReservation(stackId)}/renew";
+
+    public static string CurrentUserStackReservationCancellation(string stackId)
+        => $"{CurrentUserStackReservation(stackId)}/cancel";
+
+    public static string CurrentUserContractAuthority(string contractId)
+        => $"{CurrentUserContractAuthorities}/{Segment(contractId, nameof(contractId))}";
+
+    public static string CurrentUserContractAuthorityRenewal(string contractId)
+        => $"{CurrentUserContractAuthority(contractId)}/renew";
+
+    public static string CurrentUserContractAuthorityCancellation(string contractId)
+        => $"{CurrentUserContractAuthority(contractId)}/cancel";
+
+    public static string CurrentUserContractProviderPolicy(string contractId)
+        => $"{CurrentUserContractAuthority(contractId)}/provider-policy";
 
     public static string CurrentUserPackage(string packageId)
         => $"{CurrentUserPackages}/{Segment(packageId, nameof(packageId))}";
@@ -83,6 +129,18 @@ public static class RegistryApiRoutes
     public static string PackageVersionCanonical(string packageId, string version)
         => $"{PackageVersion(packageId, version)}/canonical";
 
+    public static string PackageVersionPublicApiInventory(string packageId, string version)
+        => $"{PackageVersion(packageId, version)}/public-api";
+
+    public static string PlatformContractRelease(string releaseVersion)
+        => $"{PlatformContracts}/releases/{Segment(releaseVersion, nameof(releaseVersion))}";
+
+    public static string PlatformContractCatalog(string releaseVersion)
+        => $"{PlatformContractRelease(releaseVersion)}/catalog";
+
+    public static string PlatformContractRevocation(string releaseVersion)
+        => $"{PlatformContractRelease(releaseVersion)}/revoke";
+
     public static string PackageVersionSharedProjectionDownload(string packageId, string version)
         => $"{PackageVersion(packageId, version)}/projections/shared/download";
 
@@ -111,6 +169,27 @@ public static class RegistryApiRoutes
     public static string PackageVersionYank(string packageId, string version)
         => $"{PackageVersion(packageId, version)}/yank";
 
+    public static string PackageSecurityBlock(string packageId)
+        => $"{Package(packageId)}/security-block";
+
+    public static string PackageVersionSecurityBlock(string packageId, string version)
+        => $"{PackageVersion(packageId, version)}/security-block";
+
+    public static string StackRevision(string stackId, long revision)
+        => revision > 0 ? $"{Stack(stackId)}/revisions/{revision.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : throw new ArgumentOutOfRangeException(nameof(revision));
+
+    public static string StackRevisionDownload(string stackId, long revision)
+        => $"{StackRevision(stackId, revision)}/download";
+
+    public static string StackVisibility(string stackId)
+        => $"{Stack(stackId)}/visibility";
+
+    public static string StackPolicy(string stackId)
+        => $"{Stack(stackId)}/policy";
+
+    public static string StackSecurityBlock(string stackId)
+        => $"{Stack(stackId)}/security-block";
+
     public static string PackageVersionDeprecation(string packageId, string version)
         => $"{PackageVersion(packageId, version)}/deprecation";
 
@@ -125,6 +204,42 @@ public static class RegistryApiRoutes
 
     public static string PackageMaintainer(string packageId, string userId)
         => $"{PackageMaintainers(packageId)}/{Segment(userId, nameof(userId))}";
+
+    public static string ExecutionRuntime(string runtimeId)
+        => $"{ExecutionRuntimes}/{Segment(runtimeId, nameof(runtimeId))}";
+
+    public static string ExecutionRuntimeReleases(string runtimeId)
+        => $"{ExecutionRuntime(runtimeId)}/releases";
+
+    public static string ExecutionRuntimeRelease(string runtimeId, string version, int packagingRevision)
+        => $"{ExecutionRuntimeReleases(runtimeId)}/{Segment(version, nameof(version))}/revisions/{PositiveRevision(packagingRevision)}";
+
+    public static string ExecutionRuntimeArtifact(string runtimeId, string version, int packagingRevision, string rid)
+        => $"{ExecutionRuntimeRelease(runtimeId, version, packagingRevision)}/artifacts/{Segment(rid, nameof(rid))}";
+
+    public static string ExecutionRuntimeArtifactDownload(string runtimeId, string version, int packagingRevision, string rid)
+        => $"{ExecutionRuntimeArtifact(runtimeId, version, packagingRevision, rid)}/download";
+
+    public static string ExecutionRuntimeReleaseLifecycle(string runtimeId, string version, int packagingRevision)
+        => $"{ExecutionRuntimeRelease(runtimeId, version, packagingRevision)}/lifecycle";
+
+    public static string ExecutionRuntimeStage(string stageId)
+        => $"{ExecutionRuntimeStages}/{Segment(stageId, nameof(stageId))}";
+
+    public static string ExecutionRuntimeStageArtifact(string stageId, string rid)
+        => $"{ExecutionRuntimeStage(stageId)}/artifacts/{Segment(rid, nameof(rid))}";
+
+    public static string ExecutionRuntimeStagePromotion(string stageId)
+        => $"{ExecutionRuntimeStage(stageId)}/promotion";
+
+    public static string DevelopmentExecutionRuntimeStage(string stageId)
+        => $"{DevelopmentExecutionRuntimeStages}/{Segment(stageId, nameof(stageId))}";
+
+    public static string DevelopmentExecutionRuntimeStageArtifactLocal(string stageId, string rid)
+        => $"{DevelopmentExecutionRuntimeStage(stageId)}/artifacts/{Segment(rid, nameof(rid))}/local";
+
+    public static string DevelopmentExecutionRuntimeStagePromotion(string stageId)
+        => $"{DevelopmentExecutionRuntimeStage(stageId)}/promotion";
 
     public static string Stack(string stackId)
         => $"{Stacks}/{Segment(stackId, nameof(stackId))}";
@@ -192,6 +307,11 @@ public static class RegistryApiRoutes
         return Uri.EscapeDataString(value);
     }
 
+    private static int PositiveRevision(int packagingRevision)
+        => packagingRevision > 0
+            ? packagingRevision
+            : throw new ArgumentOutOfRangeException(nameof(packagingRevision), "A packaging revision must be positive.");
+
     private static bool IsDotSegment(string segment)
     {
         var decoded = Uri.UnescapeDataString(segment);
@@ -214,4 +334,18 @@ public static class RegistryApiRoutes
 
         return true;
     }
+}
+
+public static class RegistryApiOperationNames
+{
+    public const string BrowseExecutionRuntimes = "BrowseExecutionRuntimes";
+    public const string GetExecutionRuntime = "GetExecutionRuntime";
+    public const string GetExecutionRuntimeRelease = "GetExecutionRuntimeRelease";
+    public const string DownloadExecutionRuntimeArtifact = "DownloadExecutionRuntimeArtifact";
+    public const string ResolveExecutionRuntime = "ResolveExecutionRuntime";
+    public const string LookupExecutionRuntimePublication = "LookupExecutionRuntimePublication";
+    public const string StageExecutionRuntimeRelease = "StageExecutionRuntimeRelease";
+    public const string PublishExecutionRuntimeArtifact = "PublishExecutionRuntimeArtifact";
+    public const string PromoteExecutionRuntimeRelease = "PromoteExecutionRuntimeRelease";
+    public const string TransitionExecutionRuntimeLifecycle = "TransitionExecutionRuntimeLifecycle";
 }

@@ -7,8 +7,8 @@ using Sunder.Sdk.Storage;
 
 namespace Sunder.Sdk.Worker;
 
-/// <summary>Configures one native <c>sunder.worker.v3</c> activation.</summary>
-[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV3)]
+/// <summary>Configures one native <c>sunder.worker.v1</c> activation.</summary>
+[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV1)]
 public sealed class SunderWorkerOptions
 {
     private readonly IReadOnlyList<SunderWorkerProviderRegistration> _providers;
@@ -16,7 +16,7 @@ public sealed class SunderWorkerOptions
     private IReadOnlyList<PackageStorageKeyMigration> _stateMigrations = [];
     private IReadOnlyList<PackageStorageKeyMigration> _secretMigrations = [];
 
-    /// <summary>Creates V3 worker options for the RPC providers declared by the package manifest.</summary>
+    /// <summary>Creates V1 worker options for the RPC providers declared by the package manifest.</summary>
     public SunderWorkerOptions(IEnumerable<SunderWorkerProviderRegistration> providers)
     {
         ArgumentNullException.ThrowIfNull(providers);

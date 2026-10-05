@@ -340,7 +340,7 @@ public sealed class RuntimeRpcCallAcquisitionPolicyTests
         => SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
               "$schema":"https://json-schema.org/draft/2020-12/schema",
-              "descriptorVersion":2,
+              "descriptorVersion":1,
               "schemaProfile":"sunder.rpc.values.v1",
               "contractId":"example.rpc",
               "version":"1.0.0",

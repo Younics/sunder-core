@@ -31,11 +31,14 @@ public sealed partial class UseStackPackageReviewViewModel(SunderStackPackageReq
             ? "Blocked"
             : item is null
                 ? "Installed"
-                : item.CurrentVersion is null
-                    ? $"Will install {item.Version}"
-                    : item.IsUpdate
-                        ? $"Will update {item.CurrentVersion} -> {item.Version}"
-                        : $"Installed {item.Version}";
+                : item.ActionKind switch
+                {
+                    RegistryPackageActionKinds.PackageInstall => $"Will install {item.Version}",
+                    RegistryPackageActionKinds.PackageUpdate => $"Will update {item.CurrentVersion} -> {item.Version}",
+                    RegistryPackageActionKinds.PackageRemove => $"Will remove {item.CurrentVersion}",
+                    RegistryPackageActionKinds.RuntimeOnlyRebind => $"Will update runtime for {item.Version}",
+                    _ => $"Installed {item.Version}",
+                };
     }
 
 }

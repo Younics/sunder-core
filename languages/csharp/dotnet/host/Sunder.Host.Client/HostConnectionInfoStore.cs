@@ -37,6 +37,15 @@ public static class HostConnectionInfoStore
     public static RuntimeConnectionInfo? Load()
         => RuntimeConnectionInfoStore.Load(GetDefaultPath());
 
+    public static RuntimeConnectionInfo? LoadLocalRuntimeWorkerFor(RuntimeConnectionInfo hostConnection)
+    {
+        ArgumentNullException.ThrowIfNull(hostConnection);
+        // This pointer comes only from private local discovery, never an HTTP DTO.
+        // The App additionally matches the direct and gateway Runtime instance IDs.
+        return hostConnection.WorkerConnectionInfoPath is { } path
+            ? RuntimeConnectionInfoStore.Load(path) : null;
+    }
+
     public static RuntimeConnectionInfo? LoadPreferredFor(Uri runtimeUrl)
         => LoadPreferredFor(runtimeUrl, GetDefaultPath(), RuntimeConnectionInfoStore.GetDefaultPath());
 

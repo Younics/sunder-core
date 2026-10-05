@@ -12,6 +12,27 @@ namespace Sunder.Runtime.Client.Tests;
 
 public sealed class RuntimeClientTransportTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DevelopmentImportPreparationRequiresItsAdvertisedFeature(bool supported)
+    {
+        var expected = new RuntimeDevPackageImportsPrepared("example.local", "1.0.0", new string('a', 64), 1, 0);
+        var requests = 0;
+        var handshake = CreateHandshake();
+        if (supported) handshake = handshake with { SupportedFeatures = [.. handshake.SupportedFeatures, RuntimeProtocolFeatures.DevPackageImportsV1] };
+        var handler = new RecordingHandler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/handshake") return Json(handshake);
+            Assert.Equal("/api/v1/dev-packages/prepare-imports", request.RequestUri.AbsolutePath);
+            Assert.Equal(HttpMethod.Post, request.Method); requests++; return Json(expected);
+        });
+        using var client = new RuntimeManagementClient(() => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"), handler);
+        var operation = () => client.PrepareDevPackageImportsAsync(new("/local/package", "https://registry.example/"));
+        if (supported) { Assert.Equal(expected, await operation()); Assert.Equal(1, requests); }
+        else { await Assert.ThrowsAnyAsync<Exception>(operation); Assert.Equal(0, requests); }
+    }
+
     [Fact]
     public async Task AppCallScopeOpen_ReturnsTypedRpcErrorResult()
     {
@@ -219,12 +240,180 @@ public sealed class RuntimeClientTransportTests
             handler.Paths);
         Assert.All(handler.Authorizations, authorization => Assert.Equal("Bearer secret", authorization));
         Assert.Equal("one-time", confirmation?.Challenge);
+        Assert.False(confirmation?.RequireBoundStateRoot);
+        Assert.False(confirmation?.RequireHostExecutedReset);
+        Assert.False(confirmation?.StartupCacheOnly);
+    }
+
+    [Fact]
+    public async Task BoundReset_RejectsUnsupportedHostBeforeDrain()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:6123/"), "secret");
+        using var management = new RuntimeManagementClient(() => connection, handler);
+        var challenge = new RuntimeResetChallengeResponse(
+            "one-time",
+            DateTimeOffset.UtcNow.AddSeconds(30));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            management.DrainAndResetLocalStateAsync(challenge, TimeSpan.Zero));
+
+        Assert.Contains("does not support", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Paths);
+    }
+
+    [Fact]
+    public async Task BoundReset_RejectsHostWithoutManagedResetExecutionBeforeDrain()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:6123/"), "secret");
+        using var management = new RuntimeManagementClient(() => connection, handler);
+        var challenge = new RuntimeResetChallengeResponse(
+            "one-time",
+            DateTimeOffset.UtcNow.AddSeconds(30))
+        {
+            SupportsBoundStateRoot = true,
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            management.DrainAndResetLocalStateAsync(challenge, TimeSpan.Zero));
+
+        Assert.Contains("lifecycle ownership", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Paths);
+    }
+
+    [Fact]
+    public async Task BoundReset_RejectsNonLoopbackConnectionBeforeDrain()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        var connection = new RuntimeConnectionInfo(new Uri("https://runtime.example.test/"), "secret");
+        using var management = new RuntimeManagementClient(() => connection, handler);
+        var challenge = new RuntimeResetChallengeResponse(
+            "one-time",
+            DateTimeOffset.UtcNow.AddSeconds(30))
+        {
+            SupportsBoundStateRoot = true,
+            SupportsHostExecutedReset = true,
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            management.DrainAndResetLocalStateAsync(challenge, TimeSpan.Zero));
+
+        Assert.Contains("loopback", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Paths);
+    }
+
+    [Fact]
+    public async Task BoundReset_UsesHostExecutedResultWithoutDeletingLocally()
+    {
+        var root = Path.Combine(
+            ResolvePhysicalDirectory(Path.GetTempPath()),
+            $"sunder-bound-reset-{Guid.NewGuid():N}");
+        RuntimeLocalState.EnsureInitialized(root);
+        var retainedPath = Path.Combine(root, RuntimeV1StateDescriptor.PackageUiSnapshotCacheDirectory, "keep.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(retainedPath)!);
+        File.WriteAllText(retainedPath, "keep");
+        var receiptPath = Path.Combine(root, "reset-receipts", "test.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
+        File.WriteAllText(receiptPath, "{}");
+        RuntimeResetConfirmRequest? confirmation = null;
+        var response = new RuntimeResetDrainResponse(
+            RuntimeV1StateDescriptor.ResetCategories.Select(static category => category.Id).ToArray())
+        {
+            CategoryResults =
+            [
+                new RuntimeResetCategoryResult(
+                    RuntimeV1StateDescriptor.StartupCacheResetCategory.Id,
+                    "already-empty",
+                    RuntimeV1StateDescriptor.StartupCacheResetCategory.RelativePaths),
+            ],
+            HostExecutedReset = true,
+            ReceiptRelativePath = "reset-receipts/test.json",
+            RuntimeStateRootPath = root,
+            RuntimeStateRootIdentity = RuntimeOwnedFileSystem.GetMutableDirectoryIdentity(root),
+        };
+        var handler = new RecordingHandler(
+            request => request.RequestUri!.AbsolutePath == "/api/v1/system/reset/drain"
+                ? Json(response)
+                : new HttpResponseMessage(HttpStatusCode.NotFound),
+            request =>
+            {
+                if (request.RequestUri!.AbsolutePath == "/api/v1/system/reset/drain")
+                {
+                    confirmation = request.Content!.ReadFromJsonAsync<RuntimeResetConfirmRequest>()
+                        .GetAwaiter()
+                        .GetResult();
+                }
+            });
+        var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:6123/"), "secret");
+        using var management = new RuntimeManagementClient(() => connection, handler);
+        var challenge = new RuntimeResetChallengeResponse(
+            "one-time",
+            DateTimeOffset.UtcNow.AddSeconds(30))
+        {
+            SupportsBoundStateRoot = true,
+            SupportsHostExecutedReset = true,
+        };
+        try
+        {
+            var result = await management.DrainAndResetStartupCacheAsync(
+                challenge,
+                TimeSpan.Zero);
+
+            Assert.True(confirmation?.RequireBoundStateRoot);
+            Assert.True(confirmation?.RequireHostExecutedReset);
+            Assert.True(confirmation?.StartupCacheOnly);
+            Assert.True(result.Success);
+            Assert.Equal("reset-receipts/test.json", result.ReceiptRelativePath);
+            Assert.Equal("keep", File.ReadAllText(retainedPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task BoundReset_RejectsMalformedReturnedRootWithoutDeletion()
+    {
+        var response = new RuntimeResetDrainResponse(
+            RuntimeV1StateDescriptor.ResetCategories.Select(static category => category.Id).ToArray())
+        {
+            CategoryResults = RuntimeV1StateDescriptor.ResetCategories.Select(static category =>
+                new RuntimeResetCategoryResult(category.Id, "already-empty", category.RelativePaths)).ToArray(),
+            HostExecutedReset = true,
+            ReceiptRelativePath = "reset-receipts/test.json",
+            RuntimeStateRootPath = "relative/runtime-root",
+            RuntimeStateRootIdentity = "test-root-identity",
+        };
+        var handler = new RecordingHandler(_ => Json(response));
+        var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:6123/"), "secret");
+        using var management = new RuntimeManagementClient(() => connection, handler);
+        var challenge = new RuntimeResetChallengeResponse(
+            "one-time",
+            DateTimeOffset.UtcNow.AddSeconds(30))
+        {
+            SupportsBoundStateRoot = true,
+            SupportsHostExecutedReset = true,
+        };
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            management.DrainAndResetLocalStateAsync(challenge, TimeSpan.Zero));
     }
 
     [Fact]
     public async Task RegistrySourceAdoption_UsesDedicatedRuntimeEndpointAndPreservesSafetyMode()
     {
         RuntimeRegistrySourceAdoptionRequest? captured = null;
+        var expectedConflict = new RuntimeRegistryPackageInstallPlanConflict(
+            "demo",
+            "1.0.0",
+            ">=2.0.0",
+            "dependent",
+            Message: "Package requirement conflict.");
         var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
         {
             "/api/handshake" => Json(CreateHandshake()),
@@ -237,7 +426,10 @@ public sealed class RuntimeClientTransportTests
                 [],
                 [],
                 [],
-                [])),
+                [])
+            {
+                Conflicts = [expectedConflict],
+            }),
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
         }, request =>
         {
@@ -252,18 +444,21 @@ public sealed class RuntimeClientTransportTests
             () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
             handler);
 
-        await client.AdoptRegistryPackageSourceAsync(new RuntimeRegistrySourceAdoptionRequest(
+        var result = await client.AdoptRegistryPackageSourceAsync(new RuntimeRegistrySourceAdoptionRequest(
             "demo",
             "https://registry.test/",
             Tag: "latest",
-            DryRun: true));
+            Confirm: true,
+            ExpectedResolutionFingerprint: new string('a', 64)));
 
         Assert.Equal(
             ["/api/handshake", "/api/v1/registry/packages/adopt-source"],
             handler.Paths);
         Assert.Equal("demo", captured?.PackageId);
-        Assert.True(captured?.DryRun);
-        Assert.False(captured?.Confirm);
+        Assert.False(captured?.DryRun);
+        Assert.True(captured?.Confirm);
+        Assert.Equal(new string('a', 64), captured?.ExpectedResolutionFingerprint);
+        Assert.Equal(expectedConflict, Assert.Single(result.Conflicts));
     }
 
     [Fact]
@@ -846,6 +1041,52 @@ public sealed class RuntimeClientTransportTests
     }
 
     [Fact]
+    public async Task InstalledPackageUiProjection_CannotBeDownloaded()
+    {
+        var transportCalled = false;
+        var handler = new RecordingHandler(_ =>
+        {
+            transportCalled = true;
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var management = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+        var cacheKey = new string('a', 64);
+        var snapshot = new PackageUiSnapshotDescriptor(
+            "test.package",
+            PackageSourceKind.Installed,
+            1,
+            new PackageTargetDescriptor(
+                "app",
+                "osx-arm64",
+                "avalonia",
+                "lib/test.dll",
+                "net10.0",
+                "1.0.0",
+                []),
+            cacheKey,
+            "snapshot",
+            string.Empty)
+        {
+            ProjectionReference = new PackageUiProjectionReferenceDescriptor(
+                1,
+                cacheKey,
+                "app",
+                new string('b', 64),
+                "rules",
+                ["app/osx-arm64"]),
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => management.DownloadPackageUiSnapshotAsync(
+            snapshot,
+            new MemoryStream(),
+            1024));
+
+        Assert.False(transportCalled);
+    }
+
+    [Fact]
     public async Task RpcManagement_QueriesCatalogAndManagesPermissions()
     {
         var handshake = CreateHandshake() with
@@ -853,8 +1094,8 @@ public sealed class RuntimeClientTransportTests
             SupportedFeatures =
             [
                 RuntimeProtocolFeatures.VersionedApiV1,
-                RuntimeProtocolFeatures.SchemaFirstRpcV2,
-                RuntimeProtocolFeatures.RpcPermissionsV2,
+                RuntimeProtocolFeatures.SchemaFirstRpcV1,
+                RuntimeProtocolFeatures.RpcPermissionsV1,
             ],
         };
         var key = new RuntimeRpcPermissionKey(
@@ -907,7 +1148,7 @@ public sealed class RuntimeClientTransportTests
             SupportedFeatures =
             [
                 RuntimeProtocolFeatures.VersionedApiV1,
-                RuntimeProtocolFeatures.AppWebRpcV2,
+                RuntimeProtocolFeatures.AppWebRpcV1,
             ],
         };
         var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
@@ -1119,6 +1360,21 @@ public sealed class RuntimeClientTransportTests
             request,
             DeadlineUtc: null);
 
+    private static string ResolvePhysicalDirectory(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath)!;
+        var current = root;
+        foreach (var segment in fullPath[root.Length..].Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            current = new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? current;
+        }
+        return current;
+    }
+
     private static JsonElement StringWithSerializedSize(int byteCount, bool escapedQuotes)
     {
         if (byteCount < 2)
@@ -1175,7 +1431,7 @@ public sealed class RuntimeClientTransportTests
             Guid.NewGuid(),
             [
                 RuntimeProtocolFeatures.VersionedApiV1,
-                RuntimeProtocolFeatures.AppWebRpcV2,
+                RuntimeProtocolFeatures.AppWebRpcV1,
                 RuntimeProtocolFeatures.RuntimeResourcePolicyV1,
             ],
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"),

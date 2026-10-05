@@ -12,19 +12,55 @@ dotnet add package Sunder.Sdk.Stacks
 
 The package preserves the `Sunder.Sdk.Stacks` namespace while using its own assembly and NuGet package identity. Packages that do not use Stack contracts only need `Sunder.Sdk`.
 
-The package bundles the authoritative descriptorVersion 2 `sunder.stack.contributor` v2.0.0 contract with public exposure and a local-interface adapter. Stack providers use public audience because Runtime Stack orchestration invokes them as a synthetic Host caller rather than as the provider-owning package. Exporter, importer, and applied-handler contracts derive from `IPackageStackContributor`; Worker packages pass that contract to `SunderStackContributorRpc.CreateHandler` when constructing their own Worker registration. Runtime invokes exact role- and version-bound RPC endpoints and moves payload bytes through Host-fenced content references rather than cross-package CLR objects. `Sunder.Sdk.Stacks` is transport-neutral and does not depend on `Sunder.Sdk.Worker`.
+## Implementation-First Providers
 
-`Sunder.Sdk.Stacks` supplies the public contract bundle transitively. Declare each Runtime provider with an exact role, contract version, and public audience; RPC `VersionRange` metadata is not valid:
+`IPackageStackContributor` is marked as a platform-import domain surface. Implement
+its exporter/importer/applied interfaces on a partial class and bind that class with
+`[SunderRpcProvider(typeof(IPackageStackContributor), ProviderId = "my.package.stack")]`.
+Then register `contributor.CreateSunderRpcProviderRegistration()` in Worker options.
+The [template contributor](https://github.com/Younics/sunder-core/blob/main/languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Stacks/StackSupport.cs)
+provides a complete example.
 
-```xml
-<SunderRpcProvider Include="my.package.stack"
-                   Role="runtime"
-                   ContractId="sunder.stack.contributor"
-                   ContractVersion="2.0.0"
-                   Audience="public" />
+After accepting owned source, explicitly select the platform contract:
+
+```powershell
+dotnet msbuild MyPackage.csproj -t:ImplementSunderPlatformApi -p:SunderContractId=sunder.stack.contributor -p:SunderRegistryOrigin=https://registry.example/
+dotnet build MyPackage.csproj
 ```
 
-`StackContributorRpcClient` requires a caller-owned `ISunderRpcCallScope`. Dispose the scope after the related calls and content transfers complete; a typed client never retains unscoped RPC authority.
+The Registry-published Core catalog and exact lock/cache provide the descriptor, hashes, wire
+types, dispatch and registration. The SDK marker does not establish ownership or
+select a version. Platform imports add neither consumer uses nor a dependency on
+`sunder.core`. Multiple contributors need distinct provider IDs. Stack providers
+use public audience for Host orchestration.
+
+`StackContributorServiceAdapter` retains local domain behavior: six-method
+composition, optional capability flags and errors, single-use content registration,
+lazy content opening and Host-stamped owner/contributor identity. The generated
+package-local bridge checks domain DTO representation against the selected
+descriptor and validates values with its exact schemas. Domain objects remain
+local; no shared CLR object identity crosses processes. The SDK does not depend on
+`Sunder.Sdk.Worker` or the build tooling.
+
+While the legacy SDK distribution is being retired, exclude its automatic bundle
+asset on implementation-first package references (the new template does this):
+
+```xml
+<PackageReference Include="Sunder.Sdk.Stacks" Version="[1.1.0,1.2.0)" ExcludeAssets="buildTransitive" />
+```
+
+Selection accepts a local Core-exported catalog without a Registry, or the chosen
+Registry's administrator-published catalog. No catalog signing key or trust bundle
+is needed. Select the import before first owned Accept when starting a contributor.
+Tests exercise the real six-method `2.0.0`
+descriptor through source and live isolated Registry composition. The Core Host
+now compiles its own internal Stack client, codecs and descriptor from checked
+Core source through a private build-only export. The shared SDK
+`StackContributorRpcClient` and `SunderStackContributorRpc.CreateClient` are removed.
+First-party providers still use legacy descriptor/provider-factory surfaces;
+retiring those remaining assets requires their authenticated-lock migration. Source derivation
+continues to preserve all 48 definitions and both issued descriptor/ABI hashes.
+See [platform imports](https://github.com/Younics/sunder-core/blob/main/docs/package-development/PLATFORM-CONTRACT-IMPORTS.md).
 
 Import preview must be side-effect free. The Runtime owns the resulting expiring, single-use plan and binds it to the validated archive, Runtime generation, exact provider activation, schema versions, selected fragments, inputs, remaps, actions, and conflicts. Import receives the immutable fragment/input/remap snapshot from that plan.
 

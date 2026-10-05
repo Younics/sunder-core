@@ -2,7 +2,7 @@ import { constants, type BigIntStats } from "node:fs";
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
-export async function readProjectDescriptorFile(root: string, path: string, label: string): Promise<Buffer> {
+export async function readProjectDescriptorFile(root: string, path: string, label: string, maximumBytes = 4_194_304): Promise<Buffer> {
   const beforePath = await inspectRegularProjectFile(root, path, label);
   let handle: FileHandle;
   try {
@@ -24,7 +24,16 @@ export async function readProjectDescriptorFile(root: string, path: string, labe
     if (!beforeHandle.isFile() || !sameStableFile(beforePath, beforeHandle)) {
       throw changedDuringReadError(label);
     }
-    const bytes = await handle.readFile();
+    if (beforeHandle.size > BigInt(maximumBytes)) throw new Error(`${label}: rpc-authoring.source-limit-exceeded: input exceeds ${maximumBytes} bytes.`);
+    // Never let a concurrently growing input turn a bounded read into readFile's
+    // unbounded allocation. Read at most the admitted size in bounded chunks.
+    const bytes = Buffer.alloc(Number(beforeHandle.size));
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, Math.min(65_536, bytes.length - offset), offset);
+      if (!bytesRead) throw changedDuringReadError(label);
+      offset += bytesRead;
+    }
     const afterHandle = await handle.stat({ bigint: true });
     if (!sameStableFile(beforeHandle, afterHandle)) throw changedDuringReadError(label);
     const afterPath = await inspectRegularProjectFile(root, path, label);

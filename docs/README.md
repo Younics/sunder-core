@@ -10,8 +10,8 @@ This folder contains current Sunder documentation for the implementation in this
 - [Package development](SUNDER-PACKAGE-DEVELOPMENT.md)
 - [Package standard](SUNDER-PACKAGE-STANDARD.md): normative package and Stack format rules
 - [SDK compatibility](SUNDER-SDK-COMPATIBILITY.md)
-- [Worker V3 protocol](SUNDER-WORKER-PROTOCOL-V3.md)
-- [RPC V2 specification and conformance fixtures](../specs/rpc/v2/README.md)
+- [Worker V1 protocol](SUNDER-WORKER-PROTOCOL-V1.md)
+- [RPC V1 specification and conformance fixtures](../specs/rpc/v1/README.md)
 - [TypeScript worker Runtime and web App packages](SUNDER-NODE-PROCESS-PACKAGES.md)
 - [Sunder V1 baseline](SUNDER-V1-BASELINE.md)
 - [CLI reference](SUNDER-CLI.md)

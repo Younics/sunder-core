@@ -15,10 +15,12 @@ production_run_id="$7"
 production_run_attempt="$8"
 production_workflow_sha="$9"
 evidence_directory="${10}"
+candidate_only="${SUNDER_PRODUCTION_ACCEPTANCE_CANDIDATE_ONLY:-false}"
 workflow_path='.github/workflows/sunder-production-acceptance.yml'
 workflow_name='Sunder Production Acceptance'
 workflow_branch='main'
 workflow_ref="refs/heads/$workflow_branch"
+expected_coordinator_sha="${SUNDER_PRODUCTION_ACCEPTANCE_COORDINATOR_SHA256:-}"
 
 [[ "$component" == "app" || "$component" == "cli" || "$component" == "host" || "$component" == "sdk" ]] \
   || { printf 'Unexpected production acceptance component: %s\n' "$component" >&2; exit 2; }
@@ -34,6 +36,10 @@ workflow_ref="refs/heads/$workflow_branch"
   || { printf 'Production acceptance publication source must be a lowercase 40-character commit.\n' >&2; exit 2; }
 [[ "$production_workflow_sha" =~ ^[0-9a-f]{40}$ ]] \
   || { printf 'Production acceptance workflow SHA must be a lowercase 40-character commit.\n' >&2; exit 2; }
+[[ "$candidate_only" == "true" || "$candidate_only" == "false" ]] \
+  || { printf 'SUNDER_PRODUCTION_ACCEPTANCE_CANDIDATE_ONLY must be true or false.\n' >&2; exit 2; }
+[[ -z "$expected_coordinator_sha" || "$expected_coordinator_sha" =~ ^[0-9a-f]{64}$ ]] \
+  || { printf 'SUNDER_PRODUCTION_ACCEPTANCE_COORDINATOR_SHA256 must be one lowercase SHA-256 digest.\n' >&2; exit 2; }
 [[ -d "$evidence_directory" && ! -L "$evidence_directory" ]] \
   || { printf 'Production acceptance evidence directory must be a real directory.\n' >&2; exit 1; }
 : "${GH_REPO:?GH_REPO must identify the GitHub repository as owner/repo.}"
@@ -76,6 +82,7 @@ jq -e \
   --arg publication_run_attempt "$publication_run_attempt" \
   --arg production_run_id "$production_run_id" \
   --arg production_run_attempt "$production_run_attempt" \
+  --arg expected_coordinator_sha "$expected_coordinator_sha" \
   --arg component_check "$required_component_check" '
     .schemaVersion == 1
     and .kind == "https://sunderapp.io/acceptance/production/v1"
@@ -95,8 +102,11 @@ jq -e \
       workflowRef: $workflow_ref,
       workflowSha: $workflow_sha,
       runId: $production_run_id,
-      runAttempt: $production_run_attempt
+      runAttempt: $production_run_attempt,
+      coordinatorSha256: .invocation.coordinatorSha256
     }
+    and (.invocation.coordinatorSha256 | test("^[0-9a-f]{64}$"))
+    and ($expected_coordinator_sha == "" or .invocation.coordinatorSha256 == $expected_coordinator_sha)
     and (.checks | type == "array" and length >= 6)
     and ([.checks[].id] | length == (unique | length))
     and all(.checks[];
@@ -159,6 +169,104 @@ while IFS=$'\t' read -r asset_name expected_sha expected_size; do
     || { printf "Production evidence '%s' does not match its manifest.\n" "$asset_name" >&2; exit 1; }
 done < <(jq -r '.files[] | [.path, .sha256, (.size | tostring)] | @tsv' "$manifest")
 
+rids=(win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64)
+for rid in "${rids[@]}"; do
+  [[ -f "$evidence_directory/core-production-$rid.json" \
+      && -f "$evidence_directory/runtime-native-output-$rid.json" \
+      && -f "$evidence_directory/runtime-reproducibility-$rid.json" ]] \
+    || { printf "Production acceptance is missing durable native receipts for '%s'.\n" "$rid" >&2; exit 1; }
+done
+jq -s -e \
+  --arg repository "$GH_REPO" \
+  --arg component "$component" \
+  --argjson release_id "$release_id" \
+  --arg tag "$tag" \
+  --arg source_sha "$source_sha" \
+  --arg publication_run_id "$publication_run_id" \
+  --arg publication_run_attempt "$publication_run_attempt" \
+  --arg workflow_sha "$production_workflow_sha" \
+  --arg run_id "$production_run_id" \
+  --arg run_attempt "$production_run_attempt" '
+    length == 6
+    and ([.[].rid] | sort) == ["linux-arm64","linux-x64","osx-arm64","osx-x64","win-arm64","win-x64"]
+    and all(.[];
+      .decision == "accepted"
+      and .release == {
+        repository:$repository,component:$component,releaseId:$release_id,tag:$tag,sourceSha:$source_sha,
+        publicationRunId:$publication_run_id,publicationRunAttempt:$publication_run_attempt
+      }
+      and .invocation.workflowPath == ".github/workflows/sunder-production-acceptance.yml"
+      and .invocation.workflowRef == "refs/heads/main"
+      and .invocation.workflowSha == $workflow_sha
+      and .invocation.runId == $run_id
+      and .invocation.runAttempt == $run_attempt
+      and (.invocation.driverSha256 | test("^[0-9a-f]{64}$")))
+  ' "$evidence_directory"/core-production-*.json >/dev/null \
+  || { printf 'Durable Core native receipts do not bind the selected invocation and reviewed driver digests.\n' >&2; exit 1; }
+jq -s -e \
+  --arg repository "$GH_REPO" \
+  --arg workflow_sha "$production_workflow_sha" \
+  --arg run_id "$production_run_id" \
+  --arg run_attempt "$production_run_attempt" '
+    length == 6
+    and ([.[].rid] | sort) == ["linux-arm64","linux-x64","osx-arm64","osx-x64","win-arm64","win-x64"]
+    and all(.[];
+      .repository == $repository
+      and .invocation == {workflowSha:$workflow_sha,runId:$run_id,runAttempt:$run_attempt}
+      and (.releaseDriverSha256 | test("^[0-9a-f]{64}$")))
+  ' "$evidence_directory"/runtime-reproducibility-*.json >/dev/null \
+  || { printf 'Durable runtime reproducibility receipts do not bind reviewed release-driver digests.\n' >&2; exit 1; }
+for rid in "${rids[@]}"; do
+  core_receipt="$evidence_directory/core-production-$rid.json"
+  native_receipt="$evidence_directory/runtime-native-output-$rid.json"
+  reproduction="$evidence_directory/runtime-reproducibility-$rid.json"
+  jq -e \
+    --arg rid "$rid" \
+    --arg native_receipt_sha "$(hash_file "$native_receipt")" \
+    --slurpfile native_receipt "$native_receipt" '
+      .schemaVersion == 1
+      and .kind == "https://sunderapp.io/acceptance/runtime-reproducibility/v1"
+      and .rid == $rid
+      and .nativeOutputReceiptSha256 == $native_receipt_sha
+      and .releaseDriverSha256 == $native_receipt[0].releaseDriverSha256
+      and .runtimeLockSha256 == $native_receipt[0].runtimeLockSha256
+      and $native_receipt[0].schemaVersion == 1
+      and $native_receipt[0].kind == "https://sunderapp.io/acceptance/runtime-native-output/v1"
+      and $native_receipt[0].rid == $rid
+      and ($native_receipt[0].releaseDriverSha256 | test("^[0-9a-f]{64}$"))
+      and ($native_receipt[0].artifacts | length) == 2
+      and ([ $native_receipt[0].artifacts[] | {path:.archiveFile,sha256:.archiveSha256,size:.archiveSize}] | sort_by(.path)) == .firstBuild
+      and .firstBuild == .secondBuild
+    ' "$reproduction" >/dev/null \
+    || { printf "Durable runtime native receipt for '%s' does not bind its reviewed driver and reproducible archives.\n" "$rid" >&2; exit 1; }
+  jq -e \
+    --arg rid "$rid" \
+    --arg reproduction_sha "$(hash_file "$reproduction")" \
+    --slurpfile native_receipt "$native_receipt" \
+    --slurpfile reproduction "$reproduction" '
+      .rid == $rid
+      and .runtimeLockSha256 == $native_receipt[0].runtimeLockSha256
+      and .reproducibilitySha256 == $reproduction_sha
+      and ([.runtimeArtifacts[] | {
+        runtimeId,version,packagingRevision,rid,moduleAbi,workerProtocol,
+        minimumHostTrustGeneration,releaseSigningKeyId,nativeAttestationKeyId
+      }] | sort_by(.runtimeId))
+        == ([$native_receipt[0].artifacts[] | {
+          runtimeId,version,packagingRevision,rid,moduleAbi,workerProtocol,
+          minimumHostTrustGeneration,releaseSigningKeyId,nativeAttestationKeyId
+        }] | sort_by(.runtimeId))
+      and ([.runtimeArtifacts[] | {path:.archiveFile,sha256:.archiveSha256,size:.archiveSize}] | sort_by(.path))
+        == $reproduction[0].firstBuild
+    ' "$core_receipt" >/dev/null \
+    || { printf "Durable Core native receipt for '%s' does not bind the canonical runtime receipts.\n" "$rid" >&2; exit 1; }
+done
+
+if [[ "$candidate_only" == "true" ]]; then
+  printf 'Verified production acceptance candidate for %s release %s (%s), current run %s attempt %s.\n' \
+    "$component" "$release_id" "$tag" "$production_run_id" "$production_run_attempt"
+  exit 0
+fi
+
 run_json="$(gh api -H 'Accept: application/vnd.github+json' \
   -H 'X-GitHub-Api-Version: 2022-11-28' \
   "repos/$GH_REPO/actions/runs/$production_run_id")"
@@ -203,5 +311,5 @@ jq -e \
   ' <<< "$attempt_json" >/dev/null \
   || { printf 'Production acceptance evidence does not match a successful selected trusted run attempt.\n' >&2; exit 1; }
 
-printf 'Verified separately archived production acceptance for %s release %s (%s), run %s attempt %s.\n' \
+printf 'Verified durable production acceptance for %s release %s (%s), run %s attempt %s.\n' \
   "$component" "$release_id" "$tag" "$production_run_id" "$production_run_attempt"

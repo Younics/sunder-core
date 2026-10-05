@@ -146,10 +146,21 @@ public sealed class RegistryPublishCredentialTests
         {
             string? expectedResourceId = null;
             bool hasSetLatestHeader = true;
+            var policyRead = false;
             using var client = new RegistryClient(
                 new Uri("https://registry.test/"),
                 new AsyncDelegateHandler(request =>
                 {
+                    if (request.Method == HttpMethod.Get)
+                    {
+                        Assert.Equal(RegistryApiRoutes.PublicationAuthorityPolicy, request.RequestUri!.AbsolutePath);
+                        Assert.Equal(PublishToken, request.Headers.Authorization!.Parameter);
+                        policyRead = true;
+                        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(new RegistryPolicyIdentity(7, new string('a', 64))) });
+                    }
+                    Assert.True(policyRead);
+                    Assert.Equal("7", request.Headers.GetValues(RegistryPolicyMutationHeaders.PublicationAuthorityRevision).Single());
+                    Assert.Matches("^[0-9a-f]{32}$", request.Headers.GetValues(RegistryPolicyMutationHeaders.IdempotencyKey).Single());
                     expectedResourceId = request.Headers.GetValues(RegistryPublishRequestHeaders.ExpectedResourceId).Single();
                     hasSetLatestHeader = request.Headers.Contains(RegistryPublishRequestHeaders.SetLatest);
                     return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)

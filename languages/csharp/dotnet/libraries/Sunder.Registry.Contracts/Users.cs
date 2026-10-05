@@ -7,6 +7,7 @@ public sealed record RegistryUserAttribution(
     bool IsOwner = false,
     string? AvatarUrl = null);
 
+/// <summary>The authenticated Registry account; UserId is an opaque Registry principal ID, not an OIDC subject.</summary>
 public sealed record RegistryCurrentUserResponse(
     string UserId,
     string? DisplayName,
@@ -17,6 +18,7 @@ public sealed record RegistryCurrentUserResponse(
 
 public sealed record RegistryUpdateCurrentUserProfileRequest(string? Username);
 
+/// <summary>Profile metadata keyed by an opaque Registry principal ID, independent of usernames and provider subjects.</summary>
 public sealed record RegistryUserProfileSummary(
     string UserId,
     string? Username,

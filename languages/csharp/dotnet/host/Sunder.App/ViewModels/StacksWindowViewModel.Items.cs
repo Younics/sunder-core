@@ -238,11 +238,14 @@ public sealed class StackPackageInstallPlanItemViewModel(RuntimeRegistryPackageI
 {
     public string PackageId { get; } = item.PackageId;
 
-    public string VersionText { get; } = item.CurrentVersion is null
-        ? $"Install {item.Version}"
-        : item.IsUpdate
-            ? $"Update {item.CurrentVersion} -> {item.Version}"
-            : $"Keep {item.Version}";
+    public string VersionText { get; } = item.ActionKind switch
+    {
+        RegistryPackageActionKinds.PackageInstall => $"Install {item.Version}",
+        RegistryPackageActionKinds.PackageUpdate => $"Update {item.CurrentVersion} -> {item.Version}",
+        RegistryPackageActionKinds.PackageRemove => $"Remove {item.CurrentVersion}",
+        RegistryPackageActionKinds.RuntimeOnlyRebind => $"Update runtime for {item.Version}",
+        _ => $"Keep {item.Version}",
+    };
 
     public string DependencyText { get; } = item.DependsOn.Count == 0
         ? "No package dependencies"

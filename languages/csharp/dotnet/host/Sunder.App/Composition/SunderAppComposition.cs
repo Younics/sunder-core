@@ -37,7 +37,7 @@ internal static class SunderAppComposition
         services.AddSingleton<RuntimeApiClientFactory>();
         services.AddSingleton<IRuntimeApiClientFactory>(provider => provider.GetRequiredService<RuntimeApiClientFactory>());
         services.AddSingleton<RuntimeAvailabilityManager>();
-        services.AddSingleton<DevPackageOwnerSession>();
+        services.AddSingleton<Sunder.App.Services.DevPackageOwnerSession>();
         services.AddSingleton<NotificationCenterService>();
         services.AddSingleton<IPackageNotificationService>(provider => new AppPackageNotificationService(
             provider.GetRequiredService<NotificationCenterService>(),
@@ -71,7 +71,17 @@ internal static class SunderAppComposition
         services.AddSingleton<IThemeManager>(provider => provider.GetRequiredService<ThemeManager>());
         services.AddSingleton<IShellCompositionService, ShellCompositionService>();
 
-        services.AddSingleton<PackageViewHostServiceFactory>();
+        services.AddSingleton(provider => new AppRuntimeProcessTransport(provider.GetRequiredService<RuntimeClientTransport>()));
+        services.AddSingleton(provider => new AppProcessPolicySupervisor(provider.GetRequiredService<AppRuntimeProcessTransport>(), () =>
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (application.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown(1);
+            })));
+        services.AddSingleton(provider => new PackageViewHostServiceFactory(
+            provider.GetRequiredService<AppPackageShellViewService>(), provider.GetRequiredService<AppPackageSettingsNavigationService>(),
+            provider.GetRequiredService<AppRuntimeProcessTransport>().Transport, provider.GetRequiredService<NotificationCenterService>(),
+            provider.GetRequiredService<BackgroundProcessQueueService>(), provider.GetRequiredService<AppPackageResourceAssemblyRegistry>(),
+            provider.GetRequiredService<IUiDispatcher>()) { PackagePolicy = provider.GetRequiredService<AppProcessPolicySupervisor>() });
         services.AddSingleton<WindowLauncherFactory>();
         services.AddSingleton<MainWindowFactory>();
         services.AddSingleton<SettingsWindowFactory>();

@@ -1,0 +1,39 @@
+<Project>
+  <!-- An explicit role reference is for implementation tests/tools. Package API
+       consumers select contracts instead of referencing implementation assemblies. -->
+  <Target Name="_ValidateSunderPackageReferenceRole">
+    <Error Condition="'$(SunderPackageReferenceRole)' != 'worker' and '$(SunderPackageReferenceRole)' != 'app'"
+            Text="package-authoring.reference-role-invalid: Select SunderPackageReferenceRole=worker or app." />
+  </Target>
+  <Target Name="_GetSunderPackageRoleReferencePath" DependsOnTargets="_ValidateSunderPackageReferenceRole" Returns="@(_SunderPackageRoleReference)">
+    <PropertyGroup>
+      <_SunderReferenceRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_SunderReferenceRid>
+      <_SunderReferenceRid Condition="'$(_SunderReferenceRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_SunderReferenceRid>
+      <_SunderReferenceAssemblyName>$(AssemblyName)</_SunderReferenceAssemblyName>
+      <_SunderReferenceAssemblyName Condition="'$(SunderPackageReferenceRole)' == 'app'">$(AssemblyName).App</_SunderReferenceAssemblyName>
+      <_SunderReferencePath>$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(SunderPackageComposedOutputRoot)', 'sunder-roles', '$(SunderPackageReferenceRole)', '$(_SunderReferenceRid)', '$(_SunderReferenceAssemblyName).dll')), '$(MSBuildProjectDirectory)'))</_SunderReferencePath>
+    </PropertyGroup>
+    <ItemGroup>
+      <_SunderPackageRoleReference Remove="@(_SunderPackageRoleReference)" />
+      <!-- These are distinct assembly outputs of one project, not two NuGet
+           project-library identities. Keep normal RAR alias/copy/deps handling;
+           SDK GenerateDepsFile keys ProjectReference records by csproj path. -->
+      <_SunderPackageRoleReference Include="$(_SunderReferencePath)" TargetFrameworkIdentifier="$(TargetFrameworkIdentifier)"
+                                  TargetFrameworkVersion="$(TargetFrameworkVersion)" TargetPlatformIdentifier="$(TargetPlatformIdentifier)"
+                                  TargetPlatformVersion="$(TargetPlatformVersion)" TargetPlatformMoniker="$(TargetPlatformMoniker)"
+                                  TargetFrameworkMoniker="$(TargetFrameworkMoniker)" ReferenceSourceTarget="ResolveAssemblyReference" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Design-time negotiation may precede Build. Actual no-build resolution must
+       diagnose a missing role rather than silently fall back to a combined DLL. -->
+  <Target Name="GetTargetPath" DependsOnTargets="_GetSunderPackageRoleReferencePath" Returns="@(_SunderPackageRoleReference)">
+    <Error Condition="'$(DesignTimeBuild)' != 'true' and !Exists('$(_SunderReferencePath)')"
+           Text="package-authoring.reference-role-unavailable: Build the selected $(SunderPackageReferenceRole) role for $(_SunderReferenceRid) before using BuildProjectReferences=false." />
+  </Target>
+  <Target Name="GetTargetPathWithTargetPlatformMoniker" DependsOnTargets="_GetSunderPackageRoleReferencePath" Returns="@(_SunderPackageRoleReference)" />
+  <Target Name="GetSunderPackageRoleReference" DependsOnTargets="_ValidateSunderPackageReferenceRole;Build;_GetSunderPackageRoleReferencePath" Returns="@(_SunderPackageRoleReference)">
+    <Error Condition="!Exists('$(_SunderReferencePath)')"
+           Text="package-authoring.reference-role-unavailable: The package has no built $(SunderPackageReferenceRole) role for $(_SunderReferenceRid)." />
+  </Target>
+</Project>

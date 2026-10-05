@@ -33,11 +33,11 @@ on:
         required: true
         type: string
       production_acceptance_run_id:
-        description: Successful trusted production-acceptance workflow run ID
+        description: Successful trusted production-acceptance workflow run ID bound by the durable release evidence
         required: true
         type: string
       production_acceptance_run_attempt:
-        description: Trusted production-acceptance run attempt that archived the evidence
+        description: Trusted production-acceptance run attempt that created the durable evidence
         required: true
         type: string
       production_acceptance_workflow_sha:
@@ -159,14 +159,16 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.publication_run_id }}
 
-      - name: Download separately archived production acceptance
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: sunder-${{ inputs.component }}-production-acceptance-${{ inputs.release_id }}-${{ inputs.production_acceptance_run_attempt }}
-          path: production-acceptance
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.production_acceptance_run_id }}
+      - name: Download manifest-bound production acceptance from the numeric draft
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          bash scripts/release/download-production-acceptance.sh
+          "${{ inputs.release_id }}" "${{ inputs.tag }}"
+          "${{ inputs.production_acceptance_run_id }}" "${{ inputs.production_acceptance_run_attempt }}"
+          production-acceptance "$RUNNER_TEMP/production-acceptance-assets.txt"
 
       - name: Verify exact immutable publication evidence
         shell: bash
@@ -174,6 +176,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
+          SUNDER_ALLOW_PRODUCTION_ACCEPTANCE_ASSETS=true \
           bash scripts/release/verify-release-promotion.sh \
             "${{ inputs.component }}" \
             "${{ inputs.release_id }}" \
@@ -341,14 +344,16 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.publication_run_id }}
 
-      - name: Download separately archived production acceptance
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: sunder-${{ inputs.component }}-production-acceptance-${{ inputs.release_id }}-${{ inputs.production_acceptance_run_attempt }}
-          path: production-acceptance
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.production_acceptance_run_id }}
+      - name: Download manifest-bound production acceptance from the numeric draft
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          bash scripts/release/download-production-acceptance.sh
+          "${{ inputs.release_id }}" "${{ inputs.tag }}"
+          "${{ inputs.production_acceptance_run_id }}" "${{ inputs.production_acceptance_run_attempt }}"
+          production-acceptance "$RUNNER_TEMP/production-acceptance-assets.txt"
 
       - name: Reverify production acceptance and finalize numeric draft
         shell: bash
@@ -387,41 +392,30 @@ jobs:
             "repos/$GH_REPO/releases/$RELEASE_ID")"
           current_draft="$(jq -r '.draft' <<< "$release_state")"
           EXPECTED_RELEASE_DRAFT="$current_draft" \
+          SUNDER_ALLOW_PRODUCTION_ACCEPTANCE_ASSETS=true \
             bash scripts/release/verify-release-promotion.sh \
               "$COMPONENT" "$RELEASE_ID" "$TAG" "${{ inputs.source_sha }}" \
               "${{ inputs.publication_run_id }}" "${{ inputs.publication_run_attempt }}" \
               publication-evidence
 
-          expected_asset_count="$(( $(jq '.artifacts | length' publication-evidence/release-provenance.json) + 4 ))"
+          verified_release_state="$(gh api -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GH_REPO/releases/$RELEASE_ID")"
           verified_asset_fingerprint="$(jq -c '
             [.assets[] | {id,name,state,size,digest}] | sort_by(.name)
-          ' <<< "$release_state")"
-          expected_assets='[]'
-          while IFS= read -r asset_path; do
-            expected_assets="$(jq -cn \
-              --argjson assets "$expected_assets" \
-              --arg name "$(basename "$asset_path")" \
-              --arg digest "sha256:$(sha256sum "$asset_path" | cut -d ' ' -f 1)" \
-              --argjson size "$(wc -c < "$asset_path" | tr -d '[:space:]')" \
-              '$assets + [{name:$name,size:$size,digest:$digest}]')"
-          done < <(find publication-evidence -mindepth 1 -maxdepth 1 -type f -print | sort)
-          expected_assets="$(jq -c 'sort_by(.name)' <<< "$expected_assets")"
+          ' <<< "$verified_release_state")"
           release_before="$(gh api -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "repos/$GH_REPO/releases/$RELEASE_ID")"
           jq -e \
             --argjson release_id "$RELEASE_ID" \
             --arg tag "$TAG" \
-            --argjson expected_count "$expected_asset_count" \
             --argjson expected_draft "$current_draft" \
-            --argjson expected_assets "$expected_assets" \
             --argjson verified_fingerprint "$verified_asset_fingerprint" '
               .id == $release_id
               and .tag_name == $tag
               and .draft == $expected_draft
-              and (.assets | length) == $expected_count
               and all(.assets[]; .state == "uploaded" and (.digest | test("^sha256:[0-9a-f]{64}$")))
-              and ([.assets[] | {name,size,digest}] | sort_by(.name)) == $expected_assets
               and ([.assets[] | {id,name,state,size,digest}] | sort_by(.name)) == $verified_fingerprint
             ' <<< "$release_before" >/dev/null \
             || { echo "Numeric release changed after final byte verification." >&2; exit 1; }

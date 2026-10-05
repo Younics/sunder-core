@@ -102,6 +102,32 @@ public sealed class WorkerFramingTests
     }
 
     [Fact]
+    public async Task ReaderAndWriter_EnforceNegotiatedValueNodeAndObjectMemberLimits()
+    {
+        var limits = WorkerLimits.Default with
+        {
+            MaximumValueNodes = 3,
+            MaximumObjectMembers = 1,
+        };
+
+        await AssertRejectedAsync(
+            "{\"type\":\"host.result\",\"value\":[null,null,null]}"u8.ToArray(),
+            limits);
+        await AssertRejectedAsync(
+            "{\"type\":\"host.result\",\"value\":{\"a\":1,\"b\":2}}"u8.ToArray(),
+            limits);
+
+        using var exactNodes = JsonDocument.Parse("[null,null]");
+        _ = SerializeResultEnvelope(limits, exactNodes.RootElement, string.Empty);
+        using var excessiveNodes = JsonDocument.Parse("[null,null,null]");
+        Assert.Throws<WorkerTransportResourceException>(() =>
+            SerializeResultEnvelope(limits, excessiveNodes.RootElement, string.Empty));
+        using var excessiveMembers = JsonDocument.Parse("{\"a\":1,\"b\":2}");
+        Assert.Throws<WorkerTransportResourceException>(() =>
+            SerializeResultEnvelope(limits, excessiveMembers.RootElement, string.Empty));
+    }
+
+    [Fact]
     [Trait("Category", "Conformance")]
     [Trait("Size", "Small")]
     public async Task Reader_ExecutesSharedCrossLanguageTransportVectors()
@@ -331,7 +357,7 @@ public sealed class WorkerFramingTests
     {
         using var corpus = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
             AppContext.BaseDirectory,
-            "WorkerV3Conformance",
+            "WorkerV1Conformance",
             "transport-vectors.json")));
         Assert.Equal(1, corpus.RootElement.GetProperty("formatVersion").GetInt32());
         var index = 0;

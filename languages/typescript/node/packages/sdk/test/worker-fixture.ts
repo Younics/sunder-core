@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { PackageStorageKeyMigration, PackageStorageKeyMigrationAction, RpcDomainError, RpcError, runWorker, safeStderr, type JsonValue, type PackageStorageKeyMigration as StorageMigration, type RpcClient, type RpcContentReference, type RpcInvocationContext, type WorkerAuthHandler, type WorkerCallbackHandler, type WorkerContext, type WorkerMigrationPreparationContext, type WorkerOptions } from "../src/index";
-import { workerV3ConformanceCorpus, type StorageMigrationRule } from "./worker-v3-conformance-corpus";
+import { workerV1ConformanceCorpus, type StorageMigrationRule } from "./worker-v1-conformance-corpus";
 
 const identity = {
   providerId: "example.provider",
@@ -11,6 +11,15 @@ const identity = {
 } as const;
 const mode = process.env.SUNDER_TEST_MODE;
 let releaseOverflowConsumption: (() => void) | undefined;
+
+function assertWorkspaceUnavailable(context: WorkerContext): void {
+  try {
+    void context.workspace.rootPath;
+  } catch {
+    return;
+  }
+  throw new Error("The persistent workspace was available before worker activation.");
+}
 
 async function* stream(context: RpcInvocationContext, request: JsonValue): AsyncIterable<JsonValue> {
   context.signal.throwIfAborted();
@@ -178,14 +187,14 @@ async function packageData(context: WorkerContext): Promise<void> {
 }
 
 async function conformancePackageData(context: WorkerContext): Promise<void> {
-  const { key, value } = workerV3ConformanceCorpus.packageData;
+  const { key, value } = workerV1ConformanceCorpus.packageData;
   await context.state.set(key, value);
-  if (await context.state.get(key) !== value) throw new Error("Worker V3 conformance state value changed.");
+  if (await context.state.get(key) !== value) throw new Error("Worker V1 conformance state value changed.");
   await context.state.delete(key);
 }
 
 function conformanceMigrations(store: "state" | "secrets"): readonly StorageMigration[] {
-  const plan = workerV3ConformanceCorpus.storageMigrations.plans.find((candidate) => candidate.store === store);
+  const plan = workerV1ConformanceCorpus.storageMigrations.plans.find((candidate) => candidate.store === store);
   return plan?.rules.map(conformanceMigration) ?? [];
 }
 
@@ -218,7 +227,7 @@ function conformanceMigration(rule: StorageMigrationRule): StorageMigration {
       );
     case "dynamic-cleanup":
       return PackageStorageKeyMigration.dynamicCleanup((key) => {
-        const action = workerV3ConformanceCorpus.storageMigrations.dynamicActions.find((candidate) => candidate.key === key);
+        const action = workerV1ConformanceCorpus.storageMigrations.dynamicActions.find((candidate) => candidate.key === key);
         if (action === undefined || action.kind === "no-match") return PackageStorageKeyMigrationAction.noMatch;
         if (action.kind === "delete") return PackageStorageKeyMigrationAction.delete;
         return PackageStorageKeyMigrationAction.rewrite(action.destinationKey!, action.precedence);
@@ -294,20 +303,21 @@ const authHandler: WorkerAuthHandler = {
 };
 
 void runWorker((workerContext) => {
+  if (mode === "context") assertWorkspaceUnavailable(workerContext);
   const options: WorkerOptions = {
   providers: [{
     ...identity,
     declaredErrors: {
       messages: {
         content: [],
-        domain: workerV3ConformanceCorpus.rpc.declaredErrors.domain ?? [],
+        domain: workerV1ConformanceCorpus.rpc.declaredErrors.domain ?? [],
         "domain-details": ["messages.rejected"],
         echo: [],
         fault: [],
         infrastructure: [],
         oversized: [],
         "release-overflow": [],
-        "undeclared-domain": workerV3ConformanceCorpus.rpc.declaredErrors["undeclared-domain"] ?? [],
+        "undeclared-domain": workerV1ConformanceCorpus.rpc.declaredErrors["undeclared-domain"] ?? [],
         wait: [],
         watch: [],
       },
@@ -347,9 +357,9 @@ void runWorker((workerContext) => {
         }
         if (methodId === "domain") {
           throw new RpcDomainError(
-            workerV3ConformanceCorpus.rpc.domainFault.error.code,
-            workerV3ConformanceCorpus.rpc.domainFault.error.message,
-            workerV3ConformanceCorpus.rpc.domainFault.error.details,
+            workerV1ConformanceCorpus.rpc.domainFault.error.code,
+            workerV1ConformanceCorpus.rpc.domainFault.error.message,
+            workerV1ConformanceCorpus.rpc.domainFault.error.details,
           );
         }
         if (methodId === "domain-details") {
@@ -357,8 +367,8 @@ void runWorker((workerContext) => {
         }
         if (methodId === "undeclared-domain") {
           throw new RpcDomainError(
-            workerV3ConformanceCorpus.rpc.undeclaredDomainFault.thrownError.code,
-            workerV3ConformanceCorpus.rpc.undeclaredDomainFault.thrownError.message,
+            workerV1ConformanceCorpus.rpc.undeclaredDomainFault.thrownError.code,
+            workerV1ConformanceCorpus.rpc.undeclaredDomainFault.thrownError.message,
           );
         }
         if (methodId === "infrastructure") {

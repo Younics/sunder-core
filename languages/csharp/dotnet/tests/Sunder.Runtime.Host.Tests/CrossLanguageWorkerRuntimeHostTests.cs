@@ -1,7 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
 using Sunder.Runtime.Host.Services;
 using Xunit;
@@ -9,25 +7,45 @@ using Xunit;
 namespace Sunder.Runtime.Host.Tests;
 
 [Collection(RuntimeProcessIntegrationCollection.Name)]
-public sealed class CrossLanguageWorkerRuntimeHostTests
+public sealed class CrossLanguageWorkerRuntimeHostTests(
+    SignedCurrentRidExecutionRuntimeFixture executionRuntimes)
+    : IClassFixture<SignedCurrentRidExecutionRuntimeFixture>
 {
     [ExternalArtifactFact(
-        "SUNDER_REQUIRE_NODE_SEA_INTEROP",
-        "SUNDER_NODE_SEA_PACKAGE_PATH",
-        "SUNDER_NODE_SEA_LEAF_PATH")]
+        "SUNDER_REQUIRE_NODE_MODULE_INTEROP",
+        "SUNDER_NODE_MODULE_PACKAGE_PATH",
+        "SUNDER_NODE_MODULE_LEAF_PATH")]
     [Trait("Category", "ExternalArtifact")]
-    public async Task DotNetToNode_RealRuntimeHostRunsNativeSeaUnaryStreamDataFaultAndShutdown()
+    public async Task DotNetToNode_RealRuntimeHostRunsRuntimeBackedModuleUnaryStreamDataFaultAndShutdown()
     {
-        var configured = GetNodeSeaInputs();
+        var configured = GetNodeModuleInputs();
         Assert.NotNull(configured);
-        var (archivePath, leafPath) = configured.Value;
+        var (archivePath, _) = configured.Value;
+        var node = Node24Availability.Current;
+        Assert.True(node.IsAvailable, node.UnavailableReason);
+        var nodeReceipt = await executionRuntimes.EnsureNodeAsync(
+            node.Version!,
+            packagingRevision: 1,
+            node.ExecutablePath!);
+        await executionRuntimes.ObserveSupportedAsync(nodeReceipt);
+        var dotnetReceipt = await executionRuntimes.EnsureDotNetAsync(
+            CurrentRidRuntimeHostTestSupport.GetCurrentDotNetVersion(),
+            packagingRevision: 1);
+        await executionRuntimes.ObserveSupportedAsync(dotnetReceipt);
         using var corpus = ReadCorpus();
         var interop = corpus.RootElement.GetProperty("interop");
         var nodePackageId = interop.GetProperty("nodeProviderPackageId").GetString()!;
         var dotnetCallerPackageId = interop.GetProperty("dotnetCallerPackageId").GetString()!;
-        var root = CreateRoot();
+        var root = CurrentRidRuntimeHostTestSupport.CreateRoot("cross-language-dotnet-to-node");
         var paths = new RuntimePackagePaths(Path.Combine(root, "runtime"));
-        var host = CreateHost(paths);
+        var transfers = new RuntimeContentTransferStore(paths);
+        var logs = new RecordingLogSink();
+        var host = CurrentRidRuntimeHostTestSupport.CreateHost(
+            paths,
+            new InstalledPackageStore(paths),
+            transfers,
+            executionRuntimes,
+            logs.CreateLogger<RuntimePackageSessionTestHost>());
         var workerProcessIds = new List<int>();
         var workerTemporaryPaths = new List<string>();
         try
@@ -41,9 +59,13 @@ public sealed class CrossLanguageWorkerRuntimeHostTests
             Assert.Equal(nodePackageId, installed.PackageId);
             var nodeWorker = Assert.IsType<ProcessRuntimeWorker>(
                 host.ActiveSession.LoadedPackageMap[nodePackageId].Worker);
+            CurrentRidRuntimeHostTestSupport.AssertRuntimeLaunch(
+                host.ActiveSession.LoadedPackageMap[nodePackageId],
+                nodeReceipt,
+                executionRuntimes);
             var nodeProcess = WorkerReleaseMetrics.GetProcess(nodeWorker);
             await WorkerReleaseMetrics.RecordAsync(
-                "nodeSea",
+                "nodeModule",
                 PackageTargetSelection.GetCurrentRuntimeIdentifier(),
                 archivePath,
                 WorkerReleaseMetrics.DirectoryBytes(paths.GetInstalledPackagePath(nodePackageId, installed.Version)),
@@ -52,21 +74,29 @@ public sealed class CrossLanguageWorkerRuntimeHostTests
                 nodeProcess,
                 Environment.GetEnvironmentVariable("SUNDER_WORKER_RELEASE_METRICS_PATH"));
 
-            var dotnetCaller = CreatePackageVariant(
+            var dotnetCaller = CurrentRidRuntimeHostTestSupport.CreatePackageVariant(
                 GetInteropWorkerDevPackage(),
                 Path.Combine(root, "dotnet-caller"),
-                dotnetCallerPackageId);
+                dotnetCallerPackageId,
+                includeProviders: false);
             await host.GrantRuntimeRpcPermissionsAsync(dotnetCaller);
             var load = await host.LoadStartupDevPackagesAsync([dotnetCaller]);
-            Assert.True(load.Success, string.Join(Environment.NewLine, load.Errors));
+            Assert.True(
+                load.Success,
+                string.Join(Environment.NewLine, load.Errors) + Environment.NewLine
+                + CurrentRidRuntimeHostTestSupport.FormatLogs(logs));
+            CurrentRidRuntimeHostTestSupport.AssertRuntimeLaunch(
+                host.ActiveSession.LoadedPackageMap[dotnetCallerPackageId],
+                dotnetReceipt,
+                executionRuntimes);
             var state = await host.GetPackageStateAsync(
                 dotnetCallerPackageId,
                 interop.GetProperty("dotnetToNodeStateKey").GetString()!);
             Assert.True(state is { Found: true, Value: not null });
             using var summary = JsonDocument.Parse(state!.Value!);
-            Assert.Equal("native SEA unary", summary.RootElement.GetProperty("unary").GetString());
+            Assert.Equal("runtime-backed Node unary", summary.RootElement.GetProperty("unary").GetString());
             Assert.Equal(
-                ["native SEA stream 1", "native SEA stream 2"],
+                ["runtime-backed Node stream 1", "runtime-backed Node stream 2"],
                 summary.RootElement.GetProperty("stream").EnumerateArray().Select(static item => item.GetString()));
             Assert.Equal(
                 corpus.RootElement.GetProperty("packageData").GetProperty("value").GetString(),
@@ -81,43 +111,75 @@ public sealed class CrossLanguageWorkerRuntimeHostTests
         {
             await host.ShutdownAsync();
             await AssertWorkersStoppedAsync(workerProcessIds, workerTemporaryPaths);
-            DeleteDirectory(root);
+            transfers.Dispose();
+            CurrentRidRuntimeHostTestSupport.DeleteDirectory(root);
         }
     }
 
     [ExternalArtifactFact(
-        "SUNDER_REQUIRE_NODE_SEA_INTEROP",
-        "SUNDER_NODE_SEA_PACKAGE_PATH",
-        "SUNDER_NODE_SEA_LEAF_PATH")]
+        "SUNDER_REQUIRE_NODE_MODULE_INTEROP",
+        "SUNDER_NODE_MODULE_PACKAGE_PATH",
+        "SUNDER_NODE_MODULE_LEAF_PATH")]
     [Trait("Category", "ExternalArtifact")]
     public async Task NodeToDotNet_RealRuntimeHostRoutesRpcToNativeDotNetWorker()
     {
-        var configured = GetNodeSeaInputs();
+        var configured = GetNodeModuleInputs();
         Assert.NotNull(configured);
         var (_, leafPath) = configured.Value;
+        var node = Node24Availability.Current;
+        Assert.True(node.IsAvailable, node.UnavailableReason);
+        var nodeReceipt = await executionRuntimes.EnsureNodeAsync(
+            node.Version!,
+            packagingRevision: 1,
+            node.ExecutablePath!);
+        await executionRuntimes.ObserveSupportedAsync(nodeReceipt);
+        var dotnetReceipt = await executionRuntimes.EnsureDotNetAsync(
+            CurrentRidRuntimeHostTestSupport.GetCurrentDotNetVersion(),
+            packagingRevision: 1);
+        await executionRuntimes.ObserveSupportedAsync(dotnetReceipt);
         using var corpus = ReadCorpus();
         var interop = corpus.RootElement.GetProperty("interop");
         var nodeCallerPackageId = interop.GetProperty("nodeCallerPackageId").GetString()!;
         var dotnetProviderPackageId = interop.GetProperty("dotnetProviderPackageId").GetString()!;
-        var root = CreateRoot();
+        var root = CurrentRidRuntimeHostTestSupport.CreateRoot("cross-language-node-to-dotnet");
         var paths = new RuntimePackagePaths(Path.Combine(root, "runtime"));
-        var host = CreateHost(paths);
+        var transfers = new RuntimeContentTransferStore(paths);
+        var logs = new RecordingLogSink();
+        var host = CurrentRidRuntimeHostTestSupport.CreateHost(
+            paths,
+            new InstalledPackageStore(paths),
+            transfers,
+            executionRuntimes,
+            logs.CreateLogger<RuntimePackageSessionTestHost>());
         var workerProcessIds = new List<int>();
         var workerTemporaryPaths = new List<string>();
         try
         {
             await host.InitializeAsync();
-            var nodeCaller = CreatePackageVariant(
+            var nodeCaller = CurrentRidRuntimeHostTestSupport.CreatePackageVariant(
                 leafPath,
                 Path.Combine(root, "node-caller"),
-                nodeCallerPackageId);
+                nodeCallerPackageId,
+                includeProviders: false,
+                consumePublicContracts: true);
             var dotnetProvider = GetInteropWorkerDevPackage();
             await host.GrantRuntimeRpcPermissionsAsync(nodeCaller);
             var load = await host.LoadStartupDevPackagesAsync([dotnetProvider, nodeCaller]);
-            Assert.True(load.Success, string.Join(Environment.NewLine, load.Errors));
+            Assert.True(
+                load.Success,
+                string.Join(Environment.NewLine, load.Errors) + Environment.NewLine
+                + CurrentRidRuntimeHostTestSupport.FormatLogs(logs));
             Assert.Contains(
                 host.GetActivePackages(),
                 package => package.PackageId == dotnetProviderPackageId);
+            CurrentRidRuntimeHostTestSupport.AssertRuntimeLaunch(
+                host.ActiveSession.LoadedPackageMap[nodeCallerPackageId],
+                nodeReceipt,
+                executionRuntimes);
+            CurrentRidRuntimeHostTestSupport.AssertRuntimeLaunch(
+                host.ActiveSession.LoadedPackageMap[dotnetProviderPackageId],
+                dotnetReceipt,
+                executionRuntimes);
             var state = await host.GetPackageStateAsync(
                 nodeCallerPackageId,
                 interop.GetProperty("nodeToDotnetStateKey").GetString()!);
@@ -141,38 +203,28 @@ public sealed class CrossLanguageWorkerRuntimeHostTests
         {
             await host.ShutdownAsync();
             await AssertWorkersStoppedAsync(workerProcessIds, workerTemporaryPaths);
-            DeleteDirectory(root);
+            transfers.Dispose();
+            CurrentRidRuntimeHostTestSupport.DeleteDirectory(root);
         }
     }
 
-    private static RuntimePackageSessionTestHost CreateHost(RuntimePackagePaths paths)
-        => new(
-            NullLogger<RuntimePackageSessionTestHost>.Instance,
-            new InstalledPackageStore(paths),
-            new SunderPackageArchiveInstaller(paths),
-            lifecyclePolicy: new RuntimeLifecyclePolicyOptions
-            {
-                PackageWorkerStartupTimeout = TimeSpan.FromSeconds(30),
-                PackageRuntimeGenerationActivationTimeout = TimeSpan.FromSeconds(30),
-            });
-
-    private static (string ArchivePath, string LeafPath)? GetNodeSeaInputs()
+    private static (string ArchivePath, string LeafPath)? GetNodeModuleInputs()
     {
-        var archivePath = Environment.GetEnvironmentVariable("SUNDER_NODE_SEA_PACKAGE_PATH");
-        var leafPath = Environment.GetEnvironmentVariable("SUNDER_NODE_SEA_LEAF_PATH");
+        var archivePath = Environment.GetEnvironmentVariable("SUNDER_NODE_MODULE_PACKAGE_PATH");
+        var leafPath = Environment.GetEnvironmentVariable("SUNDER_NODE_MODULE_LEAF_PATH");
         if (string.IsNullOrWhiteSpace(archivePath) && string.IsNullOrWhiteSpace(leafPath)) return null;
         Assert.False(string.IsNullOrWhiteSpace(archivePath));
         Assert.False(string.IsNullOrWhiteSpace(leafPath));
         archivePath = Path.GetFullPath(archivePath!);
         leafPath = Path.GetFullPath(leafPath!);
-        Assert.True(File.Exists(archivePath), $"Node SEA archive does not exist: {archivePath}");
-        Assert.True(Directory.Exists(leafPath), $"Node SEA leaf does not exist: {leafPath}");
+        Assert.True(File.Exists(archivePath), $"Node module archive does not exist: {archivePath}");
+        Assert.True(Directory.Exists(leafPath), $"Node module leaf does not exist: {leafPath}");
         return (archivePath, leafPath);
     }
 
     private static JsonDocument ReadCorpus()
         => JsonDocument.Parse(File.ReadAllBytes(
-            Path.Combine(AppContext.BaseDirectory, "WorkerV3Conformance", "corpus.json")));
+            Path.Combine(AppContext.BaseDirectory, "WorkerV1Conformance", "corpus.json")));
 
     private static string GetInteropWorkerDevPackage()
     {
@@ -192,35 +244,6 @@ public sealed class CrossLanguageWorkerRuntimeHostTests
                 Path.AltDirectorySeparatorChar))
             .Parent?.Name
            ?? "Debug";
-
-    private static string CreatePackageVariant(string sourceRoot, string destinationRoot, string packageId)
-    {
-        CopyDirectory(sourceRoot, destinationRoot);
-        var manifestPath = Path.Combine(destinationRoot, "manifest", "sunder-package.json");
-        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))?.AsObject()
-                       ?? throw new InvalidDataException("Interop package manifest was empty.");
-        manifest["id"] = packageId;
-        manifest["name"] = packageId;
-        File.WriteAllText(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-        CanonicalPackageTestBuilder.WriteContentIndex(destinationRoot);
-        return destinationRoot;
-    }
-
-    private static void CopyDirectory(string sourceRoot, string destinationRoot)
-    {
-        foreach (var directory in Directory.EnumerateDirectories(sourceRoot, "*", SearchOption.AllDirectories))
-        {
-            Directory.CreateDirectory(Path.Combine(destinationRoot, Path.GetRelativePath(sourceRoot, directory)));
-        }
-        Directory.CreateDirectory(destinationRoot);
-        foreach (var source in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
-        {
-            var destination = Path.Combine(destinationRoot, Path.GetRelativePath(sourceRoot, source));
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(source, destination);
-            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(destination, File.GetUnixFileMode(source));
-        }
-    }
 
     private static void CaptureWorkers(
         RuntimePackageSessionTestHost host,
@@ -267,11 +290,4 @@ public sealed class CrossLanguageWorkerRuntimeHostTests
         }
     }
 
-    private static string CreateRoot()
-        => Path.Combine(Path.GetTempPath(), "sunder-cross-language-worker-tests", Guid.NewGuid().ToString("N"));
-
-    private static void DeleteDirectory(string path)
-    {
-        if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
-    }
 }

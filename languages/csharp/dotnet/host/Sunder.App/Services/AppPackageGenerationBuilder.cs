@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Reflection;
 using Sunder.Package.Hosting;
@@ -26,7 +27,8 @@ internal sealed class AppPackageGenerationBuilder(
     NotificationCenterService? notificationCenter,
     BackgroundProcessQueueService? backgroundProcessQueue,
     Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
-    IUiDispatcher uiDispatcher)
+    IUiDispatcher uiDispatcher,
+    IAppPackagePolicy? packagePolicy = null)
 {
     public AppPackageGeneration CreateInitialGeneration(
         AppPackageViewRegistry viewRegistry,
@@ -83,7 +85,7 @@ internal sealed class AppPackageGenerationBuilder(
             disabledPackageIds.UnionWith(forceDisabledPackageIds);
         }
         disabledPackageIds.IntersectWith(activePackages.Select(package => package.PackageId));
-        var viewRegistry = new AppPackageViewRegistry(uiDispatcher: uiDispatcher);
+        var viewRegistry = new AppPackageViewRegistry(generationId, uiDispatcher);
         var state = new AppPackageHostState(disabledPackageIds, [], []);
         foreach (var source in packageSources)
         {
@@ -96,6 +98,7 @@ internal sealed class AppPackageGenerationBuilder(
             viewRegistry,
             state,
             sharedAssemblyRegistry: null);
+        var preparedPackages = new List<AppPreparedPackageActivation>();
 
         try
         {
@@ -103,7 +106,6 @@ internal sealed class AppPackageGenerationBuilder(
             var activeByPackageId = activePackages.ToDictionary(
                 static package => package.PackageId,
                 StringComparer.OrdinalIgnoreCase);
-            var preparedPackages = new List<AppPreparedPackageActivation>();
             var materializations = packageSources
                 .Where(source => activeByPackageId.ContainsKey(source.PackageId))
                 .Select(async source =>
@@ -118,7 +120,8 @@ internal sealed class AppPackageGenerationBuilder(
                             activeByPackageId[source.PackageId],
                             source,
                             preparedSource,
-                            Exception: null);
+                            Exception: null,
+                            ReadyTimestamp: Stopwatch.GetTimestamp());
                     }
                     catch (OperationCanceledException)
                     {
@@ -138,7 +141,8 @@ internal sealed class AppPackageGenerationBuilder(
                             activeByPackageId[source.PackageId],
                             source,
                             PreparedSource: null,
-                            Exception: exception);
+                            Exception: exception,
+                            ReadyTimestamp: Stopwatch.GetTimestamp());
                     }
                 })
                 .ToArray();
@@ -158,7 +162,8 @@ internal sealed class AppPackageGenerationBuilder(
                 preparedPackages.Add(new AppPreparedPackageActivation(
                     materialization.Package,
                     materialization.Source,
-                    materialization.PreparedSource!));
+                    materialization.PreparedSource!,
+                    materialization.ReadyTimestamp));
             }
 
             foreach (var package in activePackages)
@@ -192,6 +197,15 @@ internal sealed class AppPackageGenerationBuilder(
                     continue;
                 }
 
+                var startupTrace = AppStartupTrace.BeginPackageModuleLoad(
+                    preparedPackage.Package,
+                    preparedPackage.Source,
+                    generationId,
+                    preparedPackage.ReadyTimestamp);
+                var activationStartedTimestamp = Stopwatch.GetTimestamp();
+                AppSessionLog.WriteInfo(
+                    $"App package module load started for '{preparedPackage.Package.PackageId}' in generation '{generationId:N}'.",
+                    visibleInDeveloperLog: false);
                 try
                 {
                     await candidate.Composition.ActivatePackageAsync(
@@ -199,19 +213,30 @@ internal sealed class AppPackageGenerationBuilder(
                         preparedPackage.Source,
                         preparedPackage.PreparedSource,
                         cancellationToken).ConfigureAwait(false);
+                    startupTrace?.Complete();
+                    AppSessionLog.WriteInfo(
+                        $"App package module load completed for '{preparedPackage.Package.PackageId}' in {Stopwatch.GetElapsedTime(activationStartedTimestamp).TotalMilliseconds:0.0} ms.",
+                        visibleInDeveloperLog: false);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException exception)
                 {
+                    startupTrace?.Fail(exception);
                     throw;
                 }
                 catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
                 {
+                    startupTrace?.Fail(ex);
                     HandlePackageFailure(
                         candidate,
                         preparedPackage.Package.PackageId,
                         $"Failed to activate package views: {ex.Message}",
                         ex,
                         hasCommittedGeneration);
+                }
+                catch (Exception exception)
+                {
+                    startupTrace?.Fail(exception);
+                    throw;
                 }
             }
 
@@ -222,6 +247,16 @@ internal sealed class AppPackageGenerationBuilder(
         {
             discardGeneration(candidate);
             throw;
+        }
+        finally
+        {
+            foreach (var preparedPackage in preparedPackages)
+            {
+                if (preparedPackage.PreparedSource.ProjectionLease is { } lease)
+                {
+                    await lease.DisposeAsync().ConfigureAwait(false);
+                }
+            }
         }
     }
 
@@ -262,7 +297,8 @@ internal sealed class AppPackageGenerationBuilder(
             uiDispatcher,
             webRpcClientFactory: getRuntimeConnectionInfo is null
                 ? null
-                : new RuntimeAppWebRpcClientFactory(getRuntimeConnectionInfo));
+                : new RuntimeAppWebRpcClientFactory(getRuntimeConnectionInfo),
+            packagePolicy: packagePolicy);
         return new AppPackageGeneration(
             generationId,
             folder,
@@ -302,5 +338,6 @@ internal sealed class AppPackageGenerationBuilder(
         ActivePackageDescriptor Package,
         PackageUiSnapshotDescriptor Source,
         AppPreparedPackageSource? PreparedSource,
-        Exception? Exception);
+        Exception? Exception,
+        long ReadyTimestamp);
 }

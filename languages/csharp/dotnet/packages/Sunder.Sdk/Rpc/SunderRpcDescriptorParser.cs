@@ -6,7 +6,6 @@ namespace Sunder.Sdk.Rpc;
 
 internal static partial class SunderRpcDescriptorParser
 {
-    private const long MaximumSafeInteger = 9_007_199_254_740_991;
     private const int MaximumJsonDepth = 256;
     private const int MaximumServices = 64;
     private const int MaximumMethods = 512;
@@ -60,16 +59,16 @@ internal static partial class SunderRpcDescriptorParser
 
             var descriptorVersion = Required(root, "descriptorVersion", "$", JsonValueKind.Number);
             if (!descriptorVersion.TryGetInt32(out var descriptorVersionValue)
-                || descriptorVersionValue is not (SunderRpcProtocol.DescriptorVersionV1 or SunderRpcProtocol.DescriptorVersionV2))
+                || descriptorVersionValue != SunderRpcProtocol.DescriptorVersion)
             {
                 throw Error(
-                    $"$.descriptorVersion must be {SunderRpcProtocol.DescriptorVersionV1} or {SunderRpcProtocol.DescriptorVersionV2}.",
+                    $"$.descriptorVersion must be {SunderRpcProtocol.DescriptorVersion}.",
                     "descriptor-version");
             }
 
             try
             {
-                ValidateTokenStream(descriptorUtf8, descriptorVersionValue);
+                ValidateTokenStream(descriptorUtf8);
             }
             catch (SunderRpcDescriptorException)
             {
@@ -83,57 +82,31 @@ internal static partial class SunderRpcDescriptorParser
                     "descriptor-json");
             }
 
-            var isV2 = descriptorVersionValue == SunderRpcProtocol.DescriptorVersionV2;
-            if (isV2)
-            {
-                RequireOnlyProperties(
-                    root,
-                    "$",
-                    "$schema",
-                    "descriptorVersion",
-                    "schemaProfile",
-                    "contractId",
-                    "version",
-                    "errors",
-                    "services",
-                    "$defs");
-            }
+            RequireOnlyProperties(
+                root,
+                "$",
+                "$schema",
+                "descriptorVersion",
+                "schemaProfile",
+                "contractId",
+                "version",
+                "errors",
+                "services",
+                "$defs");
 
-            if (isV2)
+            if (!root.TryGetProperty("schemaProfile", out _))
             {
-                if (!root.TryGetProperty("schemaProfile", out _))
-                {
-                    throw Error("$ is missing required property 'schemaProfile'.", "schema-profile");
-                }
-                var schemaProfile = RequiredString(root, "schemaProfile", "$", 128);
-                if (!string.Equals(
-                        schemaProfile,
-                        SunderRpcProtocol.ValueSchemaProfile,
-                        StringComparison.Ordinal))
-                {
-                    throw Error(
-                        $"$.schemaProfile must be '{SunderRpcProtocol.ValueSchemaProfile}'.",
-                        "schema-profile");
-                }
+                throw Error("$ is missing required property 'schemaProfile'.", "schema-profile");
             }
-            else
+            var schemaProfile = RequiredString(root, "schemaProfile", "$", 128);
+            if (!string.Equals(
+                    schemaProfile,
+                    SunderRpcProtocol.ValueSchemaProfile,
+                    StringComparison.Ordinal))
             {
-                if (root.TryGetProperty("schemaProfile", out _)
-                    || root.TryGetProperty("errors", out _))
-                {
-                    throw Error(
-                        "A descriptor using V2 root fields must set descriptorVersion to 2.",
-                        "descriptor-version");
-                }
-                RequireOnlyProperties(
-                    root,
-                    "$",
-                    "$schema",
-                    "descriptorVersion",
-                    "contractId",
-                    "version",
-                    "services",
-                    "$defs");
+                throw Error(
+                    $"$.schemaProfile must be '{SunderRpcProtocol.ValueSchemaProfile}'.",
+                    "schema-profile");
             }
 
             if (root.TryGetProperty("$schema", out var dialect))
@@ -145,8 +118,8 @@ internal static partial class SunderRpcDescriptorParser
                 }
             }
 
-            var contractId = RequiredString(root, "contractId", "$", isV2 ? 128 : 256);
-            if (isV2 ? !IsContractIdV2(contractId) : !PackageId.TryParse(contractId, out _))
+            var contractId = RequiredString(root, "contractId", "$", 128);
+            if (!IsContractId(contractId))
             {
                 throw Error("$.contractId must use lowercase dot-separated ASCII identifiers.");
             }
@@ -173,22 +146,17 @@ internal static partial class SunderRpcDescriptorParser
                 definitions.Add(definition.Name, definition.Value.Clone());
             }
 
-            SunderRpcSchemaProfile.ValidateDefinitions(definitions, descriptorVersionValue);
-            var errorDeclarations = isV2
-                ? ParseErrors(Required(root, "errors", "$", JsonValueKind.Object), definitions)
-                : new Dictionary<string, SunderRpcErrorDeclaration>(StringComparer.Ordinal);
-            var servicesElement = isV2
-                ? Required(root, "services", "$", JsonValueKind.Object)
-                : Required(root, "services", "$", JsonValueKind.Array, JsonValueKind.Object);
+            SunderRpcSchemaProfile.ValidateDefinitions(definitions);
+            var errorDeclarations = ParseErrors(
+                Required(root, "errors", "$", JsonValueKind.Object),
+                definitions);
+            var servicesElement = Required(root, "services", "$", JsonValueKind.Object);
             var services = ParseServices(
                 servicesElement,
                 definitions,
-                errorDeclarations.Keys.ToHashSet(StringComparer.Ordinal),
-                descriptorVersionValue);
-            var projection = SunderRpcDescriptorProjector.Project(root, definitions, isV2);
+                errorDeclarations.Keys.ToHashSet(StringComparer.Ordinal));
+            var projection = SunderRpcDescriptorProjector.Project(root, definitions);
             return new SunderRpcContractDescriptor(
-                descriptorVersionValue,
-                isV2 ? SunderRpcProtocol.ValueSchemaProfile : null,
                 contractId,
                 version,
                 errorDeclarations.Values,

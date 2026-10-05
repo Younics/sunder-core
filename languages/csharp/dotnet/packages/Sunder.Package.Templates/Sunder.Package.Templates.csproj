@@ -91,7 +91,9 @@
         var major = match.Groups[1].Value;
         var minor = match.Groups[2].Value;
         var nextMinor = BigInteger.Parse(minor) + BigInteger.One;
-        VersionRange = $"[{major}.{minor}.0,{major}.{nextMinor}.0)";
+        // A prerelease template must restore its coordinated prerelease SDK,
+        // rather than silently selecting a stable baseline from another feed.
+        VersionRange = Version.Contains('-') ? $"[{Version}]" : $"[{major}.{minor}.0,{major}.{nextMinor}.0)";
       ]]></Code>
     </Task>
   </UsingTask>

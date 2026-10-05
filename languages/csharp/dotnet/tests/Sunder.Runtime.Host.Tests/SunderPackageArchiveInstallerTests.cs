@@ -200,10 +200,15 @@ public sealed class SunderPackageArchiveInstallerTests
 
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
         var installed = Assert.Single(await store.ListAsync());
-        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(installed.InstallPath);
+        var validation = await InstalledPackageProjection.ValidateAsync(installed);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
-        Assert.Equal(2, validation.Manifest!.Targets!.Count);
-        Assert.All(validation.Manifest.Targets!, target => Assert.Equal(currentRid, target!.Rid));
+        Assert.Equal(4, validation.Manifest!.Targets!.Count);
+        Assert.Equal(2, installed.AcquiredTargets!.Count);
+        Assert.All(installed.AcquiredTargets, target => Assert.Equal(currentRid, target.Rid));
+        Assert.NotNull(validation.Manifest.PackageArtifactImports);
+        Assert.NotNull(validation.Manifest.PackageApiImports);
+        Assert.NotNull(validation.Manifest.ProviderImports);
+        Assert.NotNull(validation.Manifest.PlatformImports);
         Assert.DoesNotContain(installed.ContentInventory, entry =>
             entry.Path.Contains($"/{alternateRid}/", StringComparison.Ordinal));
         Assert.Equal(
@@ -320,6 +325,463 @@ public sealed class SunderPackageArchiveInstallerTests
     }
 
     [Fact]
+    public async Task CommitPackageStoreStageAsync_StartsCandidateBeforeDurableCatalogReplacement()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        using var transfers = new RuntimeContentTransferStore(paths);
+        var transitions = new List<string>();
+        var lifecycleFaults = new CallbackLifecycleFaultInjector(point =>
+        {
+            if (point == InstalledPackageLifecycleFaultPoint.CandidateReadyBeforeStoreCommit)
+            {
+                transitions.Add("candidate-ready");
+            }
+        });
+        var storeFaults = new CallbackPackageStoreFaultInjector(point =>
+        {
+            if (point == PackageStoreFaultPoint.CatalogReplaced)
+            {
+                transitions.Add("catalog-replaced");
+                throw new PackageStoreSimulatedCrashException(point);
+            }
+        });
+        var coordinator = new PackageStoreCoordinator(paths, store, installer, storeFaults);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer,
+            packageStoreCoordinator: coordinator,
+            transferStore: transfers,
+            lifecycleFaultInjector: lifecycleFaults);
+
+        try
+        {
+            var upload = await UploadPackageAsync(
+                transfers,
+                CreatePackageArchive(root, "test.package", "1.0.0"));
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId),
+            ]));
+
+            var commit = await service.CommitPackageStoreStageAsync(Assert.IsType<string>(stage.StageId));
+
+            Assert.True(commit.Success, string.Join(Environment.NewLine, commit.Errors));
+            Assert.True(commit.StoreCommitted);
+            Assert.False(commit.RuntimeSessionApplied);
+            Assert.True(commit.RuntimeSessionReconciliationPending);
+            Assert.Equal(["candidate-ready", "catalog-replaced"], transitions);
+            Assert.Equal("test.package", Assert.Single(await store.ListAsync()).PackageId);
+            Assert.Throws<RuntimeUnavailableException>(() => service.AcquireSessionLease());
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task CommitPackageStoreStageAsync_IndeterminateCatalogAbandonsOldAuthorityAndFencesRuntime()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        using var transfers = new RuntimeContentTransferStore(paths);
+        var gate = new RuntimeOperationGate();
+        var armed = false;
+        var storeFaults = new CallbackPackageStoreFaultInjector(point =>
+        {
+            if (!armed || point != PackageStoreFaultPoint.CatalogReplacing)
+            {
+                return;
+            }
+
+            armed = false;
+            File.WriteAllText(paths.StateFilePath, "{invalid");
+            throw new IOException("Injected ambiguous catalog write failure.");
+        });
+        var coordinator = new PackageStoreCoordinator(paths, store, installer, storeFaults);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer,
+            operationGate: gate,
+            packageStoreCoordinator: coordinator,
+            transferStore: transfers);
+
+        try
+        {
+            var install = await service.InstallPackageFromRuntimePathAsync(
+                CreatePackageArchive(root, "test.package", "1.0.0"));
+            Assert.True(install.Success, string.Join(Environment.NewLine, install.Errors));
+            var oldGeneration = Assert.Single(service.ActiveSession.LoadedPackageMap)
+                .Value.Worker.GenerationCompletion;
+            var upload = await UploadPackageAsync(
+                transfers,
+                CreatePackageArchive(root, "test.package", "1.1.0"),
+                service.SessionGeneration);
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(
+                    PackageStoreMutationKind.Upgrade,
+                    PackageId: "test.package",
+                    UploadId: upload.UploadId),
+            ]));
+            var stageId = Assert.IsType<string>(stage.StageId);
+            armed = true;
+
+            var commit = await service.CommitPackageStoreStageAsync(stageId);
+
+            Assert.False(commit.Success);
+            Assert.False(commit.StoreCommitted);
+            Assert.True(commit.RuntimeSessionReconciliationPending);
+            Assert.Contains("indeterminate", commit.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(RuntimePackageStageState.Failed, service.GetPackageStageStatus(stageId)?.State);
+            Assert.True(oldGeneration.IsCompleted);
+            Assert.Throws<RuntimeUnavailableException>(() => service.AcquireSessionLease());
+            await Assert.ThrowsAsync<RuntimeOperationRejectedException>(
+                () => service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([])));
+            Assert.NotEmpty(Directory.EnumerateDirectories(paths.TransactionRootPath));
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task CommitRegistryPackageStoreStageAsync_AuthorityCallbacksBracketCandidateReadinessAndDurableWrite()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        using var transfers = new RuntimeContentTransferStore(paths);
+        var transitions = new List<string>();
+        var lifecycleFaults = new CallbackLifecycleFaultInjector(point =>
+        {
+            if (point == InstalledPackageLifecycleFaultPoint.CandidateReadyBeforeStoreCommit)
+            {
+                transitions.Add("candidate-ready");
+            }
+            else if (point == InstalledPackageLifecycleFaultPoint.StoreCommittedBeforeSessionPublication)
+            {
+                transitions.Add("store-committed");
+            }
+        });
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer,
+            transferStore: transfers,
+            lifecycleFaultInjector: lifecycleFaults);
+
+        try
+        {
+            var upload = await UploadPackageAsync(
+                transfers,
+                CreatePackageArchive(root, "test.package", "1.0.0"));
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId),
+            ]));
+            var authorityCall = 0;
+
+            var commit = await service.CommitRegistryPackageStoreStageAsync(
+                Assert.IsType<string>(stage.StageId),
+                (phase, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    transitions.Add($"authority-{++authorityCall}-{phase}");
+                    return Task.CompletedTask;
+                });
+
+            Assert.True(commit.Success, string.Join(Environment.NewLine, commit.Errors));
+            Assert.Equal(
+                ["authority-1-PreLaunch", "candidate-ready", "authority-2-PreCommit", "store-committed"],
+                transitions);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task CommitPackageStoreStageAsync_DurablyRecordsEveryCutoverBoundary()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        using var transfers = new RuntimeContentTransferStore(paths);
+        string? stageId = null;
+        var phases = new Dictionary<InstalledPackageLifecycleFaultPoint, PackageStoreCutoverPhase>();
+        var lifecycleFaults = new CallbackLifecycleFaultInjector(point =>
+        {
+            if (stageId is not null)
+            {
+                phases[point] = ReadCutoverPhase(paths, stageId);
+            }
+        });
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer,
+            transferStore: transfers,
+            lifecycleFaultInjector: lifecycleFaults);
+
+        try
+        {
+            var upload = await UploadPackageAsync(
+                transfers,
+                CreatePackageArchive(root, "test.package", "1.0.0"));
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId),
+            ]));
+            stageId = Assert.IsType<string>(stage.StageId);
+
+            var commit = await service.CommitPackageStoreStageAsync(stageId);
+
+            Assert.True(commit.Success, string.Join(Environment.NewLine, commit.Errors));
+            Assert.Equal(
+                PackageStoreCutoverPhase.PreLaunchPolicyConfirmed,
+                phases[InstalledPackageLifecycleFaultPoint.PreLaunchPolicyConfirmedBeforeCandidateStart]);
+            Assert.Equal(
+                PackageStoreCutoverPhase.CandidateReady,
+                phases[InstalledPackageLifecycleFaultPoint.CandidateReadyBeforeStoreCommit]);
+            Assert.Equal(
+                PackageStoreCutoverPhase.PreCommitPolicyConfirmed,
+                phases[InstalledPackageLifecycleFaultPoint.PreCommitPolicyConfirmedBeforeStoreCommit]);
+            Assert.Equal(
+                PackageStoreCutoverPhase.DurableCommitted,
+                phases[InstalledPackageLifecycleFaultPoint.StoreCommittedBeforeSessionPublication]);
+            Assert.Equal(
+                PackageStoreCutoverPhase.GenerationCommitAcknowledged,
+                phases[InstalledPackageLifecycleFaultPoint.CandidateGenerationCommittedBeforePreviousWorkersQuiesced]);
+            Assert.Equal(
+                PackageStoreCutoverPhase.OldGenerationStopped,
+                phases[InstalledPackageLifecycleFaultPoint.PreviousWorkersQuiescedBeforeStorageActivation]);
+            Assert.False(Directory.Exists(Path.Combine(paths.TransactionRootPath, stageId)));
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task CommitPackageStoreStageAsync_CommitsCandidateAfterCatalogAndBeforeStoppingOldWorker()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        using var transfers = new RuntimeContentTransferStore(paths);
+        var transitions = new List<string>();
+        var armed = false;
+        Task? oldGeneration = null;
+        bool? oldStoppedAtCandidateCommit = null;
+        bool? oldStoppedAtQuiescence = null;
+        var lifecycleFaults = new CallbackLifecycleFaultInjector(point =>
+        {
+            if (!armed)
+            {
+                return;
+            }
+            if (point == InstalledPackageLifecycleFaultPoint.StoreCommittedBeforeSessionPublication)
+            {
+                transitions.Add("store-committed");
+            }
+            else if (point == InstalledPackageLifecycleFaultPoint.CandidateGenerationCommittedBeforePreviousWorkersQuiesced)
+            {
+                oldStoppedAtCandidateCommit = oldGeneration!.IsCompleted;
+                transitions.Add("candidate-generation-committed");
+            }
+            else if (point == InstalledPackageLifecycleFaultPoint.PreviousWorkersQuiescedBeforeStorageActivation)
+            {
+                oldStoppedAtQuiescence = oldGeneration!.IsCompleted;
+                transitions.Add("old-workers-quiesced");
+            }
+        });
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer,
+            transferStore: transfers,
+            lifecycleFaultInjector: lifecycleFaults);
+
+        try
+        {
+            var install = await service.InstallPackageFromRuntimePathAsync(
+                CreatePackageArchive(root, "test.package", "1.0.0"));
+            Assert.True(install.Success, string.Join(Environment.NewLine, install.Errors));
+            oldGeneration = Assert.Single(service.ActiveSession.LoadedPackageMap).Value.Worker.GenerationCompletion;
+            Assert.False(oldGeneration.IsCompleted);
+
+            var upload = await UploadPackageAsync(
+                transfers,
+                CreatePackageArchive(root, "test.package", "1.1.0"),
+                service.SessionGeneration);
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(
+                    PackageStoreMutationKind.Upgrade,
+                    PackageId: "test.package",
+                    UploadId: upload.UploadId),
+            ]));
+            armed = true;
+
+            var commit = await service.CommitPackageStoreStageAsync(Assert.IsType<string>(stage.StageId));
+
+            Assert.True(commit.Success, string.Join(Environment.NewLine, commit.Errors));
+            Assert.Equal(
+                ["store-committed", "candidate-generation-committed", "old-workers-quiesced"],
+                transitions);
+            Assert.False(oldStoppedAtCandidateCommit);
+            Assert.True(oldStoppedAtQuiescence);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Theory]
+    [InlineData(
+        (int)InstalledPackageLifecycleFaultPoint.StoreCommittedBeforeSessionPublication,
+        (int)PackageStoreCutoverPhase.DurableCommitted)]
+    [InlineData(
+        (int)InstalledPackageLifecycleFaultPoint.CandidateGenerationCommittedBeforePreviousWorkersQuiesced,
+        (int)PackageStoreCutoverPhase.GenerationCommitAcknowledged)]
+    [InlineData(
+        (int)InstalledPackageLifecycleFaultPoint.PreviousWorkersQuiescedBeforeStorageActivation,
+        (int)PackageStoreCutoverPhase.OldGenerationStopped)]
+    public async Task CommitPackageStoreStageAsync_PostDurableFailureNeverRestoresOldGeneration(
+        int faultPointValue,
+        int expectedPhaseValue)
+    {
+        var faultPoint = (InstalledPackageLifecycleFaultPoint)faultPointValue;
+        var expectedPhase = (PackageStoreCutoverPhase)expectedPhaseValue;
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        using var transfers = new RuntimeContentTransferStore(paths);
+        var faultInjector = new ArmedLifecycleFaultInjector(faultPoint);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer,
+            transferStore: transfers,
+            lifecycleFaultInjector: faultInjector);
+
+        try
+        {
+            var install = await service.InstallPackageFromRuntimePathAsync(
+                CreatePackageArchive(root, "test.package", "1.0.0"));
+            Assert.True(install.Success, string.Join(Environment.NewLine, install.Errors));
+            var oldSession = service.ActiveSession;
+            var oldGeneration = Assert.Single(oldSession.LoadedPackageMap).Value.Worker.GenerationCompletion;
+            var upload = await UploadPackageAsync(
+                transfers,
+                CreatePackageArchive(root, "test.package", "1.1.0"),
+                service.SessionGeneration);
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(
+                    PackageStoreMutationKind.Upgrade,
+                    PackageId: "test.package",
+                    UploadId: upload.UploadId),
+            ]));
+            var stageId = Assert.IsType<string>(stage.StageId);
+            faultInjector.Arm();
+
+            var commit = await service.CommitPackageStoreStageAsync(stageId);
+
+            Assert.True(commit.Success, string.Join(Environment.NewLine, commit.Errors));
+            Assert.True(commit.StoreCommitted);
+            Assert.False(commit.RuntimeSessionApplied);
+            Assert.True(commit.RuntimeSessionReconciliationPending);
+            Assert.Equal("1.1.0", Assert.Single(await store.ListAsync()).Version);
+            Assert.NotSame(oldSession, service.ActiveSession);
+            Assert.True(service.ActiveSession.IsEmpty);
+            Assert.True(oldGeneration.IsCompleted);
+            Assert.Throws<RuntimeUnavailableException>(() => service.AcquireSessionLease());
+            var status = service.GetPackageStageStatus(stageId);
+            Assert.Equal(RuntimePackageStageState.Committed, status?.State);
+            Assert.True(status?.ReconciliationPending);
+            Assert.Equal(expectedPhase, ReadCutoverPhase(paths, stageId));
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Theory]
+    [InlineData((int)InstalledPackageLifecycleFaultPoint.PreLaunchPolicyConfirmedBeforeCandidateStart)]
+    [InlineData((int)InstalledPackageLifecycleFaultPoint.CandidateReadyBeforeStoreCommit)]
+    [InlineData((int)InstalledPackageLifecycleFaultPoint.PreCommitPolicyConfirmedBeforeStoreCommit)]
+    public async Task CommitPackageStoreStageAsync_PreDurableFailurePreservesPreviousGenerationAndCatalog(
+        int faultPointValue)
+    {
+        var faultPoint = (InstalledPackageLifecycleFaultPoint)faultPointValue;
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        using var transfers = new RuntimeContentTransferStore(paths);
+        var faultInjector = new ArmedLifecycleFaultInjector(faultPoint);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer,
+            transferStore: transfers,
+            lifecycleFaultInjector: faultInjector);
+
+        try
+        {
+            var install = await service.InstallPackageFromRuntimePathAsync(
+                CreatePackageArchive(root, "test.package", "1.0.0"));
+            Assert.True(install.Success, string.Join(Environment.NewLine, install.Errors));
+            var previousSession = service.ActiveSession;
+            var previousGeneration = Assert.Single(previousSession.LoadedPackageMap)
+                .Value.Worker.GenerationCompletion;
+            var upload = await UploadPackageAsync(
+                transfers,
+                CreatePackageArchive(root, "test.package", "1.1.0"),
+                service.SessionGeneration);
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(
+                    PackageStoreMutationKind.Upgrade,
+                    PackageId: "test.package",
+                    UploadId: upload.UploadId),
+            ]));
+            faultInjector.Arm();
+
+            var commit = await service.CommitPackageStoreStageAsync(Assert.IsType<string>(stage.StageId));
+
+            Assert.False(commit.Success);
+            Assert.False(commit.StoreCommitted);
+            Assert.Same(previousSession, service.ActiveSession);
+            Assert.False(previousGeneration.IsCompleted);
+            Assert.Equal("1.0.0", Assert.Single(await store.ListAsync()).Version);
+            Assert.Empty(Directory.EnumerateDirectories(paths.TransactionRootPath));
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public async Task CommitPackageStoreStageAsync_WhenPublicationFaultsAfterStoreCommit_ReturnsDegradedAndReconciles()
     {
         var root = CreateTempDirectory();
@@ -353,6 +815,8 @@ public sealed class SunderPackageArchiveInstallerTests
             Assert.False(commit.RuntimeSessionApplied);
             Assert.True(commit.RuntimeSessionReconciliationPending);
             Assert.NotSame(stagedSession, service.ActiveSession);
+            Assert.True(service.ActiveSession.IsEmpty);
+            Assert.Throws<RuntimeUnavailableException>(() => service.AcquireSessionLease());
             Assert.Equal("test.package", Assert.Single(await store.ListAsync()).PackageId);
             if (stagedFolder is not null)
             {
@@ -413,7 +877,7 @@ public sealed class SunderPackageArchiveInstallerTests
     }
 
     [Fact]
-    public async Task InstallFromRuntimePathAsync_PublishesCanonicalFinalSourcePaths()
+    public async Task InstallFromRuntimePathAsync_PublishesCanonicalFinalSourcePathsAndAppProjection()
     {
         var root = CreateTempDirectory();
         var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
@@ -436,8 +900,11 @@ public sealed class SunderPackageArchiveInstallerTests
             Assert.Equal(Path.GetFullPath(installed.InstallPath), Path.GetFullPath(source.SourceFolder));
             Assert.Null(source.SnapshotFolder);
             var snapshot = Assert.Single(service.GetActivePackageUiSnapshots());
-            using var lease = service.AcquireCurrentUiSnapshot(snapshot.SnapshotId);
-            Assert.NotNull(lease);
+            Assert.Empty(snapshot.SnapshotUri);
+            var projection = Assert.IsType<PackageUiProjectionReferenceDescriptor>(snapshot.ProjectionReference);
+            Assert.Equal("app", projection.ConsumerRole);
+            Assert.Equal(installed.ContentIdentity, projection.SourceContentIdentity);
+            Assert.Equal(snapshot.ContentHash, projection.CacheKey);
         }
         finally
         {
@@ -568,8 +1035,8 @@ public sealed class SunderPackageArchiveInstallerTests
                     "sdk-baseline-1-1.v1",
                     "core.v1",
                     SunderSdkCapabilities.DockerEnvironmentV1,
-                    "rpc.v2",
-                    "worker-protocol.v3",
+                    "rpc.v1",
+                    "worker-protocol.v1",
                 ]
                 : null);
         if (corruptHash)
@@ -615,7 +1082,10 @@ public sealed class SunderPackageArchiveInstallerTests
         }
     }
 
-    private static async Task<ContentUploadDescriptor> UploadPackageAsync(RuntimeContentTransferStore transfers, string archivePath)
+    private static async Task<ContentUploadDescriptor> UploadPackageAsync(
+        RuntimeContentTransferStore transfers,
+        string archivePath,
+        long generation = 0)
     {
         await using var archive = File.OpenRead(archivePath);
         return await transfers.CreateUploadAsync(
@@ -625,7 +1095,7 @@ public sealed class SunderPackageArchiveInstallerTests
             null,
             Path.GetFileName(archivePath),
             "application/vnd.sunder.package",
-            generation: 0,
+            generation,
             CancellationToken.None);
     }
 
@@ -671,6 +1141,45 @@ public sealed class SunderPackageArchiveInstallerTests
         }
         catch
         {
+        }
+    }
+
+    private static PackageStoreCutoverPhase ReadCutoverPhase(RuntimePackagePaths paths, string stageId)
+    {
+        var journal = JsonSerializer.Deserialize<PackageStoreTransactionJournal>(
+            File.ReadAllText(Path.Combine(paths.TransactionRootPath, stageId, "journal.json")),
+            InstalledPackageStore.JsonOptions);
+        return Assert.IsType<PackageStoreTransactionJournal>(journal).CutoverPhase;
+    }
+
+    private sealed class CallbackLifecycleFaultInjector(
+        Action<InstalledPackageLifecycleFaultPoint> callback)
+        : IInstalledPackageLifecycleFaultInjector
+    {
+        public void Hit(InstalledPackageLifecycleFaultPoint point) => callback(point);
+    }
+
+    private sealed class CallbackPackageStoreFaultInjector(
+        Action<PackageStoreFaultPoint> callback)
+        : IPackageStoreFaultInjector
+    {
+        public void Hit(PackageStoreFaultPoint point) => callback(point);
+    }
+
+    private sealed class ArmedLifecycleFaultInjector(
+        InstalledPackageLifecycleFaultPoint faultPoint)
+        : IInstalledPackageLifecycleFaultInjector
+    {
+        private int _armed;
+
+        public void Arm() => Interlocked.Exchange(ref _armed, 1);
+
+        public void Hit(InstalledPackageLifecycleFaultPoint point)
+        {
+            if (point == faultPoint && Interlocked.Exchange(ref _armed, 0) == 1)
+            {
+                throw new IOException($"Injected lifecycle failure at {point}.");
+            }
         }
     }
 

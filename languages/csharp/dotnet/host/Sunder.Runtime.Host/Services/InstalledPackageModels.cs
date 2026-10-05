@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 namespace Sunder.Runtime.Host.Services;
 
@@ -20,7 +21,64 @@ internal sealed record InstalledPackageRecord(
     [property: JsonPropertyName("isEnabled")] bool IsEnabled,
     [property: JsonPropertyName("installedAtUtc")] DateTimeOffset InstalledAtUtc,
     [property: JsonPropertyName("provenance")] InstalledPackageProvenanceRecord Provenance,
-    [property: JsonPropertyName("capabilityGrants")] IReadOnlyList<InstalledPackageCapabilityGrant> CapabilityGrants);
+    [property: JsonPropertyName("capabilityGrants")] IReadOnlyList<InstalledPackageCapabilityGrant> CapabilityGrants,
+    IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord>? ExecutionRuntimeBindings = null)
+{
+    [JsonPropertyName("policy"), JsonRequired]
+    public InstalledPackagePolicyRecord? Policy { get; init; }
+
+    [JsonPropertyName("sourcePackageContentIdentity"), JsonRequired]
+    public string? SourcePackageContentIdentity { get; init; }
+    [JsonPropertyName("compatibility"), JsonRequired]
+    public InstalledPackageCompatibilityRecord? Compatibility { get; init; }
+
+    private IReadOnlyList<InstalledPackageTargetRecord>? _acquiredTargets;
+    // null requires a complete archive; an empty array is explicit metadata-only
+    // acquisition. Missing state is rejected, never inferred from available files.
+    [JsonPropertyName("acquiredTargets"), JsonRequired]
+    public IReadOnlyList<InstalledPackageTargetRecord>? AcquiredTargets
+    {
+        get => _acquiredTargets;
+        init => _acquiredTargets = value is null ? null : Array.AsReadOnly(value.ToArray());
+    }
+
+    private IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> _executionRuntimeBindings
+        = Array.AsReadOnly((ExecutionRuntimeBindings ?? []).ToArray());
+
+    [JsonPropertyName("executionRuntimeBindings"), JsonRequired]
+    public IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> ExecutionRuntimeBindings
+    {
+        get => _executionRuntimeBindings;
+        init => _executionRuntimeBindings = Array.AsReadOnly(
+            (value ?? throw new InvalidDataException("Installed package execution-runtime bindings cannot be null.")).ToArray());
+    }
+}
+
+internal sealed record InstalledPackageTargetRecord(
+    [property: JsonPropertyName("role"), JsonRequired] string Role,
+    [property: JsonPropertyName("rid"), JsonRequired] string Rid)
+{
+    internal SunderPackageTargetKey ToKey() => new(Role, Rid);
+}
+
+internal sealed record InstalledPackageExecutionRuntimeBindingRecord(
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("rid")] string Rid,
+    [property: JsonPropertyName("runtimeId")] string RuntimeId,
+    [property: JsonPropertyName("runtimeVersion")] string RuntimeVersion,
+    [property: JsonPropertyName("runtimePackagingRevision")] int RuntimePackagingRevision,
+    [property: JsonPropertyName("moduleAbi")] string ModuleAbi,
+    [property: JsonPropertyName("runtimeManifestSha256")] string RuntimeManifestSha256,
+    [property: JsonPropertyName("runtimeArtifactSha256")] string RuntimeArtifactSha256,
+    [property: JsonPropertyName("runtimeArtifactSize")] long RuntimeArtifactSize,
+    [property: JsonPropertyName("registryOrigin")] string RegistryOrigin,
+    [property: JsonPropertyName("acquisitionSource")] string AcquisitionSource,
+    [property: JsonPropertyName("signingKeyId")] string SigningKeyId,
+    [property: JsonPropertyName("trustStoreGeneration")] long TrustStoreGeneration,
+    [property: JsonPropertyName("runtimePolicyRevision")] long RuntimePolicyRevision,
+    [property: JsonPropertyName("runtimeLifecycleState")] string RuntimeLifecycleState,
+    [property: JsonPropertyName("policyObservedAtUtc")] DateTimeOffset PolicyObservedAtUtc,
+    [property: JsonPropertyName("resolvedAtUtc")] DateTimeOffset ResolvedAtUtc);
 
 internal sealed record InstalledPackageCapabilityGrant(
     [property: JsonPropertyName("capability")] string Capability,
@@ -71,6 +129,7 @@ internal sealed record InstalledPackageDependencyRecord(
 internal sealed record PreparedPackageArchiveMutation(
     string StagingPath,
     string InstalledPath,
+    SunderPackageManifest Manifest,
     InstalledPackageRecord InstalledRecord,
     string ConsentManifestSha256,
     string ActiveManifestSha256,

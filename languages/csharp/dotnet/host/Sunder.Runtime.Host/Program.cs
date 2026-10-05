@@ -7,10 +7,19 @@ using Sunder.Runtime.Host.Endpoints;
 using Sunder.Runtime.Host.Services;
 using Sunder.Runtime.LocalState;
 
+if (ExecutionRuntimeProcessGuardian.IsInvocation(args))
+{
+    Environment.ExitCode = await ExecutionRuntimeProcessGuardian.RunAsync(args);
+    return;
+}
+
 var startupPhaseStarted = Stopwatch.GetTimestamp();
 var runtimeResourcePolicy = RuntimeResourcePolicyLaunch.ReadAndClearEnvironment();
 var startupDiagnostics = RuntimeStartupDiagnosticReporter.StartFromEnvironment();
 var startupOptions = RuntimeHostStartupOptions.Parse(args);
+var packageSessionStartupTracePath = Environment.GetEnvironmentVariable(
+    PackageSessionStartupTraceWriter.OutputPathEnvironmentVariable);
+Environment.SetEnvironmentVariable(PackageSessionStartupTraceWriter.OutputPathEnvironmentVariable, null);
 var supervisorEndpoint = RuntimeSupervisedTransport.ReadFromEnvironment();
 var supervisorLifetimeHandle = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_SUPERVISOR_PIPE");
 Environment.SetEnvironmentVariable("SUNDER_RUNTIME_SUPERVISOR_PIPE", null);
@@ -23,6 +32,8 @@ if (startupOptions.WaitForDebugger)
 }
 
 var builder = WebApplication.CreateBuilder(args);
+var executionRuntimeDevelopment = ExecutionRuntimeDevelopmentConfiguration.ReadAndClear(
+    builder.Environment.IsDevelopment());
 builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes);
 if (builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any())
@@ -71,7 +82,16 @@ try
     builder.Services.AddRuntimeHostServices(
         packagePaths,
         new RuntimeBearerTokenValidator(bearerToken),
-        runtimeResourcePolicy.EffectivePolicy);
+        runtimeResourcePolicy.EffectivePolicy,
+        packageSessionStartupTracePath,
+        executionRuntimeTrust: executionRuntimeDevelopment.Trust,
+        developmentAllowInsecureLoopbackRegistry:
+            executionRuntimeDevelopment.AllowInsecureLoopbackRegistry,
+        packageSessionConcurrency: new PackageSessionConcurrencyOptions
+        {
+            MaximumPreparationConcurrency = startupOptions.PackagePreparationConcurrency,
+            MaximumWorkerStartupConcurrency = startupOptions.PackageWorkerStartupConcurrency,
+        });
     LogStartupPhase("service registration", ref startupPhaseStarted);
 
     await using var app = builder.Build();
@@ -96,8 +116,10 @@ try
         .MapPackageCallbackEndpoints()
         .MapPackageAuthEndpoints()
         .MapRuntimeRpcEndpoints()
+        .MapAppPolicyEndpoints()
         .MapDevPackageOwnerEndpoints()
         .MapInstalledPackageEndpoints()
+        .MapExecutionRuntimeEndpoints()
         .MapStackEndpoints()
         .MapRuntimeStreamEndpoints();
     api.MapRegistryEndpoints();
@@ -105,6 +127,9 @@ try
 
     var packageSessionService = app.Services.GetRequiredService<PackageSessionLifecycleService>();
     var installedPackageService = app.Services.GetRequiredService<InstalledPackageLifecycleService>();
+    var executionRuntimeStore = app.Services.GetRequiredService<ExecutionRuntimeStore>();
+    var executionRuntimeMaintenance = app.Services.GetRequiredService<ExecutionRuntimeStartupMaintenance>();
+    var packageProjectionMaintenance = app.Services.GetRequiredService<PackageProjectionMaintenance>();
     var devPackageWatchService = app.Services.GetRequiredService<DevPackageWatchService>();
     var packageLogStreamService = app.Services.GetRequiredService<PackageLogStreamService>();
     var runtimeEventStreamService = app.Services.GetRequiredService<RuntimeEventStreamService>();
@@ -113,15 +138,18 @@ try
     var snapshotStore = app.Services.GetRequiredService<PackageUiSnapshotStore>();
     var shutdownLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("RuntimeShutdown");
     var packageLogStartupTask = Task.CompletedTask;
+    var executionRuntimeMaintenanceTask = Task.CompletedTask;
     LogStartupPhase("host composition", ref startupPhaseStarted);
     try
     {
+        await executionRuntimeStore.InitializeAsync(CancellationToken.None);
+        await installedPackageService.InitializeAsync(CancellationToken.None);
+        await packageProjectionMaintenance.CollectGarbageAsync(CancellationToken.None);
         await RuntimeHostBootstrapRunner.StartAsync(
             app,
             runtimeSessionOwner,
             async cancellationToken =>
             {
-                await installedPackageService.InitializeAsync(cancellationToken);
                 return await installedPackageService.LoadInstalledPackagesAsync(cancellationToken);
             },
             () =>
@@ -141,12 +169,14 @@ try
                         : throw new InvalidOperationException("The Runtime did not publish exactly one bound listener address.");
                     runtimeUrl = new Uri(boundAddress);
                 }
-                connectionInfo = new RuntimeConnectionInfo(runtimeUrl, bearerToken);
+                connectionInfo = new RuntimeConnectionInfo(runtimeUrl, bearerToken) { IpcEndpoint = supervisorEndpoint };
                 RuntimeConnectionInfoStore.Save(connectionInfo, connectionInfoPath);
                 startupDiagnostics?.Complete();
                 LogStartupPhase("listener bind and connection publication", ref startupPhaseStarted);
             });
         LogStartupPhase("package bootstrap", ref startupPhaseStarted);
+        executionRuntimeMaintenanceTask = Task.Run(
+            () => executionRuntimeMaintenance.RunOnceAsync(app.Lifetime.ApplicationStopping));
         packageLogStartupTask = Task.Run(() =>
         {
             try
@@ -170,6 +200,11 @@ try
         shutdownDeadline.Start();
         app.Lifetime.StopApplication();
         runtimeSessionOwner.MarkShuttingDown();
+        await RunCleanupStepAsync(
+            "finish execution-runtime startup maintenance",
+            _ => executionRuntimeMaintenanceTask,
+            shutdownDeadline.Token,
+            shutdownLogger);
         await RunCleanupStepAsync(
             "finish package log discovery",
             _ => packageLogStartupTask,

@@ -1,5 +1,23 @@
 namespace Sunder.Runtime.Contracts;
 
+/// <summary>Prepares exact local or Registry-backed imports for an unpublished development manifest.</summary>
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimePrepareDevPackageImportsRequest(string Folder, string? RegistryOrigin = null)
+{
+    private IReadOnlyList<string> _candidateArchives = [];
+
+    public IReadOnlyList<string> CandidateArchives
+    {
+        get => _candidateArchives;
+        init => _candidateArchives = RuntimeContractCollections.Freeze(value);
+    }
+
+    public string? PlatformCatalogPath { get; init; }
+}
+
+/// <summary>Identifies retained development import evidence; this is not a publication or installation receipt.</summary>
+public sealed record RuntimeDevPackageImportsPrepared(string PackageId, string Version, string ManifestSha256, int PackageArtifacts, int PlatformCatalogs);
+
 public sealed record DevPackageOwnerFolder(string Folder, bool Watch);
 
 public sealed record DevPackageOwnerMutationRequest(

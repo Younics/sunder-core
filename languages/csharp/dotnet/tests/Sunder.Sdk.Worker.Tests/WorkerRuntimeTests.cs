@@ -269,7 +269,7 @@ public sealed class WorkerRuntimeTests
     {
         await using (var outOfOrder = CreateNoOpWorker())
         {
-            await outOfOrder.SendAsync(new { type = "host.activate", sessionGeneration = 1 });
+            await outOfOrder.ActivateAsync(1);
             await Assert.ThrowsAsync<WorkerProtocolException>(async () =>
                 await outOfOrder.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
         }
@@ -299,6 +299,75 @@ public sealed class WorkerRuntimeTests
             await Assert.ThrowsAsync<WorkerProtocolException>(async () =>
                 await mismatch.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
         }
+    }
+
+    [Fact]
+    public async Task Worker_EnforcesExactPackageAndCallerSemanticVersionLengthBoundaries()
+    {
+        using var corpus = JsonDocument.Parse(File.ReadAllBytes(
+            Path.Combine(AppContext.BaseDirectory, "WorkerV1Conformance", "corpus.json")));
+        var boundary = corpus.RootElement.GetProperty("semanticVersionBoundary");
+        var prefix = boundary.GetProperty("prefix").GetString()!;
+        var suffixCharacter = Assert.Single(boundary.GetProperty("suffixCharacter").GetString()!);
+        var maximumLength = boundary.GetProperty("maximumLength").GetInt32();
+        var maximumVersion = prefix + new string(
+            suffixCharacter,
+            boundary.GetProperty("acceptedSuffixLength").GetInt32());
+        var overlongVersion = prefix + new string(
+            suffixCharacter,
+            boundary.GetProperty("rejectedSuffixLength").GetInt32());
+        Assert.Equal(maximumLength, maximumVersion.Length);
+        Assert.Equal(maximumLength + 1, overlongVersion.Length);
+
+        SunderWorkerContext? configured = null;
+        await using (var packageAccepted = new WorkerHarness(
+            context =>
+            {
+                configured = context;
+                return new SunderWorkerOptions([WorkerHarness.Registration(new TestRpcHandler())]);
+            },
+            packageVersion: maximumVersion))
+        {
+            await packageAccepted.HandshakeAndActivateAsync();
+            Assert.Equal(maximumVersion, configured?.Version);
+            await packageAccepted.ShutdownAsync();
+        }
+
+        var failure = Assert.Throws<InvalidOperationException>(() => new WorkerHarness(
+            _ => new SunderWorkerOptions([WorkerHarness.Registration(new TestRpcHandler())]),
+            packageVersion: overlongVersion));
+        Assert.Contains("SUNDER_PACKAGE_VERSION", failure.Message, StringComparison.Ordinal);
+
+        var callerVersion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new TestRpcHandler
+        {
+            Unary = (context, _, _, request, _) =>
+            {
+                callerVersion.TrySetResult(context.CallerPackageVersion);
+                return ValueTask.FromResult(request.Clone());
+            },
+        };
+        await using var callerWorker = new WorkerHarness(
+            _ => new SunderWorkerOptions([WorkerHarness.Registration(handler)]));
+        await callerWorker.HandshakeAndActivateAsync();
+        await callerWorker.SendInvocationAsync(
+            "maximum-caller-version",
+            "unary",
+            "echo",
+            callerPackageVersion: maximumVersion);
+        using (var result = await callerWorker.ReadAsync())
+        {
+            Assert.Equal("worker.result", result.RootElement.GetProperty("type").GetString());
+        }
+        Assert.Equal(maximumVersion, await callerVersion.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        await callerWorker.SendInvocationAsync(
+            "overlong-caller-version",
+            "unary",
+            "echo",
+            callerPackageVersion: overlongVersion);
+        await Assert.ThrowsAsync<WorkerProtocolException>(async () =>
+            await callerWorker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
     [Fact]
@@ -351,7 +420,7 @@ public sealed class WorkerRuntimeTests
         Assert.Equal(expected, configuredProfile);
         await worker.StartCandidateAndCommitAsync();
         await worker.PrepareStorageMigrationsAsync();
-        await worker.SendAsync(new { type = "host.activate", sessionGeneration = 7 });
+        await worker.ActivateAsync();
         const string scopeId = "resource-profile-scope";
         using (var open = await worker.ReadAsync())
         {
@@ -637,7 +706,7 @@ public sealed class WorkerRuntimeTests
         await worker.HandshakeAsync();
         await worker.StartCandidateAndCommitAsync();
         await worker.PrepareStorageMigrationsAsync();
-        await worker.SendAsync(new { type = "host.activate", sessionGeneration = 7 });
+        await worker.ActivateAsync();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         worker.Cancel();
@@ -764,7 +833,7 @@ public sealed class WorkerRuntimeTests
         await worker.HandshakeAsync(resourceProfile: profile);
         await worker.StartCandidateAndCommitAsync();
         await worker.PrepareStorageMigrationsAsync();
-        await worker.SendAsync(new { type = "host.activate", sessionGeneration = 7 });
+        await worker.ActivateAsync();
         using var activated = await worker.ReadAsync();
         Assert.Equal("worker.activated", activated.RootElement.GetProperty("type").GetString());
     }

@@ -1,0 +1,71 @@
+{
+  "nonce": "0123456789abcdef0123456789abcdef",
+  "registryOrigin": "https://registry.example",
+  "packagePolicy": {
+    "revision": 42,
+    "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "runtimePolicyRevision": 3,
+  "checkpoint": {
+    "sequence": 99,
+    "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "topologyGeneration": 1,
+    "topologyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "observedAtUtc": "2026-09-14T10:00:00+00:00",
+  "validUntilUtc": "2026-09-15T10:00:00+00:00",
+  "packages": [
+    {
+      "package": {
+        "packageId": "example.agent",
+        "version": "2.0.0",
+        "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "packageState": "Active",
+      "versionAvailability": "Listed",
+      "disposition": "Allowed",
+      "errorCode": null,
+      "publicReason": null,
+      "platformDependencies": [
+        {
+          "authorityId": "sunder.core",
+          "releaseVersion": "1.1.0",
+          "catalogSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    }
+  ],
+  "platformCatalogs": [
+    {
+      "catalog": {
+        "authorityId": "sunder.core",
+        "releaseVersion": "1.1.0",
+        "catalogSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "lifecycleState": "Supported",
+      "disposition": "Allowed",
+      "errorCode": null,
+      "revokedAtUtc": null
+    }
+  ],
+  "runtimes": [
+    {
+      "subject": {
+        "runtime": {
+          "runtimeId": "sunder.runtime.dotnet",
+          "version": "10.0.0",
+          "packagingRevision": 1,
+          "rid": "osx-arm64",
+          "moduleAbi": "sunder.dotnet-worker-module.v1"
+        },
+        "manifestSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "lifecycleState": "supported",
+      "disposition": "Allowed",
+      "errorCode": null,
+      "activationBlockedAtUtc": null,
+      "revokedAtUtc": null
+    }
+  ]
+}

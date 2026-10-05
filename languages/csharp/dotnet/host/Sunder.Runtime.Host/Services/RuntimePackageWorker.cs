@@ -23,6 +23,7 @@ internal interface IRuntimePackageWorker : IAsyncDisposable
     IPackageCallbackHandler? GetCallbackHandler(string callbackHandlerId);
 
     Task StartAsync(CancellationToken cancellationToken = default);
+    Task ComposeAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
     Task CommitGenerationAsync(
         RuntimePackageGeneration generation,

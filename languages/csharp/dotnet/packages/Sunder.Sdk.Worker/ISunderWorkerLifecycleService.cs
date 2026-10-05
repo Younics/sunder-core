@@ -2,7 +2,7 @@ using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Worker;
 
-/// <summary>Defines one package-owned service that participates in the staged Worker V3 lifecycle.</summary>
+/// <summary>Defines one package-owned service that participates in the staged Worker V1 lifecycle.</summary>
 /// <remarks>
 /// The worker prepares services in registration order before generation commit, awaits activation before
 /// acknowledging publication readiness, observes <see cref="Completion"/> while active, and shuts prepared
@@ -11,7 +11,7 @@ namespace Sunder.Sdk.Worker;
 /// </remarks>
 [SunderSdkCapability(SunderSdkCapabilities.BackgroundServicesV1)]
 [SunderSdkCapability(SunderSdkCapabilities.RuntimeGenerationsV1)]
-[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV3)]
+[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV1)]
 public interface ISunderWorkerLifecycleService
 {
     /// <summary>Performs non-destructive candidate preparation before any generation is committed.</summary>

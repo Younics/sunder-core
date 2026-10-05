@@ -17,6 +17,16 @@ public sealed partial class RuntimeManagementClient
         CancellationToken token = default)
         => UploadAsync(filePath, "uploads/stack-media", contentType, token);
 
+    public Task<ContentUploadDescriptor> UploadExecutionRuntimeAsync(
+        string filePath,
+        CancellationToken token = default)
+        => UploadAsync(
+            filePath,
+            "uploads/execution-runtimes",
+            "application/vnd.sunder.execution-runtime",
+            token,
+            RuntimeProtocolFeatures.ExecutionRuntimeManagementV1);
+
     public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(
         string packageId,
         CancellationToken token = default)

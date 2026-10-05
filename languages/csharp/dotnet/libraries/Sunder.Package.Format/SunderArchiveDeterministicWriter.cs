@@ -20,7 +20,8 @@ internal static class SunderArchiveDeterministicWriter
     public static async Task WriteAsync(
         string sourceDirectory,
         string archivePath,
-        SunderArchiveExtractionOptions options)
+        SunderArchiveExtractionOptions options,
+        ArchiveRelativePath? executablePath = null)
     {
         options.Validate();
         var cancellationToken = options.CancellationToken;
@@ -51,7 +52,9 @@ internal static class SunderArchiveDeterministicWriter
                     cancellationToken.ThrowIfCancellationRequested();
                     var entry = archive.CreateEntry(file.Path.ToString(), CompressionLevel.Optimal);
                     entry.LastWriteTime = DeterministicTimestamp;
-                    entry.ExternalAttributes = 0;
+                    entry.ExternalAttributes = executablePath is null
+                        ? 0
+                        : UnixRegularFileAttributes(file.Path == executablePath.Value ? 0x1ed : 0x1a4);
                     SunderArchiveFileSystem.EnsureNotLink(file.FullPath);
                     await using var input = new FileStream(
                         file.FullPath,
@@ -159,7 +162,10 @@ internal static class SunderArchiveDeterministicWriter
             or SunderPackageFormat.ContentIndexPath
             or SunderPackageProjectionFormat.DescriptorPath
             or SunderStackFormat.ManifestPath
-            or SunderStackFormat.ContentIndexPath;
+            or SunderStackFormat.ContentIndexPath
+            or SunderExecutionRuntimeFormat.ManifestPath
+            or SunderExecutionRuntimeFormat.ContentIndexPath
+            or SunderExecutionRuntimeFormat.NativeAttestationPath;
 
     private static async Task CopyObservedBytesAsync(
         FileStream source,
@@ -191,6 +197,9 @@ internal static class SunderArchiveDeterministicWriter
 
     private static InvalidDataException SourceChanged(ArchiveRelativePath path)
         => new($"Archive source file '{path}' changed after it was inspected.");
+
+    private static int UnixRegularFileAttributes(int permissions)
+        => unchecked((int)((uint)(0x8000 | permissions) << 16));
 
     private readonly record struct SourceFile(
         ArchiveRelativePath Path,

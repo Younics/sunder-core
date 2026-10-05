@@ -1,6 +1,6 @@
 # Avalonia Views
 
-> **Applies to:** Sunder SDK `1.1.x`, `Sunder.Sdk.Avalonia` `1.1.x`, Avalonia 12, package manifest V3, and Runtime protocol revision 8.
+> **Applies to:** Sunder SDK `1.1.x`, `Sunder.Sdk.Avalonia` `1.1.x`, Avalonia 12, package manifest V1, and Runtime protocol revision 1.
 
 Avalonia UI belongs to the App role. Headless packages should not reference `Sunder.Sdk.Avalonia` or Avalonia.
 
@@ -65,7 +65,7 @@ Navigation starts on the App UI dispatcher and operations for one view are seria
 
 Sunder automatically contains recoverable managed exceptions that escape through host-observed view construction, warmup, navigation, attachment, layout, or dispatcher boundaries. When the exact view is known, only that view is quarantined and replaced with a host-owned fallback. When only the package can be attributed safely, Sunder quarantines that package's App UI activation while leaving its installation and Runtime worker unchanged. After cleanup is proven and the exact package content is authoritative again, App makes one automatic fresh-activation recovery attempt for that content. A failed or repeated same-content fault remains on the host-owned fallback instead of entering a reload loop. The host logs the exception and publishes a sanitized error notification; package code does not need to report the fault explicitly.
 
-Avalonia package controls still execute inside `Sunder.App`. Process-fatal exceptions, native failures, UI-thread hangs, and deadlocks cannot be isolated reliably by an in-process exception boundary. Avoid blocking the dispatcher and move privileged or long-running work to the Worker V3 role.
+Avalonia package controls still execute inside `Sunder.App`. Process-fatal exceptions, native failures, UI-thread hangs, and deadlocks cannot be isolated reliably by an in-process exception boundary. Avoid blocking the dispatcher and move privileged or long-running work to the Worker V1 role.
 
 ## Prepared Navigation
 
@@ -130,7 +130,7 @@ Sunder App loads `Sunder.Sdk.Avalonia` theme resources and package styles. Packa
 </Border>
 ```
 
-The [compiled quickstart view](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.App/QuickstartView.axaml) uses these resources.
+The [compiled quickstart view](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/Views/QuickstartView.axaml) uses these resources.
 
 ### Resource Families
 

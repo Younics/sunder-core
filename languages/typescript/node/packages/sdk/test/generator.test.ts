@@ -16,16 +16,14 @@ import test from "node:test";
 import { canonicalizeDescriptor, generateTypeScriptBindings } from "../src/generator";
 import { parseRpcContractDescriptor } from "../src/descriptor";
 import {
-  SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR,
+  SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
-} from "../src/descriptor-v2";
+} from "../src/descriptor-v1";
 import type {
   JsonValue,
   RpcContractDescriptor,
-  RpcContractDescriptorV2,
   RpcContractIdentity,
-  RpcContractIdentityV2,
   RpcInvocationContext,
   RpcInvoker,
   RpcProviderHandler,
@@ -36,6 +34,7 @@ interface GeneratedBindingsModule {
   readonly CONTRACT_ID: string;
   readonly CONTRACT_VERSION: string;
   readonly CONTRACT_DESCRIPTOR_SHA256: string;
+  readonly CONTRACT_ABI_SHA256: string;
   readonly CONTRACT_IDENTITY: RpcContractIdentity;
   readonly ExampleGeneratorRpcHandler: new (...services: readonly unknown[]) => RpcProviderHandler;
   readonly ExampleGeneratorRpcClient: new <TTarget>(
@@ -54,15 +53,30 @@ interface GeneratedBindingsModule {
 
 const descriptor: RpcContractDescriptor = {
   descriptorVersion: 1,
+  schemaProfile: "sunder.rpc.values.v1",
   contractId: "example.messages",
   version: "1.0.0",
-  services: [{
-    serviceId: "messages",
-    methods: [
-      { methodId: "send", kind: "unary", requestSchema: { $ref: "#/$defs/Request" }, responseSchema: { $ref: "#/$defs/Response" } },
-      { methodId: "watch", kind: "server-stream", requestSchema: { $ref: "#/$defs/Request" }, eventSchema: { $ref: "#/$defs/Response" } },
-    ],
-  }],
+  errors: {},
+  services: {
+    messages: {
+      methods: {
+        send: {
+          kind: "unary",
+          idempotency: "idempotent",
+          errors: [],
+          requestSchema: { $ref: "#/$defs/Request" },
+          responseSchema: { $ref: "#/$defs/Response" },
+        },
+        watch: {
+          kind: "server-stream",
+          idempotency: "none",
+          errors: [],
+          requestSchema: { $ref: "#/$defs/Request" },
+          eventSchema: { $ref: "#/$defs/Response" },
+        },
+      },
+    },
+  },
   $defs: {
     Response: { type: "object", properties: { accepted: { type: "boolean" } }, required: ["accepted"], additionalProperties: false },
     Request: { type: "object", properties: { message: { type: "string", minLength: 1, maxLength: 128 } }, required: ["message"], additionalProperties: false },
@@ -71,23 +85,41 @@ const descriptor: RpcContractDescriptor = {
 
 const compileDescriptor: RpcContractDescriptor = {
   descriptorVersion: 1,
+  schemaProfile: "sunder.rpc.values.v1",
   contractId: "example.generator",
   version: "1.0.0",
-  services: [
-    {
-      serviceId: "foo_bar",
-      methods: [
-        { methodId: "read", kind: "unary", requestSchema: "#/$defs/foo-bar", responseSchema: "#/$defs/foo_bar" },
-      ],
+  errors: {},
+  services: {
+    foo_bar: {
+      methods: {
+        read: {
+          kind: "unary",
+          idempotency: "idempotent",
+          errors: [],
+          requestSchema: { $ref: "#/$defs/foo-bar" },
+          responseSchema: { $ref: "#/$defs/foo_bar" },
+        },
+      },
     },
-    {
-      serviceId: "foo-bar",
-      methods: [
-        { methodId: "do_it", kind: "server-stream", requestSchema: "#/$defs/foo-bar", eventSchema: "#/$defs/foo_bar" },
-        { methodId: "do-it", kind: "unary", requestSchema: "#/$defs/foo-bar", responseSchema: "#/$defs/foo_bar" },
-      ],
+    "foo-bar": {
+      methods: {
+        do_it: {
+          kind: "server-stream",
+          idempotency: "none",
+          errors: [],
+          requestSchema: { $ref: "#/$defs/foo-bar" },
+          eventSchema: { $ref: "#/$defs/foo_bar" },
+        },
+        "do-it": {
+          kind: "unary",
+          idempotency: "idempotent",
+          errors: [],
+          requestSchema: { $ref: "#/$defs/foo-bar" },
+          responseSchema: { $ref: "#/$defs/foo_bar" },
+        },
+      },
     },
-  ],
+  },
   $defs: {
     foo_bar: {
       type: "object",
@@ -171,10 +203,10 @@ const compileDescriptor: RpcContractDescriptor = {
   },
 };
 
-const v2Descriptor: RpcContractDescriptorV2 = {
-  descriptorVersion: 2,
+const bindingsDescriptor: RpcContractDescriptor = {
+  descriptorVersion: 1,
   schemaProfile: "sunder.rpc.values.v1",
-  contractId: "example.v2.bindings",
+  contractId: "example.v1.bindings",
   version: "2.0.0",
   errors: {},
   services: {
@@ -221,8 +253,8 @@ const v2Descriptor: RpcContractDescriptorV2 = {
   },
 };
 
-const valueProfileDescriptor: RpcContractDescriptorV2 = {
-  descriptorVersion: 2,
+const valueProfileDescriptor: RpcContractDescriptor = {
+  descriptorVersion: 1,
   schemaProfile: "sunder.rpc.values.v1",
   contractId: "example.values",
   version: "2.0.0",
@@ -330,8 +362,9 @@ const valueProfileDescriptor: RpcContractDescriptorV2 = {
 };
 
 const COMPILE_DESCRIPTOR_SHA256 = descriptorSha256(compileDescriptor);
-const V2_DESCRIPTOR_SHA256 = descriptorSha256(v2Descriptor);
-const V2_ABI_SHA256 = abiSha256(v2Descriptor);
+const COMPILE_ABI_SHA256 = abiSha256(compileDescriptor);
+const BINDINGS_DESCRIPTOR_SHA256 = descriptorSha256(bindingsDescriptor);
+const BINDINGS_ABI_SHA256 = abiSha256(bindingsDescriptor);
 
 test("TypeScript binding generation is deterministic and mirrors C# binding shapes", () => {
   const first = generateTypeScriptBindings(descriptor);
@@ -345,16 +378,18 @@ test("TypeScript binding generation is deterministic and mirrors C# binding shap
 });
 
 test("generated bindings compile for worker and browser clients and execute provider dispatch", async () => {
-  const first = generateTypeScriptBindings(compileDescriptor, { descriptorSha256: COMPILE_DESCRIPTOR_SHA256 });
-  const second = generateTypeScriptBindings(compileDescriptor, { descriptorSha256: COMPILE_DESCRIPTOR_SHA256 });
+  const hashes = { descriptorSha256: COMPILE_DESCRIPTOR_SHA256, abiSha256: COMPILE_ABI_SHA256 };
+  const first = generateTypeScriptBindings(compileDescriptor, hashes);
+  const second = generateTypeScriptBindings(compileDescriptor, hashes);
 
   assert.equal(first, second);
   assert.match(first, /from "@sunder\/sdk\/core";/u);
-  assert.doesNotMatch(first, /^import (?!type\b)/mu);
+  assert.match(first, /^import \{ validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/browser";/mu);
   assert.doesNotMatch(first, /from "node:/u);
   assert.match(first, /export const CONTRACT_ID = "example\.generator" as const;/u);
   assert.match(first, /export const CONTRACT_VERSION = "1\.0\.0" as const;/u);
   assert.match(first, new RegExp(`export const CONTRACT_DESCRIPTOR_SHA256 = "${COMPILE_DESCRIPTOR_SHA256}" as const;`, "u"));
+  assert.match(first, new RegExp(`export const CONTRACT_ABI_SHA256 = "${COMPILE_ABI_SHA256}" as const;`, "u"));
   assert.match(first, /as const satisfies RpcContractIdentity;/u);
   assert.match(first, /export type FooBar = \{/u);
   assert.match(first, /export type FooBar2 = \{/u);
@@ -370,12 +405,12 @@ test("generated bindings compile for worker and browser clients and execute prov
   assert.match(first, /DoIt\(request: FooBar, context: RpcInvocationContext\): Promise<FooBar2>;/u);
   assert.match(first, /DoIt2\(request: FooBar, context: RpcInvocationContext\): AsyncIterable<FooBar2>;/u);
   assert.match(first, /export class ExampleGeneratorRpcHandler implements RpcProviderHandler/u);
-  assert.match(first, /this\.#service1\.DoIt\(request as FooBar, context\)/u);
-  assert.match(first, /this\.#service1\.DoIt2\(request as FooBar, context\)/u);
+  assert.match(first, /this\.#service1\.DoIt\(\$fromWireFooBar\(request\), context\)/u);
+  assert.match(first, /this\.#service1\.DoIt2\(\$fromWireFooBar\(request\), context\)/u);
   assert.match(first, /export class ExampleGeneratorRpcClient<TTarget = string>/u);
   assert.match(first, /readonly FooBar: FooBarClient2<TTarget>;/u);
   assert.match(first, /readonly FooBar2: FooBarClient3<TTarget>;/u);
-  assert.doesNotMatch(first, /RpcProviderRegistration/u);
+  assert.match(first, /createExampleGeneratorRpcProviderRegistration/u);
 
   const generated = compileGeneratedBindings(first);
   assert.equal(generated.CONTRACT_ID, "example.generator");
@@ -384,7 +419,8 @@ test("generated bindings compile for worker and browser clients and execute prov
   assert.deepEqual(generated.CONTRACT_IDENTITY, {
     contractId: "example.generator",
     contractVersion: "1.0.0",
-    contractSha256: COMPILE_DESCRIPTOR_SHA256,
+    descriptorSha256: COMPILE_DESCRIPTOR_SHA256,
+    abiSha256: COMPILE_ABI_SHA256,
   });
 
   const calls: string[] = [];
@@ -460,76 +496,81 @@ test("generated bindings compile for worker and browser clients and execute prov
   ]);
 });
 
-test("generator hash options enforce descriptor-version-specific identities", () => {
-  const v1DescriptorSha256 = descriptorSha256(descriptor);
+test("generator hash options enforce complete V1 identities", () => {
+  const basicDescriptorSha256 = descriptorSha256(descriptor);
+  const basicAbiSha256 = abiSha256(descriptor);
   assert.doesNotThrow(() => generateTypeScriptBindings(descriptor));
-  assert.doesNotThrow(() => generateTypeScriptBindings(v2Descriptor));
+  assert.doesNotThrow(() => generateTypeScriptBindings(bindingsDescriptor));
   assert.doesNotThrow(() => generateTypeScriptBindings(descriptor, {
-    descriptorSha256: v1DescriptorSha256,
+    descriptorSha256: basicDescriptorSha256,
+    abiSha256: basicAbiSha256,
   }));
-  assert.doesNotThrow(() => generateTypeScriptBindings(v2Descriptor, {
-    descriptorSha256: V2_DESCRIPTOR_SHA256,
-    abiSha256: V2_ABI_SHA256,
+  assert.doesNotThrow(() => generateTypeScriptBindings(bindingsDescriptor, {
+    descriptorSha256: BINDINGS_DESCRIPTOR_SHA256,
+    abiSha256: BINDINGS_ABI_SHA256,
   }));
   assert.throws(
     () => generateTypeScriptBindings(descriptor, { descriptorSha256: "A".repeat(64) }),
     /descriptorSha256 must be a lowercase 64-character hexadecimal/u,
   );
   assert.throws(
-    () => generateTypeScriptBindings(v2Descriptor, { descriptorSha256: V2_DESCRIPTOR_SHA256, abiSha256: "b".repeat(63) }),
+    () => generateTypeScriptBindings(bindingsDescriptor, { descriptorSha256: BINDINGS_DESCRIPTOR_SHA256, abiSha256: "b".repeat(63) }),
     /abiSha256 must be a lowercase 64-character hexadecimal/u,
   );
   assert.throws(
-    () => generateTypeScriptBindings(descriptor, { abiSha256: V2_ABI_SHA256 }),
-    /abiSha256 is not valid for descriptor version 1/u,
-  );
-  assert.throws(
-    () => generateTypeScriptBindings(v2Descriptor, { descriptorSha256: V2_DESCRIPTOR_SHA256 }),
+    () => generateTypeScriptBindings(descriptor, { abiSha256: basicAbiSha256 }),
     /requires descriptorSha256 and abiSha256 to be provided together/u,
   );
   assert.throws(
-    () => generateTypeScriptBindings(v2Descriptor, { abiSha256: V2_ABI_SHA256 }),
+    () => generateTypeScriptBindings(bindingsDescriptor, { descriptorSha256: BINDINGS_DESCRIPTOR_SHA256 }),
     /requires descriptorSha256 and abiSha256 to be provided together/u,
   );
   assert.throws(
-    () => generateTypeScriptBindings(descriptor, { descriptorSha256: mismatchedHash(v1DescriptorSha256) }),
-    /descriptorSha256 does not match the canonical RPC descriptor/u,
+    () => generateTypeScriptBindings(bindingsDescriptor, { abiSha256: BINDINGS_ABI_SHA256 }),
+    /requires descriptorSha256 and abiSha256 to be provided together/u,
   );
   assert.throws(
-    () => generateTypeScriptBindings(v2Descriptor, {
-      descriptorSha256: mismatchedHash(V2_DESCRIPTOR_SHA256),
-      abiSha256: V2_ABI_SHA256,
+    () => generateTypeScriptBindings(descriptor, {
+      descriptorSha256: mismatchedHash(basicDescriptorSha256),
+      abiSha256: basicAbiSha256,
     }),
     /descriptorSha256 does not match the canonical RPC descriptor/u,
   );
   assert.throws(
-    () => generateTypeScriptBindings(v2Descriptor, {
-      descriptorSha256: V2_DESCRIPTOR_SHA256,
-      abiSha256: mismatchedHash(V2_ABI_SHA256),
+    () => generateTypeScriptBindings(bindingsDescriptor, {
+      descriptorSha256: mismatchedHash(BINDINGS_DESCRIPTOR_SHA256),
+      abiSha256: BINDINGS_ABI_SHA256,
+    }),
+    /descriptorSha256 does not match the canonical RPC descriptor/u,
+  );
+  assert.throws(
+    () => generateTypeScriptBindings(bindingsDescriptor, {
+      descriptorSha256: BINDINGS_DESCRIPTOR_SHA256,
+      abiSha256: mismatchedHash(BINDINGS_ABI_SHA256),
     }),
     /abiSha256 does not match the domain-separated canonical RPC ABI/u,
   );
 });
 
-test("V2 bindings compile and execute with canonical worker identity, logical wire types, and presence semantics", async () => {
-  const source = generateTypeScriptBindings(v2Descriptor, {
-    descriptorSha256: V2_DESCRIPTOR_SHA256,
-    abiSha256: V2_ABI_SHA256,
+test("V1 bindings compile and execute with canonical worker identity, logical wire types, and presence semantics", async () => {
+  const source = generateTypeScriptBindings(bindingsDescriptor, {
+    descriptorSha256: BINDINGS_DESCRIPTOR_SHA256,
+    abiSha256: BINDINGS_ABI_SHA256,
   });
-  assert.match(source, new RegExp(`export const CONTRACT_DESCRIPTOR_SHA256 = "${V2_DESCRIPTOR_SHA256}" as const;`, "u"));
-  assert.match(source, new RegExp(`export const CONTRACT_ABI_SHA256 = "${V2_ABI_SHA256}" as const;`, "u"));
+  assert.match(source, new RegExp(`export const CONTRACT_DESCRIPTOR_SHA256 = "${BINDINGS_DESCRIPTOR_SHA256}" as const;`, "u"));
+  assert.match(source, new RegExp(`export const CONTRACT_ABI_SHA256 = "${BINDINGS_ABI_SHA256}" as const;`, "u"));
   assert.match(source, /export const CONTRACT_IDENTITY = \{/u);
   assert.match(source, /descriptorSha256: CONTRACT_DESCRIPTOR_SHA256,/u);
   assert.match(source, /abiSha256: CONTRACT_ABI_SHA256,/u);
-  assert.match(source, /as const satisfies RpcContractIdentityV2;/u);
-  assert.match(source, /export function createExampleV2BindingsRpcProviderRegistration\(/u);
+  assert.match(source, /as const satisfies RpcContractIdentity;/u);
+  assert.match(source, /export function createExampleV1BindingsRpcProviderRegistration\(/u);
   assert.doesNotMatch(source, /contractSha256/u);
   assert.match(source, /export type Content = RpcContentReference;/u);
   assert.match(source, /export type Uuid = string;/u);
   assert.match(source, /export type Instant = string;/u);
   assert.match(source, /export type NullableText = null \| Text;/u);
   assert.match(source, /readonly optionalNote\?: NullableText;/u);
-  assert.doesNotMatch(source, /^import (?!type\b)/mu);
+  assert.match(source, /^import \{ validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/browser";/mu);
   assert.doesNotMatch(source, /from "node:/u);
 
   const generated = compileGeneratedModule(source, `
@@ -537,15 +578,15 @@ import {
   CONTRACT_ABI_SHA256,
   CONTRACT_DESCRIPTOR_SHA256,
   CONTRACT_IDENTITY,
-  ExampleV2BindingsRpcClient,
-  createExampleV2BindingsRpcProviderRegistration,
+  ExampleV1BindingsRpcClient,
+  createExampleV1BindingsRpcProviderRegistration,
   type IContentProvider,
   type Request,
   type Response,
 } from "./bindings";
 import type {
   RpcContentReference,
-  RpcContractIdentityV2,
+  RpcContractIdentity,
   RpcInvocationContext,
   RpcProviderRegistration,
 } from "@sunder/sdk";
@@ -571,7 +612,7 @@ const presentValue: Request = { ...common, optionalNote: "value" };
 // @ts-expect-error optional-nullable preserves absence rather than accepting undefined
 const presentUndefined: Request = { ...common, optionalNote: undefined };
 declare const browserRpc: SunderBrowserRpc;
-const client = new ExampleV2BindingsRpcClient(browserRpc, "selected-provider-handle");
+const client = new ExampleV1BindingsRpcClient(browserRpc, "selected-provider-handle");
 const result: Promise<Response> = client.Content.Put(absent);
 const provider: IContentProvider = {
   async Put(request: Request, context: RpcInvocationContext): Promise<Response> {
@@ -580,13 +621,13 @@ const provider: IContentProvider = {
     return { accepted: true };
   },
 };
-const registration: RpcProviderRegistration = createExampleV2BindingsRpcProviderRegistration(
-  "example.v2.bindings.default",
+const registration: RpcProviderRegistration = createExampleV1BindingsRpcProviderRegistration(
+  "example.v1.bindings.default",
   provider,
 );
-const descriptorHash: "${V2_DESCRIPTOR_SHA256}" = CONTRACT_DESCRIPTOR_SHA256;
-const abiHash: "${V2_ABI_SHA256}" = CONTRACT_ABI_SHA256;
-const identity: RpcContractIdentityV2 = CONTRACT_IDENTITY;
+const descriptorHash: "${BINDINGS_DESCRIPTOR_SHA256}" = CONTRACT_DESCRIPTOR_SHA256;
+const abiHash: "${BINDINGS_ABI_SHA256}" = CONTRACT_ABI_SHA256;
+const identity: RpcContractIdentity = CONTRACT_IDENTITY;
 const workerTransportDescriptorHash: string = registration.descriptorSha256;
 const workerTransportAbiHash: string = registration.abiSha256;
 void presentNull;
@@ -608,23 +649,23 @@ void workerTransportAbiHash;
       descriptorSha256: string;
       abiSha256: string;
     }>;
-    readonly ExampleV2BindingsRpcClient: new <TTarget>(
+    readonly ExampleV1BindingsRpcClient: new <TTarget>(
       invoker: RpcInvoker<TTarget>,
       target: TTarget,
     ) => { readonly Content: { Put(request: JsonValue): Promise<JsonValue> } };
-    readonly ExampleV2BindingsRpcHandler: new (...services: readonly unknown[]) => RpcProviderHandler;
-    createExampleV2BindingsRpcProviderRegistration(
+    readonly ExampleV1BindingsRpcHandler: new (...services: readonly unknown[]) => RpcProviderHandler;
+    createExampleV1BindingsRpcProviderRegistration(
       providerId: string,
       ...services: readonly unknown[]
     ): RpcProviderRegistration;
   };
-  assert.equal(generated.CONTRACT_DESCRIPTOR_SHA256, V2_DESCRIPTOR_SHA256);
-  assert.equal(generated.CONTRACT_ABI_SHA256, V2_ABI_SHA256);
+  assert.equal(generated.CONTRACT_DESCRIPTOR_SHA256, BINDINGS_DESCRIPTOR_SHA256);
+  assert.equal(generated.CONTRACT_ABI_SHA256, BINDINGS_ABI_SHA256);
   assert.deepEqual(generated.CONTRACT_IDENTITY, {
-    contractId: "example.v2.bindings",
+    contractId: "example.v1.bindings",
     contractVersion: "2.0.0",
-    descriptorSha256: V2_DESCRIPTOR_SHA256,
-    abiSha256: V2_ABI_SHA256,
+    descriptorSha256: BINDINGS_DESCRIPTOR_SHA256,
+    abiSha256: BINDINGS_ABI_SHA256,
   });
 
   const invocations: Array<readonly [string, string, string, JsonValue]> = [];
@@ -652,8 +693,8 @@ void workerTransportAbiHash;
   } as const;
   const providerContext = {} as RpcInvocationContext;
   const providerCalls: JsonValue[] = [];
-  const registration = generated.createExampleV2BindingsRpcProviderRegistration(
-    "example.v2.bindings.default",
+  const registration = generated.createExampleV1BindingsRpcProviderRegistration(
+    "example.v1.bindings.default",
     {
       async Put(receivedRequest: JsonValue, receivedContext: RpcInvocationContext) {
         assert.equal(receivedContext, providerContext);
@@ -662,20 +703,20 @@ void workerTransportAbiHash;
       },
     },
   );
-  const registrationWithV2Identity = registration as RpcProviderRegistration & RpcContractIdentityV2;
-  assert.equal(registration.providerId, "example.v2.bindings.default");
-  assert.equal(registration.contractId, "example.v2.bindings");
+  const registrationWithIdentity = registration as RpcProviderRegistration & RpcContractIdentity;
+  assert.equal(registration.providerId, "example.v1.bindings.default");
+  assert.equal(registration.contractId, "example.v1.bindings");
   assert.equal(registration.contractVersion, "2.0.0");
-  assert.equal(registrationWithV2Identity.descriptorSha256, V2_DESCRIPTOR_SHA256);
-  assert.equal(registrationWithV2Identity.abiSha256, V2_ABI_SHA256);
-  assert.ok(registration.handler instanceof generated.ExampleV2BindingsRpcHandler);
+  assert.equal(registrationWithIdentity.descriptorSha256, BINDINGS_DESCRIPTOR_SHA256);
+  assert.equal(registrationWithIdentity.abiSha256, BINDINGS_ABI_SHA256);
+  assert.ok(registration.handler instanceof generated.ExampleV1BindingsRpcHandler);
   assert.deepEqual(
     await registration.handler.invokeUnary(providerContext, "content", "put", request),
     { accepted: true },
   );
   assert.deepEqual(providerCalls, [request]);
 
-  const client = new generated.ExampleV2BindingsRpcClient(invoker, "selected-provider-handle");
+  const client = new generated.ExampleV1BindingsRpcClient(invoker, "selected-provider-handle");
   assert.deepEqual(await client.Content.Put(request), { accepted: true });
   assert.deepEqual(invocations, [["selected-provider-handle", "content", "put", request]]);
 });
@@ -689,6 +730,7 @@ test("value-profile bindings deterministically compile and convert exact domain 
   assert.match(first, /export type BigInteger = bigint;/u);
   assert.match(first, /export type Decimal = string;/u);
   assert.match(first, /export type Float32 = number;/u);
+  assert.match(first, /export type Float64 = 0\.1;/u);
   assert.match(first, /export type Bytes = Uint8Array;/u);
   assert.match(first, /export type Status = "ready" \| "queued";/u);
   assert.match(first, /export type Event = Added \| Removed;/u);
@@ -696,7 +738,7 @@ test("value-profile bindings deterministically compile and convert exact domain 
   assert.match(first, /\$toWireBase64/u);
   assert.match(first, /\$fromWireBigInteger/u);
   assert.match(first, /readonly optionalNullable\?: NullableText;/u);
-  assert.match(first, /import \{ RpcDomainError \} from "@sunder\/sdk";/u);
+  assert.match(first, /import \{ RpcDomainError, validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/browser";/u);
   assert.match(first, /export function createExampleDetailsRpcError\(details: Decimal/u);
   assert.match(first, /export function tryGetExampleDetailsRpcErrorDetails\(error: unknown\): Decimal \| undefined/u);
 
@@ -817,27 +859,73 @@ void browserResult;
   assert.equal((providerRequest as typeof domain).bigInteger, domain.bigInteger);
   assert.deepEqual([...(providerRequest as typeof domain).bytes], [0, 1, 2, 255]);
   assert.deepEqual(wireResponse, wireRequest);
+  const cycle: { value: number; next?: unknown } = { value: 1 }; cycle.next = cycle;
+  assert.throws(() => client.Values.Roundtrip({ ...domain, node: cycle }), /reference-depth budget/);
+  assert.throws(() => client.Values.Roundtrip({ ...domain, status: "invalid" }), /enum/);
+  assert.throws(() => client.Values.Roundtrip({ ...domain, bigInteger: 42 }), /must be a bigint/);
+  assert.throws(() => client.Values.Roundtrip({ ...domain, bytes: 42 }), /must be a Uint8Array/);
+  assert.throws(() => client.Values.Roundtrip({ ...domain, float32: "0.1" }), /must be a number/);
+  assert.throws(() => generated.createExampleDetailsRpcError("not-a-decimal"), /decimal/);
+  assert.deepEqual(await client.Values.Roundtrip(domain), roundTripped); // Failed conversion cannot leave validation nested/disabled.
+});
+
+test("generated simple codecs validate requests, responses and stream events before dispatch or delivery", async () => {
+  const generated = compileGeneratedModule(generateTypeScriptBindings(descriptor), "export {};") as {
+    ExampleMessagesRpcHandler: new (provider: unknown) => RpcProviderHandler;
+    ExampleMessagesRpcClient: new (invoker: unknown, target: string) => {
+      Messages: { Send(request: unknown): Promise<unknown>; Watch(request: unknown): AsyncIterable<unknown> };
+    };
+  };
+  let dispatches = 0;
+  let response: unknown = { accepted: false };
+  const handler = new generated.ExampleMessagesRpcHandler({
+    async Send() { dispatches++; return response; },
+    async *Watch() { dispatches++; yield response; },
+  });
+  const context = {} as RpcInvocationContext;
+  const invalidRequests: JsonValue[] = [{}, { message: 42 }, { message: "" }, { message: "x".repeat(129) }, { message: "valid", extra: true }];
+  for (const request of invalidRequests) {
+    assert.throws(() => handler.invokeUnary(context, "messages", "send", request));
+    assert.throws(() => handler.invokeServerStream(context, "messages", "watch", request));
+  }
+  assert.equal(dispatches, 0);
+  assert.deepEqual(await handler.invokeUnary(context, "messages", "send", { message: "valid" }), { accepted: false });
+  response = { accepted: "wrong-type" };
+  await assert.rejects(async () => handler.invokeUnary(context, "messages", "send", { message: "valid" }));
+  await assert.rejects(async () => { for await (const _ of handler.invokeServerStream(context, "messages", "watch", { message: "valid" })) assert.fail("invalid event delivered"); });
+  let requests = 0;
+  const client = new generated.ExampleMessagesRpcClient({
+    async invoke() { requests++; return response; }, async *subscribe() { requests++; yield response; },
+  }, "opaque-handle");
+  assert.throws(() => client.Messages.Send({ message: 42 }));
+  assert.equal(requests, 0);
+  await assert.rejects(client.Messages.Send({ message: "valid" }));
+  await assert.rejects(async () => { for await (const _ of client.Messages.Watch({ message: "valid" })) assert.fail("invalid client event delivered"); });
+  response = { accepted: false };
+  assert.deepEqual(await client.Messages.Send({ message: "valid" }), response);
 });
 
 test("new generated symbols remain deterministic and collision-safe", () => {
   const collisionDescriptor: RpcContractDescriptor = {
     descriptorVersion: 1,
+    schemaProfile: "sunder.rpc.values.v1",
     contractId: "collision",
     version: "1.0.0",
-    services: [
+    errors: {},
+    services: Object.fromEntries(["collision", "foo-bar", "foo_bar"].map((serviceId) => [
+      serviceId,
       {
-        serviceId: "collision",
-        methods: [{ methodId: "read", kind: "unary", requestSchema: "#/$defs/Request", responseSchema: "#/$defs/Response" }],
+        methods: {
+          read: {
+            kind: "unary",
+            idempotency: "idempotent",
+            errors: [],
+            requestSchema: { $ref: "#/$defs/Request" },
+            responseSchema: { $ref: "#/$defs/Response" },
+          },
+        },
       },
-      {
-        serviceId: "foo-bar",
-        methods: [{ methodId: "read", kind: "unary", requestSchema: "#/$defs/Request", responseSchema: "#/$defs/Response" }],
-      },
-      {
-        serviceId: "foo_bar",
-        methods: [{ methodId: "read", kind: "unary", requestSchema: "#/$defs/Request", responseSchema: "#/$defs/Response" }],
-      },
-    ],
+    ])),
     $defs: {
       CollisionClient: { type: "boolean", const: false },
       CollisionRpcClient: { type: "boolean", const: false },
@@ -860,18 +948,20 @@ test("new generated symbols remain deterministic and collision-safe", () => {
     },
   };
   const collisionDescriptorSha256 = descriptorSha256(collisionDescriptor);
-  const first = generateTypeScriptBindings(collisionDescriptor, { descriptorSha256: collisionDescriptorSha256 });
-  const second = generateTypeScriptBindings(collisionDescriptor, { descriptorSha256: collisionDescriptorSha256 });
+  const collisionAbiSha256 = abiSha256(collisionDescriptor);
+  const hashes = { descriptorSha256: collisionDescriptorSha256, abiSha256: collisionAbiSha256 };
+  const first = generateTypeScriptBindings(collisionDescriptor, hashes);
+  const second = generateTypeScriptBindings(collisionDescriptor, hashes);
   assert.equal(first, second);
   assert.match(first, /export type RpcContractIdentity2 = false;/u);
-  assert.match(first, /export type RpcProviderRegistration = false;/u);
+  assert.match(first, /export type RpcProviderRegistration2 = false;/u);
   assert.match(first, /export interface ICollisionProvider2/u);
   assert.match(first, /export class CollisionClient2<TTarget = string>/u);
   assert.match(first, /export class CollisionRpcHandler2 implements RpcProviderHandler/u);
   assert.match(first, /export class CollisionRpcClient2<TTarget = string>/u);
   assert.match(first, /readonly FooBar: FooBarClient<TTarget>;/u);
   assert.match(first, /readonly FooBar2: FooBarClient2<TTarget>;/u);
-  assert.doesNotMatch(first, /createCollisionRpcProviderRegistration/u);
+  assert.match(first, /createCollisionRpcProviderRegistration/u);
   const generated = compileGeneratedModule(first, `
 import {
   CollisionRpcClient2,
@@ -885,11 +975,11 @@ void provider;
   assert.equal(typeof generated.CollisionRpcHandler2, "function");
 });
 
-test("generator CLI supplies canonical V1 and V2 hashes", () => {
+test("generator CLI supplies canonical V1 hashes", () => {
   const packageRoot = sdkPackageRoot();
   const temporaryDirectory = mkdtempSync(join(packageRoot, ".generator-cli-"));
   try {
-    for (const [name, currentDescriptor] of [["v1", descriptor], ["v2", v2Descriptor]] as const) {
+    for (const [name, currentDescriptor] of [["basic", descriptor], ["bindings", bindingsDescriptor]] as const) {
       const descriptorPath = join(temporaryDirectory, `${name}.rpc.json`);
       const bindingsPath = join(temporaryDirectory, `${name}.ts`);
       writeFileSync(descriptorPath, `${JSON.stringify(currentDescriptor, null, 2)}\n`, "utf8");
@@ -902,19 +992,14 @@ test("generator CLI supplies canonical V1 and V2 hashes", () => {
         .update(canonicalRpcDescriptorBytes(currentDescriptor))
         .digest("hex");
       assert.match(source, new RegExp(`CONTRACT_DESCRIPTOR_SHA256 = "${expectedDescriptorHash}"`, "u"));
-      if (currentDescriptor.descriptorVersion === 1) {
-        assert.doesNotMatch(source, /createExampleMessagesRpcProviderRegistration/u);
-        assert.doesNotMatch(source, /CONTRACT_ABI_SHA256/u);
-      } else {
-        const expectedAbiHash = createHash("sha256")
-          .update(SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR, "utf8")
-          .update(canonicalRpcAbiProjectionBytes(currentDescriptor))
-          .digest("hex");
-        assert.match(source, new RegExp(`CONTRACT_ABI_SHA256 = "${expectedAbiHash}"`, "u"));
-        assert.match(source, /createExampleV2BindingsRpcProviderRegistration/u);
-        assert.match(source, /descriptorSha256: CONTRACT_DESCRIPTOR_SHA256/u);
-        assert.match(source, /abiSha256: CONTRACT_ABI_SHA256/u);
-      }
+      const expectedAbiHash = createHash("sha256")
+        .update(SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, "utf8")
+        .update(canonicalRpcAbiProjectionBytes(currentDescriptor))
+        .digest("hex");
+      assert.match(source, new RegExp(`CONTRACT_ABI_SHA256 = "${expectedAbiHash}"`, "u"));
+      assert.match(source, /RpcProviderRegistration/u);
+      assert.match(source, /descriptorSha256: CONTRACT_DESCRIPTOR_SHA256/u);
+      assert.match(source, /abiSha256: CONTRACT_ABI_SHA256/u);
     }
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -1220,9 +1305,9 @@ function descriptorSha256(value: RpcContractDescriptor): string {
   return createHash("sha256").update(canonicalRpcDescriptorBytes(value)).digest("hex");
 }
 
-function abiSha256(value: RpcContractDescriptorV2): string {
+function abiSha256(value: RpcContractDescriptor): string {
   return createHash("sha256")
-    .update(SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR, "utf8")
+    .update(SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, "utf8")
     .update(canonicalRpcAbiProjectionBytes(value))
     .digest("hex");
 }

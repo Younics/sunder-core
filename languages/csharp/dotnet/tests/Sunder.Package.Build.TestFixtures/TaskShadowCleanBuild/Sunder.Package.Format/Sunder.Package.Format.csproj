@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Sunder.Package.Format</AssemblyName>
+    <RootNamespace>Sunder.Package.Build.TestFixtures.TaskShadow</RootNamespace>
+    <DefineConstants Condition="'$(ProbeValue)' == 'first'">$(DefineConstants);TASK_SHADOW_FIRST</DefineConstants>
+    <DefineConstants Condition="'$(ProbeValue)' == 'second'">$(DefineConstants);TASK_SHADOW_SECOND</DefineConstants>
+    <BuildProjectReferences Condition="'$(TaskShadowDependencyPropertyRecordFile)' != ''">dependency-local</BuildProjectReferences>
+    <GeneratePackageOnBuild Condition="'$(TaskShadowDependencyPropertyRecordFile)' != ''">dependency-local</GeneratePackageOnBuild>
+    <SunderPackageBuildTaskSourceLockAlreadyHeld Condition="'$(TaskShadowDependencyPropertyRecordFile)' != ''">dependency-local</SunderPackageBuildTaskSourceLockAlreadyHeld>
+    <SunderPackageBuildTaskSourceLockPath Condition="'$(TaskShadowDependencyPropertyRecordFile)' != ''">dependency-local</SunderPackageBuildTaskSourceLockPath>
+    <SunderPackageBuildSourceLockTargetsPath Condition="'$(TaskShadowDependencyPropertyRecordFile)' != ''">dependency-local</SunderPackageBuildSourceLockTargetsPath>
+  </PropertyGroup>
+
+  <Target Name="_ForceTaskShadowFixtureGenerationCompilation"
+          BeforeTargets="CoreCompile"
+          Condition="'$(ProbeValue)' != ''">
+    <Delete Files="$(TargetPath);$(IntermediateOutputPath)$(TargetName).dll" />
+  </Target>
+
+  <Target Name="_RecordTaskShadowDependencyProperties"
+          BeforeTargets="CoreCompile"
+          Condition="'$(TaskShadowDependencyPropertyRecordFile)' != ''">
+    <ItemGroup>
+      <_TaskShadowDependencyProperty Include="BuildProjectReferences=$(BuildProjectReferences)" />
+      <_TaskShadowDependencyProperty Include="GeneratePackageOnBuild=$(GeneratePackageOnBuild)" />
+      <_TaskShadowDependencyProperty Include="SunderPackageBuildTaskSourceLockAlreadyHeld=$(SunderPackageBuildTaskSourceLockAlreadyHeld)" />
+      <_TaskShadowDependencyProperty Include="SunderPackageBuildTaskSourceLockPath=$(SunderPackageBuildTaskSourceLockPath)" />
+      <_TaskShadowDependencyProperty Include="SunderPackageBuildSourceLockTargetsPath=$(SunderPackageBuildSourceLockTargetsPath)" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(TaskShadowDependencyPropertyRecordFile)"
+                      Lines="@(_TaskShadowDependencyProperty)"
+                      Overwrite="true" />
+  </Target>
+</Project>

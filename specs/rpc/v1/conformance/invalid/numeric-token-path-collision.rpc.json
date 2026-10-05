@@ -1,0 +1,33 @@
+{
+  "descriptorVersion": 1,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "contractId": "example.rpc.v1.numericpathcollision",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "example": {
+      "methods": {
+        "read": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
+          "requestSchema": { "$ref": "#/$defs/A.items" },
+          "responseSchema": { "$ref": "#/$defs/A" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "A.items": {
+      "type": "string",
+      "maxLength": 9007199254740990.5
+    },
+    "A": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 1
+      }
+    }
+  }
+}

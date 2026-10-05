@@ -627,7 +627,7 @@ public sealed class RuntimePackageRecoveryCoordinatorTests
         Assert.Equal("candidate-write", await harness.GetStateAsync("failed.package", "value"));
         Assert.Equal(1, harness.GetFactoryCount("failed.package"));
         Assert.False(delays.HasPending("failed.package"));
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        await Assert.ThrowsAsync<RuntimeOperationRejectedException>(async () =>
             await harness.OperationGate.EnterAsync());
 
         harness.FailPackage("other.package", new InvalidOperationException("failure after integrity fence"));
@@ -893,7 +893,7 @@ public sealed class RuntimePackageRecoveryCoordinatorTests
             Assert.DoesNotContain(
                 harness.Events.GetSnapshot().Events,
                 runtimeEvent => runtimeEvent.Kind == RuntimeEventKind.PackageRecoverySucceeded);
-            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Assert.ThrowsAsync<RuntimeOperationRejectedException>(async () =>
                 await harness.OperationGate.EnterAsync());
 
             var shutdownCleanupCalled = false;

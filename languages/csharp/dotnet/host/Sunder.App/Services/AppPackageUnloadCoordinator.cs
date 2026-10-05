@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.Package.Projections;
 
 namespace Sunder.App.Services;
 
@@ -17,6 +18,7 @@ internal sealed class AppPackageUnloadCoordinator(
         ServiceProvider? serviceProvider,
         AppPackageLoadContext? loadContext,
         IAsyncDisposable? targetLifetime = null,
+        PackageProjectionAcquisition? projectionLease = null,
         bool stopRuntimeWork = true)
     {
         var cleanupProven = true;
@@ -50,6 +52,7 @@ internal sealed class AppPackageUnloadCoordinator(
                 serviceProvider,
                 loadContext,
                 targetLifetime,
+                projectionLease,
                 removeWholePackageTracking: packageInfo is not null || targetLifetime is not null));
         return ToCleanupOutcome(cleanupProven);
     }
@@ -79,6 +82,7 @@ internal sealed class AppPackageUnloadCoordinator(
             handle.ServiceProvider,
             handle.LoadContext,
             handle.TargetLifetime,
+            handle.ProjectionLease,
             removeWholePackageTracking: true);
         if (useRetirementDeadline)
         {
@@ -136,6 +140,7 @@ internal sealed class AppPackageUnloadCoordinator(
         object? serviceProvider,
         AppPackageLoadContext? loadContext,
         IAsyncDisposable? targetLifetime,
+        PackageProjectionAcquisition? projectionLease,
         bool removeWholePackageTracking)
     {
         var cleanupProven = true;
@@ -148,8 +153,13 @@ internal sealed class AppPackageUnloadCoordinator(
         {
             assemblyTracker.RemoveLoadContext(loadContext);
         }
-        var canDeletePackageFolder = libraryFolder is null
-            || sharedAssemblyRegistry.TryRemoveProbeDirectories([libraryFolder]);
+        var canDeletePackageFolder = projectionLease is null
+            && (libraryFolder is null
+                || sharedAssemblyRegistry.TryRemoveProbeDirectories([libraryFolder]));
+        if (projectionLease is not null && libraryFolder is not null)
+        {
+            _ = sharedAssemblyRegistry.TryRemoveProbeDirectories([libraryFolder]);
+        }
 
         if (serviceProvider is not null)
         {
@@ -197,6 +207,32 @@ internal sealed class AppPackageUnloadCoordinator(
                 AppCleanupQuarantine.Retain(
                     loadContext,
                     $"unloading app-side package load context for '{packageId}'");
+            }
+        }
+        if (projectionLease is not null)
+        {
+            if (cleanupProven)
+            {
+                try
+                {
+                    await projectionLease.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception exception) when (AppPackageUiFaultPolicy.IsRecoverable(exception))
+                {
+                    cleanupProven = false;
+                    AppCleanupQuarantine.Retain(
+                        projectionLease,
+                        $"releasing immutable package projection for '{packageId}'");
+                    AppSessionLog.WriteError(
+                        $"Failed to release immutable package projection for '{packageId}'.",
+                        exception);
+                }
+            }
+            else
+            {
+                AppCleanupQuarantine.Retain(
+                    projectionLease,
+                    $"retaining immutable package projection after unproven cleanup for '{packageId}'");
             }
         }
         if (packageFolder is not null && canDeletePackageFolder)

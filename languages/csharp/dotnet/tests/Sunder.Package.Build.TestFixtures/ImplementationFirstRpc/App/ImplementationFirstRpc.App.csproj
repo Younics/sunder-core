@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>7.6.5</Version>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <SunderPackageProject>true</SunderPackageProject>
+    <SunderPackageRootProject>..\ImplementationFirstRpc.csproj</SunderPackageRootProject>
+    <SunderSdkPackageVersion>1.1.0</SunderSdkPackageVersion>
+    <SunderSdkProject Condition="'$(SunderSdkProject)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj</SunderSdkProject>
+    <SunderPackageBuildProject Condition="'$(SunderPackageBuildProject)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj</SunderPackageBuildProject>
+    <SunderPackageBuildTargetsPath Condition="'$(SunderPackageBuildTargetsPath)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets</SunderPackageBuildTargetsPath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(SunderReferenceDirectory)' == ''">
+    <ProjectReference Include="$(SunderSdkProject)" />
+    <ProjectReference Include="$(SunderPackageBuildProject)"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(SunderReferenceDirectory)' != ''">
+    <Reference Include="Sunder.Sdk" HintPath="$(SunderReferenceDirectory)Sunder.Sdk.dll" Private="true" />
+    <Reference Include="Microsoft.Extensions.DependencyInjection.Abstractions" HintPath="$(SunderReferenceDirectory)Microsoft.Extensions.DependencyInjection.Abstractions.dll" Private="true" />
+  </ItemGroup>
+
+  <Import Project="$(SunderPackageBuildTargetsPath)" />
+</Project>

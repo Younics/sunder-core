@@ -13,6 +13,7 @@ run_id="$5"
 run_attempt="$6"
 evidence_directory="$7"
 expected_draft="${EXPECTED_RELEASE_DRAFT:-true}"
+allow_production_acceptance_assets="${SUNDER_ALLOW_PRODUCTION_ACCEPTANCE_ASSETS:-false}"
 
 [[ "$component" == "app" || "$component" == "cli" || "$component" == "host" || "$component" == "sdk" ]] \
   || { printf 'Unexpected release component: %s\n' "$component" >&2; exit 2; }
@@ -24,6 +25,8 @@ expected_draft="${EXPECTED_RELEASE_DRAFT:-true}"
   || { printf 'Publication run ID and attempt must be positive decimal integers.\n' >&2; exit 2; }
 [[ "$expected_draft" == "true" || "$expected_draft" == "false" ]] \
   || { printf 'EXPECTED_RELEASE_DRAFT must be true or false.\n' >&2; exit 2; }
+[[ "$allow_production_acceptance_assets" == "true" || "$allow_production_acceptance_assets" == "false" ]] \
+  || { printf 'SUNDER_ALLOW_PRODUCTION_ACCEPTANCE_ASSETS must be true or false.\n' >&2; exit 2; }
 [[ -d "$evidence_directory" && ! -L "$evidence_directory" ]] \
   || { printf 'Publication evidence directory must be a real directory: %s\n' "$evidence_directory" >&2; exit 1; }
 : "${GH_REPO:?GH_REPO must identify the GitHub repository as owner/repo.}"
@@ -89,6 +92,9 @@ case "$component" in
       npm-NOTICES.txt
       node-dependency-notices.json
     )
+    if [[ "$is_prerelease" == false ]]; then
+      expected_artifacts+=(sunder-platform-contracts.v1.json sunder-platform-contracts.receipt.v1.json)
+    fi
     ;;
   host)
     expected_artifacts=(
@@ -179,6 +185,10 @@ jq -e \
   || { printf 'Publication evidence is not bound to the exact repository, workflow, release ID, tag, source, run, attempt, and artifact set.\n' >&2; exit 1; }
 
 head_sha="$(git rev-parse HEAD)"
+if [[ "$component" == sdk && "$is_prerelease" == false ]]; then
+  python3 "$(dirname "$0")/core_catalog_release.py" verify --directory "$evidence_directory" \
+    --release-id "$release_id" --tag "$tag" --source "$source_sha"
+fi
 [[ "$head_sha" == "$source_sha" ]] \
   || { printf 'Promotion checkout %s does not match published source %s.\n' "$head_sha" "$source_sha" >&2; exit 1; }
 GITHUB_SHA="$source_sha" GITHUB_REF="$expected_ref" \
@@ -233,6 +243,21 @@ jq -e \
     and .prerelease == $is_prerelease
   ' <<< "$release_state" >/dev/null \
   || { printf 'GitHub release state does not match the selected tag, draft state, or SemVer kind.\n' >&2; exit 1; }
+
+if [[ "$allow_production_acceptance_assets" == true ]]; then
+  acceptance_pattern="^production-acceptance-${release_id}-[1-9][0-9]*-[1-9][0-9]*-(receipt[.]json|file-[0-9]{3})$"
+  jq -e --arg pattern "$acceptance_pattern" '
+    all(.assets[] | select(.name | startswith("production-acceptance-"));
+      (.name | test($pattern))
+      and .state == "uploaded"
+      and (.size | type == "number" and floor == . and . >= 0)
+      and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")))
+  ' <<< "$release_state" >/dev/null \
+    || { printf 'GitHub release contains a malformed or unhashed production acceptance asset.\n' >&2; exit 1; }
+  SUNDER_ADDITIONAL_RELEASE_ASSETS="$(jq -r --arg pattern "$acceptance_pattern" \
+    '.assets[].name | select(test($pattern))' <<< "$release_state" | sort)"
+  export SUNDER_ADDITIONAL_RELEASE_ASSETS
+fi
 
 EXPECTED_RELEASE_DRAFT="$expected_draft" \
   bash "$(dirname "$0")/verify-github-release-assets.sh" \

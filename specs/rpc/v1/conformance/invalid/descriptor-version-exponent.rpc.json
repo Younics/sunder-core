@@ -1,0 +1,28 @@
+{
+  "descriptorVersion": 1e0,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "contractId": "example.rpc.v1.exponentversion",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "example": {
+      "methods": {
+        "ping": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
+          "requestSchema": { "$ref": "#/$defs/Empty" },
+          "responseSchema": { "$ref": "#/$defs/Empty" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Empty": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  }
+}

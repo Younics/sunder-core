@@ -28,4 +28,30 @@ public sealed class RuntimeHostStartupOptionsTests
 
         Assert.True(options.DevelopmentAllowNonLoopbackRuntimeListen);
     }
+
+    [Fact]
+    public void Parse_PackageConcurrencyDefaultsToTwoAndAcceptsIndependentBounds()
+    {
+        var defaults = RuntimeHostStartupOptions.Parse([]);
+        var configured = RuntimeHostStartupOptions.Parse([
+            "--package-preparation-concurrency", "8",
+            "--package-worker-startup-concurrency", "1",
+        ]);
+
+        Assert.Equal(2, defaults.PackagePreparationConcurrency);
+        Assert.Equal(2, defaults.PackageWorkerStartupConcurrency);
+        Assert.Equal(8, configured.PackagePreparationConcurrency);
+        Assert.Equal(1, configured.PackageWorkerStartupConcurrency);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("9")]
+    [InlineData("not-a-number")]
+    public void Parse_RejectsPackageConcurrencyOutsideOneThroughEight(string value)
+    {
+        Assert.Throws<ArgumentException>(() => RuntimeHostStartupOptions.Parse([
+            "--package-preparation-concurrency", value,
+        ]));
+    }
 }

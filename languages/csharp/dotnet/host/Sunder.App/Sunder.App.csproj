@@ -27,6 +27,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sunder.Package.Hosting\Sunder.Package.Hosting.csproj" />
+    <ProjectReference Include="..\Sunder.Package.Projections\Sunder.Package.Projections.csproj" />
     <ProjectReference Include="..\Sunder.Host.Client\Sunder.Host.Client.csproj" />
     <ProjectReference Include="..\Sunder.Host.Supervisor\Sunder.Host.Supervisor.csproj" ReferenceOutputAssembly="false" OutputItemType="_BundledRuntimeHostTargetPath" PrivateAssets="all" Private="false" GlobalPropertiesToRemove="BaseOutputPath;OutputPath;OutDir" />
     <ProjectReference Include="..\Sunder.Cli\Sunder.Cli.csproj" ReferenceOutputAssembly="false" OutputItemType="_BundledCliTargetPath" PrivateAssets="all" Private="false" GlobalPropertiesToRemove="BaseOutputPath;OutputPath;OutDir" />

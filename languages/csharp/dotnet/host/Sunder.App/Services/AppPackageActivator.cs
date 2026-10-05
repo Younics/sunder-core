@@ -17,7 +17,8 @@ internal sealed class AppPackageActivator(
     Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo = null,
     IAppWebViewFactory? webViewFactory = null,
     IAppWebRpcClientFactory? webRpcClientFactory = null,
-    ExternalBrowserService? externalBrowser = null)
+    ExternalBrowserService? externalBrowser = null,
+    IAppPackagePolicy? packagePolicy = null)
 {
     public async Task ActivateAsync(
         ActivePackageDescriptor package,
@@ -50,6 +51,8 @@ internal sealed class AppPackageActivator(
             throw new InvalidOperationException(
                 $"Package '{package.PackageId}' snapshot target metadata does not match its strict manifest target '{targetKey}'.");
         }
+
+        await (packagePolicy ?? UnavailableAppPackagePolicy.Instance).RequireLoadAsync(source, cancellationToken).ConfigureAwait(false);
 
         if (string.Equals(source.Target.Kind, SunderPackageFormat.WebTargetKind, StringComparison.Ordinal))
         {

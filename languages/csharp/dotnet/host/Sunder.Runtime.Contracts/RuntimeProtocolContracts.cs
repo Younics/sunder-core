@@ -5,9 +5,9 @@ namespace Sunder.Runtime.Contracts;
 public static class RuntimeProtocol
 {
     public const string Identity = "dev.sunder.runtime";
-    public const int CurrentRevision = 8;
-    public const int MinimumSupportedRevision = 8;
-    public const int MaximumSupportedRevision = 8;
+    public const int CurrentRevision = 1;
+    public const int MinimumSupportedRevision = 1;
+    public const int MaximumSupportedRevision = 1;
 }
 
 public static class RuntimeProtocolFeatures
@@ -17,13 +17,15 @@ public static class RuntimeProtocolFeatures
     public const string AtomicPackageSnapshotV1 = "atomic-package-snapshot.v1";
     public const string PackageStageStatusV1 = "package-stage-status.v1";
     public const string DevPackageOwnerLeasesV1 = "dev-package-owner-leases.v1";
+    public const string DevPackageImportsV1 = "dev-package-imports.v1";
     public const string TargetAwarePackageSnapshotsV1 = "target-aware-package-snapshots.v1";
     public const string StartupDiagnosticsV1 = "startup-diagnostics.v1";
-    public const string SchemaFirstRpcV2 = "schema-first-rpc.v2";
-    public const string RpcPermissionsV2 = "rpc-permissions.v2";
-    public const string AppWebRpcV2 = "app-web-rpc.v2";
+    public const string SchemaFirstRpcV1 = "schema-first-rpc.v1";
+    public const string RpcPermissionsV1 = "rpc-permissions.v1";
+    public const string AppWebRpcV1 = "app-web-rpc.v1";
     public const string RuntimeResourcePolicyV1 = "runtime-resource-policy.v1";
     public const string PackageRuntimeRecoveryV1 = "package-runtime-recovery.v1";
+    public const string ExecutionRuntimeManagementV1 = "execution-runtime-management.v1";
 }
 
 public sealed record RuntimeProductVersionDiagnostics(

@@ -100,14 +100,37 @@ public sealed class HostSupervisorProcessIntegrationTests
             Assert.True(system.IsReady);
             Assert.Equal(RuntimeBootstrapState.Ready, system.State);
 
+            var staleTransfer = Path.Combine(runtimeStateRoot, "transfers", $"{Guid.NewGuid():N}.download");
+            Directory.CreateDirectory(Path.GetDirectoryName(staleTransfer)!);
+            File.WriteAllText(staleTransfer, "stale");
+
             var challenge = await runtime.PrepareResetAsync(timeout.Token);
             Assert.False(string.IsNullOrWhiteSpace(challenge.Challenge));
             Assert.True(challenge.ExpiresAtUtc > DateTimeOffset.UtcNow);
+            Assert.True(challenge.SupportsBoundStateRoot);
+            Assert.True(challenge.SupportsHostExecutedReset);
 
-            var drain = await runtime.DrainForResetAsync(challenge.Challenge, timeout.Token);
+            var unbound = await Assert.ThrowsAsync<RuntimeClientException>(() =>
+                runtime.DrainForResetAsync(challenge.Challenge, timeout.Token));
+            Assert.Equal(HttpStatusCode.Conflict, unbound.StatusCode);
+
+            var unmanaged = await Assert.ThrowsAsync<RuntimeClientException>(() => runtime.DrainForResetAsync(
+                challenge.Challenge,
+                requireBoundStateRoot: true,
+                timeout.Token));
+            Assert.Equal(HttpStatusCode.Conflict, unmanaged.StatusCode);
+
+            var reset = await runtime.DrainAndResetLocalStateAsync(
+                challenge,
+                TimeSpan.Zero,
+                timeout.Token);
             Assert.Equal(
                 RuntimeV1StateDescriptor.ResetCategories.Select(static category => category.Id),
-                drain.Categories);
+                reset.Categories.Select(static category => category.Category));
+            Assert.True(reset.Success);
+            Assert.False(File.Exists(staleTransfer));
+            Assert.NotNull(reset.ReceiptRelativePath);
+            Assert.True(File.Exists(Path.Combine(runtimeStateRoot, reset.ReceiptRelativePath)));
 
             var stopped = await WaitForHostStateAsync(
                 authenticated,

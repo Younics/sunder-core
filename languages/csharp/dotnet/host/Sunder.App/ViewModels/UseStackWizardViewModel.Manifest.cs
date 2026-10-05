@@ -116,6 +116,7 @@ public sealed partial class UseStackWizardViewModel
         InstallPlanErrors.Clear();
         _installPlanReady = false;
         _installPlanHasErrors = false;
+        _installPlanResolutionFingerprint = null;
 
         if (_packageRequirements.Count == 0)
         {
@@ -157,6 +158,7 @@ public sealed partial class UseStackWizardViewModel
 
             _installPlanReady = true;
             _installPlanHasErrors = !plan.Success;
+            _installPlanResolutionFingerprint = plan.Success ? plan.ResolutionFingerprint : null;
             ApplyPackageInstallPlan(plan);
             StatusText = plan.Success
                 ? InstallPlanItems.Count == 0

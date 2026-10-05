@@ -20,7 +20,7 @@ import { Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createDeflateRaw } from "node:zlib";
 import {
-  SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR,
+  SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
   canonicalizeDescriptor,
@@ -33,7 +33,13 @@ import type { BuildOptions, Metafile } from "esbuild";
 import { build as buildEsbuild, context, type BuildContext } from "esbuild";
 import type { Plugin as VitePlugin } from "vite" with { "resolution-mode": "import" };
 import { packageToolCompatibility } from "./compatibility";
+import type { RegistryOriginOptions } from "./rpc-contract-lock";
+import { validateDependencyVersionRange } from "./dependency-range";
 import { readProjectDescriptorFile } from "./descriptor-files";
+import {
+  detectRuntimeBinaryFingerprint,
+  inspectNativeBinary,
+} from "./native-binary";
 import {
   asJsonValue,
   currentRid,
@@ -48,10 +54,15 @@ import {
   type LoadedProject,
   type PackageRole,
   type ProviderAudience,
-  type SunderNodePackageConfig,
+  type ResolvedNodePackageConfig as SunderNodePackageConfig,
   type SunderRid,
 } from "./model";
 import { renderBundledDependencyNotice } from "./notices";
+import { ownedRpcPlugins, revalidateOwnedRpc } from "./rpc-authoring-plugin";
+import { validateBaselineSource } from "./rpc-baseline";
+import { authority, importProjection } from "./rpc-package-imports";
+import { withBaselineLease } from "./rpc-baseline-store";
+import { workerResolutionOptions } from "./rpc-runtime-inputs";
 import {
   generateRpcBindingsForLoadedProjectLocked,
   withRpcBindingsOutputLock,
@@ -70,24 +81,31 @@ import {
 const MANIFEST_PATH = "manifest/sunder-package.json";
 const INDEX_PATH = "manifest/content-index.json";
 const ARCHIVE_FORMAT_VERSION = 1;
-const PACKAGE_MANIFEST_VERSION = 3;
+const PACKAGE_MANIFEST_VERSION = 1;
 const CONTENT_INDEX_SCHEMA_VERSION = 1;
-const DEFAULT_MAX_EXECUTABLE_BYTES = 160 * 1024 * 1024;
 const DEFAULT_MAX_PACKAGE_BYTES = MAXIMUM_COMPRESSED_PACKAGE_BYTES;
 const MAXIMUM_ARCHIVE_ENTRIES = 4096;
 const MAXIMUM_ENTRY_BYTES = 256 * 1024 * 1024;
 const MAXIMUM_TOTAL_BYTES = 1024 * 1024 * 1024;
 const MAXIMUM_METADATA_BYTES = 1024 * 1024;
 const MAXIMUM_COMPRESSION_RATIO = 200;
-const NODE_NOTICE_LOGICAL_PATH = "THIRD-PARTY-NOTICES/Node.js-LICENSE.txt";
 const WORKER_NOTICE_LOGICAL_PATH = "THIRD-PARTY-NOTICES/Bundled-Worker-Dependencies.txt";
 const WEB_NOTICE_LOGICAL_PATH = "THIRD-PARTY-NOTICES/Bundled-Web-Dependencies.txt";
+const NODE_EXECUTABLE_HEADER_EVIDENCE_BYTES = 64 * 1024;
+let activeNodeExecutableMetadataPromise: Promise<ActiveNodeExecutableMetadata> | undefined;
+let activeNodeExecutableHashesPromise: Promise<ActiveNodeExecutableHashes> | undefined;
+export const NODE_EXECUTION_RUNTIME = {
+  id: "sunder.runtime.node",
+  versionRange: ">=24.18.1 <25.0.0",
+  moduleAbi: "sunder.node-worker-module.v1",
+} as const;
+const NODE_WORKER_ENTRY_POINT = "bin/worker.cjs";
 
 export interface PreparedProject extends LoadedProject {
   readonly contracts: readonly LoadedContract[];
 }
 
-export interface DevBuildOptions {
+export interface DevBuildOptions extends RegistryOriginOptions {
   readonly projectPath: string;
   readonly watch: boolean;
 }
@@ -105,8 +123,7 @@ interface DevWatchSession {
 export interface LeafBuildInput {
   readonly project: PreparedProject;
   readonly rid: SunderRid;
-  readonly executablePath: string;
-  readonly nodeNoticePath: string;
+  readonly modulePath: string;
   readonly workerNoticePath: string;
   readonly discoveryRoot: string;
 }
@@ -116,8 +133,9 @@ export interface LeafDiscoverySource {
   readonly discoveryRoot: string;
 }
 
-export async function prepareProject(projectPath: string): Promise<PreparedProject> {
-  const project = await loadProject(projectPath);
+export async function prepareProject(projectPath: string, options: RegistryOriginOptions = {}): Promise<PreparedProject> {
+  const project = await loadProject(projectPath, options);
+  if (project.ownedRpc !== undefined) return project;
   const contracts: LoadedContract[] = [];
   const identities = new Set<string>();
   const descriptorPaths = new Map<string, string>();
@@ -128,9 +146,6 @@ export async function prepareProject(projectPath: string): Promise<PreparedProje
       sourcePath,
       `Contract descriptor '${configured.path}'`,
     ));
-    if (descriptor.descriptorVersion !== 2) {
-      throw new Error(`Contract descriptor '${configured.path}' uses descriptorVersion ${descriptor.descriptorVersion}; Package Manifest V3 requires RPC descriptorVersion 2.`);
-    }
     const canonicalBytes = Buffer.from(canonicalRpcDescriptorBytes(descriptor));
     const canonical = canonicalBytes.toString("utf8");
     const identity = `${descriptor.contractId}\0${descriptor.version}`;
@@ -174,11 +189,11 @@ export async function prepareProject(projectPath: string): Promise<PreparedProje
 export async function buildDevPackage(options: DevBuildOptions): Promise<void> {
   const rid = currentRid();
   if (options.watch) {
-    await watchDevPackage(resolve(options.projectPath), rid);
+    await watchDevPackage(resolve(options.projectPath), rid, options);
     return;
   }
   await withRpcBindingsOutputLock(options.projectPath, async () => {
-    const project = await prepareProject(options.projectPath);
+    const project = await prepareProject(options.projectPath, options);
     await generateRpcBindingsForLoadedProjectLocked(project);
     const workRoot = resolve(project.outputRoot, ".sunder-dev-work");
     await withOutputLocks([workRoot], async () => {
@@ -200,6 +215,7 @@ export async function buildDevPackage(options: DevBuildOptions): Promise<void> {
       );
       const stagedOutputs = [staged.output, staged.marker];
       try {
+        await revalidateOwnedRpc(project);
         await commitStagedOutputs(stagedOutputs);
       } finally {
         await cleanupStagedOutputs(stagedOutputs);
@@ -221,12 +237,15 @@ function devBuildOptions(project: PreparedProject, bundlePath: string): BuildOpt
     sourcemap: false,
     metafile: true,
     logLevel: "info",
-    alias: { "@sunder/sdk": require.resolve("@sunder/sdk") },
+    ...workerResolutionOptions,
+    ...(project.ownedRpc === undefined ? {} : { tsconfigRaw: {} }),
+    plugins: ownedRpcPlugins(project),
   };
 }
 
-async function watchDevPackage(projectRoot: string, rid: SunderRid): Promise<void> {
+async function watchDevPackage(projectRoot: string, rid: SunderRid, options: RegistryOriginOptions): Promise<void> {
   let activeSession: DevWatchSession | undefined;
+  const producerWatchers = new Map<string, FSWatcher>();
   let operationTail = Promise.resolve();
   let operationTimer: NodeJS.Timeout | undefined;
   let pendingRestart = false;
@@ -271,6 +290,14 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid): Promise<voi
     });
   };
   const createSessionLocked = async (project: PreparedProject): Promise<DevWatchSession> => {
+    const producerFiles = new Set(project.ownedRpc?.producerFiles.map(pathIdentity) ?? []);
+    for (const directory of new Set((project.ownedRpc?.producerFiles ?? []).map(dirname))) if (!producerWatchers.has(directory)) {
+      const watcher = watchFiles(directory, (_event, name) => {
+        if (name === null || producerFiles.has(pathIdentity(resolve(directory, name.toString())))) scheduleOperation(true);
+      });
+      watcher.on("error", report);
+      producerWatchers.set(directory, watcher);
+    }
     const workRoot = resolve(project.outputRoot, `.sunder-dev-work.stage-${randomUUID()}`);
     await rm(workRoot, { recursive: true, force: true });
     await mkdir(workRoot, { recursive: true });
@@ -299,7 +326,7 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid): Promise<voi
     await disposeSession(previous);
     if (stopping) return;
     await withRpcBindingsOutputLock(projectRoot, async () => {
-      const project = await prepareProject(projectRoot);
+      const project = await prepareProject(projectRoot, options);
       await generateRpcBindingsForLoadedProjectLocked(project);
       const session = await createSessionLocked(project);
       activeSession = session;
@@ -338,6 +365,7 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid): Promise<voi
       return;
     }
     const relativeName = fileName.toString().replaceAll("\\", "/");
+    if (/sunder-contracts\.owned\.json\.sunder-output\.lock(?:\.|\/|$)/u.test(relativeName)) return;
     const segments = relativeName.split("/");
     if (segments.some((segment) => segment === "node_modules"
       || segment === ".git"
@@ -357,8 +385,11 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid): Promise<voi
       ...(session.project.config.rpcBindings ?? []).map((binding, index) => (
         resolveInside(session.project.root, binding.path, `rpcBindings[${index}].path`)
       )),
+      ...Object.values(session.project.config.nativeAssets ?? {}).flatMap((assets) => (
+        assets.map((asset) => resolveInside(session.project.root, asset.sourcePath, "native asset source"))
+      )),
     ].map(pathIdentity));
-    scheduleOperation([...structuralPaths].some((path) => path === changedIdentity || isInside(changedIdentity, path)));
+    scheduleOperation(session.project.ownedRpc !== undefined || [...structuralPaths].some((path) => path === changedIdentity || isInside(changedIdentity, path)));
   });
   projectWatcher.on("error", report);
   try {
@@ -372,6 +403,7 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid): Promise<voi
         process.off("SIGTERM", stop);
         if (operationTimer !== undefined) clearTimeout(operationTimer);
         projectWatcher.close();
+        for (const watcher of producerWatchers.values()) watcher.close();
         const session = activeSession;
         activeSession = undefined;
         void enqueue(() => disposeSession(session)).finally(resolvePromise);
@@ -381,6 +413,7 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid): Promise<voi
     });
   } finally {
     projectWatcher.close();
+    for (const watcher of producerWatchers.values()) watcher.close();
     await disposeSession(activeSession);
     await operationTail;
   }
@@ -394,6 +427,7 @@ export async function bundleProduction(project: PreparedProject, rid: SunderRid,
 }
 
 export async function bundleProductionWithGeneratedRpcBindings(project: PreparedProject, rid: SunderRid, outputPath: string): Promise<string> {
+  if (!SUPPORTED_RIDS.includes(rid)) throw new Error(`Unsupported exact RID '${rid}'.`);
   await mkdir(dirname(outputPath), { recursive: true });
   const result = await buildEsbuild({
     absWorkingDir: project.root,
@@ -402,20 +436,22 @@ export async function bundleProductionWithGeneratedRpcBindings(project: Prepared
     bundle: true,
     platform: "node",
     format: "cjs",
-    target: "node24.18",
+    target: "node24",
     sourcemap: false,
     metafile: true,
     minify: true,
     legalComments: "none",
     logLevel: "info",
-    alias: { "@sunder/sdk": require.resolve("@sunder/sdk") },
+    ...workerResolutionOptions,
+    ...(project.ownedRpc === undefined ? {} : { tsconfigRaw: {} }),
+    plugins: ownedRpcPlugins(project),
   });
   return await writeWorkerNotice(project, outputPath, result.metafile);
 }
 
-export async function buildWebTarget(projectPath: string, configuredRid?: SunderRid): Promise<string | null> {
+export async function buildWebTarget(projectPath: string, configuredRid?: SunderRid, options: RegistryOriginOptions = {}): Promise<string | null> {
   return await withRpcBindingsOutputLock(projectPath, async () => {
-    const project = await prepareProject(projectPath);
+    const project = await prepareProject(projectPath, options);
     if (project.config.app === undefined) return null;
     await generateRpcBindingsForLoadedProjectLocked(project);
     const rid = configuredRid ?? currentRid();
@@ -435,31 +471,28 @@ export async function buildWebTarget(projectPath: string, configuredRid?: Sunder
 export async function writeTargetLeaf(input: LeafBuildInput): Promise<string> {
   const leafRoot = resolve(input.project.outputRoot, "targets", input.rid);
   const discoveryRoot = requireDiscoveryRoot(input.discoveryRoot, leafRoot);
-  const executableName = `${safeFileName(input.project.config.id)}${input.rid.startsWith("win-") ? ".exe" : ""}`;
-  const logicalEntryPoint = `bin/${executableName}`;
-  await requireRegularFile(input.nodeNoticePath, "Node.js distribution notice");
+  await requireRegularFile(input.modulePath, "Bundled Worker module");
   await requireRegularFile(input.workerNoticePath, "Bundled worker dependency notice");
   const compatibility = packageToolCompatibility();
   const manifest = createManifest(input.project, [{
     role: "runtime",
     rid: input.rid,
     kind: "worker",
-    entryPoint: logicalEntryPoint,
+    entryPoint: NODE_WORKER_ENTRY_POINT,
     targetFramework: "node24",
     sdkVersion: compatibility.sdkVersion,
     requiredHostCapabilities: workerTargetCapabilities(input.project.config),
+    executionRuntime: NODE_EXECUTION_RUNTIME,
   }]);
   await replaceGeneratedDirectory(
     leafRoot,
     "Sunder Node target leaf generated output v1\n",
     async (stagingRoot) => {
-      const targetExecutable = resolve(stagingRoot, "payload", "runtime", input.rid, "bin", executableName);
-      await mkdir(dirname(targetExecutable), { recursive: true });
-      await copyFile(input.executablePath, targetExecutable);
+      const targetModule = resolve(stagingRoot, "payload", "runtime", input.rid, ...NODE_WORKER_ENTRY_POINT.split("/"));
+      await mkdir(dirname(targetModule), { recursive: true });
+      await copyFile(input.modulePath, targetModule);
+      await copyNativeAssets(input.project, input.rid, stagingRoot);
       await copyContracts(input.project, stagingRoot);
-      const noticePath = resolve(stagingRoot, "payload", "runtime", input.rid, ...NODE_NOTICE_LOGICAL_PATH.split("/"));
-      await mkdir(dirname(noticePath), { recursive: true });
-      await copyFile(input.nodeNoticePath, noticePath);
       const workerNoticePath = resolve(stagingRoot, "payload", "runtime", input.rid, ...WORKER_NOTICE_LOGICAL_PATH.split("/"));
       await mkdir(dirname(workerNoticePath), { recursive: true });
       await copyFile(input.workerNoticePath, workerNoticePath);
@@ -467,6 +500,8 @@ export async function writeTargetLeaf(input: LeafBuildInput): Promise<string> {
     },
     false,
     [discoveryRoot],
+    [],
+    () => revalidateOwnedRpc(input.project),
   );
   return leafRoot;
 }
@@ -503,17 +538,28 @@ async function writeWebTargetLeafLocked(
     async (stagingRoot) => {
       await validateWebOutput(app, webRoot);
       await copyDirectory(webRoot, resolve(stagingRoot, "payload", "app", rid));
-      await copyContracts(project, stagingRoot);
+      await copyContracts(project, stagingRoot, "app");
       await writeCanonicalPackageMetadata(stagingRoot, createManifest(project, [webTarget(app, rid)]));
     },
+    false,
+    () => revalidateOwnedRpc(project),
   );
+}
+
+export function assertRpcReleaseSupported(project: LoadedProject): void {
+  if (project.config.schemaVersion === 3 && project.config.rpc !== undefined) {
+    if (!project.ownedRpc?.baseline) throw new Error("V3 RPC release packing is denied without an accepted owned baseline; restore it or run first contracts accept before generation.");
+    validateBaselineSource(project.ownedRpc.baseline, project.ownedRpc.contracts, true);
+  }
 }
 
 export async function aggregateAndPack(
   projectPath: string,
   configuredSources: readonly LeafDiscoverySource[] = [],
-): Promise<{ packageRoot: string; archivePath: string; bytes: number }> {
-  const project = await prepareProject(projectPath);
+  options: RegistryOriginOptions = {},
+): Promise<{ packageRoot: string; archivePath: string; evidencePath: string; bytes: number }> {
+  const project = await prepareProject(projectPath, options);
+  assertRpcReleaseSupported(project);
   const targetsRoot = resolve(project.outputRoot, "targets");
   const sources = configuredSources.length === 0
     ? [{ path: targetsRoot, discoveryRoot: targetsRoot }]
@@ -524,12 +570,13 @@ export async function aggregateAndPack(
   const discoveryRoots = [...new Map(sources.map((source) => [pathIdentity(source.discoveryRoot), source.discoveryRoot])).values()];
   const packageRoot = resolve(project.outputRoot, "package");
   const archivePath = resolve(project.outputRoot, `${project.config.id}.${project.config.version}.sunderpkg`);
+  const evidencePath = resolve(project.outputRoot, `${project.config.id}.${project.config.version}.package-evidence.json`);
   return await withOutputLocks(discoveryRoots.map(targetLeafDiscoveryKey), async () => {
     const discovered = (await Promise.all(sources.map((source) => discoverLeaves(source.path)))).flat();
     const leafRoots = [...new Map(discovered.map((path) => [pathIdentity(path), path])).values()];
     if (leafRoots.length === 0) throw new Error("No canonical package target leaves were found.");
-    return await withOutputLocks([...leafRoots, packageRoot, archivePath], async () => {
-      const leaves = await Promise.all(leafRoots.map((root) => readLeaf(root, project.config)));
+    return await withOutputLocks([...leafRoots, packageRoot, archivePath, evidencePath], async () => {
+      const leaves = await Promise.all(leafRoots.map((root) => readLeaf(root, project.config, project)));
       if (leaves.length > 12) throw new Error("A universal Sunder package may contain at most 12 exact targets.");
       const targetKeys = new Set<string>();
       for (const leaf of leaves) {
@@ -539,15 +586,18 @@ export async function aggregateAndPack(
           targetKeys.add(key);
         }
       }
-      const fingerprint = packageMetadataFingerprint(leaves[0]?.manifest);
-      if (leaves.some((leaf) => packageMetadataFingerprint(leaf.manifest) !== fingerprint)) {
-        throw new Error("Aggregate target leaves disagree on package-wide manifest metadata.");
-      }
-      if (fingerprint !== packageMetadataFingerprint(createManifest(project, []))) {
-        throw new Error("Aggregate target leaves do not match the configured package identity and metadata.");
+      validateConfiguredNativeAssetLeaves(leaves, project.config);
+      if (project.ownedRpc && (project.ownedRpc.imports.lock.packageArtifacts.size || project.ownedRpc.imports.lock.platformImports.size)) {
+        for (const leaf of leaves) if (packageMetadataFingerprint(leaf.manifest) !== packageMetadataFingerprint(createManifest(project, leaf.manifest.targets)))
+          throw new Error("Aggregate target leaf import metadata differs from the fresh role-scoped source projection.");
+      } else {
+        const fingerprint = packageMetadataFingerprint(leaves[0]?.manifest);
+        if (leaves.some((leaf) => packageMetadataFingerprint(leaf.manifest) !== fingerprint)) throw new Error("Aggregate target leaves disagree on package-wide manifest metadata.");
+        if (fingerprint !== packageMetadataFingerprint(createManifest(project, []))) throw new Error("Aggregate target leaves do not match the configured package identity and metadata.");
       }
       await assertReplaceableGeneratedDirectory(packageRoot);
       await assertReplaceableGeneratedFile(archivePath, "package archive");
+      await assertReplaceableGeneratedFile(evidencePath, "package ownership evidence");
       const targets = leaves.flatMap((leaf) => leaf.manifest.targets).sort(compareTargets);
       const declarations: RpcManifestDeclarations = {
         usesContracts: unionDeclarations(
@@ -569,14 +619,36 @@ export async function aggregateAndPack(
       if (rpcDeclarationsFingerprint(aggregateManifest) !== rpcDeclarationsFingerprint(configuredManifest)) {
         throw new Error("Aggregate target leaves do not exactly match the configured role-scoped RPC uses and providers.");
       }
+      if (project.ownedRpc) {
+        const completeRoles = new Set<PackageRole>(["runtime"]);
+        if (targets.some((target) => target.role === "app")) completeRoles.add("app");
+        const complete = configuredRpcDeclarations(project, completeRoles);
+        if (canonicalizeDescriptor(asJsonValue(complete)) !== canonicalizeDescriptor(asJsonValue(declarations))) throw new Error("Owned release requires the complete source provider/use set, including every runtime provider.");
+        // Prebuilt leaves are not source evidence. Compile fresh ordinary source
+        // and compare the production module too, even for metadata-identical edits.
+        const fresh = await buildEsbuild({ absWorkingDir: project.root, entryPoints: [resolveInside(project.root, project.config.entry, "entry")],
+          bundle: true, platform: "node", format: "cjs", target: "node24", sourcemap: false, minify: true, legalComments: "none", logLevel: "silent",
+          ...workerResolutionOptions, tsconfigRaw: {}, write: false, plugins: ownedRpcPlugins(project) });
+        const expectedHash = sha256(fresh.outputFiles![0]!.contents);
+        for (const leaf of leaves) if (leaf.manifest.targets[0]!.role === "runtime" && leaf.files.get(NODE_WORKER_ENTRY_POINT)?.sha256 !== expectedHash) throw new Error("Prebuilt Worker module differs from fresh full ordinary source; rebuild before release packing.");
+      }
       const stagedPackage = await stageGeneratedDirectory(
         packageRoot,
         "Sunder package aggregate generated output v1\n",
         async (stagingRoot) => {
           const logicalPaths = new Set(leaves.flatMap((leaf) => [...leaf.files.keys()]));
+          const packageSharedPaths = new Set(aggregateManifest.contractBundles.map((bundle) => bundle.descriptorPath));
           for (const logicalPath of [...logicalPaths].sort(ordinal)) {
             const occurrences = leaves.filter((leaf) => leaf.files.has(logicalPath));
-            if (occurrences.length === leaves.length && identical(occurrences, logicalPath)) {
+            if (isExactRidNativeAsset(logicalPath, occurrences, project.config)) {
+              for (const leaf of occurrences) {
+                const target = single(leaf.manifest.targets, "Target leaf must contain one exact target for aggregation.");
+                await copyLeafFile(leaf, logicalPath, resolve(stagingRoot, "payload", target.role, target.rid, ...logicalPath.split("/")));
+              }
+              continue;
+            }
+            if (packageSharedPaths.has(logicalPath)
+              && identical(occurrences, logicalPath)) {
               await copyLeafFile(occurrences[0]!, logicalPath, resolve(stagingRoot, "payload", "shared", ...logicalPath.split("/")));
               continue;
             }
@@ -595,6 +667,10 @@ export async function aggregateAndPack(
                 continue;
               }
             }
+            if (occurrences.length === leaves.length && identical(occurrences, logicalPath)) {
+              await copyLeafFile(occurrences[0]!, logicalPath, resolve(stagingRoot, "payload", "shared", ...logicalPath.split("/")));
+              continue;
+            }
             for (const leaf of occurrences) {
               const target = single(leaf.manifest.targets, "Target leaf must contain one exact target for aggregation.");
               await copyLeafFile(leaf, logicalPath, resolve(stagingRoot, "payload", target.role, target.rid, ...logicalPath.split("/")));
@@ -607,13 +683,32 @@ export async function aggregateAndPack(
         finalPath: archivePath,
         stagedPath: `${archivePath}.stage-${randomUUID()}`,
       };
-      const stagedOutputs = [stagedPackage.output, stagedPackage.marker, stagedArchive];
+      const stagedEvidence: StagedOutput = {
+        finalPath: evidencePath,
+        stagedPath: `${evidencePath}.stage-${randomUUID()}`,
+      };
+      const stagedOutputs = [stagedPackage.output, stagedPackage.marker, stagedArchive, stagedEvidence];
       try {
         const maximum = project.config.maximumPackageBytes ?? DEFAULT_MAX_PACKAGE_BYTES;
         const bytes = await writeDeterministicZip(stagedPackage.output.stagedPath, stagedArchive.stagedPath, maximum);
-        await commitStagedOutputs(stagedOutputs);
+        const evidence = await createPackageOwnershipEvidence(
+          stagedPackage.output.stagedPath,
+          aggregateManifest,
+          project.config,
+          stagedArchive.stagedPath,
+          bytes,
+        );
+        await writeJson(stagedEvidence.stagedPath, evidence);
+        const commit = async (): Promise<void> => {
+          await revalidateOwnedRpc(project);
+          assertRpcReleaseSupported(project);
+          await commitStagedOutputs(stagedOutputs);
+        };
+        if (project.ownedRpc) await withBaselineLease(project.ownedRpc.baselineInput, commit);
+        else await commit();
         process.stdout.write(`Sunder package size: ${bytes} bytes (${targets.length} exact RID target${targets.length === 1 ? "" : "s"})\n`);
-        return { packageRoot, archivePath, bytes };
+        process.stdout.write(`Sunder package ownership evidence: ${evidencePath}\n`);
+        return { packageRoot, archivePath, evidencePath, bytes };
       } finally {
         await cleanupStagedOutputs(stagedOutputs);
       }
@@ -621,16 +716,14 @@ export async function aggregateAndPack(
   });
 }
 
-export function maximumExecutableBytes(config: SunderNodePackageConfig): number {
-  return config.maximumExecutableBytes ?? DEFAULT_MAX_EXECUTABLE_BYTES;
-}
-
 function workerTargetCapabilities(config: SunderNodePackageConfig): readonly string[] {
   const compatibility = packageToolCompatibility();
   return [
-    "rpc.v2",
+    "core.v1",
+    "execution-runtime.v1",
+    "rpc.v1",
     compatibility.sdkBaselineCapability,
-    "worker-protocol.v3",
+    "worker-protocol.v1",
     ...config.workerCapabilities,
   ].sort(ordinal);
 }
@@ -643,59 +736,46 @@ async function emitDevTree(
   webRoot?: string,
 ): Promise<void> {
   const root = resolve(project.outputRoot, "sunder-dev");
-  const sidecarPath = `${root}.sunder-node-dev.json`;
-  const logicalEntryPoint = "worker.cjs";
+  const obsoleteSidecarPath = `${root}.sunder-node-dev.json`;
   const compatibility = packageToolCompatibility();
   const targets: TargetManifest[] = [{
     role: "runtime",
     rid,
     kind: "worker",
-    entryPoint: logicalEntryPoint,
-    targetFramework: `node${process.versions.node.split(".")[0]}`,
+    entryPoint: NODE_WORKER_ENTRY_POINT,
+    targetFramework: "node24",
     sdkVersion: compatibility.sdkVersion,
     requiredHostCapabilities: workerTargetCapabilities(project.config),
+    executionRuntime: NODE_EXECUTION_RUNTIME,
   }];
   if (project.config.app !== undefined) targets.push(webTarget(project.config.app, rid));
   const manifest = createManifest(project, targets);
-  await withOutputLocks([root, sidecarPath], async () => {
+  await withOutputLocks([root, obsoleteSidecarPath], async () => {
     await assertReplaceableGeneratedDirectory(root);
-    await assertReplaceableGeneratedFile(sidecarPath, "Node dev sidecar");
-    let contentIdentity = "";
+    await assertReplaceableGeneratedFile(obsoleteSidecarPath, "legacy Node dev sidecar");
     const stagedDirectory = await stageGeneratedDirectory(
       root,
       "Sunder Node dev generated output v1\n",
       async (stagingRoot) => {
-        const destination = resolve(stagingRoot, "payload", "runtime", rid, logicalEntryPoint);
+        const destination = resolve(stagingRoot, "payload", "runtime", "shared", ...NODE_WORKER_ENTRY_POINT.split("/"));
         await mkdir(dirname(destination), { recursive: true });
         await copyFile(bundlePath, destination);
-        const workerNoticePath = resolve(stagingRoot, "payload", "runtime", rid, ...WORKER_NOTICE_LOGICAL_PATH.split("/"));
+        await copyNativeAssets(project, rid, stagingRoot);
+        const workerNoticePath = resolve(stagingRoot, "payload", "runtime", "shared", ...WORKER_NOTICE_LOGICAL_PATH.split("/"));
         await mkdir(dirname(workerNoticePath), { recursive: true });
         await copyFile(workerNoticeSourcePath, workerNoticePath);
         if (webRoot !== undefined) {
           await copyDirectory(webRoot, resolve(stagingRoot, "payload", "app", rid));
         }
         await copyContracts(project, stagingRoot);
-        contentIdentity = (await writeCanonicalPackageMetadata(stagingRoot, manifest)).contentIdentity;
+        await writeCanonicalPackageMetadata(stagingRoot, manifest);
       },
     );
-    const stagedSidecar: StagedOutput = {
-      finalPath: sidecarPath,
-      stagedPath: `${sidecarPath}.stage-${randomUUID()}`,
-    };
-    const stagedOutputs = [stagedDirectory.output, stagedDirectory.marker, stagedSidecar];
+    const stagedOutputs = [stagedDirectory.output, stagedDirectory.marker];
     try {
-      await writeJson(stagedSidecar.stagedPath, {
-        schemaVersion: 1,
-        kind: "node",
-        packageId: project.config.id,
-        packageVersion: project.config.version,
-        rid,
-        entryPoint: logicalEntryPoint,
-        nodePath: resolve(process.execPath),
-        nodeVersion: process.version,
-        contentIdentity,
-      });
+      await revalidateOwnedRpc(project);
       await commitStagedOutputs(stagedOutputs);
+      await rm(obsoleteSidecarPath, { force: true });
     } finally {
       await cleanupStagedOutputs(stagedOutputs);
     }
@@ -707,15 +787,18 @@ function createManifest(
   targets: readonly TargetManifest[],
   declarations?: RpcManifestDeclarations,
 ): PackageManifest {
-  const contractBundles = project.contracts.map((contract) => ({
+  const targetRoles = new Set<PackageRole>(targets.map((target) => target.role));
+  const imports = project.ownedRpc?.imports;
+  const contractBundles = project.contracts.filter(contract => !contract.imported || targetRoles.has("runtime")).map((contract): ContractBundleManifest => ({
     contractId: contract.descriptor.contractId,
     version: contract.descriptor.version,
     descriptorPath: contract.descriptorPath,
     descriptorSha256: contract.descriptorSha256,
     abiSha256: contract.abiSha256,
     exposure: contract.exposure,
+    ...(contract.imported ? { source: "imported" as const, ...authority(contract.imported) as Pick<ContractBundleManifest, "authorityKind" | "authorityId" | "selectedAuthorityRelease" | "selectedAuthorityContentIdentity"> }
+      : { source: "owned" as const, authorityKind: "package" as const, authorityId: project.config.id }),
   })).sort((left, right) => ordinal(`${left.contractId}\0${left.version}`, `${right.contractId}\0${right.version}`));
-  const targetRoles = new Set<PackageRole>(targets.map((target) => target.role));
   const configuredDeclarations = configuredRpcDeclarations(project, targetRoles);
   const selectedDeclarations = declarations ?? configuredDeclarations;
   const manifest: PackageManifest = {
@@ -725,13 +808,18 @@ function createManifest(
     name: project.config.name,
     ...(project.config.summary === undefined ? {} : { summary: project.config.summary }),
     version: project.config.version,
-    dependsOn: [...(project.config.dependencies ?? [])],
+    dependsOn: [...(project.config.dependencies ?? []).map((dependency) => ({
+      packageId: dependency.packageId,
+      versionRange: dependency.versionRange,
+      presence: "required" as const,
+    })), ...(imports && targetRoles.has("runtime") ? imports.dependencies : [])].sort((a, b) => ordinal(a.packageId, b.packageId)),
     targets: [...targets].sort(compareTargets),
     contractBundles,
     usesContracts: [...selectedDeclarations.usesContracts].sort(compareContractUses),
     provides: [...selectedDeclarations.provides].sort(compareProviders),
+    ...(imports ? importProjection(imports, targetRoles, project.ownedRpc!.importedProviders) : { packageArtifactImports: [], packageApiImports: [], providerImports: [], platformImports: [] }),
   };
-  validateRpcManifestMetadata(manifest, targetRoles, "Generated package manifest");
+  validateManifestMetadata(manifest, targetRoles, "Generated package manifest", project.ownedRpc ? manifest : undefined);
   return manifest;
 }
 
@@ -776,11 +864,37 @@ function exactContract(project: PreparedProject, contractId: string, contractVer
   return contract;
 }
 
-async function copyContracts(project: PreparedProject, packageRoot: string): Promise<void> {
-  for (const contract of project.contracts) {
+async function copyContracts(project: PreparedProject, packageRoot: string, role: PackageRole = "runtime"): Promise<void> {
+  for (const contract of project.contracts.filter(contract => !contract.imported || role === "runtime")) {
     const path = resolve(packageRoot, "payload", "shared", ...contract.descriptorPath.split("/"));
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, contract.canonicalBytes);
+  }
+}
+
+async function copyNativeAssets(project: PreparedProject, rid: SunderRid, packageRoot: string): Promise<void> {
+  const projectRealPath = await realpath(project.root);
+  for (const [index, asset] of (project.config.nativeAssets?.[rid] ?? []).entries()) {
+    const sourcePath = resolveInside(project.root, asset.sourcePath, `nativeAssets.${rid}[${index}].sourcePath`);
+    await requireRegularFile(sourcePath, `Native asset '${asset.sourcePath}'`);
+    const sourceRealPath = await realpath(sourcePath);
+    if (!isInside(projectRealPath, sourceRealPath)) {
+      throw new Error(`Native asset source '${asset.sourcePath}' resolves outside the package project.`);
+    }
+    const destination = resolve(packageRoot, "payload", "runtime", rid, ...asset.targetPath.split("/"));
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(sourcePath, destination);
+    const classification = await classifyRuntimePayloadFile(
+      asset.targetPath,
+      destination,
+      rid,
+      project.config,
+    );
+    if (classification.runtimeOwned) {
+      throw new Error(
+        `Native asset '${asset.sourcePath}' contains forbidden execution-runtime closure at '${asset.targetPath}' (${classification.detail}).`,
+      );
+    }
   }
 }
 
@@ -793,6 +907,7 @@ async function writeWorkerNotice(
   const moduleIds = new Set<string>();
   for (const output of Object.values(metafile.outputs)) {
     for (const [moduleId, contribution] of Object.entries(output.inputs)) {
+      if (moduleId.startsWith("sunder-owned-rpc:") && project.ownedRpc?.files.has(moduleId.slice("sunder-owned-rpc:".length))) continue;
       if (contribution.bytesInOutput > 0) moduleIds.add(moduleId);
     }
   }
@@ -850,6 +965,7 @@ async function buildWebAssetsLocked(project: PreparedProject, outputRoot: string
   );
   const stagedOutputs = [staged.output, staged.marker];
   try {
+    await revalidateOwnedRpc(project);
     await commitStagedOutputs(stagedOutputs);
   } finally {
     await cleanupStagedOutputs(stagedOutputs);
@@ -910,7 +1026,7 @@ function webTarget(app: AppConfig, rid: SunderRid): TargetManifest {
     entryPoint: app.entryPoint,
     targetFramework: "web",
     sdkVersion: compatibility.sdkVersion,
-    requiredHostCapabilities: ["rpc.v2", compatibility.sdkBaselineCapability, "views.v1"],
+    requiredHostCapabilities: ["core.v1", "rpc.v1", compatibility.sdkBaselineCapability, "views.v1"],
     views: app.views.map((view) => ({ ...view })),
   };
 }
@@ -941,6 +1057,108 @@ async function writeCanonicalPackageMetadata(root: string, manifest: PackageMani
   return { contentIdentity };
 }
 
+async function createPackageOwnershipEvidence(
+  packageRoot: string,
+  manifest: PackageManifest,
+  config: SunderNodePackageConfig,
+  archivePath: string,
+  archiveBytes: number,
+): Promise<PackageOwnershipEvidence> {
+  const contentIndex = JSON.parse(await readFile(resolve(packageRoot, ...INDEX_PATH.split("/")), "utf8")) as ContentIndex;
+  const entries = [...contentIndex.files].sort((left, right) => ordinal(left.path, right.path));
+  const targets: PackageTargetOwnershipEvidence[] = [];
+  const runtimeClosure = new Map<string, { readonly entry: ContentIndexEntry; readonly detail: string }>();
+  for (const target of manifest.targets) {
+    const projected = new Map<string, { readonly entry: ContentIndexEntry; readonly layer: PayloadOwnershipLayer }>();
+    for (const entry of entries) {
+      const owned = targetPayloadOwnership(entry.path, target);
+      if (owned === null) continue;
+      if (projected.has(owned.logicalPath)) {
+        throw new Error(`Package ownership evidence found projected collision '${owned.logicalPath}' for '${target.role}/${target.rid}'.`);
+      }
+      projected.set(owned.logicalPath, { entry, layer: owned.layer });
+    }
+    const nativeAssets: PackageNativeAssetEvidence[] = [];
+    const targetRuntimeClosure = new Map<string, ContentIndexEntry>();
+    const ownership = { packageSharedBytes: 0, roleSharedBytes: 0, exactRidBytes: 0 };
+    for (const [logicalPath, item] of [...projected].sort(([left], [right]) => ordinal(left, right))) {
+      ownership[item.layer] += item.entry.size;
+      const fullPath = resolve(packageRoot, ...item.entry.path.split("/"));
+      const classification = target.role === "runtime"
+        ? await classifyRuntimePayloadFile(
+          logicalPath,
+          fullPath,
+          target.rid as SunderRid,
+          config,
+          item.entry.sha256,
+        )
+        : packagePayloadClassification();
+      if (classification.nativeAsset) {
+        if (item.layer !== "exactRidBytes") {
+          throw new Error(`Native asset '${logicalPath}' for '${target.role}/${target.rid}' was factored outside its exact RID layer.`);
+        }
+        nativeAssets.push({ path: logicalPath, bytes: item.entry.size, sha256: item.entry.sha256 });
+      }
+      if (classification.runtimeOwned) {
+        targetRuntimeClosure.set(logicalPath, item.entry);
+        runtimeClosure.set(item.entry.path, { entry: item.entry, detail: classification.detail });
+      }
+    }
+    const targetRuntimeClosureEntries = [...targetRuntimeClosure.values()];
+    targets.push({
+      role: target.role,
+      rid: target.rid,
+      kind: target.kind,
+      fileCount: projected.size,
+      payloadBytes: ownership.packageSharedBytes + ownership.roleSharedBytes + ownership.exactRidBytes,
+      ownership,
+      nativeAssets,
+      runtimeClosureFileCount: targetRuntimeClosureEntries.length,
+      runtimeClosureBytes: targetRuntimeClosureEntries.reduce((total, entry) => total + entry.size, 0),
+    });
+  }
+  const runtimeClosureEntries = [...runtimeClosure.entries()].sort(([left], [right]) => ordinal(left, right));
+  const runtimeClosureFileCount = runtimeClosureEntries.length;
+  const runtimeClosureBytes = runtimeClosureEntries.reduce((total, [, item]) => total + item.entry.size, 0);
+  if (runtimeClosureFileCount > 0) {
+    throw new Error(`Package contains a forbidden execution-runtime closure: ${runtimeClosureEntries
+      .map(([path, item]) => `${path} (${item.detail})`)
+      .join(", ")}.`);
+  }
+  const payloadEntries = entries.filter((entry) => entry.path.startsWith("payload/"));
+  const metadataEntries = entries.filter((entry) => entry.path.startsWith("manifest/"));
+  const contentIndexBytes = (await stat(resolve(packageRoot, ...INDEX_PATH.split("/")))).size;
+  return {
+    schemaVersion: 1,
+    packageId: manifest.id,
+    packageVersion: manifest.version,
+    archive: basename(archivePath).replace(/\.stage-[0-9a-f-]+$/u, ""),
+    archiveSha256: await hashFile(archivePath),
+    archiveBytes,
+    payloadBytes: payloadEntries.reduce((total, entry) => total + entry.size, 0),
+    metadataBytes: metadataEntries.reduce((total, entry) => total + entry.size, contentIndexBytes),
+    runtimeClosureFileCount,
+    runtimeClosureBytes,
+    targets,
+  };
+}
+
+function targetPayloadOwnership(
+  path: string,
+  target: TargetManifest,
+): { readonly logicalPath: string; readonly layer: PayloadOwnershipLayer } | null {
+  for (const candidate of [
+    { prefix: `payload/${target.role}/${target.rid}/`, layer: "exactRidBytes" as const },
+    { prefix: `payload/${target.role}/shared/`, layer: "roleSharedBytes" as const },
+    { prefix: "payload/shared/", layer: "packageSharedBytes" as const },
+  ]) {
+    if (path.startsWith(candidate.prefix)) {
+      return { logicalPath: path.slice(candidate.prefix.length), layer: candidate.layer };
+    }
+  }
+  return null;
+}
+
 async function enumerateCanonicalFiles(root: string): Promise<string[]> {
   const output: string[] = [];
   const visit = async (directory: string): Promise<void> => {
@@ -959,7 +1177,7 @@ async function enumerateCanonicalFiles(root: string): Promise<string[]> {
   return paths;
 }
 
-async function readLeaf(root: string, config: SunderNodePackageConfig): Promise<Leaf> {
+async function readLeaf(root: string, config: SunderNodePackageConfig, project: PreparedProject): Promise<Leaf> {
   const rootEntry = await lstat(root);
   if (!rootEntry.isDirectory() || rootEntry.isSymbolicLink()) throw new Error(`Target leaf '${root}' must be a regular directory.`);
   const manifestPath = resolve(root, ...MANIFEST_PATH.split("/"));
@@ -986,7 +1204,7 @@ async function readLeaf(root: string, config: SunderNodePackageConfig): Promise<
   if (index.files.length > MAXIMUM_ARCHIVE_ENTRIES) throw new Error(`Target leaf '${root}' contains too many indexed files.`);
   const target = manifest.targets[0]!;
   validateTarget(target, manifest.id, root, config);
-  validateRpcManifestMetadata(manifest, new Set([target.role]), `Target leaf '${root}'`);
+  validateManifestMetadata(manifest, new Set([target.role]), `Target leaf '${root}'`, project.ownedRpc ? createManifest(project, manifest.targets) : undefined);
   const bundledDescriptorPaths = new Set(manifest.contractBundles.map((bundle) => bundle.descriptorPath));
   const files = new Map<string, LeafFile>();
   const indexedPaths = new Set<string>();
@@ -1008,11 +1226,25 @@ async function readLeaf(root: string, config: SunderNodePackageConfig): Promise<
     if (rawLogical === null) continue;
     const logical = normalizeLogicalPath(rawLogical);
     if (logical !== rawLogical) throw new Error(`Target leaf '${root}' contains non-canonical logical path '${rawLogical}'.`);
+    const classification = target.role === "runtime"
+      ? await classifyRuntimePayloadFile(
+        logical,
+        fullPath,
+        target.rid as SunderRid,
+        config,
+        item.sha256,
+      )
+      : packagePayloadClassification();
+    if (classification.runtimeOwned) {
+      throw new Error(
+        `Target leaf '${root}' contains forbidden execution-runtime closure '${logical}' (${classification.detail}).`,
+      );
+    }
     if (bundledDescriptorPaths.has(logical) && archivePath !== `payload/shared/${logical}`) {
       throw new Error(`Target leaf '${root}' must store bundled contract descriptor '${logical}' in payload/shared.`);
     }
     if (files.has(logical)) throw new Error(`Target leaf '${root}' has a logical payload collision at '${logical}'.`);
-    files.set(logical, { fullPath, sha256: item.sha256, size: item.size });
+    files.set(logical, { fullPath, sha256: item.sha256, size: item.size, nativeAsset: classification.nativeAsset });
   }
   const actualPaths = (await enumerateCanonicalFiles(root)).filter((path) => path !== INDEX_PATH);
   if (actualPaths.length !== indexedPaths.size || actualPaths.some((path) => !indexedPaths.has(path))) {
@@ -1025,11 +1257,57 @@ async function readLeaf(root: string, config: SunderNodePackageConfig): Promise<
   return { root, manifest, files };
 }
 
-function validateRpcManifestMetadata(
+function validateManifestMetadata(
   manifest: PackageManifest,
   targetRoles: ReadonlySet<PackageRole>,
   label: string,
+  expected?: PackageManifest,
 ): void {
+  const root = manifestRecord(manifest, label);
+  const importProperties = ["packageArtifactImports", "packageApiImports", "providerImports", "platformImports"];
+  manifestOnly(root, label,
+    "archiveFormatVersion", "manifestVersion", "id", "name", "version", "dependsOn", "targets",
+    "contractBundles", "usesContracts", "provides",
+    ...["summary", ...importProperties].filter((name) => Object.hasOwn(root, name)));
+  for (const name of importProperties) {
+    if (!Object.hasOwn(root, name)) continue;
+    const imports = root[name];
+    if (!Array.isArray(imports)) throw new Error(`${label} ${name} must be an array when present.`);
+    if (imports.length > 0 && !expected) {
+      throw new Error(`${label} nonempty ${name} is not supported by descriptor-first Node package tooling.`);
+    }
+  }
+  if (expected) {
+    const project = (value: PackageManifest) => ({ dependsOn: value.dependsOn, contractBundles: value.contractBundles, usesContracts: value.usesContracts,
+      provides: value.provides, packageArtifactImports: value.packageArtifactImports ?? [], packageApiImports: value.packageApiImports ?? [],
+      providerImports: value.providerImports ?? [], platformImports: value.platformImports ?? [] });
+    if (canonicalizeDescriptor(asJsonValue(project(manifest))) !== canonicalizeDescriptor(asJsonValue(project(expected))))
+      throw new Error(`${label} RPC/import metadata differs from the complete fresh source and lock projection.`);
+  }
+
+  if (!Array.isArray(manifest.dependsOn) || manifest.dependsOn.length > 128) {
+    throw new Error(`${label} dependsOn must be an array with at most 128 entries.`);
+  }
+  const dependencies = new Set<string>();
+  for (const [index, dependency] of manifest.dependsOn.entries()) {
+    const dependencyLabel = `${label} dependsOn[${index}]`;
+    const value = manifestRecord(dependency, dependencyLabel);
+    manifestOnly(value, dependencyLabel, "packageId", "versionRange", "presence");
+    if (typeof dependency.packageId !== "string" || !isPackageId(dependency.packageId)
+      || typeof dependency.versionRange !== "string"
+      || dependency.presence !== "required" && dependency.presence !== "optional") {
+      throw new Error(`${dependencyLabel} must declare a canonical package id, version range, and presence 'required' or 'optional'.`);
+    }
+    validateDependencyVersionRange(dependency.versionRange, `${dependencyLabel}.versionRange`);
+    if (dependency.presence === "optional" && !expected) {
+      throw new Error(`${dependencyLabel} optional dependencies are not supported by descriptor-first Node package tooling.`);
+    }
+    if (dependencies.has(dependency.packageId)) {
+      throw new Error(`${label} declares dependency package id '${dependency.packageId}' more than once.`);
+    }
+    dependencies.add(dependency.packageId);
+  }
+
   if (!Array.isArray(manifest.contractBundles)
     || !Array.isArray(manifest.usesContracts)
     || !Array.isArray(manifest.provides)) {
@@ -1042,16 +1320,39 @@ function validateRpcManifestMetadata(
   const bundles = new Map<string, ContractBundleManifest>();
   const descriptorPaths = new Map<string, string>();
   for (const [index, item] of manifest.contractBundles.entries()) {
-    const value = manifestRecord(item, `${label} contractBundles[${index}]`);
-    manifestOnly(value, `${label} contractBundles[${index}]`, "contractId", "version", "descriptorPath", "descriptorSha256", "abiSha256", "exposure");
+    const bundleLabel = `${label} contractBundles[${index}]`;
+    const value = manifestRecord(item, bundleLabel);
+    manifestOnly(value, bundleLabel,
+      "contractId", "version", "descriptorPath", "descriptorSha256", "abiSha256", "exposure",
+      "source", "authorityKind", "authorityId",
+      ...(value.source === "imported" ? ["selectedAuthorityRelease", "selectedAuthorityContentIdentity"] : []));
     const bundle = item as ContractBundleManifest;
+    if (bundle.source !== "owned" && bundle.source !== "imported"
+      || bundle.authorityKind !== "package" && bundle.authorityKind !== "platform"
+      || typeof bundle.authorityId !== "string" || !isPackageId(bundle.authorityId)) {
+      throw new Error(`${bundleLabel} must declare canonical source, authorityKind, and authorityId provenance.`);
+    }
+    if (bundle.source === "owned") {
+      if (bundle.authorityKind !== "package" || bundle.authorityId !== manifest.id) {
+        throw new Error(`${bundleLabel} owned bundles require authorityKind 'package' and authorityId equal to the manifest package id '${manifest.id}'.`);
+      }
+    } else {
+      if (typeof bundle.selectedAuthorityRelease !== "string" || !isSemanticVersion(bundle.selectedAuthorityRelease)
+        || !isSha256(bundle.selectedAuthorityContentIdentity)) {
+        throw new Error(`${bundleLabel} imported bundles require a canonical selectedAuthorityRelease and selectedAuthorityContentIdentity.`);
+      }
+      if (bundle.authorityKind === "platform" && bundle.authorityId !== "sunder.core") {
+        throw new Error(`${bundleLabel} imported platform bundles require authority 'sunder.core'.`);
+      }
+      if (!expected) throw new Error(`${bundleLabel} imported bundles are not supported by descriptor-first Node package tooling.`);
+    }
     if (typeof bundle.contractId !== "string" || !isPackageId(bundle.contractId)
       || typeof bundle.version !== "string" || !isSemanticVersion(bundle.version)
       || typeof bundle.descriptorPath !== "string" || normalizeLogicalPath(bundle.descriptorPath) !== bundle.descriptorPath
       || !isSha256(bundle.descriptorSha256)
       || !isSha256(bundle.abiSha256)
       || bundle.exposure !== "package" && bundle.exposure !== "public") {
-      throw new Error(`${label} contractBundles[${index}] is not a canonical RPC V2 contract bundle.`);
+      throw new Error(`${label} contractBundles[${index}] is not a canonical RPC V1 contract bundle.`);
     }
     const identity = `${bundle.contractId}\0${bundle.version}`;
     if (bundles.has(identity)) {
@@ -1081,7 +1382,7 @@ function validateRpcManifestMetadata(
       || use.actions.length > 3
       || new Set(use.actions).size !== use.actions.length
       || use.actions.some((action) => action !== "discover" && action !== "invoke" && action !== "subscribe")) {
-      throw new Error(`${label} usesContracts[${index}] is not a canonical exact RPC V2 contract use.`);
+      throw new Error(`${label} usesContracts[${index}] is not a canonical exact RPC V1 contract use.`);
     }
     if (!targetRoles.has(use.role)) {
       throw new Error(`${label} contract use '${use.role}/${use.contractId}' has no target for role '${use.role}'.`);
@@ -1109,7 +1410,7 @@ function validateRpcManifestMetadata(
       || !isSha256(provider.descriptorSha256)
       || !isSha256(provider.abiSha256)
       || provider.audience !== "owner" && provider.audience !== "public") {
-      throw new Error(`${label} provides[${index}] is not a canonical RPC V2 provider.`);
+      throw new Error(`${label} provides[${index}] is not a canonical RPC V1 provider.`);
     }
     if (provider.role === "app") {
       throw new Error(`${label} provider 'app/${provider.providerId}' is invalid. App-role providers are not supported because App provider registration and serving are not available.`);
@@ -1151,9 +1452,6 @@ async function validateBundledDescriptorFiles(
     } catch (error) {
       throw new Error(`Target leaf '${root}' contract descriptor '${bundle.descriptorPath}' is invalid.`, { cause: error });
     }
-    if (descriptor.descriptorVersion !== 2) {
-      throw new Error(`Target leaf '${root}' contract descriptor '${bundle.descriptorPath}' must use descriptorVersion 2.`);
-    }
     const canonicalBytes = Buffer.from(canonicalRpcDescriptorBytes(descriptor));
     if (!bytes.equals(canonicalBytes)) {
       throw new Error(`Target leaf '${root}' contract descriptor '${bundle.descriptorPath}' is not the canonical immutable descriptor snapshot.`);
@@ -1163,7 +1461,7 @@ async function validateBundledDescriptorFiles(
       || sha256(canonicalBytes) !== bundle.descriptorSha256
       || file.sha256 !== bundle.descriptorSha256
       || rpcAbiSha256(descriptor) !== bundle.abiSha256) {
-      throw new Error(`Target leaf '${root}' contract descriptor '${bundle.descriptorPath}' does not match its exact V2 bundle identity and hashes.`);
+      throw new Error(`Target leaf '${root}' contract descriptor '${bundle.descriptorPath}' does not match its exact V1 bundle identity and hashes.`);
     }
   }
 }
@@ -1205,18 +1503,18 @@ function validateTarget(
     "sdkVersion",
     "requiredHostCapabilities",
   ] as const;
-  const allowedProperties = new Set([...commonProperties, "views"]);
+  const allowedProperties = new Set([...commonProperties, "executionRuntime", "views"]);
   for (const name of Object.keys(value)) {
-    if (!allowedProperties.has(name as typeof commonProperties[number] | "views")) {
+    if (!allowedProperties.has(name as typeof commonProperties[number] | "executionRuntime" | "views")) {
       throw new Error(`Target leaf '${root}' target contains unknown property '${name}'.`);
     }
   }
   if (target.role === "runtime" && target.kind !== "worker") {
-    throw new Error(`Target leaf '${root}' Runtime target kind '${target.kind}' is invalid; Manifest V3 Runtime targets must use 'worker'.`);
+    throw new Error(`Target leaf '${root}' Runtime target kind '${target.kind}' is invalid; Manifest V1 Runtime targets must use 'worker'.`);
   }
   const compatibility = packageToolCompatibility();
   const expectedCapabilities = target.role === "app"
-    ? ["rpc.v2", compatibility.sdkBaselineCapability, "views.v1"]
+    ? ["core.v1", "rpc.v1", compatibility.sdkBaselineCapability, "views.v1"]
     : workerTargetCapabilities(config);
   const capabilitiesMatch = Array.isArray(target.requiredHostCapabilities)
     && target.requiredHostCapabilities.length === expectedCapabilities.length
@@ -1230,22 +1528,33 @@ function validateTarget(
     && normalizeLogicalPath(target.entryPoint) === target.entryPoint;
   const workerTarget = target.role === "runtime"
     && target.kind === "worker"
+    && target.entryPoint === NODE_WORKER_ENTRY_POINT
     && target.targetFramework === "node24"
-    && target.views === undefined;
+    && target.views === undefined
+    && executionRuntimeMatches(target.executionRuntime);
   const webTarget = target.role === "app"
     && target.kind === "web"
     && target.targetFramework === "web"
+    && target.executionRuntime === undefined
     && Array.isArray(target.views)
     && target.views.length > 0;
   if (!common || !workerTarget && !webTarget) {
     throw new Error(`Target leaf '${root}' does not declare one canonical supported worker or web target.`);
   }
   if (workerTarget) {
-    manifestOnly(value, `Target leaf '${root}' target`, ...commonProperties);
+    manifestOnly(value, `Target leaf '${root}' target`, ...commonProperties, "executionRuntime");
+    const executionRuntime = manifestRecord(target.executionRuntime, `Target leaf '${root}' target executionRuntime`);
+    manifestOnly(executionRuntime, `Target leaf '${root}' target executionRuntime`, "id", "versionRange", "moduleAbi");
   } else {
     manifestOnly(value, `Target leaf '${root}' target`, ...commonProperties, "views");
     validateTargetViews(target.views!, packageId, root);
   }
+}
+
+function executionRuntimeMatches(value: ExecutionRuntimeRequirement | undefined): boolean {
+  return value?.id === NODE_EXECUTION_RUNTIME.id
+    && value.versionRange === NODE_EXECUTION_RUNTIME.versionRange
+    && value.moduleAbi === NODE_EXECUTION_RUNTIME.moduleAbi;
 }
 
 function validateTargetViews(views: readonly AppViewConfig[], packageId: string, root: string): void {
@@ -1338,6 +1647,162 @@ async function copyLeafFile(leaf: Leaf, logicalPath: string, destination: string
   await copyFile(file.fullPath, destination);
 }
 
+function validateConfiguredNativeAssetLeaves(
+  leaves: readonly Leaf[],
+  config: SunderNodePackageConfig,
+): void {
+  const configuredPaths = new Map<string, Set<SunderRid>>();
+  for (const rid of SUPPORTED_RIDS) {
+    for (const asset of config.nativeAssets?.[rid] ?? []) {
+      const rids = configuredPaths.get(asset.targetPath) ?? new Set<SunderRid>();
+      rids.add(rid);
+      configuredPaths.set(asset.targetPath, rids);
+    }
+  }
+  for (const leaf of leaves) {
+    const target = single(leaf.manifest.targets, "Target leaf must contain one exact target for aggregation.");
+    if (target.role !== "runtime") continue;
+    const rid = target.rid as SunderRid;
+    const expectedPaths = new Set((config.nativeAssets?.[rid] ?? []).map((asset) => asset.targetPath));
+    for (const expectedPath of expectedPaths) {
+      if (!leaf.files.has(expectedPath)) {
+        throw new Error(`Target leaf '${leaf.root}' is missing configured exact-RID native asset '${expectedPath}'.`);
+      }
+    }
+    for (const [path, configuredRids] of configuredPaths) {
+      if (leaf.files.has(path) && !configuredRids.has(rid)) {
+        throw new Error(`Target leaf '${leaf.root}' contains native asset '${path}' configured for a different exact RID.`);
+      }
+    }
+  }
+}
+
+function isExactRidNativeAsset(
+  logicalPath: string,
+  occurrences: readonly Leaf[],
+  config: SunderNodePackageConfig,
+): boolean {
+  if (SUPPORTED_RIDS.some((rid) => (
+    config.nativeAssets?.[rid]?.some((asset) => asset.targetPath === logicalPath) ?? false
+  ))) return true;
+  return occurrences.some((leaf) => leaf.files.get(logicalPath)?.nativeAsset === true);
+}
+
+async function classifyRuntimePayloadFile(
+  logicalPath: string,
+  fullPath: string,
+  rid: SunderRid,
+  config: SunderNodePackageConfig,
+  knownSha256?: string,
+): Promise<RuntimePayloadClassification> {
+  if (isForbiddenExecutionRuntimePath(logicalPath)) {
+    return runtimePayloadClassification(`its path identifies a Node or .NET runtime/toolchain asset`);
+  }
+
+  const binary = await inspectNativeBinary(fullPath, rid);
+  if (binary.kind === "executable") return runtimePayloadClassification(binary.detail);
+  if (binary.kind === "managed-assembly") return runtimePayloadClassification(binary.detail);
+  if (binary.kind === "toolchain") return runtimePayloadClassification(binary.detail);
+  if (binary.kind === "invalid") return runtimePayloadClassification(`invalid native binary metadata: ${binary.detail}`);
+
+  const activeNodeMatch = await matchActiveNodeExecutable(fullPath, knownSha256);
+  if (activeNodeMatch !== null) return runtimePayloadClassification(activeNodeMatch);
+
+  const configured = config.nativeAssets?.[rid]?.some((asset) => asset.targetPath === logicalPath) ?? false;
+  const nativeAsset = configured || binary.kind === "shared-library" || isNativeAssetFileName(logicalPath);
+  if (!nativeAsset) return packagePayloadClassification();
+
+  const runtimeFingerprint = await detectRuntimeBinaryFingerprint(fullPath);
+  if (runtimeFingerprint !== null) {
+    return runtimePayloadClassification(`${runtimeFingerprint} content in a native asset`);
+  }
+  return { runtimeOwned: false, nativeAsset: true, detail: binary.detail };
+}
+
+function isNativeAssetFileName(logicalPath: string): boolean {
+  const fileName = basename(logicalPath).toLowerCase();
+  return fileName.endsWith(".dll")
+    || fileName.endsWith(".dylib")
+    || fileName.endsWith(".exe")
+    || fileName.endsWith(".node")
+    || fileName.endsWith(".so")
+    || fileName.includes(".so.");
+}
+
+async function matchActiveNodeExecutable(path: string, knownSha256?: string): Promise<string | null> {
+  const candidate = await stat(path);
+  const active = await activeNodeExecutableMetadata();
+  if (candidate.size !== active.size) return null;
+
+  const activeHashes = await activeNodeExecutableHashes();
+  const candidateSha256 = knownSha256 ?? await hashFile(path);
+  if (candidateSha256 === activeHashes.sha256) return "the active Node executable's exact SHA-256 content identity";
+  if (candidate.size <= NODE_EXECUTABLE_HEADER_EVIDENCE_BYTES) return null;
+  if (await hashFileFrom(path, NODE_EXECUTABLE_HEADER_EVIDENCE_BYTES) === activeHashes.afterHeaderSha256) {
+    return "the active Node executable's header-independent content identity";
+  }
+  return null;
+}
+
+function activeNodeExecutableMetadata(): Promise<ActiveNodeExecutableMetadata> {
+  activeNodeExecutableMetadataPromise ??= (async () => {
+    const path = await realpath(process.execPath);
+    return { path, size: (await stat(path)).size };
+  })();
+  return activeNodeExecutableMetadataPromise;
+}
+
+function activeNodeExecutableHashes(): Promise<ActiveNodeExecutableHashes> {
+  activeNodeExecutableHashesPromise ??= (async () => {
+    const executable = await activeNodeExecutableMetadata();
+    return {
+      sha256: await hashFile(executable.path),
+      afterHeaderSha256: executable.size > NODE_EXECUTABLE_HEADER_EVIDENCE_BYTES
+        ? await hashFileFrom(executable.path, NODE_EXECUTABLE_HEADER_EVIDENCE_BYTES)
+        : "",
+    };
+  })();
+  return activeNodeExecutableHashesPromise;
+}
+
+function runtimePayloadClassification(detail: string): RuntimePayloadClassification {
+  return { runtimeOwned: true, nativeAsset: false, detail };
+}
+
+function packagePayloadClassification(): RuntimePayloadClassification {
+  return { runtimeOwned: false, nativeAsset: false, detail: "package-owned data" };
+}
+
+function isForbiddenExecutionRuntimePath(path: string): boolean {
+  const segments = path.toLowerCase().split("/");
+  const fileName = segments.at(-1)!;
+  return fileName === "node"
+    || fileName === "node.exe"
+    || fileName === "node.dll"
+    || fileName === "node.lib"
+    || fileName === "libnode.dylib"
+    || fileName === "node.js-license.txt"
+    || fileName === "node.js-license"
+    || fileName === "node_pdb"
+    || fileName === "node_etw_provider.man"
+    || fileName === "node.h"
+    || fileName.startsWith("libnode.so")
+    || [
+      "apphost", "apphost.exe", "coreclr.dll", "hostfxr.dll", "hostpolicy.dll",
+      "libcoreclr.dylib", "libcoreclr.so", "libhostfxr.dylib", "libhostfxr.so",
+      "libhostpolicy.dylib", "libhostpolicy.so", "libclrjit.dylib", "libclrjit.so",
+      "clrjit.dll", "mscordaccore.dll", "mscordbi.dll", "system.private.corelib.dll",
+      "dotnet", "dotnet.exe",
+    ].includes(fileName)
+    || segments.some((segment) => /^node-v\d/iu.test(segment))
+    || segments.some((segment, index) => segment === "node_modules"
+      && (segments[index + 1] === "npm" || segments[index + 1] === "corepack"))
+    || segments.some((segment, index) => segment === "shared"
+      && segments[index + 1] === "microsoft.netcore.app")
+    || segments.some((segment, index) => segment === "packs"
+      && segments[index + 1]?.startsWith("microsoft.netcore.app.runtime.") === true);
+}
+
 function identical(leaves: readonly Leaf[], logicalPath: string): boolean {
   const expected = leaves[0]?.files.get(logicalPath);
   return expected !== undefined && leaves.every((leaf) => {
@@ -1365,11 +1830,12 @@ async function replaceGeneratedDirectory(
   allowUnmarked = false,
   discoveryRoots: readonly string[] = [],
   readPaths: readonly string[] = [],
+  validate?: () => Promise<void>,
 ): Promise<void> {
   const roots = discoveryRoots.map((root) => requireDiscoveryRoot(root, path));
   await withOutputLocks(roots.map(targetLeafDiscoveryKey), async () => {
     await withOutputLocks([path, ...readPaths], async () => {
-      await replaceGeneratedDirectoryLocked(path, markerContent, populate, allowUnmarked);
+      await replaceGeneratedDirectoryLocked(path, markerContent, populate, allowUnmarked, validate);
     });
   });
 }
@@ -1379,11 +1845,14 @@ async function replaceGeneratedDirectoryLocked(
   markerContent: string,
   populate: (stagingPath: string) => Promise<void>,
   allowUnmarked = false,
+  validate?: () => Promise<void>,
 ): Promise<void> {
+  await validate?.();
   await assertReplaceableGeneratedDirectory(path, allowUnmarked);
   const staged = await stageGeneratedDirectory(path, markerContent, populate);
   const outputs = [staged.output, staged.marker];
   try {
+    await validate?.();
     await commitStagedOutputs(outputs);
   } finally {
     await cleanupStagedOutputs(outputs);
@@ -1402,13 +1871,20 @@ async function hashFile(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
+async function hashFileFrom(path: string, start: number): Promise<string> {
+  const hash = createHash("sha256");
+  const stream = createReadStream(path, { start });
+  for await (const chunk of stream) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
 function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
 function rpcAbiSha256(descriptor: LoadedContract["descriptor"]): string {
   return createHash("sha256")
-    .update(SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR, "utf8")
+    .update(SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, "utf8")
     .update(canonicalRpcAbiProjectionBytes(descriptor))
     .digest("hex");
 }
@@ -1439,10 +1915,6 @@ function requireDiscoveryRoot(root: string, leaf: string): string {
 function pathIdentity(path: string): string {
   const normalized = resolve(path);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function safeFileName(packageId: string): string {
-  return packageId.replace(/[^a-z0-9.-]/gu, "-");
 }
 
 function packageMetadataFingerprint(manifest: PackageManifest | undefined): string {
@@ -1681,7 +2153,14 @@ interface TargetManifest {
   readonly targetFramework: string;
   readonly sdkVersion: string;
   readonly requiredHostCapabilities: readonly string[];
+  readonly executionRuntime?: ExecutionRuntimeRequirement;
   readonly views?: readonly AppViewConfig[];
+}
+
+interface ExecutionRuntimeRequirement {
+  readonly id: string;
+  readonly versionRange: string;
+  readonly moduleAbi: string;
 }
 
 interface ContractBundleManifest {
@@ -1691,6 +2170,11 @@ interface ContractBundleManifest {
   readonly descriptorSha256: string;
   readonly abiSha256: string;
   readonly exposure: ContractExposure;
+  readonly source: "owned" | "imported";
+  readonly authorityKind: "package" | "platform";
+  readonly authorityId: string;
+  readonly selectedAuthorityRelease?: string;
+  readonly selectedAuthorityContentIdentity?: string;
 }
 
 interface ContractUseManifest {
@@ -1724,11 +2208,19 @@ interface PackageManifest {
   readonly name: string;
   readonly summary?: string;
   readonly version: string;
-  readonly dependsOn: readonly unknown[];
+  readonly dependsOn: readonly {
+    readonly packageId: string;
+    readonly versionRange: string;
+    readonly presence: "required" | "optional";
+  }[];
   readonly targets: readonly TargetManifest[];
   readonly contractBundles: readonly ContractBundleManifest[];
   readonly usesContracts: readonly ContractUseManifest[];
   readonly provides: readonly ProviderManifest[];
+  readonly packageArtifactImports?: readonly unknown[];
+  readonly packageApiImports?: readonly unknown[];
+  readonly providerImports?: readonly unknown[];
+  readonly platformImports?: readonly unknown[];
 }
 
 interface ContentIndexEntry {
@@ -1742,10 +2234,61 @@ interface ContentIndex {
   readonly files: readonly ContentIndexEntry[];
 }
 
+type PayloadOwnershipLayer = "packageSharedBytes" | "roleSharedBytes" | "exactRidBytes";
+
+interface PackageOwnershipEvidence {
+  readonly schemaVersion: 1;
+  readonly packageId: string;
+  readonly packageVersion: string;
+  readonly archive: string;
+  readonly archiveSha256: string;
+  readonly archiveBytes: number;
+  readonly payloadBytes: number;
+  readonly metadataBytes: number;
+  readonly runtimeClosureFileCount: number;
+  readonly runtimeClosureBytes: number;
+  readonly targets: readonly PackageTargetOwnershipEvidence[];
+}
+
+interface PackageTargetOwnershipEvidence {
+  readonly role: PackageRole;
+  readonly rid: string;
+  readonly kind: string;
+  readonly fileCount: number;
+  readonly payloadBytes: number;
+  readonly ownership: Readonly<Record<PayloadOwnershipLayer, number>>;
+  readonly nativeAssets: readonly PackageNativeAssetEvidence[];
+  readonly runtimeClosureFileCount: number;
+  readonly runtimeClosureBytes: number;
+}
+
+interface PackageNativeAssetEvidence {
+  readonly path: string;
+  readonly bytes: number;
+  readonly sha256: string;
+}
+
 interface LeafFile {
   readonly fullPath: string;
   readonly sha256: string;
   readonly size: number;
+  readonly nativeAsset: boolean;
+}
+
+interface RuntimePayloadClassification {
+  readonly runtimeOwned: boolean;
+  readonly nativeAsset: boolean;
+  readonly detail: string;
+}
+
+interface ActiveNodeExecutableMetadata {
+  readonly path: string;
+  readonly size: number;
+}
+
+interface ActiveNodeExecutableHashes {
+  readonly sha256: string;
+  readonly afterHeaderSha256: string;
 }
 
 interface Leaf {

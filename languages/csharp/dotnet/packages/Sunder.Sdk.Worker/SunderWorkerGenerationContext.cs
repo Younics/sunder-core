@@ -2,9 +2,9 @@ using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Worker;
 
-/// <summary>Identifies the exact Runtime generation committed to a V3 worker.</summary>
+/// <summary>Identifies the exact Runtime generation committed to a V1 worker.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.RuntimeGenerationsV1)]
-[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV3)]
+[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV1)]
 public sealed class SunderWorkerGenerationContext
 {
     internal SunderWorkerGenerationContext(Guid activationId, long sessionGeneration)

@@ -1,0 +1,30 @@
+{
+  "$defs": {
+    "Empty": {
+      "title": "Empty value",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "services": {
+    "example": {
+      "methods": {
+        "ping": {
+          "responseSchema": { "$ref": "#/$defs/Empty" },
+          "requestSchema": { "$ref": "#/$defs/Empty" },
+          "errors": [],
+          "idempotency": "idempotent",
+          "kind": "unary"
+        }
+      }
+    }
+  },
+  "errors": {},
+  "version": "2.0.0",
+  "contractId": "example.rpc.v1.minimal",
+  "descriptorVersion": 1,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

@@ -1,0 +1,17 @@
+{
+  "packageId": "example.dependency",
+  "presence": "recommended",
+  "bundleRefs": [
+    {
+      "contractId": "example.rpc.v1.minimal",
+      "contractVersion": "2.0.0"
+    }
+  ],
+  "useRefs": [
+    {
+      "role": "runtime",
+      "contractId": "example.rpc.v1.minimal",
+      "contractVersion": "2.0.0"
+    }
+  ]
+}

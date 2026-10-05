@@ -25,11 +25,20 @@
   <ItemGroup>
     <None Include="PublicApi\*.txt" CopyToOutputDirectory="PreserveNewest" />
     <None Include="ApiFidelity\*.txt" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\specs\rpc\v2\conformance\**\*.json"
-          Link="RpcV2Conformance\%(RecursiveDir)%(Filename)%(Extension)"
+    <None Include="RuntimeContracts\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="PolicyContracts\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\policy\v1\*.json" Link="PolicySpecs\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v1\conformance\**\*.json"
+          Link="RpcV1Conformance\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\specs\rpc\v2\descriptor.schema.json"
-          Link="RpcV2Conformance\descriptor.schema.json"
+    <None Include="..\..\..\..\..\specs\rpc\v1\descriptor.schema.json"
+          Link="RpcV1Conformance\descriptor.schema.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\**\*"
+          Link="RpcV1Authoring\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\..\..\..\specs\rpc\v1\conformance\identifier-keywords.json"
+             Link="conformance\identifier-keywords.json"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

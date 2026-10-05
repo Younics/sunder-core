@@ -106,10 +106,10 @@ internal sealed class StackCommandHandler(
         return CliRenderers.StackPublish(output, result);
     }
 
-    public async Task<int> ExecuteAsync(DeleteStackCommand command, CancellationToken token)
+    public async Task<int> ExecuteAsync(SetStackVisibilityCommand command, CancellationToken token)
     {
-        var result = await RequireManager().DeleteRegistryStackAsync(
-            new RuntimeRegistryDeleteStackRequest(options.RequireRegistryApiUrl().AbsoluteUri, command.StackId), token).ConfigureAwait(false);
+        var result = await RequireManager().SetRegistryStackVisibilityAsync(
+            new RuntimeRegistryStackVisibilityRequest(options.RequireRegistryApiUrl().AbsoluteUri, command.StackId, command.Listed), token).ConfigureAwait(false);
         return CliRenderers.StackManagement(output, result);
     }
 

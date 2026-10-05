@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 
 namespace Sunder.Runtime.Client;
 
@@ -39,4 +40,6 @@ public sealed class RuntimeClientException : Exception
     public string? ErrorCode { get; }
 
     public string? CorrelationId { get; }
+
+    public JsonElement? Details { get; internal init; }
 }

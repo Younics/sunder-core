@@ -30,6 +30,57 @@ missing or skipped also fails.
 
 ## Runtime evidence
 
+### Local iteration
+
+Use the smallest meaningful check first. A passing focused test does not replace the
+full CI gates, but a full artifact rebuild is not needed after each source edit.
+
+```sh
+# Changed behavior first (replace the class/method selector for the task).
+dotnet test languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj --no-restore --filter FullyQualifiedName~ServiceApiEditorGeneratorTests
+
+# Fast owning-project check: existing portable lane, including on macOS/Windows.
+node scripts/test-oracles/run-dotnet-tests-with-results.mjs --project Sunder.Package.Build.Tests --primary-lane dotnet-linux --build
+
+# Inspect exactly which declarations are selected, without execution or report cleanup.
+node scripts/test-oracles/run-dotnet-tests-with-results.mjs --project Sunder.Package.Build.Tests --primary-lane host-platform --list
+
+# Process/build integration when the changed boundary warrants the whole lane.
+node scripts/test-oracles/run-dotnet-tests-with-results.mjs --project Sunder.Package.Build.Tests --primary-lane host-platform --build
+
+# Full owning project once at a coherent integration checkpoint.
+node scripts/test-oracles/run-dotnet-tests-with-results.mjs --project Sunder.Package.Build.Tests --build
+```
+
+`--build` compiles current source without restoring. Restore explicitly after dependency
+changes. When source has not changed since compilation, omit `--build` to reuse those
+test binaries. Project-scoped reports go under `artifacts/test-results/local/` by
+default and do not remove other lanes' reports. Full runs have a bounded 60-minute
+project watchdog; individual hang watchdogs remain unchanged.
+
+| Change | Validation to select |
+| --- | --- |
+| Parser, compiler, planner, mapper or business rule | Changed class/method and portable owning-project lane. |
+| MSBuild, dependency/resource ownership, output publication or locking | Relevant process/artifact tests; broaden to `host-platform` for shared orchestration changes. |
+| Public SDK/wire/persisted contract | Public API/contract checks and affected consumers, in addition to owning tests. |
+| Packed tooling/template or native asset change | Relevant fresh-package/template/native scenario with its prerequisites. |
+| Migration checkpoint, broad shared refactor or release | Full affected suites and existing CI/native/release lanes. |
+
+Run workspace Build/Rebuild for build-graph/cross-repository changes and final cutover.
+Do not repeat broad checks after documentation or unrelated edits. Keep useful small
+theories for distinct inputs/bounds; avoid cloning a full process fixture for the same
+behavior. Identify the surviving coverage before deleting or merging a test.
+
+Only parallelize independent checks. The npm public-artifact checks clean shared
+`dist`/`dist-test` directories, so finish them before compiling the Node helpers used
+by .NET interop tests. From `languages/typescript/node`, prepare with `npm run build`
+and `npm exec -- tsc -p packages/package-tool/tsconfig.test.json` using the repository's
+Node/npm versions. Then run the required interop selection without another Node output
+cleanup in parallel. After a prerequisite failure, rerun the affected cases rather
+than repeating already-passed full suites.
+
+### Complete CI evidence
+
 `run-dotnet-tests-with-results.mjs` executes selected .NET projects serially and
 writes one TRX per project. `run-node-test-matrix-with-results.mjs` removes
 generated output, rebuilds every workspace, and routes all four Node groups
@@ -69,9 +120,9 @@ test-only snapshot records accessor visibility and functional MSBuild
 
 The .NET and Node implementations consume the same checked-in corpora:
 
-- RPC V2 values: `specs/rpc/v2/conformance/instances.json`
-- Worker V3 envelopes: `specs/worker/v3/conformance/corpus.json`
-- Worker V3 transport: `specs/worker/v3/conformance/transport-vectors.json`
+- RPC V1 values: `specs/rpc/v1/conformance/instances.json`
+- Worker V1 envelopes: `specs/worker/v1/conformance/corpus.json`
+- Worker V1 transport: `specs/worker/v1/conformance/transport-vectors.json`
 - generated-output documents: `specs/generated-output/v1/conformance/documents.json`
 
 Each oracle includes a seeded mutation probe. A parser that merely reads a
@@ -86,7 +137,7 @@ map; this section records the observable contract.
 
 | Object | Inputs and outputs | Errors and cancellation | Ordering and authority | Persistence, logging, and cleanup |
 | --- | --- | --- | --- | --- |
-| `ProcessRuntimeWorker` | Accepts Worker V3 handshake, lifecycle, invocation, stream, callback, package-data, content, and payload-handle messages; its lifecycle codec returns typed bounded envelopes and deterministically rejects malformed fields. | Bounds startup and shutdown, forwards cancellation in protocol order, rejects callback identity spoofing and protocol violations, and fences crashes/fault reports to the exact generation. | Compose precedes commit and activation; provider dispatch waits for activation acknowledgement; recovery-candidate package-data authority ends at exact revocation. | Consumes stale upload handles, releases invocation-bound content, drains shutdown, and captures bounded stderr diagnostics. |
+| `ProcessRuntimeWorker` | Accepts Worker V1 handshake, lifecycle, invocation, stream, callback, package-data, content, and payload-handle messages; its lifecycle codec returns typed bounded envelopes and deterministically rejects malformed fields. | Bounds startup and shutdown, forwards cancellation in protocol order, rejects callback identity spoofing and protocol violations, and fences crashes/fault reports to the exact generation. | Compose precedes commit and activation; provider dispatch waits for activation acknowledgement; recovery-candidate package-data authority ends at exact revocation. | Consumes stale upload handles, releases invocation-bound content, drains shutdown, and captures bounded stderr diagnostics. |
 | `RuntimeRpcBroker` | Admits unary/stream RPC calls through one acquisition policy for endpoint, generation, contract, permission, frame, and bounded lease outcomes. | Default-denies permission, preserves unary/stream setup-failure parity, schema-validates outputs, cancels exact calls on retirement/deadline, and isolates provider-generation faults. | Binds content to sibling endpoints, marks dispatched idempotent failures retry-safe without replaying them, and drains retired leases before replacement disposal. | Tears call leases down authority-first; scope retirement, deadline, and explicit close use their characterized discard/revoke order and release timers, content, and capacity exactly once. |
 | `PackageSessionState` | Publishes and leases package-session generations and emits deep, read-only publication snapshots. | Aborted publication reopens admission; a foreign publication handle is rejected before mutation; post-swap callback failure leaves the committed candidate authoritative. | Drains the old generation before publishing replacement, and owner-fences each pending publication handle. | Later session mutation cannot alter a captured descriptor graph; prior leases retire deterministically. |
 | `PackageViewHostService` | Loads, applies, navigates, disables, and disposes package UI generations while candidate registrations stay invisible until commit. | Quarantines attributed failures, permits one fresh automatic recovery, and does not start recovery when boundary cleanup is unproven. | Commits replacement before retiring detached UI, then revalidates navigation after waiting on its gate. | Unloads resources/load contexts; timed-out cleanup remains retained until completion; notifications are sanitized and deduplicated. |

@@ -32,7 +32,7 @@ public sealed class RuntimeHostStartInfoFactoryTests
     }
 
     [Fact]
-    public void ManagedSupervisorEnvironment_RemovesInheritedSunderSecretsAndRetainsStateOverrides()
+    public void ManagedSupervisorEnvironment_RetainsPublicDevelopmentTrustAndRemovesInheritedSecrets()
     {
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
         {
@@ -48,6 +48,11 @@ public sealed class RuntimeHostStartInfoFactoryTests
             ["SUNDER_HOST_STATE_ROOT"] = "/state/host",
             ["SUNDER_RUNTIME_STATE_ROOT"] = "/state/runtime",
             ["sunder_host_state_root"] = "/state/mixed-case-host",
+            ["SUNDER_RUNTIME_DEVELOPMENT_RELEASE_KEY_ID"] = "development-release-key",
+            ["SUNDER_RUNTIME_DEVELOPMENT_RELEASE_PUBLIC_KEY_BASE64"] = "public-key",
+            ["SUNDER_RUNTIME_DEVELOPMENT_TRUST_GENERATION"] = "2",
+            ["SUNDER_RUNTIME_DEVELOPMENT_ALLOW_INSECURE_LOOPBACK_REGISTRY"] = "true",
+            ["SUNDER_EXECUTION_RUNTIME_DEVELOPMENT_STATE_ROOT"] = "/private/key-state",
         };
 
         RuntimeHostStartInfoFactory.SanitizeManagedSupervisorEnvironment(environment);
@@ -57,11 +62,16 @@ public sealed class RuntimeHostStartInfoFactoryTests
         Assert.Equal("/state/host", environment["SUNDER_HOST_STATE_ROOT"]);
         Assert.Equal("/state/runtime", environment["SUNDER_RUNTIME_STATE_ROOT"]);
         Assert.Equal("/state/mixed-case-host", environment["sunder_host_state_root"]);
+        Assert.Equal("development-release-key", environment["SUNDER_RUNTIME_DEVELOPMENT_RELEASE_KEY_ID"]);
+        Assert.Equal("public-key", environment["SUNDER_RUNTIME_DEVELOPMENT_RELEASE_PUBLIC_KEY_BASE64"]);
+        Assert.Equal("2", environment["SUNDER_RUNTIME_DEVELOPMENT_TRUST_GENERATION"]);
+        Assert.Equal("true", environment["SUNDER_RUNTIME_DEVELOPMENT_ALLOW_INSECURE_LOOPBACK_REGISTRY"]);
         Assert.DoesNotContain("SUNDER_RUNTIME_BEARER_TOKEN", environment.Keys);
         Assert.DoesNotContain("SUNDER_WAIT_FOR_DEBUGGER", environment.Keys);
         Assert.DoesNotContain("SUNDER_UNRELATED_SECRET", environment.Keys);
         Assert.DoesNotContain("sunder_runtime_bearer_token", environment.Keys);
         Assert.DoesNotContain("sunder_wait_for_debugger", environment.Keys);
+        Assert.DoesNotContain("SUNDER_EXECUTION_RUNTIME_DEVELOPMENT_STATE_ROOT", environment.Keys);
         Assert.DoesNotContain(RuntimeResourcePolicyEnvironment.PolicyFilePathVariable, environment.Keys);
         Assert.DoesNotContain(RuntimeResourcePolicyEnvironment.LaunchPayloadVariable, environment.Keys);
     }
@@ -80,6 +90,28 @@ public sealed class RuntimeHostStartInfoFactoryTests
 
         Assert.False(startInfo.Environment.ContainsKey(RuntimeResourcePolicyEnvironment.PolicyFilePathVariable));
         Assert.False(startInfo.Environment.ContainsKey(RuntimeResourcePolicyEnvironment.LaunchPayloadVariable));
+    }
+
+    [Fact]
+    public void Create_StandaloneRuntimeDoesNotReceivePrivateDevelopmentStateRoot()
+    {
+        const string variable = "SUNDER_EXECUTION_RUNTIME_DEVELOPMENT_STATE_ROOT";
+        var previous = Environment.GetEnvironmentVariable(variable);
+        try
+        {
+            Environment.SetEnvironmentVariable(variable, "/private/key-state");
+
+            var startInfo = RuntimeHostStartInfoFactory.Create(
+                OperatingSystem.IsWindows() ? @"C:\Sunder\Sunder.Runtime.Host.exe" : "/opt/sunder/Sunder.Runtime.Host",
+                new Uri("http://127.0.0.1:5275/"),
+                OperatingSystem.IsWindows() ? @"C:\Sunder\host.json" : "/tmp/sunder/host.json");
+
+            Assert.False(startInfo.Environment.ContainsKey(variable));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, previous);
+        }
     }
 
 }

@@ -8,7 +8,9 @@ public sealed record PackageTargetDescriptor(
     string? TargetFramework,
     string? SdkVersion,
     IReadOnlyList<string> RequiredHostCapabilities,
-    IReadOnlyList<PackageWebViewDescriptor>? Views = null)
+    IReadOnlyList<PackageWebViewDescriptor>? Views = null,
+    RuntimeExecutionRuntimeRequirement? ExecutionRuntime = null,
+    PackageTargetExecutionRuntimeBinding? ExecutionRuntimeBinding = null)
 {
     public IReadOnlyList<string> RequiredHostCapabilities { get; }
         = RuntimeContractCollections.Freeze(RequiredHostCapabilities);

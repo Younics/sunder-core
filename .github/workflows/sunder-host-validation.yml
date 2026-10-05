@@ -16,10 +16,12 @@ on:
       - "languages/csharp/dotnet/packages/**"
       - "languages/csharp/dotnet/tests/Directory.Build.props"
       - "languages/csharp/dotnet/tests/**"
-      - "languages/typescript/node/fixtures/sea-smoke/contracts/example.rpc.json"
+      - "languages/typescript/node/fixtures/runtime-backed-worker/**"
+      - "languages/typescript/node/packages/package-tool/**"
+      - "languages/typescript/node/packages/sdk/**"
       - "eng/test-oracles/**"
       - "scripts/test-oracles/**"
-      - "specs/worker/v3/conformance/corpus.json"
+      - "specs/worker/v1/conformance/corpus.json"
   push:
     branches:
       - main
@@ -36,10 +38,12 @@ on:
       - "languages/csharp/dotnet/packages/**"
       - "languages/csharp/dotnet/tests/Directory.Build.props"
       - "languages/csharp/dotnet/tests/**"
-      - "languages/typescript/node/fixtures/sea-smoke/contracts/example.rpc.json"
+      - "languages/typescript/node/fixtures/runtime-backed-worker/**"
+      - "languages/typescript/node/packages/package-tool/**"
+      - "languages/typescript/node/packages/sdk/**"
       - "eng/test-oracles/**"
       - "scripts/test-oracles/**"
-      - "specs/worker/v3/conformance/corpus.json"
+      - "specs/worker/v1/conformance/corpus.json"
 
 permissions:
   contents: read
@@ -47,6 +51,9 @@ permissions:
 env:
   DOTNET_VERSION: "10.0.100"
   NODE_VERSION: "24.18.1"
+  NPM_VERSION: "11.19.0"
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+  SUNDER_REQUIRE_NODE24_HOST_INTEGRATION: "1"
 
 jobs:
   supervisor-and-runtime:
@@ -76,6 +83,13 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install exact Node Host test dependencies
+        working-directory: languages/typescript/node
+        run: |
+          npm install --global "npm@${{ env.NPM_VERSION }}" --registry="${{ env.NPM_CONFIG_REGISTRY }}"
+          node -e "const actual = require('node:child_process').execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(); if (actual !== process.env.NPM_VERSION) throw new Error('Expected npm ' + process.env.NPM_VERSION + ', found ' + actual);"
+          npm ci
 
       - name: Restore Core
         run: dotnet restore Sunder.Core.slnx --locked-mode

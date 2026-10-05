@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sunder.dev/specs/rpc/v1/authoring/package-project-export.schema.json",
+  "title": "Sunder Package Project RPC Export V1",
+  "description": "A project-neutral and RID-neutral export of only package-owned contracts for an associated App build.",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 9,
+  "required": [
+    "schemaVersion",
+    "producer",
+    "projectIdentity",
+    "configuration",
+    "targetFramework",
+    "inputFingerprint",
+    "lockSha256",
+    "packageId",
+    "contracts"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "projectIdentity": {
+      "$ref": "#/$defs/projectIdentity"
+    },
+    "configuration": {
+      "$ref": "#/$defs/buildDimension"
+    },
+    "targetFramework": {
+      "$ref": "#/$defs/buildDimension"
+    },
+    "inputFingerprint": {
+      "$ref": "#/$defs/sha256"
+    },
+    "lockSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "packageId": {
+      "$ref": "#/$defs/packageId"
+    },
+    "contracts": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/exportedContract"
+      }
+    }
+  },
+  "$defs": {
+    "packageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:\\.[a-z0-9]+)*$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 256,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "portableKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
+    },
+    "projectIdentity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
+    },
+    "buildDimension": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._+-]{0,62}[A-Za-z0-9])?$"
+    },
+    "canonicalDescriptor": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4194304,
+      "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f])\\{[\\s\\S]*\\}$"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 3,
+      "required": [
+        "name",
+        "version",
+        "language"
+      ],
+      "properties": {
+        "name": {
+          "const": "Sunder.Package.Build"
+        },
+        "version": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "language": {
+          "const": "csharp"
+        }
+      }
+    },
+    "exportedContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 13,
+      "required": [
+        "contractKey",
+        "contractId",
+        "contractVersion",
+        "exposure",
+        "source",
+        "authorityKind",
+        "authorityId",
+        "descriptorBytes",
+        "canonicalDescriptor",
+        "descriptorSha256",
+        "abiSha256"
+      ],
+      "properties": {
+        "contractKey": {
+          "$ref": "#/$defs/portableKey"
+        },
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "exposure": {
+          "enum": [
+            "package",
+            "public"
+          ]
+        },
+        "source": {
+          "const": "owned"
+        },
+        "authorityKind": {
+          "const": "package"
+        },
+        "authorityId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "descriptorBytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4194304
+        },
+        "canonicalDescriptor": {
+          "$ref": "#/$defs/canonicalDescriptor"
+        },
+        "descriptorSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "abiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "appUse": {
+          "$ref": "#/$defs/ownedUsePolicy"
+        },
+        "runtimeUse": {
+          "$ref": "#/$defs/ownedUsePolicy"
+        }
+      }
+    },
+    "ownedUsePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 2,
+      "required": [
+        "required",
+        "actions"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "discover",
+              "invoke",
+              "subscribe"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

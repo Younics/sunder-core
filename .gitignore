@@ -14,6 +14,8 @@
 [Rr]elease/
 !scripts/release/
 !scripts/release/**
+!eng/release/
+!eng/release/**
 x64/
 [Bb]in/
 [Oo]bj/

@@ -34,6 +34,7 @@ internal sealed class AppPackageHostedViewFacade(
     private readonly HashSet<ActiveViewOperation> _activeOperations = [];
     private readonly HashSet<string> _warmedViewIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _presentedViewIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _startupTracedViewIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _operationCancellation = new();
     private readonly AsyncLocal<ViewOperationScope?> _operationScope = new();
     private bool _operationsStopping;
@@ -742,6 +743,7 @@ internal sealed class AppPackageHostedViewFacade(
             _activeOperations.Add(activeOperation);
         }
 
+        var startupTrace = BeginFirstViewLoad(viewId, kind);
         return RunCoreAsync();
 
         async Task<T> RunCoreAsync()
@@ -783,8 +785,14 @@ internal sealed class AppPackageHostedViewFacade(
                     }
                 }
             }
+            catch (Exception exception)
+            {
+                startupTrace?.Fail(exception);
+                throw;
+            }
             finally
             {
+                startupTrace?.Complete();
                 lock (_operationSyncRoot)
                 {
                     _activeOperations.Remove(activeOperation);
@@ -793,6 +801,38 @@ internal sealed class AppPackageHostedViewFacade(
                 activeOperation.Completion.TrySetResult();
             }
         }
+    }
+
+    private AppStartupTraceOperation? BeginFirstViewLoad(
+        string viewId,
+        ViewOperationKind kind)
+    {
+        if (kind == ViewOperationKind.Reset)
+        {
+            return null;
+        }
+
+        lock (_operationSyncRoot)
+        {
+            if (!_startupTracedViewIds.Add(viewId))
+            {
+                return null;
+            }
+        }
+
+        var packageId = viewRegistry.GetPackageId(viewId);
+        if (packageId is not null)
+        {
+            AppSessionLog.WriteInfo(
+                $"First package view load started for '{viewId}' from '{packageId}'.",
+                visibleInDeveloperLog: false);
+        }
+        return packageId is null
+            ? null
+            : AppStartupTrace.BeginPackageViewLoad(
+                packageId,
+                viewId,
+                viewRegistry.AppGenerationId);
     }
 
     private async Task WaitForOperationsAsync(

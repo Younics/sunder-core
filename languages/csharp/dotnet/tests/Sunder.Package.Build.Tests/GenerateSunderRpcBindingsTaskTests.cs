@@ -1,13 +1,523 @@
 using System.Collections;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
+using Sunder.Package.Build.Rpc.Authoring;
+using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Package.Build.Tasks;
+using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Worker;
 using Xunit;
 
 namespace Sunder.Package.Build.Tests;
 
-public sealed class GenerateSunderRpcBindingsTaskTests
+public sealed partial class GenerateSunderRpcBindingsTaskTests
 {
+    private static readonly JsonSerializerOptions DeterministicJson = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    [Fact]
+    public void Execute_GeneratesAndAtomicallyPublishesImplementationFirstOutputs()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var sourcePath = Path.Combine(root, "Program.cs");
+            File.WriteAllText(sourcePath, ImplementationFirstSource);
+            var references = CompilationReferences();
+            var candidate = new SunderRpcCSharpSourceCompiler().Compile(new(
+                string.Empty,
+                "7.6.5",
+                [new(sourcePath, ImplementationFirstSource)],
+                references));
+            Assert.True(candidate.Success, string.Join(Environment.NewLine, candidate.Diagnostics));
+            WriteSourceAuthoringState(root, Assert.Single(candidate.Contracts).Descriptor);
+            var intermediateOutputPath = Path.Combine(root, "obj", "Debug", "net10.0");
+            var first = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
+
+            Assert.True(first.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)first.BuildEngine).Errors));
+            Assert.Contains(first.CompileItems, item => Path.GetFileName(item.ItemSpec) == "authoring.g.cs");
+            Assert.Contains(first.CompileItems, item => Path.GetFileName(item.ItemSpec) == "imports.g.cs");
+            Assert.Contains(first.CompileItems, item => item.ItemSpec.EndsWith(
+                Path.Combine("bindings", "greeting.g.cs"),
+                PathComparison));
+            var authoringPath = first.CompileItems.Single(item => Path.GetFileName(item.ItemSpec) == "authoring.g.cs").ItemSpec;
+            Assert.Contains("CreateSunderRpcProviderRegistration", File.ReadAllText(authoringPath), StringComparison.Ordinal);
+
+            var snapshot = Assert.Single(first.BindingSnapshots);
+            Assert.Equal("example.generated.greeting", snapshot.GetMetadata("ContractId"));
+            Assert.Equal("1.0.0", snapshot.GetMetadata("ContractVersion"));
+            Assert.Equal(snapshot.ItemSpec, snapshot.GetMetadata("SourceDescriptorPath"));
+            var bundle = Assert.Single(first.ContractBundles);
+            Assert.Equal(snapshot.ItemSpec, bundle.ItemSpec);
+            Assert.Equal("contracts/greeting.rpc.json", bundle.GetMetadata("DescriptorPath"));
+            var provider = Assert.Single(first.RpcProviders);
+            Assert.Equal("example.generated.greeting.provider", provider.ItemSpec);
+            Assert.Equal("runtime", provider.GetMetadata("Role"));
+            Assert.Equal("owner", provider.GetMetadata("Audience"));
+
+            var exportPath = Assert.Single(first.PackageProjectExports).ItemSpec;
+            var receiptItem = Assert.Single(first.AuthoringReceipts);
+            var receiptPath = receiptItem.ItemSpec;
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(receiptPath))).ToLowerInvariant(), receiptItem.GetMetadata("Sha256"));
+            Assert.Equal("example.generated", receiptItem.GetMetadata("PackageId"));
+            Assert.Equal("7.6.5", receiptItem.GetMetadata("PackageVersion"));
+            var lockSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(
+                Path.Combine(root, SunderRpcAuthoringDocuments.ContractLockFileName)))).ToLowerInvariant();
+            using (var export = JsonDocument.Parse(File.ReadAllBytes(exportPath)))
+            {
+                Assert.Equal("example.generated", export.RootElement.GetProperty("packageId").GetString());
+                Assert.Equal(lockSha256, export.RootElement.GetProperty("lockSha256").GetString());
+                var contract = Assert.Single(export.RootElement.GetProperty("contracts").EnumerateArray());
+                Assert.Equal("owned", contract.GetProperty("source").GetString());
+                Assert.Equal("example.generated", contract.GetProperty("authorityId").GetString());
+            }
+            using (var receipt = JsonDocument.Parse(File.ReadAllBytes(receiptPath)))
+            {
+                Assert.Equal(64, receipt.RootElement.GetProperty("inputFingerprint").GetString()!.Length);
+                Assert.Equal(lockSha256, receipt.RootElement.GetProperty("lockSha256").GetString());
+                Assert.Equal(lockSha256, receiptItem.GetMetadata("LockSha256"));
+                Assert.Single(receipt.RootElement.GetProperty("contracts").EnumerateArray());
+                Assert.Single(receipt.RootElement.GetProperty("bundles").EnumerateArray());
+                Assert.Single(receipt.RootElement.GetProperty("providers").EnumerateArray());
+                Assert.Single(receipt.RootElement.GetProperty("generatedBindings").EnumerateArray());
+            }
+
+            var generatedDirectory = Path.Combine(intermediateOutputPath, GenerateSunderRpcBindingsTask.GeneratedDirectoryName);
+            var markerPath = GenerateSunderRpcBindingsTask.GetOwnershipMarkerPath(generatedDirectory);
+            var before = ReadOwnedSet(generatedDirectory);
+            var oldTimestamp = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+            foreach (var path in Directory.EnumerateFiles(generatedDirectory, "*", SearchOption.AllDirectories))
+            {
+                File.SetLastWriteTimeUtc(path, oldTimestamp);
+            }
+            File.SetLastWriteTimeUtc(markerPath, oldTimestamp);
+            Directory.SetLastWriteTimeUtc(generatedDirectory, oldTimestamp);
+            var timestamps = ReadOwnedTimestamps(generatedDirectory);
+
+            var second = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
+            Assert.True(second.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)second.BuildEngine).Errors));
+            Assert.Equal(before, ReadOwnedSet(generatedDirectory));
+            Assert.Equal(timestamps, ReadOwnedTimestamps(generatedDirectory));
+
+            var baselinePath = Path.Combine(root, "sunder-contracts.owned.json");
+            var baselineBytes = File.ReadAllBytes(baselinePath);
+            var originalReceipt = File.ReadAllBytes(receiptPath);
+            var renamed = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
+            renamed.AssemblyName = "Example.ActualAssembly";
+            Assert.True(renamed.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)renamed.BuildEngine).Errors));
+            Assert.NotEqual(originalReceipt, File.ReadAllBytes(receiptPath));
+            Assert.Equal(baselineBytes, File.ReadAllBytes(baselinePath));
+            Assert.True(first.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)first.BuildEngine).Errors));
+            Assert.Equal(before, ReadOwnedSet(generatedDirectory));
+            File.AppendAllText(baselinePath, "\n");
+            var noncanonical = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
+            Assert.False(noncanonical.Execute());
+            Assert.Contains(((TestBuildEngine)noncanonical.BuildEngine).Errors, error =>
+                error.Contains("deterministic outer JSON form", StringComparison.Ordinal));
+            Assert.Equal(before, ReadOwnedSet(generatedDirectory));
+            File.WriteAllBytes(baselinePath, baselineBytes);
+
+            File.WriteAllText(
+                sourcePath,
+                ImplementationFirstSource.Replace(
+                    "    [SunderRpcMethod]",
+                    "    public SunderWorkerProviderRegistration CreateSunderRpcProviderRegistration() => throw null!;\n    [SunderRpcMethod]",
+                    StringComparison.Ordinal));
+            var failed = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
+            Assert.False(failed.Execute());
+            Assert.Contains(((TestBuildEngine)failed.BuildEngine).Errors, error =>
+                error.Contains("rpc-authoring.generated-name-collision", StringComparison.Ordinal));
+            Assert.Equal(before, ReadOwnedSet(generatedDirectory));
+            Assert.Empty(failed.CompileItems);
+            Assert.Empty(failed.ContractBundles);
+            Assert.Empty(failed.RpcProviders);
+
+            File.WriteAllText(
+                sourcePath,
+                ImplementationFirstSource.Replace(
+                    "[SunderRpcService(SunderRpcExposure.Package)]",
+                    string.Empty,
+                    StringComparison.Ordinal));
+            var removed = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
+            Assert.False(removed.Execute());
+            Assert.Contains(((TestBuildEngine)removed.BuildEngine).Errors, error =>
+                error.Contains("owned baseline has 1 active contract", StringComparison.Ordinal));
+            Assert.Equal(before, ReadOwnedSet(generatedDirectory));
+
+            File.WriteAllText(sourcePath, ImplementationFirstSource);
+            var invalidIdentity = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
+            invalidIdentity.ProjectIdentity = "Implementation+FirstRpc";
+            Assert.False(invalidIdentity.Execute());
+            Assert.Contains(((TestBuildEngine)invalidIdentity.BuildEngine).Errors, error =>
+                error.Contains("portable project identity", StringComparison.Ordinal));
+            Assert.Equal(before, ReadOwnedSet(generatedDirectory));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("4d2c20ba9591c04449ee4fe1e48fbbd1664642807e039a6984245317a9735c1d")]
+    [InlineData("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")]
+    public void Execute_ProjectImportCopiesVerifiedSnapshotsAndGeneratesAppLocalClients(string? producerLockSha256)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var sourcePath = Path.Combine(root, "Program.cs");
+            File.WriteAllText(sourcePath, ImplementationFirstSource);
+            var references = CompilationReferences();
+            var candidate = new SunderRpcCSharpSourceCompiler().Compile(new(
+                string.Empty,
+                "7.6.5",
+                [new(sourcePath, ImplementationFirstSource)],
+                references));
+            Assert.True(candidate.Success, string.Join(Environment.NewLine, candidate.Diagnostics));
+            WriteSourceAuthoringState(root, Assert.Single(candidate.Contracts).Descriptor);
+
+            var exportTask = CreateSourceTask(
+                root,
+                Path.Combine(root, "obj", "Debug", "net10.0"),
+                sourcePath,
+                references);
+            exportTask.GenerationMode = "ProjectExport";
+            Assert.True(
+                exportTask.Execute(),
+                string.Join(Environment.NewLine, ((TestBuildEngine)exportTask.BuildEngine).Errors));
+
+            Directory.CreateDirectory(Path.Combine(root, "App"));
+            var exportItem = Assert.Single(exportTask.PackageProjectExports);
+            var exportPath = exportItem.ItemSpec;
+            using var produced = JsonDocument.Parse(File.ReadAllBytes(exportPath));
+            var producerVersion = produced.RootElement.GetProperty("producer").GetProperty("version").GetString()!;
+            var lockSha256 = producerLockSha256 ?? produced.RootElement.GetProperty("lockSha256").GetString()!;
+            if (producerLockSha256 is not null)
+            {
+                // Exercise nonempty/arbitrary lock hashes without enabling imported source generation.
+                var bytes = SunderRpcAuthoringDocuments.WritePackageExport(
+                    producerVersion,
+                    exportTask.ProjectIdentity,
+                    exportTask.Configuration,
+                    exportTask.TargetFramework,
+                    produced.RootElement.GetProperty("inputFingerprint").GetString()!,
+                    producerLockSha256,
+                    "example.generated",
+                    candidate.Contracts);
+                File.WriteAllBytes(exportPath, bytes);
+                exportItem.SetMetadata("Sha256", Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+            }
+            var projectExport = SunderRpcAuthoringDocuments.ReadPackageProjectExport(
+                exportPath,
+                producerVersion,
+                exportTask.ProjectIdentity,
+                exportTask.Configuration,
+                exportTask.TargetFramework,
+                "example.generated");
+            Assert.Equal(lockSha256, projectExport.LockSha256);
+            Assert.Equal(exportItem.GetMetadata("Sha256"), SunderRpcAuthoringDocuments.ValidatePackageProjectExport(
+                exportPath,
+                producerVersion,
+                exportTask.ProjectIdentity,
+                exportTask.Configuration,
+                exportTask.TargetFramework,
+                "example.generated",
+                lockSha256,
+                candidate.Contracts));
+            var sharedIntermediate = Path.GetDirectoryName(Path.GetDirectoryName(exportPath)!)!;
+            var overlappingIntermediate = OperatingSystem.IsMacOS()
+                                          && sharedIntermediate.StartsWith("/private/var/", StringComparison.Ordinal)
+                ? sharedIntermediate["/private".Length..]
+                : sharedIntermediate;
+            var overlappingImport = new GenerateSunderRpcBindingsTask
+            {
+                BuildEngine = new TestBuildEngine(),
+                GenerationMode = "ProjectImport",
+                ExpectedPackageProjectExports = [Assert.Single(exportTask.PackageProjectExports)],
+                PackageVersion = "7.6.5",
+                ProjectIdentity = "ImplementationFirstRpc.App",
+                Configuration = "Debug",
+                TargetFramework = "net10.0-app",
+                ProjectDirectory = Path.Combine(root, "App"),
+                IntermediateOutputPath = overlappingIntermediate,
+            };
+            Assert.False(overlappingImport.Execute());
+            Assert.Contains(((TestBuildEngine)overlappingImport.BuildEngine).Errors, error =>
+                error.Contains("distinct producer and local", StringComparison.Ordinal));
+            Assert.True(File.Exists(exportPath));
+
+            var appIntermediate = Path.Combine(root, "App", "obj", "Debug", "net10.0");
+            var importTask = new GenerateSunderRpcBindingsTask
+            {
+                BuildEngine = new TestBuildEngine(),
+                GenerationMode = "ProjectImport",
+                ExpectedPackageProjectExports = [Assert.Single(exportTask.PackageProjectExports)],
+                PackageVersion = "7.6.5",
+                ProjectIdentity = "ImplementationFirstRpc.App",
+                Configuration = "Debug",
+                TargetFramework = "net10.0-app",
+                ProjectDirectory = Path.Combine(root, "App"),
+                IntermediateOutputPath = appIntermediate,
+            };
+
+            Assert.True(
+                importTask.Execute(),
+                string.Join(Environment.NewLine, ((TestBuildEngine)importTask.BuildEngine).Errors));
+            Assert.DoesNotContain(importTask.CompileItems, item => Path.GetFileName(item.ItemSpec) == "authoring.g.cs");
+            Assert.Contains(importTask.CompileItems, item => Path.GetFileName(item.ItemSpec) == "imports.g.cs");
+            var bindingPath = importTask.CompileItems.Single(item => item.ItemSpec.EndsWith(
+                Path.Combine("bindings", "greeting.g.cs"),
+                PathComparison)).ItemSpec;
+            var binding = File.ReadAllText(bindingPath);
+            Assert.Contains("namespace Sunder.Generated.Rpc.Greeting;", binding, StringComparison.Ordinal);
+            Assert.Contains("internal sealed class GreetingClient", binding, StringComparison.Ordinal);
+            Assert.DoesNotContain("Sunder.Sdk.Worker", binding, StringComparison.Ordinal);
+
+            var snapshot = Assert.Single(importTask.BindingSnapshots);
+            Assert.Equal("example.generated.greeting", snapshot.GetMetadata("ContractId"));
+            Assert.Equal(snapshot.ItemSpec, Assert.Single(importTask.ContractBundles).ItemSpec);
+            Assert.Empty(importTask.RpcProviders);
+            Assert.Empty(importTask.PackageProjectExports);
+            var use = Assert.Single(importTask.RpcUses);
+            Assert.Equal("example.generated.greeting", use.ItemSpec);
+            Assert.Equal("app", use.GetMetadata("Role"));
+            Assert.Equal("true", use.GetMetadata("Required"));
+            Assert.Equal("discover;invoke", use.GetMetadata("Actions"));
+
+            var receiptPath = Assert.Single(importTask.AuthoringReceipts).ItemSpec;
+            using var receipt = JsonDocument.Parse(File.ReadAllBytes(receiptPath));
+            Assert.Equal("example.generated", receipt.RootElement.GetProperty("packageId").GetString());
+            Assert.Equal(lockSha256, receipt.RootElement.GetProperty("lockSha256").GetString());
+            Assert.Single(receipt.RootElement.GetProperty("contracts").EnumerateArray());
+            var importedBundle = Assert.Single(receipt.RootElement.GetProperty("bundles").EnumerateArray());
+            Assert.Equal("owned", importedBundle.GetProperty("source").GetString());
+            Assert.Equal("example.generated", importedBundle.GetProperty("authorityId").GetString());
+            Assert.Empty(receipt.RootElement.GetProperty("providers").EnumerateArray());
+            Assert.Single(receipt.RootElement.GetProperty("uses").EnumerateArray());
+            Assert.Single(receipt.RootElement.GetProperty("generatedBindings").EnumerateArray());
+            foreach (var name in new[]
+                     {
+                         "packageArtifacts", "packageArtifactImports", "packageApiImports", "providerImports",
+                         "platformImports", "generatedPackageFacades",
+                     })
+            {
+                Assert.Empty(receipt.RootElement.GetProperty(name).EnumerateArray());
+            }
+
+            var generatedDirectory = Path.Combine(
+                appIntermediate,
+                GenerateSunderRpcBindingsTask.GeneratedDirectoryName);
+            var before = ReadOwnedSet(generatedDirectory);
+            var timestamps = ReadOwnedTimestamps(generatedDirectory);
+            File.WriteAllText(exportPath, File.ReadAllText(exportPath).Replace(
+                $"\"lockSha256\": \"{lockSha256}\"",
+                $"\"lockSha256\": \"{new string('f', 64)}\"",
+                StringComparison.Ordinal));
+            var failed = new GenerateSunderRpcBindingsTask
+            {
+                BuildEngine = new TestBuildEngine(),
+                GenerationMode = "ProjectImport",
+                ExpectedPackageProjectExports = [Assert.Single(exportTask.PackageProjectExports)],
+                PackageVersion = "7.6.5",
+                ProjectIdentity = "ImplementationFirstRpc.App",
+                Configuration = "Debug",
+                TargetFramework = "net10.0-app",
+                ProjectDirectory = Path.Combine(root, "App"),
+                IntermediateOutputPath = appIntermediate,
+            };
+            Assert.False(failed.Execute());
+            Assert.Contains(((TestBuildEngine)failed.BuildEngine).Errors, error =>
+                error.Contains("changed after its producing target completed", StringComparison.Ordinal));
+            Assert.Equal(before, ReadOwnedSet(generatedDirectory));
+            Assert.Equal(timestamps, ReadOwnedTimestamps(generatedDirectory));
+            Assert.Empty(failed.CompileItems);
+            Assert.Empty(failed.FileWrites);
+            Assert.Empty(failed.BindingSnapshots);
+            Assert.Empty(failed.ContractBundles);
+            Assert.Empty(failed.RpcUses);
+            Assert.Empty(failed.AuthoringReceipts);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("missing", "missing or unsupported members")]
+    [InlineData("null", "deterministic outer JSON form")]
+    [InlineData("empty", "not lowercase SHA-256 text")]
+    [InlineData("short", "not lowercase SHA-256 text")]
+    [InlineData("uppercase", "not lowercase SHA-256 text")]
+    [InlineData("nonhex", "not lowercase SHA-256 text")]
+    [InlineData("out-of-order", "not in deterministic schema order")]
+    public void ReadPackageProjectExport_RequiresLockSha256InSchemaOrder(string mutation, string expectedError)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var lockSha256 = new string('b', 64);
+            var contents = Encoding.UTF8.GetString(SunderRpcAuthoringDocuments.WritePackageExport(
+                "1.0.0", "ImplementationFirstRpc", "Debug", "net10.0", new string('a', 64),
+                lockSha256, "example.generated", []));
+            var lockLine = $"  \"lockSha256\": \"{lockSha256}\",\n";
+            const string packageLine = "  \"packageId\": \"example.generated\",\n";
+            contents = mutation switch
+            {
+                "missing" => contents.Replace(lockLine, string.Empty, StringComparison.Ordinal),
+                "null" => contents.Replace(lockLine, "  \"lockSha256\": null,\n", StringComparison.Ordinal),
+                "empty" => contents.Replace(lockSha256, string.Empty, StringComparison.Ordinal),
+                "short" => contents.Replace(lockSha256, new string('b', 63), StringComparison.Ordinal),
+                "uppercase" => contents.Replace(lockSha256, new string('B', 64), StringComparison.Ordinal),
+                "nonhex" => contents.Replace(lockSha256, new string('g', 64), StringComparison.Ordinal),
+                "out-of-order" => contents.Replace(lockLine, string.Empty, StringComparison.Ordinal)
+                    .Replace(packageLine, packageLine + lockLine, StringComparison.Ordinal),
+                _ => throw new InvalidOperationException($"Unknown mutation '{mutation}'."),
+            };
+            var path = Path.Combine(root, SunderRpcAuthoringDocuments.PackageExportFileName);
+            File.WriteAllText(path, contents);
+
+            var exception = Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ReadPackageProjectExport(
+                path, "1.0.0", "ImplementationFirstRpc", "Debug", "net10.0", "example.generated"));
+            Assert.Contains(expectedError, exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Execute_ImplementationRejectsExportLockMismatchBeforePublication(bool hasPreviousOutput)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var sourcePath = Path.Combine(root, "Program.cs");
+            File.WriteAllText(sourcePath, ImplementationFirstSource);
+            var references = CompilationReferences();
+            var candidate = new SunderRpcCSharpSourceCompiler().Compile(new(
+                string.Empty,
+                "7.6.5",
+                [new(sourcePath, ImplementationFirstSource)],
+                references));
+            Assert.True(candidate.Success, string.Join(Environment.NewLine, candidate.Diagnostics));
+            WriteSourceAuthoringState(root, Assert.Single(candidate.Contracts).Descriptor);
+            var exportTask = CreateSourceTask(
+                root, Path.Combine(root, "obj", "Debug", "net10.0"), sourcePath, references);
+            exportTask.GenerationMode = "ProjectExport";
+            Assert.True(exportTask.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)exportTask.BuildEngine).Errors));
+            var exportItem = Assert.Single(exportTask.PackageProjectExports);
+
+            var intermediate = Path.Combine(root, "obj", "Debug", "net10.0", "linux-x64");
+            var generated = Path.Combine(intermediate, GenerateSunderRpcBindingsTask.GeneratedDirectoryName);
+            string[]? before = null;
+            string[]? timestamps = null;
+            if (hasPreviousOutput)
+            {
+                var previous = CreateSourceTask(root, intermediate, sourcePath, references);
+                previous.GenerationMode = "Implementation";
+                previous.ExpectedPackageProjectExports = [exportItem];
+                Assert.True(previous.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)previous.BuildEngine).Errors));
+                before = ReadOwnedSet(generated);
+                timestamps = ReadOwnedTimestamps(generated);
+            }
+
+            using var produced = JsonDocument.Parse(File.ReadAllBytes(exportItem.ItemSpec));
+            var producerVersion = produced.RootElement.GetProperty("producer").GetProperty("version").GetString()!;
+            var lockSha256 = produced.RootElement.GetProperty("lockSha256").GetString()!;
+            var tamperedBytes = SunderRpcAuthoringDocuments.WritePackageExport(
+                producerVersion,
+                exportTask.ProjectIdentity,
+                exportTask.Configuration,
+                exportTask.TargetFramework,
+                produced.RootElement.GetProperty("inputFingerprint").GetString()!,
+                new string('f', 64),
+                "example.generated",
+                candidate.Contracts);
+            File.WriteAllBytes(exportItem.ItemSpec, tamperedBytes);
+            // Keep file identity current so only the exact-RID lock comparison can reject this export.
+            exportItem.SetMetadata("Sha256", Convert.ToHexString(SHA256.HashData(tamperedBytes)).ToLowerInvariant());
+            var exception = Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ValidatePackageProjectExport(
+                exportItem.ItemSpec,
+                producerVersion,
+                exportTask.ProjectIdentity,
+                exportTask.Configuration,
+                exportTask.TargetFramework,
+                "example.generated",
+                lockSha256,
+                candidate.Contracts));
+            Assert.Contains("exact-RID contract lock", exception.Message, StringComparison.Ordinal);
+
+            var failed = CreateSourceTask(root, intermediate, sourcePath, references);
+            failed.GenerationMode = "Implementation";
+            failed.ExpectedPackageProjectExports = [exportItem];
+            Assert.False(failed.Execute());
+            Assert.Contains(((TestBuildEngine)failed.BuildEngine).Errors, error =>
+                error.Contains("exact-RID contract lock", StringComparison.Ordinal));
+            Assert.Empty(failed.CompileItems);
+            Assert.Empty(failed.FileWrites);
+            Assert.Empty(failed.BindingSnapshots);
+            Assert.Empty(failed.ContractBundles);
+            Assert.Empty(failed.RpcProviders);
+            Assert.Empty(failed.RpcUses);
+            Assert.Empty(failed.PackageProjectExports);
+            Assert.Empty(failed.AuthoringReceipts);
+            if (hasPreviousOutput)
+            {
+                Assert.Equal(before, ReadOwnedSet(generated));
+                Assert.Equal(timestamps, ReadOwnedTimestamps(generated));
+            }
+            else
+            {
+                Assert.False(Directory.Exists(generated));
+                Assert.False(File.Exists(GenerateSunderRpcBindingsTask.GetOwnershipMarkerPath(generated)));
+            }
+            Assert.Equal(tamperedBytes, File.ReadAllBytes(exportItem.ItemSpec));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_DescriptorFirstHandlerNameDoesNotActivateSourceAuthoring()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var sourcePath = Path.Combine(root, "Handler.cs");
+            File.WriteAllText(
+                sourcePath,
+                "namespace Example; public sealed class Handler : ISunderRpcServiceHandler { }");
+            var task = CreateTask(
+                root,
+                Path.Combine(root, "obj"),
+                Binding(WriteDescriptor(root, "test.binding"), "Test.Binding.Generated"));
+            task.SourceFiles = [new TaskItem(sourcePath)];
+
+            Assert.True(task.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)task.BuildEngine).Errors));
+            Assert.Single(task.CompileItems);
+            Assert.Empty(task.PackageProjectExports);
+            Assert.Empty(task.AuthoringReceipts);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void Execute_GeneratesDeterministicSourceAndDoesNotRewriteUnchangedFile()
     {
@@ -26,7 +536,7 @@ public sealed class GenerateSunderRpcBindingsTaskTests
             var bindingSnapshot = Assert.Single(first.BindingSnapshots);
             Assert.Contains(first.FileWrites, item => PathsEqual(item.ItemSpec, bindingSnapshot.ItemSpec));
             Assert.Equal(Path.GetFullPath(descriptorPath), bindingSnapshot.GetMetadata("SourceDescriptorPath"));
-            Assert.Equal("2", bindingSnapshot.GetMetadata("DescriptorVersion"));
+            Assert.Equal("1", bindingSnapshot.GetMetadata("DescriptorVersion"));
             Assert.Equal(64, bindingSnapshot.GetMetadata("DescriptorSha256").Length);
             Assert.Equal(64, bindingSnapshot.GetMetadata("AbiSha256").Length);
             Assert.StartsWith(
@@ -396,6 +906,158 @@ public sealed class GenerateSunderRpcBindingsTaskTests
     }
 
     [Fact]
+    public void CleanGeneratedOutput_DeletesOnlyACompleteMarkedLinkFreeSet()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var intermediateOutputPath = Path.Combine(root, "obj");
+            var generatedDirectory = Path.Combine(
+                intermediateOutputPath,
+                GenerateSunderRpcBindingsTask.GeneratedDirectoryName);
+            var markerPath = GenerateSunderRpcBindingsTask.GetOwnershipMarkerPath(generatedDirectory);
+            var generated = CreateTask(
+                root,
+                intermediateOutputPath,
+                Binding(WriteDescriptor(root, "test.binding"), "Test.Generated"));
+            Assert.True(generated.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)generated.BuildEngine).Errors));
+
+            var cleanup = CreateCleanupTask(root, intermediateOutputPath);
+            Assert.True(cleanup.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)cleanup.BuildEngine).Errors));
+            Assert.False(Directory.Exists(generatedDirectory));
+            Assert.False(File.Exists(markerPath));
+
+            Directory.CreateDirectory(generatedDirectory);
+            var sentinel = Path.Combine(generatedDirectory, "user.cs");
+            File.WriteAllText(sentinel, "user-owned");
+            var unmarked = CreateCleanupTask(root, intermediateOutputPath);
+            Assert.False(unmarked.Execute());
+            Assert.Equal("user-owned", File.ReadAllText(sentinel));
+
+            File.WriteAllText(markerPath, GenerateSunderRpcBindingsTask.MarkerContents);
+            var outside = Path.Combine(root, "outside.txt");
+            File.WriteAllText(outside, "outside");
+            var link = Path.Combine(generatedDirectory, "linked.txt");
+            try
+            {
+                File.CreateSymbolicLink(link, outside);
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
+            {
+                return;
+            }
+            var linked = CreateCleanupTask(root, intermediateOutputPath);
+            Assert.False(linked.Execute());
+            Assert.Equal("outside", File.ReadAllText(outside));
+            Assert.True(File.Exists(markerPath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GeneratedOutputLifecycle_RecoversMarkerOnlyInterruptedClean()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var intermediateOutputPath = Path.Combine(root, "obj");
+            var generatedDirectory = Path.Combine(
+                intermediateOutputPath,
+                GenerateSunderRpcBindingsTask.GeneratedDirectoryName);
+            var markerPath = GenerateSunderRpcBindingsTask.GetOwnershipMarkerPath(generatedDirectory);
+            var descriptor = Binding(WriteDescriptor(root, "test.binding"), "Test.Generated");
+            var generated = CreateTask(root, intermediateOutputPath, descriptor);
+            Assert.True(generated.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)generated.BuildEngine).Errors));
+
+            Directory.Delete(generatedDirectory, recursive: true);
+            var regenerated = CreateTask(root, intermediateOutputPath, descriptor);
+            Assert.True(regenerated.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)regenerated.BuildEngine).Errors));
+            Assert.True(Directory.Exists(generatedDirectory));
+            Assert.True(GenerateSunderRpcBindingsTask.HasValidOwnershipMarker(markerPath));
+
+            Directory.Delete(generatedDirectory, recursive: true);
+            var cleanup = CreateCleanupTask(root, intermediateOutputPath);
+            Assert.True(cleanup.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)cleanup.BuildEngine).Errors));
+            Assert.False(File.Exists(markerPath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CleanGeneratedOutput_RecoversInterruptedPublicationBeforeDeletingOwnedSet()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var intermediateOutputPath = Path.Combine(root, "obj");
+            var generatedDirectory = Path.Combine(
+                intermediateOutputPath,
+                GenerateSunderRpcBindingsTask.GeneratedDirectoryName);
+            var markerPath = GenerateSunderRpcBindingsTask.GetOwnershipMarkerPath(generatedDirectory);
+            var generated = CreateTask(
+                root,
+                intermediateOutputPath,
+                Binding(WriteDescriptor(root, "test.binding"), "Test.Generated"));
+            Assert.True(generated.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)generated.BuildEngine).Errors));
+
+            var token = Guid.NewGuid().ToString("D");
+            var stagedDirectory = generatedDirectory + ".stage-" + Guid.NewGuid().ToString("N");
+            var stagedMarkerPath = markerPath + ".stage-" + Guid.NewGuid().ToString("N");
+            var backupDirectory = generatedDirectory + ".backup-" + token;
+            var backupMarkerPath = markerPath + ".backup-" + token;
+            Directory.CreateDirectory(stagedDirectory);
+            File.WriteAllText(Path.Combine(stagedDirectory, "replacement.g.cs"), "replacement");
+            File.WriteAllText(stagedMarkerPath, GenerateSunderRpcBindingsTask.MarkerContents);
+            var journalPath = generatedDirectory + GeneratedOutputTransaction.TransactionSuffix;
+            File.WriteAllText(journalPath, JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1,
+                token,
+                coordinatorPath = generatedDirectory,
+                outputs = new[]
+                {
+                    new
+                    {
+                        finalPath = generatedDirectory,
+                        stagedPath = stagedDirectory,
+                        backupPath = backupDirectory,
+                        existed = true,
+                    },
+                    new
+                    {
+                        finalPath = markerPath,
+                        stagedPath = stagedMarkerPath,
+                        backupPath = backupMarkerPath,
+                        existed = true,
+                    },
+                },
+            }));
+            Directory.Move(generatedDirectory, backupDirectory);
+            File.Move(markerPath, backupMarkerPath);
+
+            var cleanup = CreateCleanupTask(root, intermediateOutputPath);
+            Assert.True(cleanup.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)cleanup.BuildEngine).Errors));
+            Assert.False(Directory.Exists(generatedDirectory));
+            Assert.False(File.Exists(markerPath));
+            Assert.False(Directory.Exists(stagedDirectory));
+            Assert.False(File.Exists(stagedMarkerPath));
+            Assert.False(Directory.Exists(backupDirectory));
+            Assert.False(File.Exists(backupMarkerPath));
+            Assert.False(File.Exists(journalPath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Execute_RefusesAnUnmarkedExistingGeneratedDirectory()
     {
         var root = CreateTempDirectory();
@@ -545,6 +1207,41 @@ public sealed class GenerateSunderRpcBindingsTaskTests
             Bindings = bindings,
         };
 
+    private static GenerateSunderRpcBindingsTask CreateSourceTask(
+        string projectDirectory,
+        string intermediateOutputPath,
+        string sourcePath,
+        IReadOnlyList<string> references)
+        => new()
+        {
+            BuildEngine = new TestBuildEngine(),
+            ProjectDirectory = projectDirectory,
+            IntermediateOutputPath = intermediateOutputPath,
+            SourceFiles = [new TaskItem(sourcePath)],
+            ReferencePaths = references.Select(static path => (ITaskItem)new TaskItem(path)).ToArray(),
+            PackageVersion = "7.6.5",
+            ProjectIdentity = "ImplementationFirstRpc",
+            Configuration = "Debug",
+            TargetFramework = "net10.0",
+            NullableEnabled = true,
+        };
+
+    private static CleanSunderRpcGeneratedOutputTask CreateCleanupTask(
+        string projectDirectory,
+        string intermediateOutputPath)
+    {
+        var generatedDirectory = new TaskItem(Path.Combine(
+            intermediateOutputPath,
+            GenerateSunderRpcBindingsTask.GeneratedDirectoryName));
+        generatedDirectory.SetMetadata("DiscoveryRoot", intermediateOutputPath);
+        return new()
+        {
+            BuildEngine = new TestBuildEngine(),
+            ProjectDirectory = projectDirectory,
+            GeneratedDirectories = [generatedDirectory],
+        };
+    }
+
     private static TaskItem Binding(string descriptorPath, string namespaceName)
     {
         var binding = new TaskItem(descriptorPath);
@@ -572,6 +1269,66 @@ public sealed class GenerateSunderRpcBindingsTaskTests
         return files;
     }
 
+    private static string[] ReadOwnedTimestamps(string generatedDirectory)
+        => Directory.EnumerateFiles(generatedDirectory, "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(generatedDirectory, path).Replace(Path.DirectorySeparatorChar, '/')
+                            + ":" + File.GetLastWriteTimeUtc(path).Ticks)
+            .Append("<directory>:" + Directory.GetLastWriteTimeUtc(generatedDirectory).Ticks)
+            .Append("<marker>:" + File.GetLastWriteTimeUtc(
+                GenerateSunderRpcBindingsTask.GetOwnershipMarkerPath(generatedDirectory)).Ticks)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string[] CompilationReferences()
+    {
+        var trustedPlatformAssemblies = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")
+                                        ?? throw new InvalidOperationException("Trusted platform assemblies are unavailable.");
+        return trustedPlatformAssemblies.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Append(typeof(SunderRpcServiceAttribute).Assembly.Location)
+            .Append(typeof(SunderWorkerProviderRegistration).Assembly.Location)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static void WriteSourceAuthoringState(string root, SunderRpcContractDescriptor descriptor)
+    {
+        var canonicalDescriptor = Encoding.UTF8.GetString(descriptor.GetCanonicalUtf8());
+        var canonicalAbi = Encoding.UTF8.GetString(descriptor.GetCanonicalAbiProjectionUtf8());
+        var baseline = "{\n"
+                       + "  \"schemaVersion\": 1,\n"
+                       + "  \"authorityKind\": \"package\",\n"
+                       + "  \"authorityId\": \"example.generated\",\n"
+                       + "  \"packageId\": \"example.generated\",\n"
+                       + "  \"contracts\": {\n"
+                       + "    \"greeting\": {\n"
+                       + "      \"contractId\": \"example.generated.greeting\",\n"
+                       + "      \"current\": {\n"
+                       + "        \"state\": \"draft\",\n"
+                       + "        \"exposure\": \"package\",\n"
+                       + "        \"contractVersion\": \"1.0.0\",\n"
+                       + $"        \"descriptorBytes\": {descriptor.GetCanonicalUtf8().Length},\n"
+                        + $"        \"canonicalDescriptor\": {JsonSerializer.Serialize(canonicalDescriptor, DeterministicJson)},\n"
+                       + $"        \"descriptorSha256\": \"{descriptor.Sha256}\",\n"
+                       + $"        \"abiProjectionBytes\": {descriptor.GetCanonicalAbiProjectionUtf8().Length},\n"
+                        + $"        \"canonicalAbiProjection\": {JsonSerializer.Serialize(canonicalAbi, DeterministicJson)},\n"
+                       + $"        \"abiSha256\": \"{descriptor.AbiSha256}\"\n"
+                       + "      },\n"
+                       + "      \"history\": []\n"
+                       + "    }\n"
+                       + "  }\n"
+                       + "}\n";
+        File.WriteAllText(Path.Combine(root, "sunder-contracts.owned.json"), baseline);
+        File.WriteAllText(
+            Path.Combine(root, "sunder-contracts.lock.json"),
+            "{\n"
+            + "  \"lockVersion\": 1,\n"
+            + "  \"packageArtifacts\": {},\n"
+            + "  \"packageImports\": {},\n"
+            + "  \"providerImports\": {},\n"
+            + "  \"platformImports\": {}\n"
+            + "}\n");
+    }
+
     private static bool PathsEqual(string left, string right)
         => string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), PathComparison);
 
@@ -592,7 +1349,7 @@ public sealed class GenerateSunderRpcBindingsTaskTests
 
     private const string Descriptor = """
         {
-          "descriptorVersion": 2,
+          "descriptorVersion": 1,
           "schemaProfile": "sunder.rpc.values.v1",
           "contractId": "CONTRACT_ID",
           "version": "1.0.0",
@@ -629,6 +1386,38 @@ public sealed class GenerateSunderRpcBindingsTaskTests
               "additionalProperties": false
             }
           }
+        }
+        """;
+
+    private const string ImplementationFirstSource = """
+        using System.Threading;
+        using System.Threading.Tasks;
+        using Sunder.Sdk.Packaging;
+        using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Worker;
+        [assembly: SunderPackage(Id = "example.generated", Name = "Generated")]
+        namespace Example.Generated;
+        public static class Bootstrap
+        {
+            public static SunderWorkerProviderRegistration Create()
+                => new GreetingService().CreateSunderRpcProviderRegistration();
+        }
+        [SunderRpcService(SunderRpcExposure.Package)]
+        public sealed partial class GreetingService
+        {
+            [SunderRpcMethod]
+            public ValueTask<GreetingResult> GreetAsync(
+                GreetingRequest request,
+                SunderRpcInvocationContext context,
+                CancellationToken cancellationToken) => ValueTask.FromResult(new GreetingResult { Message = request.Name });
+        }
+        public sealed record GreetingRequest
+        {
+            public required string Name { get; init; }
+        }
+        public sealed record GreetingResult
+        {
+            public required string Message { get; init; }
         }
         """;
 

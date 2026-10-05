@@ -11,14 +11,21 @@ public sealed class CliCommandTreeTests
         { ["runtime", "stop"], typeof(RuntimeLifecycleCommand), "runtime stop" },
         { ["runtime", "restart"], typeof(RuntimeLifecycleCommand), "runtime restart" },
         { ["runtime", "reset", "--yes"], typeof(RuntimeResetCommand), "runtime reset" },
+        { ["runtime", "list"], typeof(ListExecutionRuntimesCommand), "runtime list" },
+        { ["runtime", "info", "sunder.runtime.dotnet", "8.0.1", "2", "linux-x64", "sunder.dotnet-worker-module.v1"], typeof(ShowExecutionRuntimeCommand), "runtime info" },
+        { ["runtime", "ensure", "sunder.runtime.dotnet", ">=8.0.0 <9.0.0", "sunder.dotnet-worker-module.v1"], typeof(EnsureExecutionRuntimeCommand), "runtime ensure" },
+        { ["runtime", "import", "--file", "dotnet.sunderruntime"], typeof(ImportExecutionRuntimeCommand), "runtime import" },
+        { ["runtime", "verify", "sunder.runtime.dotnet", "8.0.1", "2", "linux-x64", "sunder.dotnet-worker-module.v1"], typeof(VerifyExecutionRuntimeCommand), "runtime verify" },
+        { ["runtime", "repair", "sunder.runtime.dotnet", "8.0.1", "2", "linux-x64", "sunder.dotnet-worker-module.v1", "--yes"], typeof(RepairExecutionRuntimeCommand), "runtime repair" },
+        { ["runtime", "gc"], typeof(GarbageCollectExecutionRuntimesCommand), "runtime gc" },
         { ["package", "search", "agent"], typeof(SearchPackagesCommand), "package search" },
         { ["package", "info", "demo"], typeof(PackageInfoCommand), "package info" },
         { ["package", "list"], typeof(ListInstalledCommand), "package list" },
         { ["package", "status", "demo"], typeof(PackageStatusCommand), "package status" },
-        { ["package", "install", "demo"], typeof(InstallRegistryPackageCommand), "package install" },
+        { ["package", "install", "demo", "--dry-run"], typeof(InstallRegistryPackageCommand), "package install" },
         { ["package", "install", "--file", "demo.sunderpkg"], typeof(InstallLocalPackageCommand), "package install" },
-        { ["package", "update", "demo"], typeof(UpdatePackagesCommand), "package update" },
-        { ["package", "update", "--all"], typeof(UpdatePackagesCommand), "package update" },
+        { ["package", "update", "demo", "--dry-run"], typeof(UpdatePackagesCommand), "package update" },
+        { ["package", "update", "--all", "--dry-run"], typeof(UpdatePackagesCommand), "package update" },
         { ["package", "source", "adopt", "demo", "--registry-origin", "https://registry.test/", "--tag", "latest", "--dry-run"], typeof(AdoptPackageSourceCommand), "package source adopt" },
         { ["package", "enable", "demo"], typeof(SetPackageEnabledCommand), "package enable" },
         { ["package", "disable", "demo"], typeof(SetPackageEnabledCommand), "package disable" },
@@ -53,8 +60,12 @@ public sealed class CliCommandTreeTests
         { ["registry", "package", "tag", "set", "demo", "latest", "1.0.0"], typeof(SetDistTagCommand), "registry package tag set" },
         { ["registry", "package", "tag", "delete", "demo", "beta"], typeof(SetDistTagCommand), "registry package tag delete" },
         { ["registry", "stack", "publish", "--file", "demo.sunderstack"], typeof(PublishStackCommand), "registry stack publish" },
-        { ["registry", "stack", "delete", "demo"], typeof(DeleteStackCommand), "registry stack delete" },
+        { ["registry", "stack", "unlist", "demo"], typeof(SetStackVisibilityCommand), "registry stack unlist" },
+        { ["registry", "stack", "relist", "demo"], typeof(SetStackVisibilityCommand), "registry stack relist" },
         { ["dev", "package", "validate", "demo.sunderpkg"], typeof(ValidatePackageCommand), "dev package validate" },
+        { ["dev", "package", "prepare-imports", "dist/sunder-dev", "--registry", "https://registry.test/"], typeof(PrepareDevPackageImportsCommand), "dev package prepare-imports" },
+        { ["dev", "package", "run", "dist/sunder-dev", "--watch"], typeof(RunDevPackageCommand), "dev package run" },
+        { ["dev", "package", "smoke", "dist/sunder-dev"], typeof(SmokeDevPackageCommand), "dev package smoke" },
         { ["dev", "stack", "inspect", "demo.sunderstack"], typeof(ValidateStackCommand), "dev stack inspect" },
         { ["dev", "registry", "package", "publish-local", "--file", "demo.sunderpkg"], typeof(PublishPackageCommand), "dev registry package publish-local" },
         { ["dev", "registry", "stack", "publish-local", "--file", "demo.sunderstack"], typeof(PublishStackCommand), "dev registry stack publish-local" },
@@ -138,6 +149,32 @@ public sealed class CliCommandTreeTests
     }
 
     [Fact]
+    public void Public_api_candidate_inspection_is_an_offline_validation_operation()
+    {
+        var parsed = new CliCommandParser().Parse(["dev", "package", "validate", "candidate.sunderpkg", "--api-output", "inspection", "--json"]);
+        Assert.Empty(parsed.Errors);
+        var command = Assert.IsType<ValidatePackageCommand>(parsed.Invocation!.Command);
+        Assert.Equal("inspection", command.ApiOutput);
+        var plan = CliCommandPlan.For(command);
+        Assert.Equal(CliClientRequirements.None, plan.Clients);
+        Assert.Equal(CliConfigurationRequirements.None, plan.Configuration);
+        Assert.False(plan.UseRequestTimeout);
+    }
+
+    [Fact]
+    public void Registry_install_and_update_require_exactly_one_plan_or_apply_mode()
+    {
+        var parser = new CliCommandParser();
+
+        Assert.NotEmpty(parser.Parse(["package", "install", "demo"]).Errors);
+        Assert.NotEmpty(parser.Parse(["package", "install", "demo", "--yes", "--dry-run"]).Errors);
+        Assert.NotEmpty(parser.Parse(["package", "update", "demo"]).Errors);
+        Assert.NotEmpty(parser.Parse(["package", "update", "--all", "--yes", "--dry-run"]).Errors);
+        Assert.Empty(parser.Parse(["package", "install", "demo", "--yes"]).Errors);
+        Assert.Empty(parser.Parse(["package", "update", "--all", "--dry-run"]).Errors);
+    }
+
+    [Fact]
     public void Package_source_adoption_requires_origin_policy_and_exactly_one_safety_mode()
     {
         var parser = new CliCommandParser();
@@ -159,6 +196,7 @@ public sealed class CliCommandTreeTests
         Assert.NotEmpty(parser.Parse(["package", "secret", "set", "demo", "api-key", "--stdin", "--from-env", "API_KEY"]).Errors);
         Assert.NotEmpty(parser.Parse(["package", "secret", "set", "demo", "api-key", "literal-value"]).Errors);
         Assert.NotEmpty(parser.Parse(["stack", "import", "--file", "demo.sunderstack"]).Errors);
+        Assert.NotEmpty(parser.Parse(["runtime", "repair", "sunder.runtime.dotnet", "8.0.1", "2", "linux-x64", "sunder.dotnet-worker-module.v1"]).Errors);
     }
 
     [Fact]
@@ -169,7 +207,8 @@ public sealed class CliCommandTreeTests
         var lifecycle = parser.Parse(["runtime", "start"]).Invocation!.Command;
         var settings = parser.Parse(["package", "config", "list", "demo"]).Invocation!.Command;
         var stackExport = parser.Parse(["stack", "export", "demo"]).Invocation!.Command;
-        var update = parser.Parse(["package", "update", "--all"]).Invocation!.Command;
+        var update = parser.Parse(["package", "update", "--all", "--dry-run"]).Invocation!.Command;
+        var devRun = parser.Parse(["dev", "package", "run", "dist/sunder-dev"]).Invocation!.Command;
         var adoption = parser.Parse([
             "package", "source", "adopt", "demo", "--registry-origin", "https://registry.test/", "--tag", "latest", "--dry-run",
         ]).Invocation!.Command;
@@ -180,6 +219,8 @@ public sealed class CliCommandTreeTests
         Assert.Equal(CliClientRequirements.Runtime, CliCommandPlan.For(stackExport).Clients);
         Assert.Equal(CliConfigurationRequirements.Runtime, CliCommandPlan.For(update).Configuration);
         Assert.Equal(CliConfigurationRequirements.Runtime, CliCommandPlan.For(adoption).Configuration);
+        Assert.Equal(CliClientRequirements.Host | CliClientRequirements.Runtime, CliCommandPlan.For(devRun).Clients);
+        Assert.False(CliCommandPlan.For(devRun).UseRequestTimeout);
     }
 
     [Theory]

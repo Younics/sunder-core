@@ -1,0 +1,88 @@
+{
+  "success": true,
+  "errorCode": null,
+  "message": "The package now uses the resolved execution runtime.",
+  "packageId": "sunder.package.sample",
+  "packageVersion": "1.2.3",
+  "packageContentIdentity": "package-content-identity-123",
+  "previousBinding": {
+    "role": "runtime",
+    "rid": "win-x64",
+    "requirement": {
+      "runtimeId": "sunder.runtime.dotnet",
+      "versionRange": "\u003E=10.0.0 \u003C11.0.0",
+      "moduleAbi": "sunder.dotnet-worker-module.v1"
+    },
+    "runtime": {
+      "runtimeId": "sunder.runtime.dotnet",
+      "version": "10.0.0",
+      "packagingRevision": 1,
+      "rid": "win-x64",
+      "moduleAbi": "sunder.dotnet-worker-module.v1",
+      "manifestSha256": "runtime-manifest-10.0.0-1",
+      "artifactSha256": "runtime-artifact-10.0.0-1"
+    },
+    "artifactSize": 104857600,
+    "registryOrigin": "https://registry.example",
+    "acquisitionSource": "registry",
+    "signingKeyId": "sunder-runtime-release-2026-01",
+    "trustGeneration": 2,
+    "lifecycle": {
+      "state": "supported",
+      "supportedFromUtc": "2026-07-10T12:00:00+00:00",
+      "deprecatedAtUtc": null,
+      "installBlockedAtUtc": null,
+      "activationBlockedAtUtc": null,
+      "revokedAtUtc": null,
+      "policyMessage": null,
+      "runtimePolicyRevision": 42,
+      "policyObservedAtUtc": "2026-07-11T10:00:00+00:00"
+    },
+    "resolvedAtUtc": "2026-07-11T09:00:00+00:00"
+  },
+  "newBinding": {
+    "role": "runtime",
+    "rid": "win-x64",
+    "requirement": {
+      "runtimeId": "sunder.runtime.dotnet",
+      "versionRange": "\u003E=10.0.0 \u003C11.0.0",
+      "moduleAbi": "sunder.dotnet-worker-module.v1"
+    },
+    "runtime": {
+      "runtimeId": "sunder.runtime.dotnet",
+      "version": "10.0.1",
+      "packagingRevision": 2,
+      "rid": "win-x64",
+      "moduleAbi": "sunder.dotnet-worker-module.v1",
+      "manifestSha256": "runtime-manifest-10.0.1-2",
+      "artifactSha256": "runtime-artifact-10.0.1-2"
+    },
+    "artifactSize": 104857600,
+    "registryOrigin": "https://registry.example",
+    "acquisitionSource": "registry",
+    "signingKeyId": "sunder-runtime-release-2026-01",
+    "trustGeneration": 2,
+    "lifecycle": {
+      "state": "supported",
+      "supportedFromUtc": "2026-07-10T12:00:00+00:00",
+      "deprecatedAtUtc": null,
+      "installBlockedAtUtc": null,
+      "activationBlockedAtUtc": null,
+      "revokedAtUtc": null,
+      "policyMessage": null,
+      "runtimePolicyRevision": 42,
+      "policyObservedAtUtc": "2026-07-11T10:00:00+00:00"
+    },
+    "resolvedAtUtc": "2026-07-11T09:00:00+00:00"
+  },
+  "runtimeSessionApplied": true,
+  "impact": {
+    "packageReferenceCount": 3,
+    "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "impactedPackageIds": [
+      "sunder.package.sample",
+      "sunder.package.tools",
+      "sunder.package.workflow"
+    ]
+  }
+}

@@ -39,6 +39,18 @@ public sealed class SunderPackageManifest
 
     [JsonPropertyName("provides")]
     public IReadOnlyList<SunderPackageProviderManifest?>? Provides { get; init; }
+
+    [JsonPropertyName("packageArtifactImports")]
+    public IReadOnlyList<SunderPackageArtifactImportManifest?>? PackageArtifactImports { get; init; }
+
+    [JsonPropertyName("packageApiImports")]
+    public IReadOnlyList<SunderPackageApiImportManifest?>? PackageApiImports { get; init; }
+
+    [JsonPropertyName("providerImports")]
+    public IReadOnlyList<SunderPackageProviderImportManifest?>? ProviderImports { get; init; }
+
+    [JsonPropertyName("platformImports")]
+    public IReadOnlyList<SunderPackagePlatformImportManifest?>? PlatformImports { get; init; }
 }
 
 public sealed class SunderPackageDependencyManifest
@@ -48,6 +60,9 @@ public sealed class SunderPackageDependencyManifest
 
     [JsonPropertyName("versionRange")]
     public string? VersionRange { get; init; }
+
+    [JsonPropertyName("presence")]
+    public string? Presence { get; init; }
 }
 
 public sealed class SunderPackageTargetManifest
@@ -73,8 +88,23 @@ public sealed class SunderPackageTargetManifest
     [JsonPropertyName("requiredHostCapabilities")]
     public IReadOnlyList<string?>? RequiredHostCapabilities { get; init; }
 
+    [JsonPropertyName("executionRuntime")]
+    public SunderPackageExecutionRuntimeManifest? ExecutionRuntime { get; init; }
+
     [JsonPropertyName("views")]
     public IReadOnlyList<SunderPackageWebViewManifest?>? Views { get; init; }
+}
+
+public sealed record SunderPackageExecutionRuntimeManifest
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; init; }
+
+    [JsonPropertyName("versionRange")]
+    public string? VersionRange { get; init; }
+
+    [JsonPropertyName("moduleAbi")]
+    public string? ModuleAbi { get; init; }
 }
 
 public sealed class SunderPackageWebViewManifest
@@ -100,6 +130,21 @@ public sealed class SunderPackageWebViewManifest
 
 public sealed class SunderPackageContractBundleManifest
 {
+    [JsonPropertyName("source")]
+    public string? Source { get; init; }
+
+    [JsonPropertyName("authorityKind")]
+    public string? AuthorityKind { get; init; }
+
+    [JsonPropertyName("authorityId")]
+    public string? AuthorityId { get; init; }
+
+    [JsonPropertyName("selectedAuthorityRelease")]
+    public string? SelectedAuthorityRelease { get; init; }
+
+    [JsonPropertyName("selectedAuthorityContentIdentity")]
+    public string? SelectedAuthorityContentIdentity { get; init; }
+
     [JsonPropertyName("contractId")]
     public string? ContractId { get; init; }
 

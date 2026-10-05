@@ -1,0 +1,653 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sunder.dev/specs/rpc/v1/authoring/owned-contracts.schema.json",
+  "title": "Sunder Owned Contracts Baseline V1",
+  "description": "The reviewed tool-owned compatibility baseline for package-owned or Sunder Core platform-owned RPC contracts.",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 5,
+  "required": [
+    "schemaVersion",
+    "authorityKind",
+    "authorityId",
+    "contracts"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "authorityKind": {
+      "enum": [
+        "package",
+        "platform"
+      ]
+    },
+    "authorityId": {
+      "$ref": "#/$defs/packageId"
+    },
+    "packageId": {
+      "$ref": "#/$defs/packageId"
+    },
+    "contracts": {}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "authorityKind": {
+            "const": "package"
+          }
+        },
+        "required": [
+          "authorityKind"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "required": [
+          "packageId"
+        ],
+        "properties": {
+          "packageId": {
+            "$ref": "#/$defs/packageId"
+          },
+          "contracts": {
+            "$ref": "#/$defs/packageOwnedContractMap"
+          }
+        }
+      },
+      "else": {
+        "type": "object",
+        "properties": {
+          "authorityId": {
+            "const": "sunder.core"
+          },
+          "packageId": false,
+          "contracts": {
+            "$ref": "#/$defs/platformOwnedContractMap"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "packageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:\\.[a-z0-9]+)*$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 256,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "strongDescriptorEtag": {
+      "type": "string",
+      "minLength": 66,
+      "maxLength": 66,
+      "pattern": "^\"[0-9a-f]{64}\"$"
+    },
+    "portableKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
+    },
+    "canonicalJsonObject": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4194304,
+      "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f])\\{[\\s\\S]*\\}$"
+    },
+    "registryOrigin": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 268,
+      "anyOf": [
+        {
+          "pattern": "^https://(?=[^:/]{1,253}(?::[0-9]{1,5})?/$)(?![0-9]+(?:\\.[0-9]+)*(?::[0-9]+)?/)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::(?!443/)(?:[1-9]|[1-9][0-9]{1,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?/$"
+        },
+        {
+          "pattern": "^http://localhost(?::(?!80/)(?:[1-9]|[1-9][0-9]{1,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?/$"
+        }
+      ]
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 30,
+      "pattern": "^(?!0000)[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{0,8}[1-9])?Z$"
+    },
+    "packageOwnedContractMap": {
+      "type": "object",
+      "minProperties": 0,
+      "maxProperties": 128,
+      "propertyNames": {
+        "$ref": "#/$defs/portableKey"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/packageOwnedContract"
+      }
+    },
+    "platformOwnedContractMap": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 128,
+      "propertyNames": {
+        "$ref": "#/$defs/portableKey"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/platformOwnedContract"
+      }
+    },
+    "packageOwnedContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 3,
+      "required": [
+        "contractId",
+        "history"
+      ],
+      "properties": {
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "current": {
+          "$ref": "#/$defs/packageSnapshot"
+        },
+        "history": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/packageImmutableSnapshot"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "not": {
+              "type": "object",
+              "properties": {
+                "current": {}
+              },
+              "required": [
+                "current"
+              ]
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "history": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 256
+              }
+            }
+          }
+        }
+      ]
+    },
+    "platformOwnedContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 3,
+      "required": [
+        "contractId",
+        "history"
+      ],
+      "properties": {
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "current": {
+          "$ref": "#/$defs/platformSnapshot"
+        },
+        "history": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/platformImmutableSnapshot"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "not": {
+              "type": "object",
+              "properties": {
+                "current": {}
+              },
+              "required": [
+                "current"
+              ]
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "history": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 256
+              }
+            }
+          }
+        }
+      ]
+    },
+    "packageSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 11,
+      "required": [
+        "state",
+        "exposure",
+        "contractVersion",
+        "descriptorBytes",
+        "canonicalDescriptor",
+        "descriptorSha256",
+        "abiProjectionBytes",
+        "canonicalAbiProjection",
+        "abiSha256"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "draft",
+            "release-frozen",
+            "published"
+          ]
+        },
+        "exposure": {
+          "enum": [
+            "package",
+            "public"
+          ]
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "descriptorBytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4194304
+        },
+        "canonicalDescriptor": {
+          "$ref": "#/$defs/canonicalJsonObject"
+        },
+        "descriptorSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "abiProjectionBytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4194304
+        },
+        "canonicalAbiProjection": {
+          "$ref": "#/$defs/canonicalJsonObject"
+        },
+        "abiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "packageRelease": {
+          "$ref": "#/$defs/packageRelease"
+        },
+        "publication": {
+          "$ref": "#/$defs/packagePublication"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "draft"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "packageRelease": false,
+              "publication": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "release-frozen"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "packageRelease"
+            ],
+            "properties": {
+              "packageRelease": {
+                "$ref": "#/$defs/packageRelease"
+              },
+              "publication": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "published"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "packageRelease",
+              "publication"
+            ],
+            "properties": {
+              "packageRelease": {
+                "$ref": "#/$defs/packageRelease"
+              },
+              "publication": {
+                "$ref": "#/$defs/packagePublication"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "platformSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 11,
+      "required": [
+        "state",
+        "exposure",
+        "contractVersion",
+        "descriptorBytes",
+        "canonicalDescriptor",
+        "descriptorSha256",
+        "abiProjectionBytes",
+        "canonicalAbiProjection",
+        "abiSha256"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "draft",
+            "release-frozen",
+            "published"
+          ]
+        },
+        "exposure": {
+          "const": "public"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "descriptorBytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4194304
+        },
+        "canonicalDescriptor": {
+          "$ref": "#/$defs/canonicalJsonObject"
+        },
+        "descriptorSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "abiProjectionBytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4194304
+        },
+        "canonicalAbiProjection": {
+          "$ref": "#/$defs/canonicalJsonObject"
+        },
+        "abiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "catalogRelease": {
+          "$ref": "#/$defs/catalogRelease"
+        },
+        "publication": {
+          "$ref": "#/$defs/platformPublication"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "draft"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "catalogRelease": false,
+              "publication": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "release-frozen"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "catalogRelease"
+            ],
+            "properties": {
+              "catalogRelease": {
+                "$ref": "#/$defs/catalogRelease"
+              },
+              "publication": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "published"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "required": [
+              "catalogRelease",
+              "publication"
+            ],
+            "properties": {
+              "catalogRelease": {
+                "$ref": "#/$defs/catalogRelease"
+              },
+              "publication": {
+                "$ref": "#/$defs/platformPublication"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "packageImmutableSnapshot": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/packageSnapshot"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "release-frozen",
+                "published"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "platformImmutableSnapshot": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/platformSnapshot"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "release-frozen",
+                "published"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "packageRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 2,
+      "required": [
+        "packageId",
+        "packageVersion"
+      ],
+      "properties": {
+        "packageId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "packageVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        }
+      }
+    },
+    "catalogRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 2,
+      "required": [
+        "authorityId",
+        "releaseVersion"
+      ],
+      "properties": {
+        "authorityId": {
+          "const": "sunder.core"
+        },
+        "releaseVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        }
+      }
+    },
+    "packagePublication": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 6,
+      "required": [
+        "registryOrigin",
+        "packageId",
+        "packageVersion",
+        "packageContentIdentity",
+        "publishedAtUtc",
+        "etag"
+      ],
+      "properties": {
+        "registryOrigin": {
+          "$ref": "#/$defs/registryOrigin"
+        },
+        "packageId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "packageVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "packageContentIdentity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "publishedAtUtc": {
+          "$ref": "#/$defs/utcTimestamp"
+        },
+        "etag": {
+          "$ref": "#/$defs/strongDescriptorEtag"
+        }
+      }
+    },
+    "platformPublication": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 6,
+      "required": [
+        "registryOrigin",
+        "authorityId",
+        "catalogRelease",
+        "catalogContentIdentity",
+        "publishedAtUtc",
+        "etag"
+      ],
+      "properties": {
+        "registryOrigin": {
+          "$ref": "#/$defs/registryOrigin"
+        },
+        "authorityId": {
+          "const": "sunder.core"
+        },
+        "catalogRelease": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "catalogContentIdentity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "publishedAtUtc": {
+          "$ref": "#/$defs/utcTimestamp"
+        },
+        "etag": {
+          "$ref": "#/$defs/strongDescriptorEtag"
+        }
+      }
+    }
+  }
+}

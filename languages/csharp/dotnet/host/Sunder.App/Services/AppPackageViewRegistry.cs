@@ -21,6 +21,7 @@ internal sealed class AppPackageViewRegistry
     private readonly HashSet<string> _quarantinedViewIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PackageSettingsViewDescriptor> _settingsViewPackagesById;
     private readonly Dictionary<string, List<string>> _viewIdsByPackageId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Guid? _appGenerationId;
     private IUiDispatcher _uiDispatcher;
 
     public AppPackageViewRegistry(IUiDispatcher? uiDispatcher = null)
@@ -36,8 +37,20 @@ internal sealed class AppPackageViewRegistry
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
     }
 
+    internal AppPackageViewRegistry(Guid appGenerationId, IUiDispatcher uiDispatcher)
+        : this(new Dictionary<string, PackageSettingsViewDescriptor>(StringComparer.OrdinalIgnoreCase), uiDispatcher)
+    {
+        if (appGenerationId == Guid.Empty)
+        {
+            throw new ArgumentException("App generation id is required.", nameof(appGenerationId));
+        }
+        _appGenerationId = appGenerationId;
+    }
+
     internal void SetUiDispatcher(IUiDispatcher uiDispatcher)
         => _uiDispatcher = uiDispatcher ?? throw new ArgumentNullException(nameof(uiDispatcher));
+
+    internal Guid? AppGenerationId => _appGenerationId;
 
     public void RegisterPackageView<TView>(string packageId, PackageViewRegistration registration, IServiceProvider serviceProvider)
         where TView : Control
@@ -172,12 +185,18 @@ internal sealed class AppPackageViewRegistry
         }
 
         Control control;
+        var startupTrace = AppStartupTrace.BeginPackageViewConstruction(
+            registration.PackageId,
+            viewId,
+            _appGenerationId);
         try
         {
             control = registration.Factory();
+            startupTrace?.Complete();
         }
         catch (Exception ex)
         {
+            startupTrace?.Fail(ex);
             if (!AppPackageUiFaultPolicy.IsRecoverable(ex)
                 || !reportFailure(registration.PackageId, viewId, ex))
             {
@@ -305,12 +324,18 @@ internal sealed class AppPackageViewRegistry
         }
 
         Control control;
+        var startupTrace = AppStartupTrace.BeginPackageViewConstruction(
+            registration.PackageId,
+            viewId,
+            _appGenerationId);
         try
         {
             control = CreateControl(registration.ServiceProvider, registration.ImplementationType);
+            startupTrace?.Complete();
         }
         catch (Exception ex)
         {
+            startupTrace?.Fail(ex);
             if (!AppPackageUiFaultPolicy.IsRecoverable(ex)
                 || !reportFailure(registration.PackageId, viewId, ex))
             {
@@ -401,12 +426,18 @@ internal sealed class AppPackageViewRegistry
         }
 
         Control control;
+        var startupTrace = AppStartupTrace.BeginPackageViewConstruction(
+            registration.PackageId,
+            viewId,
+            _appGenerationId);
         try
         {
             control = CreateControl(registration.ServiceProvider, registration.ImplementationType);
+            startupTrace?.Complete();
         }
         catch (Exception ex)
         {
+            startupTrace?.Fail(ex);
             if (!AppPackageUiFaultPolicy.IsRecoverable(ex)
                 || !reportFailure(registration.PackageId, viewId, ex))
             {

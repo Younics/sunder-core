@@ -1,6 +1,6 @@
 # Stacks
 
-> **Applies to:** Sunder SDK `1.1.x`, `Sunder.Sdk.Stacks` `1.1.x`, Stack format V1, .NET 10, and Runtime protocol revision 8.
+> **Applies to:** Sunder SDK `1.1.x`, `Sunder.Sdk.Stacks` `1.1.x`, Stack format V1, .NET 10, and Runtime protocol revision 1.
 
 Stacks export selected setup from active packages into a portable archive and import it through a reviewable, contributor-owned plan. `Sunder.Sdk.Stacks` contains package-author contracts; Sunder Runtime owns archive validation, plan identity, and orchestration.
 
@@ -8,7 +8,7 @@ The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md#stack-archive-valida
 
 ## Add Stack Support
 
-Generate a compiled stub:
+Generate a contributor stub:
 
 ```powershell
 dotnet new sunder-package `
@@ -18,7 +18,12 @@ dotnet new sunder-package `
   --withStacks
 ```
 
-Or reference `Sunder.Sdk.Stacks` with the same bounded minor range as `Sunder.Sdk`.
+Or reference `Sunder.Sdk.Stacks` with the same bounded minor range as `Sunder.Sdk`,
+using `ExcludeAssets="buildTransitive"` while its legacy automatic bundle asset
+remains. Select `sunder.stack.contributor` with `ImplementSunderPlatformApi` and
+`SunderPlatformCatalogPath` for Registry-independent local authoring, or an explicit
+`SunderRegistryOrigin` for a published catalog. Select before first Accept when the
+source already contains a contributor. See [platform imports](PLATFORM-CONTRACT-IMPORTS.md).
 
 ## Contributor Contracts
 
@@ -29,22 +34,18 @@ Or reference `Sunder.Sdk.Stacks` with the same bounded minor range as `Sunder.Sd
 | `IPackageStackImporter` | Produce a side-effect-free preview, then apply selected actions. |
 | `IPackageStackImportAppliedHandler` | Refresh derived state after committed imports for one contributor id. |
 
-Register one manifest-declared RPC provider from Worker V3. The SDK adapter keeps the convenient interfaces package-local:
+Mark the partial contributor class with
+`[SunderRpcProvider(typeof(IPackageStackContributor), ProviderId = "my.company.package.stack")]`.
+Register its generated provider from Worker V1:
 
 ```csharp
 var contributor = new MyStackContributor();
-providers.Add(new SunderWorkerProviderRegistration(
-    "my.company.package.stack",
-    SunderStackContributorRpc.ContractId,
-    SunderStackContributorRpc.ContractVersion,
-    SunderStackContributorRpc.DescriptorSha256,
-    SunderStackContributorRpc.AbiSha256,
-    SunderStackContributorRpc.CreateHandler(contributor)));
+providers.Add(contributor.CreateSunderRpcProviderRegistration());
 ```
 
-A single class may implement multiple local contracts, which all derive from `IPackageStackContributor`. Registration accepts that common interface rather than `object`, so unrelated services cannot be registered accidentally. The adapter publishes capability metadata over `sunder.stack.contributor` v1.0.0, and Runtime discovers only exact descriptor-compatible RPC endpoints. Contributor ids are stable and unique only within the owner package. Duplicate exporter/importer ids for one package are rejected case-insensitively.
+A single class may implement multiple local contracts, which all derive from `IPackageStackContributor`. Its marker selects the local semantic adapter, not platform authority. Generation uses the authenticated platform lock to produce private wire types, dispatch and registration for `sunder.stack.contributor` `2.0.0`; authors do not copy descriptor versions or hashes. Runtime discovers only exact descriptor-compatible endpoints. Contributor ids are stable and unique only within the owner package. Duplicate exporter/importer ids for one package are rejected case-insensitively.
 
-The generated template's [compiled Stack stub](../../languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.Worker/StackSupport.cs) is exercised by template tests and CI.
+The generated template's [Stack stub](../../languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Stacks/StackSupport.cs) has packed-template bootstrap checks and Registry-catalog generation/behavior coverage. Production Registry publication/bootstrap and Runtime acceptance remain separate gates; catalog signing setup is not required.
 
 ## Export Lifecycle
 

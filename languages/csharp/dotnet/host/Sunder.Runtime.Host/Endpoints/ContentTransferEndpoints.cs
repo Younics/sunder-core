@@ -18,6 +18,9 @@ internal static class ContentTransferEndpoints
         uploads.MapPost("stack-media", (HttpRequest request, RuntimeContentTransferService transfers, CancellationToken cancellationToken)
                 => UploadAsync(request, transfers, RuntimeUploadKind.StackMedia, cancellationToken))
             .WithMetadata(new RequestSizeLimitAttribute(RuntimeContentTransferStore.MaxMediaUploadBytes));
+        uploads.MapPost("execution-runtimes", (HttpRequest request, RuntimeContentTransferService transfers, CancellationToken cancellationToken)
+                => UploadAsync(request, transfers, RuntimeUploadKind.ExecutionRuntime, cancellationToken))
+            .WithMetadata(new RequestSizeLimitAttribute(RuntimeContentTransferStore.MaxExecutionRuntimeUploadBytes));
 
         endpoints.MapGet("/downloads/{downloadId}", async (
             string downloadId,

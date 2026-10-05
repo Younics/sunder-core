@@ -16,7 +16,8 @@ public interface IPackageStorageContext
     /// Gets the package-scoped workspace owned by the current activation and host role.
     /// This capability is intended only for APIs that require local paths, including SQLite,
     /// process working directories, container mounts, and atomic directory trees.
-    /// It is unavailable during package preflight and on non-local Runtime transports.
+    /// The Runtime capability object is available during configuration, but its root and path resolution are
+    /// unavailable until activation. The capability is unavailable on non-local Runtime transports.
     /// </summary>
     IPackageRoleLocalWorkspace RoleLocalWorkspace { get; }
 }

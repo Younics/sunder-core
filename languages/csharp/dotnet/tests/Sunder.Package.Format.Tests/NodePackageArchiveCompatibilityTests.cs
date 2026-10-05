@@ -5,17 +5,17 @@ namespace Sunder.Package.Format.Tests;
 
 public sealed class NodePackageArchiveCompatibilityTests
 {
-    [ExternalArtifactFact("SUNDER_REQUIRE_NODE_SEA_PACKAGE", "SUNDER_NODE_SEA_PACKAGE_PATH")]
+    [ExternalArtifactFact("SUNDER_REQUIRE_NODE_MODULE_PACKAGE", "SUNDER_NODE_MODULE_PACKAGE_PATH")]
     [Trait("Category", "ExternalArtifact")]
     public async Task NodePackageArchive_WhenConfigured_IsAcceptedByDotNetInspector()
     {
-        var archivePath = Environment.GetEnvironmentVariable("SUNDER_NODE_SEA_PACKAGE_PATH");
-        Assert.False(string.IsNullOrWhiteSpace(archivePath), "SUNDER_NODE_SEA_PACKAGE_PATH is required by the selected artifact lane.");
+        var archivePath = Environment.GetEnvironmentVariable("SUNDER_NODE_MODULE_PACKAGE_PATH");
+        Assert.False(string.IsNullOrWhiteSpace(archivePath), "SUNDER_NODE_MODULE_PACKAGE_PATH is required by the selected artifact lane.");
 
-        Assert.True(File.Exists(archivePath), $"Node SEA package does not exist: {archivePath}");
+        Assert.True(File.Exists(archivePath), $"Node module package does not exist: {archivePath}");
         var stagingPath = Path.Combine(
             Path.GetTempPath(),
-            "sunder-node-sea-validation",
+            "sunder-node-module-validation",
             Guid.NewGuid().ToString("N"));
         try
         {
@@ -32,7 +32,7 @@ public sealed class NodePackageArchiveCompatibilityTests
                 Assert.Equal(SunderPackageFormat.WorkerTargetKind, target.Kind);
             });
 
-            var expectedRids = Environment.GetEnvironmentVariable("SUNDER_NODE_SEA_EXPECTED_RIDS");
+            var expectedRids = Environment.GetEnvironmentVariable("SUNDER_NODE_MODULE_EXPECTED_RIDS");
             if (!string.IsNullOrWhiteSpace(expectedRids))
             {
                 Assert.Equal(

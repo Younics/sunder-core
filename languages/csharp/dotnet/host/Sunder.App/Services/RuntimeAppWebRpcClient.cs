@@ -14,11 +14,13 @@ internal sealed class RuntimeAppWebRpcClientFactory(
         ActivePackageWebStamp package,
         CancellationToken cancellationToken)
     {
-        var management = getRuntimeConnectionInfo.Target is RuntimeClientTransport sharedTransport
-            ? new RuntimeManagementClient(sharedTransport)
-            : new RuntimeManagementClient(getRuntimeConnectionInfo);
+        var startupTrace = AppStartupTrace.BeginFirstUsefulRpc(package);
+        RuntimeManagementClient? management = null;
         try
         {
+            management = getRuntimeConnectionInfo.Target is RuntimeClientTransport sharedTransport
+                ? new RuntimeManagementClient(sharedTransport)
+                : new RuntimeManagementClient(getRuntimeConnectionInfo);
             var session = await management.OpenAppRpcSessionAsync(
                 new RuntimeRpcAppSessionOpenRequest(
                     package.PackageId,
@@ -28,11 +30,12 @@ internal sealed class RuntimeAppWebRpcClientFactory(
                     package.SessionGeneration,
                     package.AppGenerationId),
                 cancellationToken).ConfigureAwait(false);
-            return new RuntimeAppWebRpcClient(management, session.SessionId);
+            return new RuntimeAppWebRpcClient(management, session.SessionId, startupTrace);
         }
-        catch
+        catch (Exception exception)
         {
-            management.Dispose();
+            startupTrace?.Fail(exception);
+            management?.Dispose();
             throw;
         }
     }
@@ -44,12 +47,17 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
     private readonly string sessionId;
     private readonly RuntimeClientResourceLimits _resourceLimits;
     private readonly SunderRpcResourceProfile? _resourceProfile;
+    private readonly AppStartupTraceOperation? _firstUsefulRpcTrace;
     private int _disposed;
 
-    public RuntimeAppWebRpcClient(RuntimeManagementClient management, string sessionId)
+    public RuntimeAppWebRpcClient(
+        RuntimeManagementClient management,
+        string sessionId,
+        AppStartupTraceOperation? firstUsefulRpcTrace = null)
     {
         this.management = management;
         this.sessionId = sessionId;
+        _firstUsefulRpcTrace = firstUsefulRpcTrace;
         _resourceLimits = management.ResourceLimits;
         _resourceProfile = ToSdk(_resourceLimits.Profile);
     }
@@ -89,7 +97,12 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
             new RuntimeRpcAppProviderRequest(sessionId, endpoint.Value, callScopeId),
             cancellationToken).ConfigureAwait(false);
         ThrowIfError(response.Error);
-        return response.Provider is null ? null : ToSdk(response.Provider);
+        if (response.Provider is null)
+        {
+            return null;
+        }
+        RecordFirstUsefulRpc("provider");
+        return ToSdk(response.Provider);
     }
 
     public async ValueTask<bool> TryReportInvariantViolationAsync(
@@ -139,6 +152,10 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         ThrowIfError(response.Error);
         var snapshot = response.Snapshot
                        ?? throw Protocol("rpc.transport.empty-discovery", "The Runtime returned an empty RPC discovery response.");
+        if (snapshot.Providers.Count > 0)
+        {
+            RecordFirstUsefulRpc("discover");
+        }
         return ToSdk(snapshot);
     }
 
@@ -176,6 +193,7 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
             switch (frame.Type)
             {
                 case RuntimeRpcAppStreamFrameTypes.Event when frame.Event is not null:
+                    RecordFirstUsefulRpc("watch");
                     yield return ToSdk(frame.Event);
                     break;
                 case RuntimeRpcAppStreamFrameTypes.Completed:
@@ -232,8 +250,10 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
                 callScopeId),
             cancellationToken).ConfigureAwait(false);
         ThrowIfError(response.Error);
-        return response.Value
-               ?? throw Protocol("rpc.transport.empty-response", "The Runtime returned an empty RPC invocation response.");
+        var value = response.Value
+                    ?? throw Protocol("rpc.transport.empty-response", "The Runtime returned an empty RPC invocation response.");
+        RecordFirstUsefulRpc("invoke");
+        return value;
     }
 
     ValueTask<JsonElement> ISunderRpcClient.InvokeAsync(
@@ -290,6 +310,7 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
             switch (frame.Type)
             {
                 case RuntimeRpcAppStreamFrameTypes.Event when frame.Event is { } item:
+                    RecordFirstUsefulRpc("subscribe");
                     yield return item;
                     break;
                 case RuntimeRpcAppStreamFrameTypes.Completed:
@@ -376,6 +397,7 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         {
             return;
         }
+        _firstUsefulRpcTrace?.Complete("unused", operation: "none");
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -393,6 +415,9 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
             management.Dispose();
         }
     }
+
+    private void RecordFirstUsefulRpc(string operation)
+        => _firstUsefulRpcTrace?.Complete(operation: operation);
 
     private static SunderRpcCatalogSnapshot ToSdk(RuntimeRpcCatalogSnapshot snapshot)
         => new(

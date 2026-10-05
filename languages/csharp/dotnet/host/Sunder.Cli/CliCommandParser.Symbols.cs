@@ -229,3 +229,10 @@ internal sealed partial class CliCommandParser
     private static string JoinPath(string parent, string name)
         => string.IsNullOrEmpty(parent) ? name : $"{parent} {name}";
 }
+
+internal sealed record CliCommandParseResult(
+    CliInvocation? Invocation,
+    IReadOnlyList<string> Errors,
+    Command HelpScope,
+    bool ShowHelp,
+    bool Json);

@@ -1,6 +1,6 @@
 # Callbacks And Auth
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V3, .NET 10, and Runtime protocol revision 8.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
 Callbacks let an App-started package flow open a browser and return values to a Runtime handler without giving the package ownership of a network listener. Auth is the standard authorization projection built on the same callback machinery.
 
@@ -120,7 +120,7 @@ These are host transport constraints, not permission to place sensitive data in 
 
 ## Implement Auth
 
-`IPackageAuthHandler` uses the reserved callback id `PackageCallbackHandlerIds.Authentication` (`auth`). Assign the implementation to the dedicated Worker V3 option; because that contract extends `IPackageCallbackHandler`, Runtime also exposes it to callback routing:
+`IPackageAuthHandler` uses the reserved callback id `PackageCallbackHandlerIds.Authentication` (`auth`). Assign the implementation to the dedicated Worker V1 option; because that contract extends `IPackageCallbackHandler`, Runtime also exposes it to callback routing:
 
 ```csharp
 return new SunderWorkerOptions(providers)

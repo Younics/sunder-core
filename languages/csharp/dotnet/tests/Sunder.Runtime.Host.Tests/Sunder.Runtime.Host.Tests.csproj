@@ -2,18 +2,112 @@
   <ItemGroup>
     <ProjectReference Include="..\..\host\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" />
     <ProjectReference Include="..\..\host\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
+    <ProjectReference Include="..\..\host\Sunder.App\Sunder.App.csproj"
+                      ReferenceOutputAssembly="false" OutputItemType="_PolicyAppTargetPath" PrivateAssets="all" />
     <ProjectReference Include="..\Sunder.Runtime.Host.TestWorker\Sunder.Runtime.Host.TestWorker.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Runtime.Host.InteropWorker\Sunder.Runtime.Host.InteropWorker.csproj"
                       ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerV3Executable\WorkerV3Executable.csproj"
+    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerV1Executable\WorkerV1Executable.csproj"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <None Update="Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\specs\worker\v3\conformance\corpus.json"
-          Link="WorkerV3Conformance\corpus.json"
+    <None Include="..\..\..\..\..\eng\execution-runtimes\test-fixtures.lock.json"
+          Link="ExecutionRuntimeFixtures\test-fixtures.lock.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <Compile Remove="SyntheticExecutionRuntimeLauncher.cs" />
+    <None Include="SyntheticExecutionRuntimeLauncher.cs" />
+    <Compile Remove="AppPolicyStartupHook.cs" />
+    <None Include="AppPolicyStartupHook.cs" />
+    <None Include="..\..\..\..\..\specs\worker\v1\conformance\corpus.json"
+          Link="WorkerV1Conformance\corpus.json"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\StrictJson.cs"
+             Link="ExecutionRuntimeBuild\StrictJson.cs" />
+    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\ExecutionRuntimeLockPolicy.cs"
+             Link="ExecutionRuntimeBuild\ExecutionRuntimeLockPolicy.cs" />
+    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\ExecutionRuntimeLockModels.cs"
+             Link="ExecutionRuntimeBuild\ExecutionRuntimeLockModels.cs" />
+    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\ExecutionRuntimeLockValidator.cs"
+             Link="ExecutionRuntimeBuild\ExecutionRuntimeLockValidator.cs" />
+    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\ExecutionRuntimeLockLoader.cs"
+             Link="ExecutionRuntimeBuild\ExecutionRuntimeLockLoader.cs" />
+    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\ExecutionRuntimeSourceMaterializer.cs"
+             Link="ExecutionRuntimeBuild\ExecutionRuntimeSourceMaterializer.cs" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <UseAppHost>true</UseAppHost>
+    <SyntheticExecutionRuntimeLauncherName>Sunder.Runtime.Host.Tests.SyntheticExecutionRuntimeLauncher</SyntheticExecutionRuntimeLauncherName>
+    <TestWorkerAppHostName>Sunder.Runtime.Host.Tests.TestWorkerAppHost</TestWorkerAppHostName>
+    <TestWorkerAssemblyPath>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\Sunder.Runtime.Host.TestWorker\bin\$(Configuration)\$(TargetFramework)\$(NETCoreSdkRuntimeIdentifier)\Sunder.Runtime.Host.TestWorker.dll'))</TestWorkerAssemblyPath>
+  </PropertyGroup>
+
+  <Target Name="BuildAppPolicyStartupHook" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="$(MSBuildProjectDirectory)\AppPolicyStartupHook.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)app-policy-hook\Sunder.App.Tests.dll;$(TargetDir)sunder-policy-app-target-path.txt">
+    <Error Condition="'@(_PolicyAppTargetPath->Count())' != '1'" Text="The native App policy tests require one exact App build output." />
+    <MakeDir Directories="$(TargetDir)app-policy-hook" />
+    <Csc Sources="$(MSBuildProjectDirectory)\AppPolicyStartupHook.cs"
+         References="@(ReferencePathWithRefAssemblies);@(_PolicyAppTargetPath)"
+         OutputAssembly="$(TargetDir)app-policy-hook\Sunder.App.Tests.dll"
+         TargetType="Library" TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+    <WriteLinesToFile File="$(TargetDir)sunder-policy-app-target-path.txt" Lines="@(_PolicyAppTargetPath->'%(FullPath)')" Overwrite="true" />
+  </Target>
+
+  <Target Name="BuildSyntheticExecutionRuntimeLauncher"
+          AfterTargets="Build"
+          DependsOnTargets="_GetAppHostPaths;_GetAppHostCreationConfiguration;ResolveReferences"
+          Inputs="$(MSBuildProjectDirectory)\SyntheticExecutionRuntimeLauncher.cs;$(AppHostSourcePath);@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)$(SyntheticExecutionRuntimeLauncherName).dll;$(TargetDir)$(SyntheticExecutionRuntimeLauncherName)$(_NativeExecutableExtension)">
+    <Csc Sources="$(MSBuildProjectDirectory)\SyntheticExecutionRuntimeLauncher.cs"
+         References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(TargetDir)$(SyntheticExecutionRuntimeLauncherName).dll"
+         TargetType="Exe"
+         TargetFramework="$(TargetFramework)"
+         LangVersion="$(LangVersion)"
+         Nullable="$(Nullable)"
+         NoConfig="true"
+         NoLogo="true"
+         NoStandardLib="true"
+         Optimize="$(Optimize)"
+         Deterministic="true"
+         TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)"
+         ToolPath="$(CscToolPath)" />
+    <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)"
+                   AppHostDestinationPath="$(TargetDir)$(SyntheticExecutionRuntimeLauncherName)$(_NativeExecutableExtension)"
+                   AppBinaryName="$(SyntheticExecutionRuntimeLauncherName).dll"
+                   IntermediateAssembly="$(TargetDir)$(SyntheticExecutionRuntimeLauncherName).dll"
+                   WindowsGraphicalUserInterface="false"
+                   Retries="$(CopyRetryCount)"
+                   RetryDelayMilliseconds="$(CopyRetryDelayMilliseconds)"
+                   EnableMacOSCodeSign="$(_EnableMacOSCodeSign)"
+                   DisableCetCompat="$(_DisableCetCompat)"
+                   DotNetSearchLocations="AppRelative"
+                   AppRelativeDotNet="dotnet" />
+  </Target>
+
+  <Target Name="BuildTestWorkerAppHost"
+          AfterTargets="Build"
+          DependsOnTargets="_GetAppHostPaths;_GetAppHostCreationConfiguration"
+          Inputs="$(TestWorkerAssemblyPath);$(AppHostSourcePath)"
+          Outputs="$(TargetDir)$(TestWorkerAppHostName)$(_NativeExecutableExtension)">
+    <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)"
+                   AppHostDestinationPath="$(TargetDir)$(TestWorkerAppHostName)$(_NativeExecutableExtension)"
+                   AppBinaryName="Sunder.Runtime.Host.TestWorker.dll"
+                   IntermediateAssembly="$(TestWorkerAssemblyPath)"
+                   WindowsGraphicalUserInterface="false"
+                   Retries="$(CopyRetryCount)"
+                   RetryDelayMilliseconds="$(CopyRetryDelayMilliseconds)"
+                   EnableMacOSCodeSign="$(_EnableMacOSCodeSign)"
+                   DisableCetCompat="$(_DisableCetCompat)" />
+  </Target>
 </Project>

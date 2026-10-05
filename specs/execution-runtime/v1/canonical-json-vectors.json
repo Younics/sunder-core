@@ -1,0 +1,6 @@
+{
+  "conformance/valid/dotnet-linux-x64.manifest.json": "c1ef47c7e20ab24b8e954420f5666f02de19c31319e86898a0c37be8963972fc",
+  "conformance/valid/node-linux-x64.manifest.json": "ff80ac1b1538a72ef232452bc68eb54fe2b96a4ff4c91b5098a1375f490c34b2",
+  "conformance/valid/content-index.json": "72fe4a1184196e52d4f65614bf8bdf84bddba68a2676679fdbff167f07754df3",
+  "conformance/valid/dotnet-linux-x64.native-attestation.json": "ac6edae87b537fe4ab7650321ad99a92bf7b52227870409b1efd3a7afa9b6733"
+}

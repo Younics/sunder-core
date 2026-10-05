@@ -2,11 +2,11 @@ using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Worker;
 
-/// <summary>Owns package-local services and lifecycle aggregation for one Worker V3 activation.</summary>
+/// <summary>Owns package-local services and lifecycle aggregation for one Worker V1 activation.</summary>
 /// <remarks>The package constructs its own service provider; the Host never composes package DI over IPC.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.BackgroundServicesV1)]
 [SunderSdkCapability(SunderSdkCapabilities.RuntimeGenerationsV1)]
-[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV3)]
+[SunderSdkCapability(SunderWorkerCapabilities.ProtocolV1)]
 public sealed class SunderWorkerComposition : IAsyncDisposable
 {
     private readonly object _gate = new();
@@ -61,7 +61,7 @@ public sealed class SunderWorkerComposition : IAsyncDisposable
             if (_bound)
             {
                 throw new InvalidOperationException(
-                    "A worker composition can be bound to only one Worker V3 activation.");
+                    "A worker composition can be bound to only one Worker V1 activation.");
             }
             _bound = true;
         }

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sunder.dev/specs/rpc/v1/authoring/cache-entry-receipt.schema.json",
+  "title": "Sunder RPC Descriptor Cache Entry Receipt V1",
+  "description": "Integrity metadata for one canonical descriptor in the shared content-addressed restore cache. Selection and authority remain in the validated contract lock.",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 6,
+  "required": [
+    "schemaVersion",
+    "contractId",
+    "contractVersion",
+    "descriptorBytes",
+    "descriptorSha256",
+    "abiSha256"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "contractId": {
+      "$ref": "#/$defs/packageId"
+    },
+    "contractVersion": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "descriptorBytes": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 4194304
+    },
+    "descriptorSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "abiSha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "packageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:\\.[a-z0-9]+)*$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 256,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

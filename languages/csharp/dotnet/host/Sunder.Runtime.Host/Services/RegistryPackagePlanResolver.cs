@@ -2,13 +2,16 @@ using System.Net.Http.Json;
 using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Packaging;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed class RegistryPackagePlanResolver(
     RegistryHttpClient registryClient,
     InstalledPackageStore installedPackages,
-    ILogger<RegistryPackagePlanResolver> logger)
+    ExecutionRuntimeHostTrustService runtimeTrust,
+    ILogger<RegistryPackagePlanResolver> logger,
+    RegistryPackagePolicySynchronizer? policySynchronizer = null)
 {
     public async Task<RuntimeRegistryResolveInstallPlanResponse> ResolveAsync(
         RuntimeRegistryPackageBatchRequest request,
@@ -18,7 +21,11 @@ internal sealed class RegistryPackagePlanResolver(
         try
         {
             return RuntimeRegistryContractMapper.ToRuntime(
-                await ResolveCoreAsync(origin, request, cancellationToken));
+                await ResolveCoreAsync(
+                    origin,
+                    request,
+                    request.ExpectedResolutionFingerprint,
+                    cancellationToken));
         }
         catch (Exception ex) when (ex is HttpRequestException or TimeoutException)
         {
@@ -33,36 +40,40 @@ internal sealed class RegistryPackagePlanResolver(
                 [],
                 []);
         }
+        catch (PackagePolicyDeniedException error)
+        {
+            return new(false, [], [], [error.Code], [], []);
+        }
     }
 
     public async Task<RegistryPackagePlanResolution> ResolveForExecutionAsync(
         RuntimeRegistryPackageBatchRequest request,
+        string? expectedResolutionFingerprint,
         CancellationToken cancellationToken)
     {
         var origin = RegistryOrigin.Normalize(request.RegistryOrigin);
         return new RegistryPackagePlanResolution(
             origin,
-            await ResolveCoreAsync(origin, request, cancellationToken));
+            await ResolveCoreAsync(origin, request, expectedResolutionFingerprint, cancellationToken));
     }
 
     private async Task<RegistryResolveInstallPlanResponse> ResolveCoreAsync(
         Uri origin,
         RuntimeRegistryPackageBatchRequest request,
+        string? expectedResolutionFingerprint,
         CancellationToken cancellationToken)
     {
         var installed = new List<RegistryInstalledPackageState>();
         foreach (var package in await installedPackages.ListAsync(cancellationToken))
         {
-            var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(
-                package.InstallPath,
-                cancellationToken);
+            var validation = await InstalledPackageProjection.ValidateAsync(package, cancellationToken);
             if (!validation.Success || validation.Manifest is null)
             {
                 throw new InvalidDataException(
                     $"Installed package '{package.PackageId}' cannot be sent to the Registry: {string.Join(" | ", validation.Errors)}");
             }
 
-            var acquired = SunderPackageTargetResolver.EnumerateTargets(validation.Manifest)
+            var acquired = (InstalledPackageProjection.Keys(package) ?? SunderPackageTargetResolver.EnumerateTargets(validation.Manifest))
                 .Select(target => new RegistryPackageProjectionKey(target.Role, target.Rid))
                 .Prepend(new RegistryPackageProjectionKey(SunderPackageProjectionFormat.SharedKind, null))
                 .ToArray();
@@ -72,7 +83,9 @@ internal sealed class RegistryPackagePlanResolver(
                 package.DependsOn.Select(dependency => new RegistryPackageDependency(
                     dependency.PackageId,
                     dependency.VersionRange)).ToArray(),
-                acquired));
+                acquired,
+                GetRegistryPackageContentIdentity(package),
+                ProjectRuntimeBindings(package, validation.Manifest)));
         }
         using var response = await registryClient.SendAsync(
             new HttpRequestMessage(
@@ -85,12 +98,14 @@ internal sealed class RegistryPackagePlanResolver(
                     RuntimeRegistryContractMapper.ToRegistry(request.Packages),
                     installed,
                     RuntimeRegistryContractMapper.CompatibilityProfile,
-                    request.IncludePrerelease,
-                    request.AllowDowngrade,
-                    request.Reinstall)),
+                    new RegistryHostRuntimeTrustProfile(runtimeTrust.ProfileId, runtimeTrust.Generation),
+                    ExpectedResolutionFingerprint: expectedResolutionFingerprint,
+                    IncludePrerelease: request.IncludePrerelease,
+                    AllowDowngrade: request.AllowDowngrade,
+                    Reinstall: request.Reinstall)),
             },
             cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.Conflict)
         {
             return new RegistryResolveInstallPlanResponse(
                 false,
@@ -102,9 +117,78 @@ internal sealed class RegistryPackagePlanResolver(
         }
 
         var result = await registryClient.ReadJsonAsync<RegistryResolveInstallPlanResponse>(response, cancellationToken);
-        if (result is not null) return result;
+        if (result is not null)
+        {
+            if (result.Success && policySynchronizer is not null)
+                await policySynchronizer.RefreshPlanAsync(origin.AbsoluteUri, result, cancellationToken);
+            return result;
+        }
         return new RegistryResolveInstallPlanResponse(false, [], [], [await registryClient.ReadErrorAsync(response, cancellationToken)], [], []);
     }
+
+    internal static IReadOnlyList<RegistryPackageTargetRuntimeBinding> ProjectRuntimeBindings(
+        InstalledPackageRecord package,
+        SunderPackageManifest manifest)
+    {
+        var bindingsByTarget = new Dictionary<(string Role, string Rid), InstalledPackageExecutionRuntimeBindingRecord>();
+        foreach (var binding in package.ExecutionRuntimeBindings)
+        {
+            if (binding is null || !bindingsByTarget.TryAdd((binding.Role, binding.Rid), binding))
+            {
+                throw RuntimeBindingMismatch(package.PackageId);
+            }
+        }
+
+        var projected = new List<RegistryPackageTargetRuntimeBinding>(bindingsByTarget.Count);
+        InstalledPackageProjection.ValidateScope(InstalledPackageProjection.Keys(package), manifest);
+        foreach (var target in InstalledPackageProjection.Targets(package, manifest)
+                     .Where(static target => target?.ExecutionRuntime is not null)
+                     .Select(static target => target!)
+                     .OrderBy(static target => target.Role, StringComparer.Ordinal)
+                     .ThenBy(static target => target.Rid, StringComparer.Ordinal))
+        {
+            var key = (target.Role!, target.Rid!);
+            var requirement = target.ExecutionRuntime!;
+            if (!bindingsByTarget.Remove(key, out var binding)
+                || !string.Equals(binding.RuntimeId, requirement.Id, StringComparison.Ordinal)
+                || !string.Equals(binding.ModuleAbi, requirement.ModuleAbi, StringComparison.Ordinal)
+                || !PackageVersionRange.IsSatisfiedBy(binding.RuntimeVersion, requirement.VersionRange!))
+            {
+                throw RuntimeBindingMismatch(package.PackageId);
+            }
+
+            projected.Add(new RegistryPackageTargetRuntimeBinding(
+                target.Role!,
+                target.Rid!,
+                new RegistryExecutionRuntimeRequirement(
+                    requirement.Id!,
+                    requirement.VersionRange!,
+                    requirement.ModuleAbi!),
+                new RegistryExecutionRuntimeIdentity(
+                    binding.RuntimeId,
+                    binding.RuntimeVersion,
+                    binding.RuntimePackagingRevision,
+                    binding.Rid,
+                    binding.ModuleAbi)));
+        }
+
+        if (bindingsByTarget.Count != 0)
+        {
+            throw RuntimeBindingMismatch(package.PackageId);
+        }
+        return projected;
+    }
+
+    private static InvalidDataException RuntimeBindingMismatch(string packageId)
+        => new(
+            $"Installed package '{packageId}' execution-runtime bindings do not exactly match its strict manifest target requirements.");
+
+    private static string GetRegistryPackageContentIdentity(InstalledPackageRecord package)
+        => package.Provenance.SourceKind == InstalledPackageSourceKind.Registry
+            ? package.Provenance.SourceIdentity
+              ?? throw new InvalidDataException(
+                  $"Installed Registry package '{package.PackageId}' has no source package content identity.")
+            : package.SourcePackageContentIdentity ?? package.ContentIdentity;
 }
 
 internal sealed record RegistryPackagePlanResolution(

@@ -1,0 +1,13 @@
+{
+  "sessionId": "0123456789abcdef0123456789abcdef",
+  "state": "exit-proven",
+  "errorCode": null,
+  "shutdownRequired": false,
+  "loadedPackages": [
+    {
+      "packageId": "example.agent",
+      "version": "2.0.0",
+      "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

@@ -77,10 +77,10 @@ type sealed class Sunder.Host.Contracts.HostProductVersionDiagnostics : System.I
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Host.Contracts.HostProtocol
-  field static System.Int32 CurrentRevision = 2
+  field static System.Int32 CurrentRevision = 1
   field static System.String Identity = "dev.sunder.host"
-  field static System.Int32 MaximumSupportedRevision = 2
-  field static System.Int32 MinimumSupportedRevision = 2
+  field static System.Int32 MaximumSupportedRevision = 1
+  field static System.Int32 MinimumSupportedRevision = 1
 type sealed class Sunder.Host.Contracts.HostProtocolFeatures
   field static System.String DurableOperationsV1 = "durable-operations.v1"
   field static System.String RuntimeGatewayV1 = "runtime-gateway.v1"
