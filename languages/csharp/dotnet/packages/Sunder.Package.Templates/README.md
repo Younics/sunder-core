@@ -46,32 +46,34 @@ MyPackage/
 ```
 
 The annotated service generates `ISampleService`, which the view model receives
-through its constructor. `[SunderPackageView]` supplies view metadata. Default DI,
+through its constructor. For `my.company.package`, it lives in
+`Sunder.Generated.Packages.My_Company_Package_Services`. Author business records once;
+owned roles reuse them and importers receive generated records in the authority
+package's `_Models` namespace. `[SunderPackageView]` supplies view metadata. Default DI,
 Worker entry, App module, provider registration and RPC lifetime are generated.
 Source folders do not define role boundaries, and authors maintain no App/Protocol
 project, manual descriptor, client scope or default bootstrap.
 
 Stable templates reference the coordinated SDK minor range. Prerelease templates
 pin their exact coordinated SDK release. The package's own version is `1.0.0` in
-its project file; it is independent of the owned RPC contract version.
+its project file. The starter service is private, so its descriptor version follows
+the complete package version. Explicitly public APIs have reviewed contract versions.
 
 ## Build, Run And Package
 
 With `--withStacks`, select the platform import described below before the first
-Accept command. Local selection requires no Registry.
+Build. Local selection requires no Registry.
 
 ```powershell
 dotnet restore .\MyPackage\MyPackage.csproj
-dotnet msbuild .\MyPackage\MyPackage.csproj -t:AcceptSunderContracts -p:SunderContractKey=sample -p:SunderContractNextVersion=2.0.0
 dotnet build .\MyPackage\MyPackage.csproj --no-restore
 dotnet run --project .\MyPackage\MyPackage.csproj --no-build
-dotnet msbuild .\MyPackage\MyPackage.csproj -t:FreezeSunderContracts
 dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
 
-First Accept creates the reviewed owned baseline; retain it and the contract lock.
-The explicit initial RPC version `2.0.0` preserves the sample's wire identity. Normal
-Build/Rebuild are offline and never accept/freeze or change selections automatically.
+Retain the contract lock. Private-only source needs no owned baseline or Accept/Freeze
+step. Explicitly public contracts use reviewed acceptance and immutable history.
+Normal Build/Rebuild are offline and never change selections automatically.
 
 Build composes the current RID at `bin/Debug/net10.0/sunder-dev`. Internal role outputs
 are under `sunder-roles/<role>/<rid>`; Pack builds all declared RIDs and emits one
@@ -88,9 +90,9 @@ provenance is qualified; ordinary Pack builds current source.
 
 ## Optional Stack Contributor
 
-Select `sunder.stack.contributor` with `ImplementSunderPlatformApi` before first Accept.
+Select `sunder.stack.contributor` with `ImplementSunderPlatformApi` before first Build.
 Use `SunderPlatformCatalogPath` for a local Core catalog, or `SunderRegistryOrigin` for
-a published catalog. First Accept validates the owned greeting and imported contributor
+a published catalog. Build validates the private service and imported contributor
 together. Generated composition registers the exact selected adapter automatically.
 
 Local creation and development require no Registry. Published selection uses the
@@ -102,7 +104,21 @@ Registry selection.
 
 See the generated README and the package-development documentation for explicit
 public package API selection, optional presence/readiness, updates and offline restore.
+Selected C# packages expose `IPackageApi` in their canonical flat `_Services`
+namespace. Use `IServiceProviders<TService>` for multiple implementations and
+`provider.Service` / `provider.Reference` for calls and typed references. Content
+uses `SunderContent` with normal async disposal. Generated bindings own transport;
+type availability does not infer consumer grants.
+For narrow imported use, `SunderRuntimeUse(typeof(...), Actions = ["discover"])`
+declares only discovery against an already selected canonical service type.
+`SunderOptionalServiceReference` explicitly opts a direct nullable reference member
+into safe-absence-as-null behavior; the default remains strict. Replayable content
+watches can opt into provider-local `CompleteOnResponseContentRetirement`.
+The ordinary-service guide covers the failure boundaries and transient
+`JsonIgnore` / `SunderServiceMember` distinction. Compiled JSON metadata and automatic
+empty-request/completion handling require no authored resolver or `Unit` type.
 
+- Ordinary services: https://github.com/Younics/sunder-core/blob/main/docs/package-development/ORDINARY-SERVICES.md
 - Package development: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
 - Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md
 - SDK compatibility: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-SDK-COMPATIBILITY.md

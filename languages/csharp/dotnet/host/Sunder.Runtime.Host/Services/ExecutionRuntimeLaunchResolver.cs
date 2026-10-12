@@ -1,7 +1,5 @@
 using System.Security.Cryptography;
-using System.Globalization;
 using Sunder.Package.Format;
-using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Packaging;
 
@@ -10,20 +8,9 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed record RuntimePackageExecutionRuntimeBinding(
     string Role,
     string Rid,
-    string RuntimeId,
-    string RuntimeVersion,
-    int RuntimePackagingRevision,
-    string ModuleAbi,
-    string RuntimeManifestSha256,
-    string RuntimeArtifactSha256,
-    long RuntimeArtifactSize,
-    string RegistryOrigin,
-    string AcquisitionSource,
-    string SigningKeyId,
-    long TrustStoreGeneration,
-    long RuntimePolicyRevision,
-    string RuntimeLifecycleState,
-    DateTimeOffset PolicyObservedAtUtc,
+    RuntimeExecutionRuntimeRequirement Requirement,
+    RuntimeExecutionRuntimeIdentity Runtime,
+    RuntimeExecutionRuntimeInstalledArtifact InstalledArtifact,
     DateTimeOffset ResolvedAtUtc)
 {
     public static RuntimePackageExecutionRuntimeBinding FromInstalled(
@@ -31,61 +18,21 @@ internal sealed record RuntimePackageExecutionRuntimeBinding(
         => new(
             binding.Role,
             binding.Rid,
-            binding.RuntimeId,
-            binding.RuntimeVersion,
-            binding.RuntimePackagingRevision,
-            binding.ModuleAbi,
-            binding.RuntimeManifestSha256,
-            binding.RuntimeArtifactSha256,
-            binding.RuntimeArtifactSize,
-            binding.RegistryOrigin,
-            binding.AcquisitionSource,
-            binding.SigningKeyId,
-            binding.TrustStoreGeneration,
-            binding.RuntimePolicyRevision,
-            binding.RuntimeLifecycleState,
-            binding.PolicyObservedAtUtc,
+            binding.Requirement,
+            binding.Runtime,
+            binding.InstalledArtifact,
             binding.ResolvedAtUtc);
 
-    public ExecutionRuntimeIdentity Identity => new(
-        RuntimeId,
-        RuntimeVersion,
-        RuntimePackagingRevision,
-        Rid,
-        ModuleAbi);
+    public ExecutionRuntimeIdentity Identity => ExecutionRuntimeIdentity.FromContract(Runtime);
 
     public bool MatchesReceipt(ExecutionRuntimeReceiptV1 receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        var trustAndSourceMatch = AcquisitionSource switch
-        {
-            RuntimeExecutionRuntimeAcquisitionSources.Registry
-                or RuntimeExecutionRuntimeAcquisitionSources.LocalImport =>
-                receipt.TrustEnvironment == ExecutionRuntimeTrustEnvironment.Production,
-            RuntimeExecutionRuntimeAcquisitionSources.Development =>
-                receipt.TrustEnvironment == ExecutionRuntimeTrustEnvironment.Development,
-            _ => false,
-        };
-        var originMatches = AcquisitionSource switch
-        {
-            RuntimeExecutionRuntimeAcquisitionSources.Registry
-                or RuntimeExecutionRuntimeAcquisitionSources.Development => string.Equals(
-                    receipt.RegistryOrigin,
-                    RegistryOrigin,
-                    StringComparison.Ordinal),
-            RuntimeExecutionRuntimeAcquisitionSources.LocalImport => receipt.RegistryOrigin is null,
-            _ => false,
-        };
         return receipt.Identity == Identity
-               && string.Equals(receipt.WorkerProtocol, SunderExecutionRuntimeFormat.WorkerProtocol, StringComparison.Ordinal)
-               && string.Equals(receipt.ManifestSha256, RuntimeManifestSha256, StringComparison.Ordinal)
-               && string.Equals(receipt.ArtifactSha256, RuntimeArtifactSha256, StringComparison.Ordinal)
-               && receipt.ArtifactSize == RuntimeArtifactSize
-               && string.Equals(receipt.SigningKeyId, SigningKeyId, StringComparison.Ordinal)
-               && receipt.TrustGeneration == TrustStoreGeneration
-               && trustAndSourceMatch
-               && string.Equals(receipt.AcquisitionSource, AcquisitionSource, StringComparison.Ordinal)
-               && originMatches;
+               && string.Equals(receipt.ArchiveSha256, InstalledArtifact.ArchiveSha256, StringComparison.Ordinal)
+               && receipt.ArchiveSize == InstalledArtifact.ArchiveSize
+               && string.Equals(receipt.ContentIdentity, InstalledArtifact.ContentIdentity, StringComparison.Ordinal)
+               && receipt.Provenance == InstalledArtifact.Provenance;
     }
 }
 
@@ -240,36 +187,29 @@ internal interface IExecutionRuntimeLaunchStore
 internal sealed class ExecutionRuntimeLaunchResolver : IExecutionRuntimeLaunchResolver
 {
     private readonly IExecutionRuntimeLaunchStore _store;
-    private readonly ExecutionRuntimeLifecyclePolicyCache? _lifecyclePolicies;
-    private readonly TimeProvider _timeProvider;
     private readonly ExecutionRuntimePhaseTelemetry _telemetry;
     private readonly PackageLifecyclePolicyCache? _activePolicies;
 
     public ExecutionRuntimeLaunchResolver(
         ExecutionRuntimeStore store,
-        ExecutionRuntimeLifecyclePolicyCache lifecyclePolicies,
         TimeProvider timeProvider,
         ExecutionRuntimePhaseTelemetry? telemetry = null,
         PackageLifecyclePolicyCache? activePolicies = null)
-        : this(new ExecutionRuntimeLaunchStore(store), lifecyclePolicies, timeProvider, telemetry, activePolicies)
+        : this(new ExecutionRuntimeLaunchStore(store), telemetry, activePolicies)
     {
     }
 
     internal ExecutionRuntimeLaunchResolver(IExecutionRuntimeLaunchStore store)
-        : this(store, lifecyclePolicies: null, timeProvider: null, telemetry: null)
+        : this(store, telemetry: null)
     {
     }
 
     internal ExecutionRuntimeLaunchResolver(
         IExecutionRuntimeLaunchStore store,
-        ExecutionRuntimeLifecyclePolicyCache? lifecyclePolicies,
-        TimeProvider? timeProvider,
         ExecutionRuntimePhaseTelemetry? telemetry = null,
         PackageLifecyclePolicyCache? activePolicies = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
-        _lifecyclePolicies = lifecyclePolicies;
-        _timeProvider = timeProvider ?? TimeProvider.System;
         _telemetry = telemetry ?? ExecutionRuntimePhaseTelemetry.Disabled;
         _activePolicies = activePolicies;
     }
@@ -326,16 +266,7 @@ internal sealed class ExecutionRuntimeLaunchResolver : IExecutionRuntimeLaunchRe
                                : "does not carry its committed execution-runtime binding");
 
         ValidateTargetBinding(package, targetKey, requirement, binding);
-        ValidatePolicyEvidence(package, binding);
         phase.SetIdentity(binding.Identity);
-        if (_lifecyclePolicies is null && _activePolicies is null
-            && binding.RuntimeLifecycleState is not (
-                ExecutionRuntimeLifecycleStates.Supported or ExecutionRuntimeLifecycleStates.Deprecated))
-        {
-            throw Invalid(
-                package,
-                $"execution runtime lifecycle state '{binding.RuntimeLifecycleState}' does not permit activation");
-        }
 
         var receipt = await _store.GetReceiptAsync(binding.Identity, cancellationToken).ConfigureAwait(false)
                       ?? throw Invalid(package, "execution-runtime receipt is missing");
@@ -343,8 +274,7 @@ internal sealed class ExecutionRuntimeLaunchResolver : IExecutionRuntimeLaunchRe
         {
             throw Invalid(package, "execution-runtime receipt does not match its exact committed binding");
         }
-        var activationWarning = await ValidateLifecycleAsync(package, binding, receipt, cancellationToken)
-            .ConfigureAwait(false);
+        if (_activePolicies is not null) new PackagePolicyAdmission(_activePolicies).Require(package.Source);
 
         var verification = await _store.VerifyAsync(binding.Identity, deep: false, cancellationToken)
             .ConfigureAwait(false);
@@ -359,8 +289,8 @@ internal sealed class ExecutionRuntimeLaunchResolver : IExecutionRuntimeLaunchRe
         PackageStorePathGuard.EnsureSafe(runtimeRoot, _store.Layout.ContentRootPath);
         var launcherPath = ArchiveRelativePath.Parse(
                 receipt.LauncherPath,
-                SunderExecutionRuntimeFormat.MaxArchivePathLength,
-                SunderExecutionRuntimeFormat.MaxArchivePathDepth)
+                OfficialRuntimeSourcePolicy.MaxPathLength,
+                32)
             .ToPlatformPath(runtimeRoot);
         PackageStorePathGuard.EnsureSafe(launcherPath, runtimeRoot);
         var lease = await _store.ReserveProcessLeaseAsync(
@@ -378,14 +308,14 @@ internal sealed class ExecutionRuntimeLaunchResolver : IExecutionRuntimeLaunchRe
             var arguments = receipt.LauncherArguments
                 .Select(argument => string.Equals(
                     argument,
-                    SunderExecutionRuntimeFormat.PackageEntryPointPlaceholder,
+                    OfficialRuntimeSourcePolicy.EntryPointToken,
                     StringComparison.Ordinal)
                     ? entryPoint
                     : argument)
                 .ToArray();
             if (arguments.Any(argument => string.Equals(
                     argument,
-                    SunderExecutionRuntimeFormat.PackageEntryPointPlaceholder,
+                    OfficialRuntimeSourcePolicy.EntryPointToken,
                     StringComparison.Ordinal)))
             {
                 throw Invalid(package, "execution-runtime launch recipe contains an unresolved package entry-point token");
@@ -397,30 +327,13 @@ internal sealed class ExecutionRuntimeLaunchResolver : IExecutionRuntimeLaunchRe
                 arguments,
                 lease,
                 receipt.Identity,
-                activationWarning,
+                activationWarning: null,
                 phase.CorrelationId);
         }
         catch
         {
             await lease.DisposeAsync().ConfigureAwait(false);
             throw;
-        }
-    }
-
-    private static void ValidatePolicyEvidence(
-        PreparedRuntimePackage package,
-        RuntimePackageExecutionRuntimeBinding binding)
-    {
-        if (binding.RuntimePolicyRevision <= 0
-            || binding.PolicyObservedAtUtc == default
-            || binding.ResolvedAtUtc == default
-            || binding.RuntimeLifecycleState is not (
-                ExecutionRuntimeLifecycleStates.Supported
-                or ExecutionRuntimeLifecycleStates.Deprecated
-                or ExecutionRuntimeLifecycleStates.Retired
-                or ExecutionRuntimeLifecycleStates.Revoked))
-        {
-            throw Invalid(package, "does not carry valid execution-runtime policy evidence");
         }
     }
 
@@ -433,165 +346,16 @@ internal sealed class ExecutionRuntimeLaunchResolver : IExecutionRuntimeLaunchRe
         if (!string.Equals(targetKey.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
             || !string.Equals(binding.Role, targetKey.Role, StringComparison.Ordinal)
             || !string.Equals(binding.Rid, targetKey.Rid, StringComparison.Ordinal)
-            || !string.Equals(binding.RuntimeId, requirement.Id, StringComparison.Ordinal)
-            || !string.Equals(binding.ModuleAbi, requirement.ModuleAbi, StringComparison.Ordinal)
-            || !PackageVersionRange.IsSatisfiedBy(binding.RuntimeVersion, requirement.VersionRange!))
+            || !string.Equals(binding.Requirement.RuntimeId, requirement.Id, StringComparison.Ordinal)
+            || !string.Equals(binding.Requirement.VersionRange, requirement.VersionRange, StringComparison.Ordinal)
+            || !string.Equals(binding.Requirement.ModuleAbi, requirement.ModuleAbi, StringComparison.Ordinal)
+            || !string.Equals(binding.Runtime.RuntimeId, requirement.Id, StringComparison.Ordinal)
+            || !string.Equals(binding.Runtime.Rid, targetKey.Rid, StringComparison.Ordinal)
+            || !string.Equals(binding.Runtime.ModuleAbi, requirement.ModuleAbi, StringComparison.Ordinal)
+            || !PackageVersionRange.IsSatisfiedBy(binding.Runtime.VendorVersion, requirement.VersionRange!))
         {
             throw Invalid(package, "execution-runtime binding does not satisfy the selected role/RID target requirement");
         }
-    }
-
-    private async Task<string?> ValidateLifecycleAsync(
-        PreparedRuntimePackage package,
-        RuntimePackageExecutionRuntimeBinding binding,
-        ExecutionRuntimeReceiptV1 receipt,
-        CancellationToken cancellationToken)
-    {
-        if (binding.RuntimeLifecycleState == ExecutionRuntimeLifecycleStates.Revoked)
-        {
-            throw Invalid(package, "execution runtime lifecycle state 'revoked' does not permit activation");
-        }
-        var stagedAuthority = package.ExecutionRuntimePolicyAuthority;
-        if (stagedAuthority is not null
-            && (!stagedAuthority.MatchesReceipt(receipt)
-                || stagedAuthority.RuntimePolicyRevision < binding.RuntimePolicyRevision
-                || !string.Equals(
-                    stagedAuthority.RegistryOrigin,
-                    binding.RegistryOrigin,
-                    StringComparison.Ordinal)))
-        {
-            throw Invalid(
-                package,
-                "staged execution-runtime policy authority does not match its exact binding and immutable receipt");
-        }
-        if (stagedAuthority is { TrustDisposition: ExecutionRuntimeTrustDispositions.Denied }
-            || stagedAuthority?.Lifecycle.State == ExecutionRuntimeLifecycleStates.Revoked)
-            ValidateCachedPolicy(package, stagedAuthority!);
-        if (_lifecyclePolicies is not null)
-        {
-            await _lifecyclePolicies.InitializeAsync(cancellationToken).ConfigureAwait(false);
-            if (_lifecyclePolicies.CaptureSnapshot().TryGet(receipt.Identity, out var policy))
-            {
-                if (policy is null || !policy.MatchesReceipt(receipt))
-                {
-                    throw Invalid(
-                        package,
-                        "cached execution-runtime lifecycle policy does not match its immutable receipt");
-                }
-                if (_activePolicies is not null && binding.AcquisitionSource != RuntimeExecutionRuntimeAcquisitionSources.Development)
-                {
-                    if (policy.TrustDisposition == ExecutionRuntimeTrustDispositions.Denied || policy.Lifecycle.State == ExecutionRuntimeLifecycleStates.Revoked)
-                        ValidateCachedPolicy(package, policy);
-                    return ValidateActivePolicy(package, binding, receipt.Identity, policy.Lifecycle.State == ExecutionRuntimeLifecycleStates.Retired);
-                }
-                var wouldWeakenRetiredBinding =
-                    binding.RuntimeLifecycleState == ExecutionRuntimeLifecycleStates.Retired
-                    && policy.Lifecycle.State is ExecutionRuntimeLifecycleStates.Supported
-                        or ExecutionRuntimeLifecycleStates.Deprecated;
-                if (!wouldWeakenRetiredBinding
-                    && (policy.RuntimePolicyRevision >= binding.RuntimePolicyRevision
-                        || policy.TrustDisposition == ExecutionRuntimeTrustDispositions.Denied
-                        || policy.Lifecycle.State is ExecutionRuntimeLifecycleStates.Retired
-                            or ExecutionRuntimeLifecycleStates.Revoked))
-                {
-                    ValidateCachedPolicy(package, policy);
-                    return CreateActivationWarning(package, receipt.Identity, policy.Lifecycle);
-                }
-            }
-        }
-        if (_activePolicies is not null && binding.AcquisitionSource != RuntimeExecutionRuntimeAcquisitionSources.Development)
-            return ValidateActivePolicy(package, binding, receipt.Identity, stagedAuthority?.Lifecycle.State == ExecutionRuntimeLifecycleStates.Retired);
-        if (stagedAuthority is not null)
-        {
-            ValidateCachedPolicy(package, stagedAuthority);
-            return CreateActivationWarning(package, receipt.Identity, stagedAuthority.Lifecycle);
-        }
-        if (binding.RuntimeLifecycleState is not (
-                ExecutionRuntimeLifecycleStates.Supported or ExecutionRuntimeLifecycleStates.Deprecated))
-        {
-            throw Invalid(
-                package,
-                $"execution runtime lifecycle state '{binding.RuntimeLifecycleState}' does not permit activation");
-        }
-        return binding.RuntimeLifecycleState == ExecutionRuntimeLifecycleStates.Deprecated
-            ? CreateActivationWarning(package, receipt.Identity, lifecycle: null)
-            : null;
-    }
-
-    private string? ValidateActivePolicy(PreparedRuntimePackage package, RuntimePackageExecutionRuntimeBinding binding, ExecutionRuntimeIdentity identity, bool knownRetired)
-    {
-        var decision = PackagePolicyAdmission.RequireBindingPolicy(_activePolicies!, binding);
-        if ((knownRetired || binding.RuntimeLifecycleState == ExecutionRuntimeLifecycleStates.Retired) && decision.LifecycleState != ExecutionRuntimeLifecycleStates.Retired)
-            throw Invalid(package, "active policy cannot erase a known retired runtime");
-        return CreateActivationWarning(package, identity, new RegistryExecutionRuntimeLifecycle(decision.LifecycleState,
-            default, null, null, null, decision.ActivationBlockedAtUtc, decision.RevokedAtUtc, null));
-    }
-
-    private void ValidateCachedPolicy(
-        PreparedRuntimePackage package,
-        ExecutionRuntimeLifecyclePolicyEntryV1 policy)
-    {
-        if (policy.TrustDisposition == ExecutionRuntimeTrustDispositions.Denied)
-        {
-            throw Invalid(package, "Registry trust policy denies this exact execution runtime");
-        }
-        ValidateCachedLifecycle(package, policy.Lifecycle);
-    }
-
-    private void ValidateCachedLifecycle(
-        PreparedRuntimePackage package,
-        RegistryExecutionRuntimeLifecycle lifecycle)
-    {
-        var now = _timeProvider.GetUtcNow();
-        if (lifecycle.State == ExecutionRuntimeLifecycleStates.Revoked)
-        {
-            throw Invalid(package, "execution runtime lifecycle state 'revoked' does not permit activation");
-        }
-        if (lifecycle.ActivationBlockedAtUtc is { } activationBlocked
-            && activationBlocked <= now)
-        {
-            throw Invalid(package, "execution runtime activation is blocked by its lifecycle deadline");
-        }
-        if (lifecycle.State is ExecutionRuntimeLifecycleStates.Supported
-            or ExecutionRuntimeLifecycleStates.Deprecated)
-        {
-            return;
-        }
-        if (lifecycle.State == ExecutionRuntimeLifecycleStates.Retired
-            && (lifecycle.ActivationBlockedAtUtc is null
-                || lifecycle.ActivationBlockedAtUtc > now))
-        {
-            return;
-        }
-        throw Invalid(
-            package,
-            lifecycle.State == ExecutionRuntimeLifecycleStates.Retired
-                ? "execution runtime is retired and its activation deadline has elapsed"
-                : $"execution runtime lifecycle state '{lifecycle.State}' does not permit activation");
-    }
-
-    private static string? CreateActivationWarning(
-        PreparedRuntimePackage package,
-        ExecutionRuntimeIdentity identity,
-        RegistryExecutionRuntimeLifecycle? lifecycle)
-    {
-        var state = lifecycle?.State ?? ExecutionRuntimeLifecycleStates.Deprecated;
-        var subject = $"Package '{package.PackageId}' uses {state} execution runtime '{identity.RuntimeId}' version '{identity.Version}' packaging revision {identity.PackagingRevision} for RID '{identity.Rid}'.";
-        if (state == ExecutionRuntimeLifecycleStates.Deprecated)
-        {
-            return subject + " Update the package or rebind it to a supported execution runtime.";
-        }
-        if (state != ExecutionRuntimeLifecycleStates.Retired)
-        {
-            return null;
-        }
-        if (lifecycle?.ActivationBlockedAtUtc is { } deadline)
-        {
-            return subject
-                   + $" Activation is allowed only until {deadline.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)}."
-                   + " Update the package or rebind it to a supported execution runtime before that deadline.";
-        }
-        return subject + " Update the package or rebind it to a supported execution runtime before activation is blocked.";
     }
 
     private static async Task<string> ValidateProjectedPackageAsync(

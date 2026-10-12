@@ -11,19 +11,15 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed record PackagePolicyEntry(long Revision, RegistryPackagePolicyDecision Decision, RuntimePolicyLeaseStatus Lease);
 internal sealed record PlatformPolicyEntry(long Revision, RegistryPlatformPolicyDecision Decision, RuntimePolicyLeaseStatus Lease);
-internal sealed record RuntimePolicyEntry(long Revision, RegistryRuntimePolicyDecision Decision, RuntimePolicyLeaseStatus Lease);
-internal sealed record PackagePolicyOriginFile(int SchemaVersion, long Generation, long AuthorityGeneration, long ClockGeneration, string Origin, RegistryPolicyIdentity PackagePolicy, long RuntimeRevision,
+internal sealed record PackagePolicyOriginFile(int SchemaVersion, long Generation, long AuthorityGeneration, long ClockGeneration, string Origin, RegistryPolicyIdentity PackagePolicy,
     RegistryPolicyCheckpointIdentity Checkpoint,
     PolicyClockReading HighWater, long LastRequestStarted, string LastNonce, bool ClockInvalidated,
-    IReadOnlyDictionary<string, PackagePolicyEntry> Packages, IReadOnlyDictionary<string, PlatformPolicyEntry> Platforms,
-    IReadOnlyDictionary<string, RuntimePolicyEntry> Runtimes)
+    IReadOnlyDictionary<string, PackagePolicyEntry> Packages, IReadOnlyDictionary<string, PlatformPolicyEntry> Platforms)
 {
     private IReadOnlyDictionary<string, PackagePolicyEntry> _packages = Freeze(Packages);
     private IReadOnlyDictionary<string, PlatformPolicyEntry> _platforms = Freeze(Platforms);
-    private IReadOnlyDictionary<string, RuntimePolicyEntry> _runtimes = Freeze(Runtimes);
     public IReadOnlyDictionary<string, PackagePolicyEntry> Packages { get => _packages; init => _packages = Freeze(value); }
     public IReadOnlyDictionary<string, PlatformPolicyEntry> Platforms { get => _platforms; init => _platforms = Freeze(value); }
-    public IReadOnlyDictionary<string, RuntimePolicyEntry> Runtimes { get => _runtimes; init => _runtimes = Freeze(value); }
     internal static IReadOnlyDictionary<string, T> Freeze<T>(IReadOnlyDictionary<string, T> entries)
         => new ReadOnlyDictionary<string, T>(entries.OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
@@ -75,7 +71,7 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
 
     internal RuntimePolicyLeaseStatus PackageLease(string origin, RegistryPackageVersionIdentity package)
     {
-        RequireActivation(origin, package, []);
+        RequireActivation(origin, package);
         return _snapshots[RegistryActivePolicyClient.Origin(origin)].Packages[RegistryActivePolicyClient.PackageKey(package)].Lease;
     }
 
@@ -85,15 +81,14 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
         if (!_snapshots.TryGetValue(origin, out var state)
             || !state.Packages.TryGetValue(RegistryActivePolicyClient.PackageKey(package), out var entry))
             throw Denied(PackagePolicyErrorCodes.PolicyRequired);
-        return new(origin, [package], entry.Decision.PlatformDependencies.ToArray(), []);
+        return new(origin, [package], entry.Decision.PlatformDependencies.ToArray());
     }
 
-    internal void RequirePlan(string origin, RegistryPolicyIdentity packagePolicy, long runtimeRevision, RegistryPolicyCheckpointIdentity checkpoint)
+    internal void RequirePlan(string origin, RegistryPolicyIdentity packagePolicy, RegistryPolicyCheckpointIdentity checkpoint)
     {
         origin = RegistryActivePolicyClient.Origin(origin);
         if (_persistenceFailures.ContainsKey(origin) || !_snapshots.TryGetValue(origin, out var state)
-            || state.PackagePolicy != packagePolicy || state.RuntimeRevision != runtimeRevision
-            || state.Checkpoint != checkpoint)
+            || state.PackagePolicy != packagePolicy || state.Checkpoint != checkpoint)
             throw Denied(PackagePolicyErrorCodes.PlanStale);
     }
 
@@ -134,10 +129,10 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
     }
 
     public async Task<RegistryPolicySynchronizationRequest> CreateRequestAsync(string origin, IReadOnlyList<RegistryPackageVersionIdentity> packages,
-        IReadOnlyList<RegistryPlatformCatalogIdentity> platforms, IReadOnlyList<RegistryRuntimePolicySubject> runtimes, CancellationToken token)
+        IReadOnlyList<RegistryPlatformCatalogIdentity> platforms, CancellationToken token)
     {
         var state = await LoadAsync(origin, checkpointClock: false, token);
-        return new("", packages, platforms, runtimes, state?.PackagePolicy, state?.RuntimeRevision ?? 0, state?.Checkpoint);
+        return new("", packages, platforms, state?.PackagePolicy, state?.Checkpoint);
     }
 
     public async Task ObserveAsync(RegistryPolicyObservation observation, CancellationToken token = default)
@@ -168,24 +163,24 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
             RegistryActivePolicyClient.Require(response.Nonce != previous.LastNonce, "The policy nonce was already accepted.");
             RegistryActivePolicyClient.Require(invalidateOldLeases || observation.Started.Ticks >= previous.LastRequestStarted, "A reordered policy response cannot replace a newer observation.");
             RegistryActivePolicyClient.Require(response.PackagePolicy.Revision >= previous.PackagePolicy.Revision
-                && (response.PackagePolicy.Revision != previous.PackagePolicy.Revision || response.PackagePolicy == previous.PackagePolicy)
-                && response.RuntimePolicyRevision >= previous.RuntimeRevision, "Policy observation would roll back or conflict with durable watermarks.");
+                && (response.PackagePolicy.Revision != previous.PackagePolicy.Revision || response.PackagePolicy == previous.PackagePolicy),
+                "Policy observation would roll back or conflict with durable watermarks.");
             RegistryActivePolicyClient.Require(response.Checkpoint.Sequence >= previous.Checkpoint.Sequence
                 && response.Checkpoint.TopologyGeneration >= previous.Checkpoint.TopologyGeneration
                 && (response.Checkpoint.Sequence != previous.Checkpoint.Sequence || response.Checkpoint == previous.Checkpoint)
                 && (response.Checkpoint.TopologyGeneration != previous.Checkpoint.TopologyGeneration || response.Checkpoint.TopologyFingerprint == previous.Checkpoint.TopologyFingerprint), "Checkpoint observation conflicts with durable history.");
             RegistryActivePolicyClient.Require(response.Checkpoint.Sequence != previous.Checkpoint.Sequence
-                || response.PackagePolicy == previous.PackagePolicy && response.RuntimePolicyRevision == previous.RuntimeRevision,
+                || response.PackagePolicy == previous.PackagePolicy,
                 "The same checkpoint cannot carry different policy watermarks.");
         }
         var deadline = checked(observation.Started.Ticks + checked(observation.Started.Frequency * RuntimePolicyTiming.LeaseSeconds));
         RegistryActivePolicyClient.Require(now.Ticks < deadline, "Policy response arrived after its local lease deadline.");
-        var watermark = new RuntimePolicyWatermark(origin, response.PackagePolicy.Revision, response.PackagePolicy.Fingerprint, response.RuntimePolicyRevision,
+        var watermark = new RuntimePolicyWatermark(origin, response.PackagePolicy.Revision, response.PackagePolicy.Fingerprint,
             response.Checkpoint.Sequence, response.Checkpoint.Digest, response.Checkpoint.TopologyGeneration, response.Checkpoint.TopologyFingerprint);
         var status = new RuntimePolicyLeaseStatus(RuntimePolicyLeaseStates.Valid, null, watermark, response.Nonce, observation.ResponseSha256,
             response.ObservedAtUtc, response.ValidUntilUtc, new(now.BootSessionId, now.Source, now.Frequency, observation.Started.Ticks, deadline, now.Ticks, now.VirtualMachineGeneration));
         if (invalidateOldLeases && previous is not null) previous = InvalidateLeases(previous);
-        var packages = Copy(previous?.Packages); var platforms = Copy(previous?.Platforms); var runtimes = Copy(previous?.Runtimes);
+        var packages = Copy(previous?.Packages); var platforms = Copy(previous?.Platforms);
         foreach (var decision in response.Packages)
         {
             var key = RegistryActivePolicyClient.PackageKey(decision.Package);
@@ -213,25 +208,9 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
             }
             platforms[key] = new(response.PackagePolicy.Revision, decision, status);
         }
-        foreach (var decision in response.Runtimes)
-        {
-            var key = RegistryActivePolicyClient.RuntimeKey(decision.Subject);
-            RegistryActivePolicyClient.Require(runtimes.Values.All(value => value.Decision.Subject.Runtime != decision.Subject.Runtime || value.Decision.Subject == decision.Subject), "Immutable runtime subject identity changed.");
-            if (runtimes.TryGetValue(key, out var existing))
-            {
-                RegistryActivePolicyClient.Require(existing.Decision.LifecycleState != "revoked" || Same(existing.Decision, decision), "A revoked runtime cannot change or broaden.");
-                // A fixed activation cutoff may become elapsed without a new policy revision.
-                RegistryActivePolicyClient.Require(existing.Revision != response.RuntimePolicyRevision || Same(existing.Decision, decision)
-                    || existing.Decision.Disposition == "Allowed" && decision.Disposition == "Denied"
-                    && existing.Decision.LifecycleState == decision.LifecycleState && existing.Decision.ActivationBlockedAtUtc == decision.ActivationBlockedAtUtc
-                    && existing.Decision.RevokedAtUtc == decision.RevokedAtUtc && decision.ActivationBlockedAtUtc <= response.ObservedAtUtc, "Same-revision runtime decisions conflict.");
-                RegistryActivePolicyClient.Require(existing.Decision.Disposition != "Denied" || decision.Disposition != "Allowed", "A known runtime denial cannot be broadened.");
-            }
-            runtimes[key] = new(response.RuntimePolicyRevision, decision, status);
-        }
         var next = new PackagePolicyOriginFile(1, checked((previous?.Generation ?? 0) + 1), checked((previous?.AuthorityGeneration ?? 0) + 1),
-            checked((previous?.ClockGeneration ?? 0) + (invalidateOldLeases && previous?.ClockInvalidated != true ? 1 : 0)), origin, response.PackagePolicy, response.RuntimePolicyRevision,
-            response.Checkpoint, now, observation.Started.Ticks, response.Nonce, false, Sorted(packages), Sorted(platforms), Sorted(runtimes));
+            checked((previous?.ClockGeneration ?? 0) + (invalidateOldLeases && previous?.ClockInvalidated != true ? 1 : 0)), origin, response.PackagePolicy,
+            response.Checkpoint, now, observation.Started.Ticks, response.Nonce, false, Sorted(packages), Sorted(platforms));
         await PersistAsync(filePath, next, token);
         var accepted = false;
         lock (_clockGate)
@@ -259,15 +238,15 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
 
     }
 
-    public async Task RequireActivationAsync(string origin, RegistryPackageVersionIdentity package, IReadOnlyList<RegistryRuntimePolicySubject> runtimes, CancellationToken token)
+    public async Task RequireActivationAsync(string origin, RegistryPackageVersionIdentity package, CancellationToken token)
     {
         await LoadAsync(origin, checkpointClock: true, token);
-        RequireActivation(origin, package, runtimes);
+        RequireActivation(origin, package);
     }
 
     internal Task CheckpointClockAsync(string origin, CancellationToken token) => LoadAsync(origin, checkpointClock: true, token);
 
-    public void RequireActivation(string origin, RegistryPackageVersionIdentity package, IReadOnlyList<RegistryRuntimePolicySubject> runtimes)
+    public void RequireActivation(string origin, RegistryPackageVersionIdentity package)
     {
         origin = RegistryActivePolicyClient.Origin(origin);
         if (_persistenceFailures.ContainsKey(origin) || !_snapshots.TryGetValue(origin, out var state)) throw Denied(PackagePolicyErrorCodes.PolicyRequired);
@@ -283,14 +262,6 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
             if (platform.Decision.Disposition != "Allowed") throw Denied(platform.Decision.ErrorCode ?? PackagePolicyErrorCodes.PolicyRequired);
             RequireLease(state, platform.Lease, now);
         }
-        RequireRuntimes(state, runtimes, now);
-    }
-
-    internal void RequireRuntimeActivation(string origin, IReadOnlyList<RegistryRuntimePolicySubject> runtimes)
-    {
-        origin = RegistryActivePolicyClient.Origin(origin);
-        if (_persistenceFailures.ContainsKey(origin) || !_snapshots.TryGetValue(origin, out var state)) throw Denied(ExecutionRuntimeErrorCodes.PolicyRequired);
-        RequireRuntimes(state, runtimes, ReadClock(origin, state.HighWater));
     }
 
     internal void RequirePlatformActivation(string origin, IReadOnlyList<RegistryPlatformCatalogIdentity> subjects)
@@ -311,32 +282,6 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
         RequirePlatformActivation(origin, subjects);
         return subjects.Select(subject => _snapshots[RegistryActivePolicyClient.Origin(origin)].Platforms[RegistryActivePolicyClient.PlatformKey(subject)].Lease)
             .OrderBy(lease => lease.Clock!.DeadlineTicks).First();
-    }
-
-    internal RegistryRuntimePolicyDecision RuntimeDecision(string origin, RegistryRuntimePolicySubject subject, long minimumRevision = 0)
-    {
-        origin = RegistryActivePolicyClient.Origin(origin);
-        if (_persistenceFailures.ContainsKey(origin) || !_snapshots.TryGetValue(origin, out var state)) throw Denied(ExecutionRuntimeErrorCodes.PolicyRequired);
-        RequireRuntimes(state, [subject], ReadClock(origin, state.HighWater));
-        var entry = state.Runtimes[RegistryActivePolicyClient.RuntimeKey(subject)];
-        if (entry.Revision < minimumRevision) throw Denied(ExecutionRuntimeErrorCodes.PolicyRequired);
-        return entry.Decision;
-    }
-
-    private static void RequireRuntimes(PackagePolicyOriginFile state, IReadOnlyList<RegistryRuntimePolicySubject> runtimes, PolicyClockReading now)
-    {
-        foreach (var subject in runtimes)
-        {
-            if (!state.Runtimes.TryGetValue(RegistryActivePolicyClient.RuntimeKey(subject), out var runtime)) throw Denied(ExecutionRuntimeErrorCodes.PolicyRequired);
-            if (runtime.Decision.Disposition != "Allowed") throw Denied(runtime.Decision.ErrorCode ?? PackagePolicyErrorCodes.PolicyRequired);
-            RequireLease(state, runtime.Lease, now);
-            if (runtime.Decision.ActivationBlockedAtUtc is { } cutoff && cutoff <= runtime.Lease.ValidUntilUtc)
-            {
-                var delta = cutoff - runtime.Lease.ObservedAtUtc!.Value;
-                var cutoffTicks = (Int128)runtime.Lease.Clock!.RequestStartedTicks + (Int128)delta.Ticks * now.Frequency / TimeSpan.TicksPerSecond;
-                if (now.Ticks >= cutoffTicks) throw Denied(runtime.Decision.LifecycleState == "retired" ? ExecutionRuntimeErrorCodes.Retired : ExecutionRuntimeErrorCodes.Deprecated);
-            }
-        }
     }
 
     public async Task InvalidateClockAsync(string origin, CancellationToken token = default)
@@ -422,11 +367,10 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
         static RuntimePolicyLeaseStatus Invalid(RuntimePolicyLeaseStatus lease) => lease with
         { State = RuntimePolicyLeaseStates.ClockInvalid, ErrorCode = PackagePolicyErrorCodes.PolicyClockInvalid };
         return state with
-        {
-            Packages = PackagePolicyOriginFile.Freeze(state.Packages.ToDictionary(pair => pair.Key, pair => pair.Value with { Lease = Invalid(pair.Value.Lease) })),
-            Platforms = PackagePolicyOriginFile.Freeze(state.Platforms.ToDictionary(pair => pair.Key, pair => pair.Value with { Lease = Invalid(pair.Value.Lease) })),
-            Runtimes = PackagePolicyOriginFile.Freeze(state.Runtimes.ToDictionary(pair => pair.Key, pair => pair.Value with { Lease = Invalid(pair.Value.Lease) })),
-        };
+            {
+                Packages = PackagePolicyOriginFile.Freeze(state.Packages.ToDictionary(pair => pair.Key, pair => pair.Value with { Lease = Invalid(pair.Value.Lease) })),
+                Platforms = PackagePolicyOriginFile.Freeze(state.Platforms.ToDictionary(pair => pair.Key, pair => pair.Value with { Lease = Invalid(pair.Value.Lease) })),
+            };
     }
 
     private static void RequireLease(PackagePolicyOriginFile state, RuntimePolicyLeaseStatus lease, PolicyClockReading now)

@@ -12,8 +12,7 @@ internal sealed partial class PackageSessionLoadService
         IReadOnlyList<string> devFolders,
         IReadOnlyDictionary<string, string>? preparationSourcePaths = null,
         CancellationToken cancellationToken = default,
-        PackageSessionStartupTraceAttempt? startupTrace = null,
-        ExecutionRuntimeLifecyclePolicySnapshot? runtimePolicyAuthority = null)
+        PackageSessionStartupTraceAttempt? startupTrace = null)
     {
         var started = Stopwatch.GetTimestamp();
         cancellationToken.ThrowIfCancellationRequested();
@@ -123,8 +122,7 @@ internal sealed partial class PackageSessionLoadService
                     sessionFolder,
                     errors,
                     cancellationToken,
-                    packageTrace,
-                    runtimePolicyAuthority);
+                    packageTrace);
                 if (preparedPackage is not null)
                 {
                     packageTrace?.SetPreparedIdentity(preparedPackage);

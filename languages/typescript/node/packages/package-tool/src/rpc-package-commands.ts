@@ -3,37 +3,45 @@ import { open, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { isPackageId } from "@sunder/sdk";
 import { cachePath, contractCacheFiles, DEFAULT_CONTRACT_CACHE } from "./rpc-contract-cache";
-import { contractError, parseContractLock, type ContractLock, type RegistryOriginOptions } from "./rpc-contract-lock";
+import { contractError, consumerRoles, parseContractLock, parseContractLockForReselection, type ConsumerRole, type ContractLock, type RegistryOriginOptions } from "./rpc-contract-lock";
+import { migrateConsumerRoles, type ConsumerRoleChange } from "./rpc-consumer-migration";
 import { ordered, outerBytes, outerKeys, parseOuter, type Outer, type OuterObject } from "./rpc-baseline-json";
 import { hydrateContractLock } from "./rpc-contract-restore";
 import { sameReviewedSelection, selectPackageArtifact } from "./rpc-package-selection";
 import { loadProjectWithOwnedFrame, loadProjectConfiguration } from "./model";
 import { prepareInitialApiSelection } from "./rpc-authoring";
-import { captureBaseline, verifyFreshOwnedSource } from "./rpc-baseline-store";
+import { captureBaseline, verifyFreshOwnedSource, exists } from "./rpc-baseline-store";
 import { withOutputLeases } from "./output";
 import { defaultPlatformKey, selectPlatformContract } from "./rpc-platform-catalogs";
+import type { InspectedContractCandidate } from "./rpc-contract-candidate";
 
 export interface PackageApiRequest extends RegistryOriginOptions {
-  readonly operation: "add" | "update" | "remove" | "list" | "require" | "unrequire" | "implement" | "unimplement"
+  readonly operation: "add" | "update" | "remove" | "list" | "require" | "unrequire" | "implement" | "unimplement" | "migrate-consumer-roles"
     | "platform-implement" | "platform-update" | "platform-unimplement" | "platform-list";
   readonly packageId?: string; readonly contractId?: string; readonly versionRange?: string; readonly includePrerelease?: boolean;
   readonly registryOrigin?: string; readonly presence?: "required" | "optional"; readonly localName?: string; readonly candidate?: string; readonly platformCatalog?: string;
   readonly cacheRoot?: string; readonly fetchImplementation?: typeof fetch; readonly signal?: AbortSignal;
+  readonly consumerRoles?: readonly ConsumerRole[];
 }
-type Draft = { lockVersion: number; packageArtifacts: Record<string, OuterObject>; packageImports: Record<string, { localName: string; presence: string; requiredContracts: string[] }>;
+type Draft = { lockVersion: number; packageArtifacts: Record<string, OuterObject>; packageImports: Record<string, { localName: string; presence: string; requiredContracts: string[]; consumerRoles: readonly ConsumerRole[] }>;
   providerImports: Record<string, { packageId: string; contractId: string }>; platformImports: Record<string, OuterObject> };
-export async function packageApiCommand(project: string, request: PackageApiRequest): Promise<{ changed: boolean; lock: ContractLock }> {
+export interface PackageApiResult { readonly changed: boolean; readonly lock: ContractLock; readonly roleChanges?: readonly ConsumerRoleChange[] }
+export async function packageApiCommand(project: string, request: PackageApiRequest): Promise<PackageApiResult> {
   try { return await execute(project, request); }
   catch (error) {
     if (error instanceof Error && /^(?:rpc-authoring|package-api|contract-cache|platform-api)\.[a-z-]+:/u.test(error.message)) throw error;
     throw new Error("package-api.public-inventory-invalid: Package API operation could not validate its bounded inputs; the prior lock was retained.", { cause: error });
   }
 }
-async function execute(project: string, request: PackageApiRequest): Promise<{ changed: boolean; lock: ContractLock }> {
+async function execute(project: string, request: PackageApiRequest): Promise<PackageApiResult> {
   validateRequest(request); project = await cachePath(project);
+  if (request.operation === "migrate-consumer-roles") return migrateConsumerRoles(project, request);
   const path = join(project, "sunder-contracts.lock.json"); const cache = request.cacheRoot ?? DEFAULT_CONTRACT_CACHE;
-  const original = await contractCacheFiles.read(path, 33_554_432); const before = parseContractLock(original, request.allowDevelopmentRegistryOrigin);
+  const original = await contractCacheFiles.read(path, 33_554_432);
+  const before = (request.operation === "update" ? parseContractLockForReselection : parseContractLock)(original, request.allowDevelopmentRegistryOrigin);
   if (request.operation === "list" || request.operation === "platform-list") return { changed: false, lock: before };
+  const candidates = new Map<string, InspectedContractCandidate>();
+  try {
   const draft = clone(parseOuter(original)) as unknown as Draft; const id = request.packageId!;
   const verify = async (): Promise<void> => {
     if (!(await contractCacheFiles.read(path, 33_554_432)).equals(original)) contractError("rpc-authoring.evidence-mismatch", "Contract lock changed during selection; retry against current inputs.");
@@ -77,19 +85,19 @@ async function execute(project: string, request: PackageApiRequest): Promise<{ c
     else {
       if (request.versionRange === undefined || request.registryOrigin === undefined && request.candidate === undefined)
         contractError("package-api.local-input-required", "A new artifact selection requires a reviewed version range and either a local candidate or Registry origin.");
-      draft.packageArtifacts[id] = await selectPackageArtifact(id, { ...request, registryOrigin: request.registryOrigin, versionRange: request.versionRange, includePrerelease: request.includePrerelease ?? false });
+      draft.packageArtifacts[id] = await selectPackageArtifact(id, { ...request, candidates, registryOrigin: request.registryOrigin, versionRange: request.versionRange, includePrerelease: request.includePrerelease ?? false });
     }
     if (existing && request.candidate !== undefined) {
-      const candidate = await selectPackageArtifact(id, { ...request, registryOrigin: existing.registryOrigin, versionRange: existing.requestedVersionRange, includePrerelease: existing.includePrerelease });
+      const candidate = await selectPackageArtifact(id, { ...request, candidates, registryOrigin: existing.registryOrigin, versionRange: existing.requestedVersionRange, includePrerelease: existing.includePrerelease });
       if (!outerBytes(candidate).equals(outerBytes(draft.packageArtifacts[id]!))) contractError("package-api.public-inventory-invalid", "Candidate differs from the shared selection; use targeted update.");
     }
     if (request.operation === "add") {
       const current = before.packageImports.get(id); const localName = request.localName ?? current?.localName ?? id.split(".").at(-1)!; const presence = request.presence ?? "required";
       if (current) {
-        if (current.localName !== localName || current.presence !== presence) contractError("package-api.local-name-collision", "Existing consumer intent differs; use targeted update for presence changes.");
+        if (current.localName !== localName || current.presence !== presence || request.consumerRoles !== undefined && JSON.stringify(current.consumerRoles) !== JSON.stringify(request.consumerRoles)) contractError("package-api.local-name-collision", "Existing consumer intent differs; use targeted update for presence/role changes.");
         await verify(); return { changed: false, lock: before };
       }
-      draft.packageImports[id] = { localName, presence, requiredContracts: [] };
+      draft.packageImports[id] = { localName, presence, requiredContracts: [], consumerRoles: request.consumerRoles ?? ["app", "runtime"] };
     } else {
       if (!isPublic((draft.packageArtifacts[id]!.contracts as OuterObject)[request.contractId!]))
         contractError("package-api.provider-contract-not-public", "Provider intent must select a public package-authority contract.");
@@ -111,7 +119,7 @@ async function execute(project: string, request: PackageApiRequest): Promise<{ c
       if (previous.registryOrigin !== undefined && request.registryOrigin !== undefined)
         contractError("package-api.registry-origin-invalid", "Update retains an existing Registry origin and rejects an override.");
       if (request.presence !== undefined && !before.packageImports.has(id)) missing();
-      const next = await selectPackageArtifact(id, { ...request, registryOrigin: previous.registryOrigin ?? request.registryOrigin, versionRange: request.versionRange ?? previous.requestedVersionRange, includePrerelease: request.includePrerelease ?? previous.includePrerelease });
+      const next = await selectPackageArtifact(id, { ...request, candidates, registryOrigin: previous.registryOrigin ?? request.registryOrigin, versionRange: request.versionRange ?? previous.requestedVersionRange, includePrerelease: request.includePrerelease ?? previous.includePrerelease });
       const contracts = next.contracts as OuterObject;
       for (const required of before.packageImports.get(id)?.requiredContracts ?? [])
         if (!isPublic(contracts[required])) contractError("package-api.required-contract-removed", "Run api unrequire before removing a required contract.");
@@ -119,6 +127,7 @@ async function execute(project: string, request: PackageApiRequest): Promise<{ c
         contractError("package-api.provider-contract-removed", "Remove the provider source and intent before removing its contract.");
       draft.packageArtifacts[id] = next;
       if (request.presence !== undefined) draft.packageImports[id]!.presence = request.presence;
+      if (request.consumerRoles !== undefined) { if (!draft.packageImports[id]) missing(); draft.packageImports[id]!.consumerRoles = request.consumerRoles; }
     }
     if (request.packageId === undefined) for (const [key, value] of before.platformImports)
       draft.platformImports[key] = await selectPlatformContract(value.contractId as string, value.registryOrigin as string | undefined, request.fetchImplementation, request.signal, request.allowDevelopmentRegistryOrigin, request.platformCatalog);
@@ -153,8 +162,8 @@ async function execute(project: string, request: PackageApiRequest): Promise<{ c
   if (hydrate || request.operation === "unimplement" || request.operation === "platform-unimplement") {
     const physicalBaseline = await captureBaseline(project);
     await verifyFreshOwnedSource(project, physicalBaseline);
-    if (hydrate) await hydrateContractLock(after, { ...request, cacheRoot: cache }, verify);
-    if (!physicalBaseline.baseline) {
+    if (hydrate) await hydrateContractLock(after, { ...request, cacheRoot: cache }, verify, candidates);
+    if (!physicalBaseline.baseline && ["add", "implement", "platform-implement"].includes(request.operation) && !await exists(join(project, ".sunder/generated/rpc/authoring-receipt.v1.json"))) {
       const frame = await loadProjectConfiguration(project);
       const revalidate = await prepareInitialApiSelection(frame.project, frame.configBytes, after, cache, physicalBaseline);
       verifySource = async () => { await revalidate(); await verifyFreshOwnedSource(project, physicalBaseline); };
@@ -173,7 +182,7 @@ async function execute(project: string, request: PackageApiRequest): Promise<{ c
     verifySource = async () => { await checked.ownedRpc!.revalidate(); await verifyFreshOwnedSource(project, physicalBaseline); };
     }
   }
-  return withOutputLeases([path], async () => {
+  return await withOutputLeases([path], async () => {
     request.signal?.throwIfAborted(); await verify(); await verifySource?.();
     if (!changed) return { changed: false, lock: before };
     const stage = join(project, ".sunder-contract-selection-" + randomUUID()); let created = false;
@@ -181,12 +190,14 @@ async function execute(project: string, request: PackageApiRequest): Promise<{ c
       const file = await open(stage, "wx", 0o644); created = true;
       try { await file.writeFile(proposal); await file.sync(); } finally { await file.close(); }
       if (!(await contractCacheFiles.read(stage, 33_554_432)).equals(proposal)) contractError("rpc-authoring.evidence-mismatch", "Staged lock changed before selection commit.");
-      await verifySource?.(); await verify(); request.signal?.throwIfAborted(); await cachePath(path); await rename(stage, path); created = false;
+      await verifySource?.(); await verify(); for (const candidate of candidates.values()) await candidate.revalidate();
+      request.signal?.throwIfAborted(); await cachePath(path); await rename(stage, path); created = false;
       return { changed: true, lock: after };
     } finally {
       if (created) try { if ((await contractCacheFiles.read(stage, 33_554_432)).equals(proposal)) await unlink(stage); } catch { /* Preserve an unproven source-tree stage. */ }
     }
   }, 30_000);
+  } finally { for (const candidate of candidates.values()) if ("dispose" in candidate) await (candidate.dispose as () => Promise<void>)(); }
 }
 function isPublic(value: Outer | undefined): boolean { return value !== null && typeof value === "object" && !Array.isArray(value) && value.authorityKind === "package"; }
 function clone(value: Outer): Outer {
@@ -196,7 +207,15 @@ function clone(value: Outer): Outer {
 }
 function missing(): never { return contractError("package-api.import-not-found", "The exact requested import or target does not exist."); }
 function validateRequest(value: PackageApiRequest): void {
-  if (Object.keys(value).some(key => !["operation", "packageId", "contractId", "versionRange", "includePrerelease", "registryOrigin", "presence", "localName", "candidate", "platformCatalog", "cacheRoot", "fetchImplementation", "signal", "allowDevelopmentRegistryOrigin"].includes(key))) missing();
+  if (Object.keys(value).some(key => !["operation", "packageId", "contractId", "versionRange", "includePrerelease", "registryOrigin", "presence", "localName", "candidate", "platformCatalog", "cacheRoot", "fetchImplementation", "signal", "allowDevelopmentRegistryOrigin", "consumerRoles"].includes(key))) missing();
+  if (value.consumerRoles !== undefined) {
+    consumerRoles(value.consumerRoles, value.packageId);
+    if (!["add", "update", "migrate-consumer-roles"].includes(value.operation) || value.packageId === undefined) missing();
+  }
+  if (value.operation === "migrate-consumer-roles") {
+    if (value.packageId !== undefined && !isPackageId(value.packageId) || [value.contractId, value.versionRange, value.includePrerelease, value.registryOrigin, value.presence, value.localName, value.candidate, value.platformCatalog, value.fetchImplementation].some(item => item !== undefined)) missing();
+    return;
+  }
   if (value.allowDevelopmentRegistryOrigin !== undefined && typeof value.allowDevelopmentRegistryOrigin !== "boolean")
     contractError("package-api.registry-origin-invalid", "Development Registry mode must be an explicit Boolean.");
   if (typeof value.operation === "string" && value.operation.startsWith("platform-")) {

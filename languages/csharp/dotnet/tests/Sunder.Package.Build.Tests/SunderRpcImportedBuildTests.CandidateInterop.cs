@@ -14,8 +14,7 @@ public sealed partial class SunderRpcImportedBuildTests
     {
         var archive = await CreateLockedCandidateAsync();
         var helper = Path.Combine(RepositoryRoot(), "languages/typescript/node/packages/package-tool/dist-test/test/contract-candidate-child.js");
-        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
-        var cli = Path.Combine(RepositoryRoot(), "languages/csharp/dotnet/host/Sunder.Cli/bin", configuration, "net10.0", OperatingSystem.IsWindows() ? "sunder.exe" : "sunder");
+        var cli = CanonicalInspectorCli();
         Assert.True(File.Exists(helper), "Build the Node test helpers before selecting candidate interop.");
         Assert.True(File.Exists(cli), "Build Sunder.Cli before selecting canonical candidate interop.");
         var before = File.ReadAllBytes(LockPath);
@@ -62,6 +61,10 @@ public sealed partial class SunderRpcImportedBuildTests
 
         async Task Node(string candidate, string cache, bool success)
         {
+            // This helper's registry-parity leg explicitly tests a cold restore.
+            // Keep the candidate cache intact for the repeat/no-op assertion above.
+            var registryComparisonCache = cache + "-registry";
+            if (Directory.Exists(registryComparisonCache)) Directory.Delete(registryComparisonCache, recursive: true);
             var info = new ProcessStartInfo("node") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
             info.Environment["SUNDER_CLI"] = cli;
             foreach (var argument in new[] { helper, _root, candidate, cache }) info.ArgumentList.Add(argument);
@@ -76,5 +79,21 @@ public sealed partial class SunderRpcImportedBuildTests
             }
             finally { if (!process.HasExited) process.Kill(entireProcessTree: true); }
         }
+    }
+
+    private static string CanonicalInspectorCli()
+    {
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
+        var directory = Path.Combine(RepositoryRoot(), "languages/csharp/dotnet/host/Sunder.Cli/bin", configuration, "net10.0");
+        var cli = Path.Combine(directory, OperatingSystem.IsWindows() ? "sunder.exe" : "sunder");
+        Assert.True(File.Exists(cli), "Build Sunder.Cli before canonical candidate interop.");
+        foreach (var assembly in new[] { typeof(Sunder.Package.Format.SunderPackageArchiveInspector).Assembly,
+                     typeof(Sunder.Sdk.Rpc.SunderRpcContractDescriptor).Assembly })
+        {
+            var dependency = Path.Combine(directory, Path.GetFileName(assembly.Location));
+            Assert.True(File.Exists(dependency) && File.ReadAllBytes(assembly.Location).AsSpan().SequenceEqual(File.ReadAllBytes(dependency)),
+                $"Canonical inspector has stale {assembly.GetName().Name} bytes; rebuild Sunder.Cli with the qualified Core inputs.");
+        }
+        return cli;
     }
 }

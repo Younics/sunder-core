@@ -14,8 +14,17 @@ internal static class SunderPackageCompositionPlanner
         if (sourceTypes.Length > 8192)
             return new([], [], [new("package-authoring.di-limit-exceeded", "Default composition exceeds its source type budget.", null, null, null)]);
         var roles = analysis.RolePlan.Types.ToDictionary(type => type.MetadataName, type => type.Roles, StringComparer.Ordinal);
-        var apis = analysis.Compilation.Contracts.Where(contract => contract.ServiceType.TypeKind == TypeKind.Class)
-            .ToDictionary(SunderRpcCSharpServiceApiEmitter.ApiType, StringComparer.Ordinal);
+        var apis = analysis.Compilation.Contracts.ToDictionary(SunderRpcCSharpServiceApiEmitter.ApiType, StringComparer.Ordinal);
+        var importedApis = analysis.Compilation.ImportedPackageApis.ToDictionary(api => "global::" + api.InterfaceMetadataName, StringComparer.Ordinal);
+        var importedServices = analysis.Compilation.ImportedPackageApis.SelectMany(api => api.Services.Select(service => (Api: api, Service: service)))
+            .GroupBy(value => "global::" + value.Service.InterfaceMetadataName, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.SelectMany(value => value.Api.ConsumerRoles).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
+        foreach (var use in analysis.Compilation.ImportedUses)
+        {
+            var key = "global::" + use.Service.InterfaceMetadataName;
+            if (!importedServices.TryGetValue(key, out var rolesForService)) importedServices.Add(key, rolesForService = new(StringComparer.Ordinal));
+            rolesForService.Add("runtime");
+        }
         var diagnostics = new List<SunderRpcCSharpCompilerDiagnostic>();
         var settingsProviders = sourceTypes.Where(type => !type.IsAbstract && SunderPackageDependencyDiscovery.IsSettingsSchemaProvider(type)).ToArray();
         if (settingsProviders.Length > 1)
@@ -48,8 +57,8 @@ internal static class SunderPackageCompositionPlanner
             // All exposed default Worker APIs must be resolvable, even when only
             // package-local code obtains them after activation.
             if (role == SunderPackageRoleMembership.Worker)
-                roots = roots.Concat(apis.Values.Where(contract => !SunderRpcCSharpServiceApiEmitter.RequiresContext(contract)
-                    || contract.RuntimeUse is not null).Select(contract => contract.ServiceType));
+                roots = roots.Concat(apis.Values.Where(contract => contract.ServiceType.TypeKind == TypeKind.Class
+                    && (!SunderRpcCSharpServiceApiEmitter.RequiresContext(contract) || contract.RuntimeUse is not null)).Select(contract => contract.ServiceType));
             foreach (var root in roots.Distinct<INamedTypeSymbol>(SymbolEqualityComparer.Default).OrderBy(Name, StringComparer.Ordinal))
                 Visit(root, root.Locations.FirstOrDefault() ?? Location.None);
             return result;
@@ -115,6 +124,27 @@ internal static class SunderPackageCompositionPlanner
                     }
                     var name = Name(requested);
                     if (IsHostService(requested, role)) { arguments.Add(new(parameter, requested, deferred)); continue; }
+                    if (IsProviderCatalog(requested))
+                    {
+                        var service = Name(requested.TypeArguments[0]);
+                        var roleName = role == SunderPackageRoleMembership.App ? "app" : "runtime";
+                        var allowed = apis.TryGetValue(service, out var own)
+                            ? role == SunderPackageRoleMembership.App
+                                ? SunderRpcAuthoringDocuments.ResolveAppUse(own.Exposure, own.Descriptor, own.AppUse) is not null
+                                : own.RuntimeUse is not null
+                            : importedServices.TryGetValue(service, out var grantedRoles) && grantedRoles.Contains(roleName);
+                        if (!allowed) Add("di-use-required", $"Catalog '{name}' requires reviewed {roleName} consumer use of its service contract; implementing a provider does not grant consumption.", at);
+                        else arguments.Add(new(parameter, requested, deferred));
+                        continue;
+                    }
+                    if (importedApis.TryGetValue(name, out var imported))
+                    {
+                        var roleName = role == SunderPackageRoleMembership.App ? "app" : "runtime";
+                        if (!imported.ConsumerRoles.Contains(roleName, StringComparer.Ordinal))
+                            Add("di-use-required", $"'{name}' is not selected for {roleName}; explicitly review '{imported.PackageId}' consumerRoles.", at);
+                        else arguments.Add(new(parameter, requested, deferred));
+                        continue;
+                    }
                     if (apis.TryGetValue(name, out var api))
                     {
                         var hasContext = SunderRpcCSharpServiceApiEmitter.RequiresContext(api);
@@ -122,12 +152,13 @@ internal static class SunderPackageCompositionPlanner
                         {
                             Add("di-use-required", $"App injection of '{name}' requires explicit App-use intent for this public service.", at); continue;
                         }
-                        if (role == SunderPackageRoleMembership.Worker && hasContext && api.RuntimeUse is null)
+                        if (role == SunderPackageRoleMembership.Worker && (hasContext || api.ServiceType.TypeKind == TypeKind.Interface) && api.RuntimeUse is null)
                         {
                             Add("di-context-required", $"'{name}' has Host-context methods. Declare Runtime-use intent for broker-backed calls or use a context-free local service.", at); continue;
                         }
                         arguments.Add(new(parameter, requested, deferred));
-                        if (role == SunderPackageRoleMembership.Worker && SunderRpcCSharpServiceApiEmitter.HasLocalMethods(api)) Visit(api.ServiceType, at);
+                        if (role == SunderPackageRoleMembership.Worker && api.ServiceType.TypeKind == TypeKind.Class
+                            && SunderRpcCSharpServiceApiEmitter.HasLocalMethods(api)) Visit(api.ServiceType, at);
                         continue;
                     }
                     INamedTypeSymbol? dependency = null;
@@ -174,6 +205,11 @@ internal static class SunderPackageCompositionPlanner
                 || role == SunderPackageRoleMembership.App && type.ToDisplayString() is "Sunder.Sdk.Notifications.IPackageNotificationService"
                     or "Sunder.Sdk.Abstractions.IBackgroundProcessQueue" or "Sunder.Sdk.Abstractions.IPackageSettingsNavigationService"
                     or "Sunder.Sdk.Abstractions.IPackageShellViewService")
+            && type.ContainingAssembly.Identity.Name == "Sunder.Sdk"
+            && type.ContainingAssembly.Identity.Version == typeof(Sunder.Sdk.Abstractions.IPackageContext).Assembly.GetName().Version;
+
+    private static bool IsProviderCatalog(INamedTypeSymbol type)
+        => type.MetadataName == "IServiceProviders`1" && type.ContainingNamespace.ToDisplayString() == "Sunder.Sdk.Services"
             && type.ContainingAssembly.Identity.Name == "Sunder.Sdk"
             && type.ContainingAssembly.Identity.Version == typeof(Sunder.Sdk.Abstractions.IPackageContext).Assembly.GetName().Version;
 

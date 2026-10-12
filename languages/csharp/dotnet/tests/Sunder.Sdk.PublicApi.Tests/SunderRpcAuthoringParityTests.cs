@@ -645,7 +645,29 @@ public sealed class SunderRpcAuthoringParityTests
         Assert.Equal(projection.GetProperty("receiptPresence").GetString(), receiptPresence);
         Assert.Equal(lockPresence, receiptPresence);
         var lockSha256 = Sha256(File.ReadAllBytes(ResolveMetadataPath(projection.GetProperty("lockPath").GetString()!)));
-        Assert.Equal(projection.GetProperty("lockSha256").GetString(), lockSha256);
+        // The parity ledger pins the historical pre-role/projection-pin image. Keep that
+        // oracle immutable and separately verify the revised current lock bytes.
+        var historical = JsonNode.Parse(lockFile.RootElement.GetRawText())!;
+        foreach (var import in historical["packageImports"]!.AsObject())
+        {
+            Assert.Equal(new[] { "runtime" }, import.Value!["consumerRoles"]!.AsArray().Select(value => value!.GetValue<string>()));
+            import.Value.AsObject().Remove("consumerRoles");
+        }
+        foreach (var artifact in historical["packageArtifacts"]!.AsObject())
+        {
+            var current = lockFile.RootElement.GetProperty("packageArtifacts").GetProperty(artifact.Key);
+            Assert.InRange(current.GetProperty("modelProjectionBytes").GetInt32(), 1, 4_194_304);
+            Assert.Matches("^[a-f0-9]{64}$", current.GetProperty("modelProjectionSha256").GetString()!);
+            var receiptArtifact = FindByStringProperty(receipt.RootElement.GetProperty("packageArtifacts"), "packageId", artifact.Key);
+            Assert.Equal(current.GetProperty("modelProjectionBytes").GetInt32(), receiptArtifact.GetProperty("modelProjectionBytes").GetInt32());
+            Assert.Equal(current.GetProperty("modelProjectionSha256").GetString(), receiptArtifact.GetProperty("modelProjectionSha256").GetString());
+            artifact.Value!.AsObject().Remove("modelProjectionBytes");
+            artifact.Value.AsObject().Remove("modelProjectionSha256");
+        }
+        var historicalBytes = Encoding.UTF8.GetBytes(historical.ToJsonString(new JsonSerializerOptions
+            { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + "\n");
+        Assert.Equal(projection.GetProperty("lockSha256").GetString(), Sha256(historicalBytes));
+        Assert.Equal("6ea46e7a2e9dcfc2b04f221224cb61434dcc181bc53f540fe3b3f9527f36a93e", lockSha256);
         Assert.Equal(lockSha256, receipt.RootElement.GetProperty("lockSha256").GetString());
 
         var coalescing = oracle.GetProperty("dependencyCoalescing");
@@ -1110,12 +1132,20 @@ public sealed class SunderRpcAuthoringParityTests
         AssertOwnedContractProjection(export, fixture, contract);
 
         using var schema = JsonDocument.Parse(File.ReadAllBytes(ResolveMetadataPath(input.GetProperty("projectExportSchema").GetString()!)));
-        string[] rootMembers = ["schemaVersion", "producer", "projectIdentity", "configuration", "targetFramework", "inputFingerprint", "lockSha256", "packageId", "contracts"];
+        string[] rootMembers = ["schemaVersion", "producer", "projectIdentity", "configuration", "targetFramework", "inputFingerprint", "lockSha256", "packageId", "packageVersion", "contracts"];
         Assert.Equal(rootMembers, schema.RootElement.GetProperty("required").EnumerateArray().Select(StringValue));
-        Assert.Equal(rootMembers, schema.RootElement.GetProperty("properties").EnumerateObject().Select(property => property.Name));
-        Assert.Equal(rootMembers.Length, schema.RootElement.GetProperty("maxProperties").GetInt32());
+        Assert.Equal(rootMembers.Prepend("roleUses"), schema.RootElement.GetProperty("properties").EnumerateObject().Select(property => property.Name));
+        Assert.Equal(rootMembers.Length + 1, schema.RootElement.GetProperty("maxProperties").GetInt32());
+        var roleUses = schema.RootElement.GetProperty("properties").GetProperty("roleUses");
+        Assert.Equal("array", roleUses.GetProperty("type").GetString());
+        Assert.Equal("authoring-receipt.schema.json#/$defs/roleUse", roleUses.GetProperty("items").GetProperty("$ref").GetString());
         var required = schema.RootElement.GetProperty("$defs").GetProperty("exportedContract").GetProperty("required").EnumerateArray().Select(StringValue).Order(StringComparer.Ordinal);
-        Assert.Equal(export.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal), required);
+        Assert.False(export.TryGetProperty("modelProjection", out _)); // Frozen source/descriptor oracle remains its original image.
+        Assert.Equal(export.EnumerateObject().Select(property => property.Name).Append("modelProjection").Order(StringComparer.Ordinal), required);
+        var currentProperties = schema.RootElement.GetProperty("$defs").GetProperty("exportedContract").GetProperty("properties");
+        Assert.Equal("rpc-model-projection.schema.json#/$defs/modelProjection", currentProperties.GetProperty("modelProjection").GetProperty("$ref").GetString());
+        Assert.Contains("methodPolicies", currentProperties.EnumerateObject().Select(property => property.Name));
+        Assert.DoesNotContain("methodPolicies", required);
 
         var records = shape.GetProperty("expectedRecords");
         AssertReceiptContractProjection(records.GetProperty("contracts").EnumerateArray().Single(), contract);
@@ -1187,7 +1217,7 @@ public sealed class SunderRpcAuthoringParityTests
         var transformed = ApplyTransformations(lockBase.RootElement, input.GetProperty("lockTransformations"));
         var records = shape.GetProperty("expectedRecords");
         var contract = records.GetProperty("contracts")[0];
-        AssertJsonEqual(FindByStringProperty(receipt.RootElement.GetProperty("contracts"), "contractKey", ContractKey(contract)), contract, "provider-import contract");
+        AssertJsonEqual(FindByStringProperty(HistoricalReceiptRecords(receipt.RootElement).GetProperty("contracts"), "contractKey", ContractKey(contract)), contract, "provider-import contract");
         AssertPackageArtifactMapProjection(transformed["packageArtifacts"]!.AsObject(), records.GetProperty("packageArtifacts"));
         AssertJsonEqual(ProjectPackageArtifactImports(records.GetProperty("packageArtifacts")), records.GetProperty("packageArtifactImports"), "provider artifact imports");
 
@@ -1225,7 +1255,7 @@ public sealed class SunderRpcAuthoringParityTests
         var transformed = ApplyTransformations(lockFile.RootElement, input.GetProperty("lockTransformations"));
         var records = shape.GetProperty("expectedRecords");
         var contract = records.GetProperty("contracts")[0];
-        AssertJsonEqual(FindByStringProperty(receipt.RootElement.GetProperty("contracts"), "contractKey", ContractKey(contract)), contract, "platform-import contract");
+        AssertJsonEqual(FindByStringProperty(HistoricalReceiptRecords(receipt.RootElement).GetProperty("contracts"), "contractKey", ContractKey(contract)), contract, "platform-import contract");
         Assert.Empty(records.GetProperty("packageArtifacts").EnumerateArray());
         Assert.Empty(transformed["packageArtifacts"]!.AsObject());
         Assert.Empty(transformed["packageImports"]!.AsObject());
@@ -1259,6 +1289,7 @@ public sealed class SunderRpcAuthoringParityTests
 
     private static void AssertFilteredReceipt(JsonElement receipt, JsonElement records, HashSet<string> selectedKeys, bool includePackageFacade)
     {
+        receipt = HistoricalReceiptRecords(receipt);
         foreach (var name in new[] { "contracts", "bundles", "providers", "uses", "generatedBindings" })
             AssertJsonEqual(FilterByContractKeys(receipt.GetProperty(name), selectedKeys), records.GetProperty(name), $"receipt {name} projection");
         AssertJsonEqual(receipt.GetProperty("packageArtifacts"), records.GetProperty("packageArtifacts"), "receipt packageArtifacts");
@@ -1269,6 +1300,29 @@ public sealed class SunderRpcAuthoringParityTests
         if (includePackageFacade) AssertJsonEqual(receipt.GetProperty("generatedPackageFacades"), records.GetProperty("generatedPackageFacades"), "receipt generatedPackageFacades");
     }
 
+    private static JsonElement HistoricalReceiptRecords(JsonElement current)
+    {
+        // Reconstruct only the frozen record shape in memory. The current donor's
+        // required metadata is asserted separately; tracked oracle bytes stay intact.
+        var historical = JsonNode.Parse(current.GetRawText())!;
+        foreach (var contract in historical["contracts"]!.AsArray())
+        {
+            var projection = contract!["modelProjection"]!.AsObject();
+            Assert.Equal(new[] { "models", "serviceReferences" }, projection.Select(pair => pair.Key));
+            _ = projection["models"]!.AsObject(); _ = projection["serviceReferences"]!.AsObject();
+            contract.AsObject().Remove("modelProjection");
+            if (contract["methodPolicies"] is { } policies) Assert.NotEmpty(policies.AsObject());
+            contract.AsObject().Remove("methodPolicies");
+        }
+        foreach (var artifact in historical["packageArtifacts"]!.AsArray())
+        {
+            Assert.InRange(artifact!["modelProjectionBytes"]!.GetValue<int>(), 1, 4_194_304);
+            Assert.Matches("^[a-f0-9]{64}$", artifact["modelProjectionSha256"]!.GetValue<string>());
+            artifact.AsObject().Remove("modelProjectionBytes"); artifact.AsObject().Remove("modelProjectionSha256");
+        }
+        return JsonSerializer.SerializeToElement(historical);
+    }
+
     private static void AssertPackageArtifactMapProjection(JsonElement map, JsonElement array)
     {
         Assert.Equal(map.EnumerateObject().Count(), array.GetArrayLength());
@@ -1276,7 +1330,9 @@ public sealed class SunderRpcAuthoringParityTests
         {
             var packageId = record.GetProperty("packageId").GetString()!;
             var item = map.GetProperty(packageId);
-            foreach (var property in item.EnumerateObject().Where(property => property.Name != "contracts"))
+            Assert.InRange(item.GetProperty("modelProjectionBytes").GetInt32(), 1, 4_194_304);
+            Assert.Matches("^[a-f0-9]{64}$", item.GetProperty("modelProjectionSha256").GetString()!);
+            foreach (var property in item.EnumerateObject().Where(property => property.Name is not ("contracts" or "modelProjectionBytes" or "modelProjectionSha256")))
                 AssertJsonEqual(property.Value, record.GetProperty(property.Name), $"package artifact {packageId}/{property.Name}");
             var contractMap = item.GetProperty("contracts");
             var contracts = record.GetProperty("contracts");

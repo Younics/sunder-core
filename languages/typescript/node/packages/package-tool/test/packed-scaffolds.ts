@@ -10,31 +10,40 @@ const exec = promisify(execFile);
 
 /** Exercise the actual npm entry point and installed template dependency graph outside the checkout. */
 export async function exercisePackedScaffolds(archives: readonly string[], creator: string): Promise<void> {
-  for (const preset of ["node", "react-node"]) {
+  for (const preset of ["node", "react-node"]) for (const language of ["ts", "js"]) {
     const root = await mkdtemp(resolve(tmpdir(), "sunder-packed-scaffold-"));
     const id = `packed.${preset.replaceAll("-", ".")}`;
     const name = `Packed ${preset}`;
     try {
-      await exec(process.execPath, [creator, root, "--preset", preset, "--package-id", id, "--package-name", name]);
+      await exec(process.execPath, [creator, root, "--preset", preset, "--language", language, "--package-id", id, "--package-name", name]);
       await assert.rejects(stat(resolve(root, "sunder-contracts.owned.json")), { code: "ENOENT" });
       const config = await readFile(resolve(root, "sunder.package.json"));
-      const source = await readFile(resolve(root, "src/rpc.ts"));
+      const source = await readFile(resolve(root, `src/services.${language}`));
       const lock = await readFile(resolve(root, "sunder-contracts.lock.json"));
       await exec("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...archives], { cwd: root });
+      const sdkRoot = resolve(root, "node_modules/@sunder/sdk");
+      const sdk = JSON.parse(await readFile(resolve(sdkRoot, "package.json"), "utf8"));
+      assert.equal(sdk.peerDependenciesMeta.react.optional, true);
+      if (preset === "node") await assert.rejects(stat(resolve(root, "node_modules/react")), { code: "ENOENT" });
+      for (const retired of ["dist/authoring.js", "test/historical-authoring.ts", "dist-test/test/historical-authoring.js"])
+        await assert.rejects(stat(resolve(sdkRoot, retired)), { code: "ENOENT" });
       const run = (script: string) => exec("npm", ["run", script], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
-      await run("contracts:accept"); await run("contracts:check");
+      await run("contracts:check");
       const baselinePath = resolve(root, "sunder-contracts.owned.json");
-      const baseline = await readFile(baselinePath);
-      assert.equal(JSON.parse(baseline.toString()).contracts.messages.current.contractVersion, "1.0.0");
+      await assert.rejects(stat(baselinePath), { code: "ENOENT" });
       await exec("npm", ["test"], { cwd: root });
+      // Check the emitted declaration closure with no Node ambient types and no
+      // skipLibCheck; a browser facade must not leak the Worker SDK entry point.
+      await writeFile(resolve(root, "browser-declarations.ts"), 'import {Self} from "#sunder/api"; import {createBrowserContext} from "@sunder/sdk/browser"; const owner=createBrowserContext(Self); const result:Promise<string>=owner.api(Self).messages.send("browser"); void result; owner.dispose();\n');
+      await writeFile(resolve(root, "tsconfig.browser-declarations.json"), JSON.stringify({ compilerOptions: {
+        target: "ES2023", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2023", "DOM", "DOM.Iterable"], types: [], strict: true, noEmit: true, skipLibCheck: false,
+      }, files: ["browser-declarations.ts"] }));
+      await exec(process.execPath, [resolve(root, "node_modules/typescript/bin/tsc"), "-p", "tsconfig.browser-declarations.json"], { cwd: root });
       await run("sunder:dev:once");
       await exerciseOwnedWorker(root, true, "1.0.0", { packageName: name, app: preset === "react-node" });
       await run("build");
       await exerciseOwnedWorker(root, false, "1.0.0", { packageName: name, app: preset === "react-node" });
-      assert.deepEqual(await readFile(baselinePath), baseline);
-      await assert.rejects(run("package"), /frozen|Freeze|freeze/);
-      await run("contracts:freeze");
-      const frozen = await readFile(baselinePath);
+      await assert.rejects(stat(baselinePath), { code: "ENOENT" });
       await run("package");
       assert.ok((await stat(resolve(root, `dist/${id}.1.0.0.sunderpkg`))).size > 0);
       const manifest = JSON.parse(await readFile(resolve(root, "dist/package/manifest/sunder-package.json"), "utf8"));
@@ -48,15 +57,15 @@ export async function exercisePackedScaffolds(archives: readonly string[], creat
         assert.equal(manifest.usesContracts[0].role, "app");
         assert.deepEqual(manifest.usesContracts[0].actions, ["discover", "invoke", "subscribe"]);
       }
-      assert.deepEqual(await readFile(baselinePath), frozen);
+      await assert.rejects(stat(baselinePath), { code: "ENOENT" });
       assert.deepEqual(await readFile(resolve(root, "sunder.package.json")), config);
-      assert.deepEqual(await readFile(resolve(root, "src/rpc.ts")), source);
+      assert.deepEqual(await readFile(resolve(root, `src/services.${language}`)), source);
       assert.deepEqual(await readFile(resolve(root, "sunder-contracts.lock.json")), lock);
       assert.equal((await readdir(resolve(root, ".sunder/generated/rpc"))).includes("example-messages.g.ts"), false);
       // A strict project typecheck and the source prepass both reject invalid ordinary handlers.
-      await writeFile(resolve(root, "src/rpc.ts"), source.toString().replace("return { message: `Hello from ${packageName}: ${request.message}` };", "return { message: 42 };"));
+      await writeFile(resolve(root, `src/services.${language}`), source.toString().replace("return `Hello from ${packageName}: ${message}`;", "return 42;"));
       await assert.rejects(run("build"), /handler-incomplete/);
-      assert.deepEqual(await readFile(baselinePath), frozen);
+      await assert.rejects(stat(baselinePath), { code: "ENOENT" });
     } finally { await rm(root, { recursive: true, force: true }); }
   }
 }

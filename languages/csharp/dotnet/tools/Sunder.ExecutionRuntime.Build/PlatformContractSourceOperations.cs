@@ -9,6 +9,7 @@ using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.ExecutionRuntime.Build;
 
@@ -134,7 +135,7 @@ internal sealed class PlatformContractSourceOperations
         if (_baseline is null)
         {
             var descriptor = contracts.Count == 1 && contracts[0].ContractKey == StackKey
-                && contracts[0].Exposure == SunderRpcExposure.Public ? contracts[0].Descriptor : null;
+                && contracts[0].Exposure == SunderServiceExposure.Public ? contracts[0].Descriptor : null;
             if (descriptor is null || descriptor.ContractId != StackId || descriptor.Version != InitialStackVersion
                 || descriptor.DescriptorVersion != 1 || descriptor.SchemaProfile != "sunder.rpc.values.v1"
                 || descriptor.Sha256 != "38c8f49840f951aec29398d3641ff2306c906aee12ea80c2277db734bce49898"
@@ -169,12 +170,12 @@ internal sealed class PlatformContractSourceOperations
         SunderRpcAuthoringDocuments.ValidateCompiledContracts(baseline, contracts);
         var bytes = SunderPlatformContractCatalog.Create(
             catalogRelease, contracts.Select(static contract => contract.Descriptor).ToArray());
-        var destination = SigningFileOperations.NormalizePath(outputPath);
+        var destination = EngineeringFileOperations.NormalizePath(outputPath);
         // Conservatively protect case aliases even on case-sensitive macOS/Windows volumes.
         if (destination.StartsWith(Path.Combine(_coreRoot, "languages") + Path.DirectorySeparatorChar,
                 OperatingSystem.IsMacOS() || OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             throw new InvalidDataException("Platform catalog output must be outside Core language source trees.");
-        var parent = SigningFileOperations.EnsureDirectory(Path.GetDirectoryName(destination)!);
+        var parent = EngineeringFileOperations.EnsureDirectory(Path.GetDirectoryName(destination)!);
         var parentCreated = Directory.GetCreationTimeUtc(parent);
         CheckDestination();
         _cancellationToken.ThrowIfCancellationRequested();
@@ -182,7 +183,7 @@ internal sealed class PlatformContractSourceOperations
         VerifyInputs();
         CheckDestination();
         var stage = Path.Combine(parent, $".{Path.GetFileName(destination)}.catalog-{Guid.NewGuid():N}");
-        SigningFileOperations.FileStamp? owned = null;
+        EngineeringFileOperations.FileStamp? owned = null;
         try
         {
             await using (var stream = new FileStream(stage, FileMode.CreateNew, FileAccess.Write, FileShare.None,
@@ -190,16 +191,16 @@ internal sealed class PlatformContractSourceOperations
             {
                 await stream.WriteAsync(bytes, _cancellationToken);
                 stream.Flush(flushToDisk: true);
-                owned = SigningFileOperations.ObserveFile(stage);
+                owned = EngineeringFileOperations.ObserveFile(stage);
             }
             beforePublication?.Invoke(stage);
-            var staged = await SigningFileOperations.ReadStableAsync(stage, bytes.Length, _cancellationToken);
-            if (!staged.AsSpan().SequenceEqual(bytes) || SigningFileOperations.ObserveFile(stage) != owned)
+            var staged = await EngineeringFileOperations.ReadStableAsync(stage, bytes.Length, _cancellationToken);
+            if (!staged.AsSpan().SequenceEqual(bytes) || EngineeringFileOperations.ObserveFile(stage) != owned)
                 throw new IOException("Platform catalog stage changed before publication.");
             VerifyInputs();
             CheckDestination();
-            var finalBytes = await SigningFileOperations.ReadStableAsync(stage, bytes.Length, _cancellationToken);
-            if (!finalBytes.AsSpan().SequenceEqual(bytes) || SigningFileOperations.ObserveFile(stage) != owned)
+            var finalBytes = await EngineeringFileOperations.ReadStableAsync(stage, bytes.Length, _cancellationToken);
+            if (!finalBytes.AsSpan().SequenceEqual(bytes) || EngineeringFileOperations.ObserveFile(stage) != owned)
                 throw new IOException("Platform catalog stage changed during input verification.");
             _cancellationToken.ThrowIfCancellationRequested();
             File.Move(stage, destination, overwrite: false);
@@ -207,15 +208,15 @@ internal sealed class PlatformContractSourceOperations
         }
         finally
         {
-            SigningFileOperations.TryDeleteOwnedFile(stage, owned, Convert.ToHexStringLower(SHA256.HashData(bytes)));
+            EngineeringFileOperations.TryDeleteOwnedFile(stage, owned, Convert.ToHexStringLower(SHA256.HashData(bytes)));
         }
 
         void CheckDestination()
         {
-            SigningFileOperations.EnsureDirectory(parent);
+            EngineeringFileOperations.EnsureDirectory(parent);
             if (Directory.GetCreationTimeUtc(parent) != parentCreated)
                 throw new IOException("Platform catalog output parent changed after planning.");
-            SigningFileOperations.EnsureAbsent(destination);
+            EngineeringFileOperations.EnsureAbsent(destination);
         }
     }
 
@@ -393,7 +394,7 @@ internal sealed class PlatformContractSourceOperations
             "System.Linq", "System.ObjectModel", "System.Threading", "System.Threading.Tasks", "System.Memory",
             "System.Text.Json", "System.Net.Http"];
         return names.Select(name => Path.Combine(runtime, name + ".dll"))
-            .Append(typeof(SunderRpcServiceAttribute).Assembly.Location)
+            .Append(typeof(SunderServiceAttribute).Assembly.Location)
             .Select(GeneratedOutputPathSafety.NormalizeTrustedSystemAliases).ToArray();
     }
 }

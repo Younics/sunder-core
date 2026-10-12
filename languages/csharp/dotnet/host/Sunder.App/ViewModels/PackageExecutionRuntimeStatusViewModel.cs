@@ -1,4 +1,3 @@
-using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.ViewModels;
@@ -15,8 +14,8 @@ public sealed class PackageExecutionRuntimeStatusViewModel
     {
         Identity = binding.Runtime;
         Role = binding.Role;
-        Title = $"{binding.Runtime.RuntimeId} {binding.Runtime.Version}";
-        TargetText = $"{binding.Role} | {binding.Runtime.Rid} | revision {binding.Runtime.PackagingRevision}";
+        Title = $"{Services.RuntimeManagementUi.Family(binding.Runtime.RuntimeId)} {binding.Runtime.VendorVersion}";
+        TargetText = $"{binding.Role} | {binding.Runtime.Rid} | {Services.RuntimeManagementUi.Source(binding.Runtime)}";
         StatusText = statusText;
         DetailText = detailText;
         ShowWarning = showWarning;
@@ -51,7 +50,7 @@ public sealed class PackageExecutionRuntimeStatusViewModel
             return new(
                 binding,
                 "Missing",
-                "The exact bound execution runtime is missing. Restore that exact trusted runtime and reload every dependent package.",
+                "The exact bound runtime is missing. Restore it from its official source, verify its vendor checksum, and reload every dependent package.",
                 showWarning: true,
                 canRepair: true,
                 actionText: "Restore");
@@ -69,44 +68,12 @@ public sealed class PackageExecutionRuntimeStatusViewModel
                 canRepair: true);
         }
 
-        var lifecycle = runtime.Lifecycle.State;
-        if (lifecycle == RuntimeExecutionRuntimeLifecycleStates.PolicyRequired)
+        if (runtime.Support.State != RuntimeExecutionRuntimeSupportState.Supported)
         {
             return new(
                 binding,
-                "Policy required",
-                runtime.Lifecycle.PolicyMessage
-                ?? "Trusted Registry lifecycle policy is required before new packages can bind this runtime.",
-                showWarning: true,
-                canRepair: false);
-        }
-        if (lifecycle == ExecutionRuntimeLifecycleStates.Revoked)
-        {
-            return new(
-                binding,
-                "Revoked",
-                runtime.Lifecycle.PolicyMessage
-                ?? "Registry policy revoked this runtime. Update the package before activating it.",
-                showWarning: true,
-                canRepair: false);
-        }
-        if (lifecycle == ExecutionRuntimeLifecycleStates.Retired)
-        {
-            return new(
-                binding,
-                "Retired",
-                runtime.Lifecycle.PolicyMessage
-                ?? "This runtime is retired. Update the package to a supported runtime.",
-                showWarning: true,
-                canRepair: false);
-        }
-        if (lifecycle == ExecutionRuntimeLifecycleStates.Deprecated)
-        {
-            return new(
-                binding,
-                "Deprecated",
-                runtime.Lifecycle.PolicyMessage
-                ?? "This runtime remains usable but should be replaced by a package update.",
+                runtime.Support.State == RuntimeExecutionRuntimeSupportState.EndOfLife ? "End of support" : "Support unknown",
+                runtime.Support.Message ?? "Check Package Runtimes for an eligible official update.",
                 showWarning: true,
                 canRepair: false);
         }
@@ -123,7 +90,7 @@ public sealed class PackageExecutionRuntimeStatusViewModel
         return new(
             binding,
             "Compatible",
-            "The exact signed execution runtime is installed, healthy, and supported.",
+            "The exact official runtime is installed and verified against its vendor checksum.",
             showWarning: false,
             canRepair: false);
     }

@@ -222,7 +222,8 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
     private static string FormatFooterStatus(BackgroundProcessSnapshot snapshot)
         => snapshot.State switch
         {
-            BackgroundProcessState.Queued => $"Queued: {snapshot.Title}",
+            BackgroundProcessState.Queued => string.IsNullOrWhiteSpace(snapshot.StatusText) || snapshot.StatusText == "Queued"
+                ? $"Queued: {snapshot.Title}" : snapshot.StatusText,
             BackgroundProcessState.Cancelling => "Cancelling...",
             _ => string.IsNullOrWhiteSpace(snapshot.StatusText) ? snapshot.Title : snapshot.StatusText,
         };
@@ -285,7 +286,7 @@ public sealed partial class BackgroundProcessItemViewModel : ViewModelBase
     private static string FormatStatus(BackgroundProcessSnapshot snapshot)
         => snapshot.State switch
         {
-            BackgroundProcessState.Queued => "Queued",
+            BackgroundProcessState.Queued => string.IsNullOrWhiteSpace(snapshot.StatusText) ? "Queued" : snapshot.StatusText,
             BackgroundProcessState.Running => string.IsNullOrWhiteSpace(snapshot.StatusText) ? "Running" : snapshot.StatusText,
             BackgroundProcessState.Cancelling => "Cancelling",
             _ => snapshot.StatusText,
@@ -297,6 +298,7 @@ public sealed partial class BackgroundProcessItemViewModel : ViewModelBase
         if (PackageOperationMetadata.TryCreate(snapshot.Metadata, out var packageMetadata))
         {
             parts.Add(packageMetadata.DisplayName);
+            if (packageMetadata.PackageIds.Count > 1) parts.Add(string.Join(", ", packageMetadata.PackageIds));
         }
         else if (PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var packageProcessMetadata))
         {

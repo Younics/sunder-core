@@ -23,7 +23,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var sources = ResolvePhysicalTemporaryPath(scope.CreateDirectory("linked"));
         var repository = FindRepositoryRoot();
         var baseline = Path.Combine(repository, "languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ImplementationFirstRpc");
-        foreach (var file in new[] { "sunder-contracts.owned.json", "sunder-contracts.lock.json" }) File.Copy(Path.Combine(baseline, file), Path.Combine(root, file));
+        File.Copy(Path.Combine(baseline, "sunder-contracts.lock.json"), Path.Combine(root, "sunder-contracts.lock.json"));
         var hostRid = RuntimeInformation.RuntimeIdentifier;
         var otherRid = hostRid == "linux-x64" ? "win-x64" : "linux-x64";
         await File.WriteAllTextAsync(Path.Combine(sources, "Host.cs"), Flavor("host"));
@@ -72,7 +72,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Assert.Equal("other", Constant(Worker("net10.0", otherRid), "Value"));
         using (var plan = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(root, "obj/Debug/net10.0/sunder-analysis", otherRid, "sunder-rpc/package-role-plan.v1.json"))))
             Assert.Equal(otherRid, plan.RootElement.GetProperty("runtimeIdentifier").GetString());
-        AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-p:TargetFramework=net10.0", "-t:FreezeSunderContracts;PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet"]));
+        AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-p:TargetFramework=net10.0", "-t:PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet"]));
         var archive = Path.Combine(root, "bin/Debug/net10.0/TargetSelection.7.6.5.sunderpkg");
         var inspection = await SunderPackageArchiveInspector.ExtractAndValidateAsync(archive, scope.GetPath("extracted"));
         Assert.True(inspection.Success, string.Join(Environment.NewLine, inspection.Errors));

@@ -152,7 +152,8 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         var manifestTargets = PackageTargetBuilder.StampRpcCapabilities(
             targets,
             contracts.RpcRoles,
-            Log);
+            Log,
+            contracts.ExtendedDeadlineRoles);
         if (manifestTargets is null) return false;
 
         var manifest = new SunderPackageManifest

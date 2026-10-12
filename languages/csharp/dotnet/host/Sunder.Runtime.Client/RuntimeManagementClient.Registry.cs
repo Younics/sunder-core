@@ -32,7 +32,10 @@ public sealed partial class RuntimeManagementClient
         => PostAsync<RuntimeRegistryUpdateRequest, RuntimeRegistryPackageChangeResult>("registry/packages/update", request, token);
 
     public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken token = default)
-        => PostAsync<RuntimeRegistrySourceAdoptionRequest, RuntimeRegistryPackageChangeResult>("registry/packages/adopt-source", request, token);
+        => request.RuntimePrerequisiteExpectation is null
+            ? PostAsync<RuntimeRegistrySourceAdoptionRequest, RuntimeRegistryPackageChangeResult>("registry/packages/adopt-source", request, token)
+            : PostAsync<RuntimeRegistrySourceAdoptionRequest, RuntimeRegistryPackageChangeResult>("registry/packages/adopt-source", request,
+                RuntimeProtocolFeatures.PackageInstallResumptionV1, token);
 
     public async Task<RegistryPublishPackageResponse> PublishRegistryPackageAsync(
         string origin, string packagePath, bool setLatest, CancellationToken token = default)

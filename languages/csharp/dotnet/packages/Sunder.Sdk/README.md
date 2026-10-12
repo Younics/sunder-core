@@ -15,9 +15,18 @@ Runtime contains file-store paths beneath their package root and rejects symboli
 
 `Sunder.Sdk` contains the public contracts used to build Sunder packages.
 
+Normal service authoring uses `Sunder.Sdk.Services`: `[SunderService]`, ordinary public async methods,
+business records authored once and generated service injection. Services default to
+package-private. Optional `SunderMethod`, `SunderServiceError` and value metadata
+preserve deliberate names and semantics. Private versions follow the
+full package version; public contracts retain explicit reviewed evolution. See the
+[ordinary-service guide](https://github.com/Younics/sunder-core/blob/main/docs/package-development/ORDINARY-SERVICES.md)
+for role-reviewed imported services and explicit baseline/lock migrations. The older
+RPC-prefixed authoring declarations are removed; Services is the sole source surface.
+
 Avalonia view/settings contracts and theme resources are distributed separately in `Sunder.Sdk.Avalonia`. Stack import/export and Stack contributor contracts are distributed separately in `Sunder.Sdk.Stacks`. Standalone .NET Runtime workers use the exact coordinated `Sunder.Sdk.Worker` package.
 
-Use this package for App lifecycle roles, shared package contracts, schema-first RPC, and package-scoped capability abstractions. Runtime executables use `Sunder.Sdk.Worker`, which depends on the exact coordinated `Sunder.Sdk` version. Add `Sunder.Sdk.Avalonia` only for Avalonia views/settings and theme resources.
+Use this package for ordinary services, App lifecycle roles, shared values and package-scoped capability abstractions. Runtime executables use `Sunder.Sdk.Worker`, which depends on the exact coordinated `Sunder.Sdk` version. Add `Sunder.Sdk.Avalonia` only for Avalonia views/settings and theme resources.
 
 SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK requirements automatically; see `docs/SUNDER-SDK-COMPATIBILITY.md` in the Sunder Core repository for the full policy.
 
@@ -57,7 +66,7 @@ Decision summary:
 | Need | Package/tool |
 | --- | --- |
 | Worker V1 Runtime leaf | `Sunder.Sdk.Worker` |
-| App or Protocol project | `Sunder.Sdk` |
+| Canonical package source and App contracts | `Sunder.Sdk` |
 | Avalonia views/settings | Add `Sunder.Sdk.Avalonia` to that App leaf |
 | Stack contributor | Add `Sunder.Sdk.Stacks` to the implementing leaf |
 | Canonical C# build/archive | `Sunder.Package.Build` with `PrivateAssets="all"` |
@@ -71,9 +80,9 @@ A Sunder package is one universal archive with shared content and exact App/Runt
 Typical package projects:
 
 - Target `net10.0`.
-- Reference `Sunder.Sdk.Worker` from Worker leaves and `Sunder.Sdk` from App or Protocol projects.
+- Reference the coordinated SDK packages; generated Worker roles use `Sunder.Sdk.Worker`.
 - Reference `Sunder.Package.Build` with `PrivateAssets="all"`.
-- Set `SunderPackagePrimaryProject=true` on the canonical Worker/package csproj; a separate Aggregate wrapper is not needed.
+- Set `SunderPackageProject=true` on the one authored Library project; Sunder generates isolated Worker and optional App roles.
 - Reference `Sunder.Sdk.Avalonia` and Avalonia packages only when they register Avalonia UI behavior.
 - Do not reference `Sunder.App` or `Sunder.Runtime.Host`.
 
@@ -226,27 +235,89 @@ Runtime applies the declared rewrites atomically under the document lock, retain
 
 `Storage.RoleLocalWorkspace` provides paths for APIs such as SQLite, process working directories, and atomic directory trees. It belongs to the current package activation and host role. App and Runtime workspaces are separate, the host owns their lifecycle, and package code must not dispose the capability.
 
-## Owner And Cross-Package RPC
+<a id="owner-and-cross-package-rpc"></a>
 
-Implementation-first C# contracts use the declarative types in `Sunder.Sdk.Rpc`.
-Mark an ordinary class or interface with `SunderRpcService`, mark its RPC methods
-with `SunderRpcMethod`, and describe named values with `SunderRpcDefinition` plus
-the closed facet, transparent-wrapper, numeric-enum, union, discriminator, and
-variant attributes. A concrete annotated partial class is the normal one-service/
-one-provider shorthand. Use `SunderRpcProvider(typeof(IService))` only for a
-separately declared service interface or an explicit multi-provider binding.
-These attributes contain no compiler or runtime reflection behavior. They are the
-frozen SDK input for the coordinated `Sunder.Package.Build` source-compiler
-cutover; until that compiler lands, annotations alone do not produce package RPC
-artifacts and the descriptor-backed build path below remains active.
+## Owner And Cross-Package Services
 
-Use `Sunder.Sdk.Rpc` for App-to-Worker owner calls and cross-package Runtime calls. A package bundles every contract descriptor it provides or imports under `payload/shared`, declares the descriptor identity and hashes in `contractBundles`, declares maximum requested `discover`, `invoke`, and `subscribe` actions in `usesContracts`, and declares each provider in `provides`. Worker V1 registers the same manifest-declared provider identity through `SunderWorkerProviderRegistration`. Consumers receive a caller-scoped `ISunderRpcClient`; endpoint references identify one exact activation and never retarget a replacement.
+Ordinary C# authoring uses `Sunder.Sdk.Services`: mark a partial service with
+`SunderService` and inject its generated `I<Service>` interface. Public async methods
+and natural values define the service; optional `SunderMethod`, `SunderValue` and
+related metadata preserve explicit semantics. The canonical package ID determines
+the flat generated namespace. Selecting `sunder.package.agent`, for example, gives:
+
+```csharp
+using Sunder.Generated.Packages.Sunder_Package_Agent_Services;
+using Sunder.Generated.Packages.Sunder_Package_Agent_Models;
+```
+
+Inject `IPackageApi` for that selected package, or `IServiceProviders<IChatProviderService>`
+for business selection among authorized chat implementations. Catalog entries expose
+`.Service` for calls and `.Reference` for an exact-bound `ServiceReference<TService>`.
+They are borrowed values; DI owns their transport lifetime. `EnsureCurrentAsync`,
+`RetirementToken` and `TryReportInvariantViolationAsync` support genuine business
+validation, cancellation and invariant reporting. A retired entry never retargets.
+
+Author a business record once. Owned roles reuse it; imported Models are generated
+from validated package-wide projection metadata and share one model identity across
+contracts. Use generated init properties rather than maintaining mirrored records,
+JSON conversions or request wrappers. A class implementing several contracts repeats
+`SunderServiceProvider` with distinct provider IDs and uses explicit interface methods
+where signatures collide.
+
+Use `SunderContent.FromBytes`, `FromStream` or `FromFile` for content and
+`OpenReadAsync` to read it. Dispose content and opened streams normally; generated
+bindings own RPC registration and scopes. Sending retains the author's ownership.
+Received content stays bounded by cancellation, deadlines and receiver lifetime.
+For long operations, declare `[SunderMethod(TimeoutSeconds = 2100)]` on the contract
+method; the Host still clamps the requested deadline.
+
+Transient authority remains an ordinary `[JsonIgnore]` property. Add
+`SunderServiceMember` only to a public property deliberately transferred by generated
+service codecs; normal JSON still ignores it. A server `SunderRpcInvocationContext`
+belongs only on methods whose policy needs authenticated `Caller` information.
+Generated callers omit it. Type availability and typed references grant no access;
+reviewed role/action uses and Host authorization remain independent.
+
+Reference availability is strict by default. `[SunderOptionalServiceReference]`
+opts a transferred, direct nullable `ServiceReference<TService>` property into
+safe-absence-as-null handling; nullable syntax alone does not. Live references stay
+exact-bound, and optional dependency retirement does not itself cancel the outer
+call. Permission, malformed-metadata, unsafe-dispatch and caller-cancellation failures
+remain failures. Combine it with `[JsonIgnore, SunderServiceMember]` when the property
+is transient and deliberately transferred.
+
+An implementation can request minimal imported Runtime use with
+`[SunderRuntimeUse(typeof(IExecutionTargetService), Actions = ["discover"])]`.
+The canonical type must already belong to the validated import set. This declares
+discovery only, not invocation or inferred authority.
+
+For replayable content-output watches, the provider implementation may opt into
+`[SunderMethod(CompleteOnResponseContentRetirement = true)]`. Only authenticated
+retirement of its current response-registration authority becomes completion;
+consumers resnapshot/resume. The default is strict, and other failures propagate.
+This is provider-local policy, distinct from declaring-method `TimeoutSeconds`.
+
+Generated codecs use compiled model/collection JSON metadata without reflection
+accessor-cache retention of collectible package types. Normal methods need no
+authored `Unit` or empty-request record. This does not change arbitrary persistence
+serialization outside generated service paths.
+
+See the [ordinary-service guide](../../../../../docs/package-development/ORDINARY-SERVICES.md)
+for naming, provider selection, content ownership and public evolution.
+
+### Advanced RPC Boundary
+
+The earlier RPC-prefixed declaration attributes are removed; `Sunder.Sdk.Services`
+is the sole source-authoring namespace. The advanced broker, content-scope and wire
+APIs below retain their RPC namespace and semantics.
+
+Generated services use the advanced `Sunder.Sdk.Rpc` boundary underneath. Build tooling bundles every provided/imported descriptor under `payload/shared` and derives `contractBundles`, `usesContracts`, `provides` and Worker registrations from reviewed source/lock policy. Authors do not duplicate those records. Endpoint references identify one exact activation and never retarget a replacement.
 
 Descriptors are strict UTF-8 JSON with `descriptorVersion: 1`, exact `schemaProfile: "sunder.rpc.values.v1"`, strict SemVer contract versions, keyed services and methods, declared errors, and local `#/$defs/...` schema references. The supported Draft 2020-12 profile is deliberately closed: bounded ordinary strings and collections; closed case-sensitive records; portable JSON values and objects; safe integers; explicit `float32` and `float64` numbers; asserted string formats; exact big-integer and decimal strings; bounded base64 bytes; content references; local references; productive recursion; and unambiguous nullable or tagged `oneOf` unions. Remote references, bare `type: "number"`, legacy UUID/date-time logical types, unknown keywords, open records, unbounded ordinary values, unproductive recursion, duplicate or case-colliding names, and excessive descriptor depth/count/size are rejected during package validation.
 
 Descriptor hashes use deterministic JCS-compatible canonical JSON, while ABI hashes use the domain-separated structural RPC V1 identity. Every descriptor number must decode to a finite IEEE-754 binary64 value. Integer-valued keywords and safe-integer schema values remain mathematical integers in the inclusive range `-9007199254740991` through `9007199254740991`; floating-point schemas select their wire semantics explicitly with `format: "float32"` or `format: "float64"`.
 
-Runtime validates requests and responses/events against the same parsed descriptor. Grants are explicit, default-deny, durable, and fenced to the caller package version plus manifest hash. Revocation immediately removes discovery visibility and cancels active calls and subscriptions. Use `SunderRpcException` for bounded domain failures, `SunderRpcContentReference` for host-mediated large content, and the typed client extensions or `SunderRpcCSharpGenerator` for generated bindings.
+Runtime validates requests and responses/events against the same parsed descriptor. Grants are explicit, default-deny, durable, and fenced to the caller package version plus manifest hash. Revocation immediately removes discovery visibility and cancels active calls and subscriptions. `SunderRpcException` represents bounded domain failures. The raw content-reference and binding-generator APIs serve advanced transport integration; ordinary services use `SunderContent`.
 
 `SunderRpcCSharpGenerator.Generate(descriptor, namespaceName)` preserves the public generated surface. The overload accepting `SunderRpcCSharpAccessibility` can instead emit every top-level generated declaration as `Internal`; undefined enum values are rejected. Accessibility is uniform for one generated binding, so use internal mode only when its DTOs, provider interface, client, and handler stay in the same assembly behind intentional handwritten public contracts.
 
@@ -289,15 +360,19 @@ queue.Enqueue(new BackgroundProcessRequest(
 
 Request metadata and returned metadata are immutable snapshots. `ReportProgress` clamps finite values to 0 through 100 and rejects `NaN` and infinities. Terminal snapshots never advertise cancellation.
 
-## Package-Local Protocol
+<a id="package-local-protocol"></a>
 
-Sunder does not share package-authored CLR assemblies or expose package objects across activation boundaries. Define cross-package Runtime behavior with a schema-first RPC descriptor, bundle it in each package manifest, and use generated or hand-written package-local adapters over `ISunderRpcClient`.
+## Package Isolation
+
+Sunder does not share package-authored CLR assemblies or expose local objects across
+activation boundaries. Ordinary source defines cross-package behavior; tooling
+generates the canonical descriptors and independent role-local bindings.
 
 Discovery and watch results carry Host-stamped owner and activation identities. Endpoint references bind to one exact activation, so callers must rediscover after provider replacement. Keep CLR interfaces and implementations package-local; adapters such as `Sunder.Sdk.Stacks` translate those local calls to the public RPC ABI.
 
-Create an `ISunderRpcCallScope` when a call sends or receives content. Register request content against its exact endpoint, construct generated clients with the scope, and dispose the scope after all calls and response streams finish. Disposal cancels active scope work and revokes every remaining content reference.
-
-Providers receive a Host-created `SunderRpcInvocationContext`. Use its content methods to open caller content or register provider output; do not retain the context or streams beyond the handler or subscription. Invocation authority ends when that handler or stream ends. Providers may return `Domain` errors for contract-defined failures, but infrastructure error kinds are Host-authenticated and cannot be forged by package code.
+Generated bindings manage content scopes and reference transfer. Server context is
+Host-created and cannot be retained to extend invocation authority. Providers may
+return declared domain errors; infrastructure failures remain Host-authenticated.
 
 ## Callback Sessions
 
@@ -335,13 +410,21 @@ Example Avalonia usage:
 </Border>
 ```
 
-## Runtime Dependencies And Protocol Packages
+<a id="runtime-dependencies-and-protocol-packages"></a>
 
-Runtime package dependencies and NuGet protocol dependencies are separate concepts.
+## Runtime Dependencies And API Selection
 
-Use `[assembly: SunderPackageDependency(...)]` when your installed package requires another installed Sunder package at runtime.
+Select another package's API through the owning package tooling and retain its
+reviewed `sunder-contracts.lock.json`. Generated model/service namespaces derive
+from canonical package identity; no Protocol NuGet dependency is required.
 
-Keep descriptors, DTOs, generated bindings, and adapters in a non-packable package-local Protocol project by default. A coordinated package family may distribute a helper NuGet package, but it remains a build-time convenience and does not create shared Runtime type identity. Every Sunder package still bundles the language-neutral descriptor it uses, and cross-package calls travel through `ISunderRpcClient`.
+Use `[assembly: SunderPackageDependency(...)]` for an ordinary runtime dependency
+that is not already derived from an API selection.
+
+API selection derives package dependencies, descriptor bundles and reviewed role
+uses. It preserves the selected artifact's public model-projection metadata while
+Build and Pack remain offline. Keep business models and implementations in the one
+authored package project.
 
 ## Build And Publish
 

@@ -400,6 +400,81 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
     }
 
     [Fact]
+    public async Task DevWatcher_ImportHandoffCreationAndEditsReloadWithoutReplacingTheDirectory()
+    {
+        var folder = CreateDevPackageFolder();
+        var parent = Path.GetDirectoryName(folder)!;
+        var commits = 0;
+        var events = new RuntimeEventStreamService();
+        await using var watcher = CreateWatcher(folder, events, commit: (_, _) =>
+        {
+            Interlocked.Increment(ref commits);
+            return Task.FromResult(CreateReloadResult(true));
+        });
+        try
+        {
+            await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
+            var imports = folder + ".imports.v1.json";
+            await File.WriteAllTextAsync(imports, "first handoff");
+            await WaitUntilAsync(() => Volatile.Read(ref commits) > 0);
+            var previous = Volatile.Read(ref commits);
+            await File.WriteAllTextAsync(imports, "changed handoff");
+            await WaitUntilAsync(() => Volatile.Read(ref commits) > previous);
+        }
+        finally
+        {
+            await watcher.DisposeAsync();
+            TryDeleteDirectory(parent);
+        }
+    }
+
+    [Fact]
+    public async Task DevWatcher_WaitsForCompleteDirectoryAndImportHandoffPublication()
+    {
+        var folder = CreateDevPackageFolder();
+        var parent = Path.GetDirectoryName(folder)!;
+        var journal = folder + ".sunder-output-transaction.json";
+        var imports = folder + ".imports.v1.json";
+        await File.WriteAllTextAsync(journal, "publication in progress");
+        var stabilityStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishPublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stages = 0;
+        var committed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var watcher = new DevPackageWatchService(
+            (request, _) =>
+            {
+                Assert.False(File.Exists(journal));
+                Assert.Equal("complete", File.ReadAllText(imports));
+                Interlocked.Increment(ref stages);
+                return Task.FromResult(CreateStage(request.PackageIds));
+            },
+            (_, _) => { committed.TrySetResult(); return Task.FromResult(CreateReloadResult(true)); },
+            (_, _) => Task.FromResult(true), new RuntimeEventStreamService(), NullLogger<DevPackageWatchService>.Instance,
+            async (delay, token) =>
+            {
+                if (delay == DevPackageWatchService.DebounceDelay) await Task.Delay(50, token);
+                else { stabilityStarted.TrySetResult(); await finishPublication.Task.WaitAsync(token); }
+            });
+        try
+        {
+            await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
+            await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), "rebuilt");
+            await stabilityStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, Volatile.Read(ref stages));
+            await File.WriteAllTextAsync(imports, "complete");
+            File.Delete(journal);
+            finishPublication.TrySetResult();
+            await committed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            finishPublication.TrySetResult();
+            await watcher.DisposeAsync();
+            TryDeleteDirectory(parent);
+        }
+    }
+
+    [Fact]
     public void AppProductionCode_DoesNotWatchOrDiscoverPackageRoots()
     {
         var appRoot = Path.Combine(RepositoryRoot, "languages", "csharp", "dotnet", "host", "Sunder.App");

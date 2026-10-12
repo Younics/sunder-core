@@ -72,10 +72,13 @@ internal static class RecordedRuntimePhaseAssertions
         "Outcome",
         "DurationMs",
         "CorrelationId",
+        "RuntimeSourceId",
         "RuntimeId",
-        "RuntimeVersion",
-        "RuntimePackagingRevision",
+        "RuntimeVendorVersion",
         "RuntimeRid",
+        "RuntimeModuleAbi",
+        "RuntimeVendorChecksumAlgorithm",
+        "RuntimeVendorChecksumDigest",
         "Bytes",
         "CacheHit",
         "FailureType",
@@ -120,10 +123,13 @@ internal static class RecordedRuntimePhaseAssertions
 
     public static void Identity(RecordedLogEntry entry, ExecutionRuntimeIdentity identity)
     {
+        Assert.Equal(identity.SourceId, entry.Properties["RuntimeSourceId"]);
         Assert.Equal(identity.RuntimeId, entry.Properties["RuntimeId"]);
-        Assert.Equal(identity.Version, entry.Properties["RuntimeVersion"]);
-        Assert.Equal(identity.PackagingRevision, entry.Properties["RuntimePackagingRevision"]);
+        Assert.Equal(identity.VendorVersion, entry.Properties["RuntimeVendorVersion"]);
         Assert.Equal(identity.Rid, entry.Properties["RuntimeRid"]);
+        Assert.Equal(identity.ModuleAbi, entry.Properties["RuntimeModuleAbi"]);
+        Assert.Equal(identity.VendorChecksumAlgorithm, entry.Properties["RuntimeVendorChecksumAlgorithm"]);
+        Assert.Equal(identity.VendorChecksumDigest, entry.Properties["RuntimeVendorChecksumDigest"]);
     }
 
     public static string Flatten(RecordingLogSink sink)

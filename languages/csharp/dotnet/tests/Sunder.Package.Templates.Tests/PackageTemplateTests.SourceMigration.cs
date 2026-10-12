@@ -25,7 +25,7 @@ public sealed partial class PackageTemplateTests
         foreach (var (path, bytes) in expected) Assert.Equal(bytes, actual[path]);
     }
 
-    private static async Task VerifyTemplateRebuildAsync(string root, string project, string binding, byte[] baseline)
+    private static async Task VerifyTemplateRebuildAsync(string root, string project, string binding)
     {
         var generated = Path.GetDirectoryName(Path.GetDirectoryName(binding))!;
         var snapshot = Directory.EnumerateFiles(generated, "*", SearchOption.AllDirectories)
@@ -38,7 +38,7 @@ public sealed partial class PackageTemplateTests
         }
         AssertSuccess(await RunDotnetAsync(root, "build", project, "--no-restore", "-t:Rebuild", "--disable-build-servers"));
         Assert.True(File.Exists(binding));
-        Assert.Equal(baseline, await File.ReadAllBytesAsync(Path.Combine(root, "sunder-contracts.owned.json")));
+        Assert.False(File.Exists(Path.Combine(root, "sunder-contracts.owned.json")));
         Assert.False(File.Exists(Path.Combine(root, "sunder-package.json")));
     }
 

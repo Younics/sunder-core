@@ -485,6 +485,7 @@ public static class SunderPackageProjectionArchiveInspector
                 }
 
                 var pathText = path.ToString();
+                PackageContentIndexValidator.ValidateModelProjectionPath(pathText, errors);
                 if (previousPath is not null
                     && string.CompareOrdinal(previousPath, pathText) >= 0)
                 {
@@ -546,6 +547,7 @@ public static class SunderPackageProjectionArchiveInspector
         foreach (var actualFile in actualFiles)
         {
             var pathText = actualFile.Path.ToString();
+            PackageContentIndexValidator.ValidateModelProjectionPath(pathText, errors);
             if (MetadataPaths.Contains(pathText))
             {
                 continue;

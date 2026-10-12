@@ -29,13 +29,16 @@ internal sealed record SunderRpcLockedPackageArtifact(
     string? RegistryOrigin,
     int PublicContractCount,
     string PublicInventorySha256,
+    int ModelProjectionBytes,
+    string ModelProjectionSha256,
     IReadOnlyDictionary<string, SunderRpcLockedArtifactContract> Contracts);
 
 internal sealed record SunderRpcLockedPackageImport(
     string PackageId,
     string LocalName,
     string Presence,
-    IReadOnlyList<string> RequiredContracts);
+    IReadOnlyList<string> RequiredContracts,
+    IReadOnlyList<string> ConsumerRoles);
 
 internal sealed record SunderRpcLockedProviderImport(
     string Key,
@@ -85,8 +88,20 @@ internal static partial class SunderRpcAuthoringDocuments
         => ParseContractLock(SunderRpcDescriptorFileReader.ReadStableBytes(path, MaximumContractLockBytes, "Sunder contract lock"), allowDevelopmentRegistryOrigin);
 
     internal static SunderRpcContractLock ParseContractLock(byte[] bytes, bool allowDevelopmentRegistryOrigin = false)
+        => ParseContractLockCore(bytes, allowDevelopmentRegistryOrigin);
+
+    // One-shot unreleased V1 reselection input only. The result cannot be restored,
+    // compiled or committed: Update must replace every unpinned selected artifact
+    // and pass the ordinary strict reader before publishing the proposed lock.
+    internal static SunderRpcContractLock ReadContractLockForArtifactUpdate(
+        string path, string? packageId, bool allowDevelopmentRegistryOrigin)
+        => ParseContractLockCore(SunderRpcDescriptorFileReader.ReadStableBytes(path, MaximumContractLockBytes,
+            "Sunder contract lock update input"), allowDevelopmentRegistryOrigin, artifactUpdate: true, updatePackageId: packageId);
+
+    private static SunderRpcContractLock ParseContractLockCore(byte[] bytes, bool allowDevelopmentRegistryOrigin,
+        bool artifactUpdate = false, string? updatePackageId = null)
     {
-        var root = ParseStrictDocument(bytes, MaximumContractLockBytes, "Sunder contract lock");
+        var root = ParseStrictDocument(bytes, MaximumContractLockBytes, "Sunder contract lock", ValidatePresentConsumerRoles);
         using (root)
         {
             var document = root.RootElement;
@@ -98,7 +113,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 []);
             RequireInteger(document, "lockVersion", 1, "contract lock");
 
-            var artifacts = ReadPackageArtifacts(document, allowDevelopmentRegistryOrigin);
+            var artifacts = ReadPackageArtifacts(document, allowDevelopmentRegistryOrigin, artifactUpdate, updatePackageId);
             var packageImports = ReadPackageImports(document);
             var providerImports = ReadProviderImports(document);
             var platformImports = ReadPlatformImports(document, allowDevelopmentRegistryOrigin);
@@ -139,7 +154,9 @@ internal static partial class SunderRpcAuthoringDocuments
 
     private static IReadOnlyDictionary<string, SunderRpcLockedPackageArtifact> ReadPackageArtifacts(
         JsonElement root,
-        bool allowDevelopmentRegistryOrigin)
+        bool allowDevelopmentRegistryOrigin,
+        bool artifactUpdate = false,
+        string? updatePackageId = null)
     {
         var map = RequireProperty(root, "packageArtifacts", JsonValueKind.Object, "contract lock");
         var properties = ReadOrderedLockMap(map, "contract lock packageArtifacts");
@@ -150,7 +167,8 @@ internal static partial class SunderRpcAuthoringDocuments
             result.Add(property.Name, ReadPackageArtifact(
                 property.Name,
                 property.Value,
-                allowDevelopmentRegistryOrigin));
+                allowDevelopmentRegistryOrigin,
+                artifactUpdate && (updatePackageId is null || updatePackageId == property.Name)));
         }
         return result;
     }
@@ -158,9 +176,16 @@ internal static partial class SunderRpcAuthoringDocuments
     private static SunderRpcLockedPackageArtifact ReadPackageArtifact(
         string packageId,
         JsonElement value,
-        bool allowDevelopmentRegistryOrigin)
+        bool allowDevelopmentRegistryOrigin,
+        bool allowPriorSelectionForUpdate = false)
     {
         var label = $"contract lock package artifact '{packageId}'";
+        if (value.ValueKind != JsonValueKind.Object) throw new InvalidDataException($"The {label} must be an object.");
+        var priorSelection = allowPriorSelectionForUpdate
+            && !value.TryGetProperty("modelProjectionBytes", out _) && !value.TryGetProperty("modelProjectionSha256", out _);
+        if (!priorSelection && (!value.TryGetProperty("modelProjectionBytes", out _) || !value.TryGetProperty("modelProjectionSha256", out _)))
+            throw ContractLockError("package-api.model-projection-reselection-required",
+                $"The {label} is missing required model projection pins. Explicitly update the selected artifact with the current canonical candidate; Build/Restore never infer pins.");
         RequireObject(
             value,
             label,
@@ -172,6 +197,8 @@ internal static partial class SunderRpcAuthoringDocuments
                 "registryOrigin",
                 "publicContractCount",
                 "publicInventorySha256",
+                "modelProjectionBytes",
+                "modelProjectionSha256",
                 "contracts",
             ],
             [
@@ -181,6 +208,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 "selectedPackageContentIdentity",
                 "publicContractCount",
                 "publicInventorySha256",
+                .. (priorSelection ? Array.Empty<string>() : new[] { "modelProjectionBytes", "modelProjectionSha256" }),
                 "contracts",
             ],
             ["registryOrigin"]);
@@ -208,6 +236,8 @@ internal static partial class SunderRpcAuthoringDocuments
             registryOrigin,
             publicContractCount,
             publicInventorySha256,
+            priorSelection ? 0 : RequireBoundedInteger(value, "modelProjectionBytes", 1, 4_194_304, label),
+            priorSelection ? string.Empty : RequireSha256(value, "modelProjectionSha256", label),
             contracts);
         ValidatePackagePublicInventory(artifact);
         return artifact;
@@ -296,11 +326,16 @@ internal static partial class SunderRpcAuthoringDocuments
             var packageId = property.Name;
             RequireCanonicalPackageId(packageId, "contract lock package import key");
             var label = $"contract lock package import '{packageId}'";
+            if (property.Value.ValueKind != JsonValueKind.Object) throw new InvalidDataException($"The {label} must be an object.");
+            if (!property.Value.TryGetProperty("consumerRoles", out var roles))
+                throw ContractLockError("package-api.consumer-roles-migration-required",
+                    $"{label} is missing consumerRoles. Run MigrateSunderPackageApiConsumerRoles; omitted review preserves Runtime-only intent. Build/Restore never migrate.");
+            var consumerRoles = ReadConsumerRoles(roles, label);
             RequireObject(
                 property.Value,
                 label,
-                ["localName", "presence", "requiredContracts"],
-                ["localName", "presence", "requiredContracts"],
+                ["localName", "presence", "requiredContracts", "consumerRoles"],
+                ["localName", "presence", "requiredContracts", "consumerRoles"],
                 []);
             var localName = RequireLocalName(property.Value, "localName", label);
             var presence = RequireOneOf(property.Value, "presence", label, "required", "optional");
@@ -330,10 +365,32 @@ internal static partial class SunderRpcAuthoringDocuments
                 requiredContracts.Add(contractId);
                 previous = contractId;
             }
-            result.Add(packageId, new(packageId, localName, presence, requiredContracts));
+            result.Add(packageId, new(packageId, localName, presence, requiredContracts, consumerRoles));
         }
         return result;
     }
+
+    internal static IReadOnlyList<string> ReadConsumerRoles(JsonElement value, string label)
+    {
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            var roles = value.EnumerateArray().Select(role => role.ValueKind == JsonValueKind.String ? role.GetString()! : "").ToArray();
+            if (roles.SequenceEqual(new[] { "app" }) || roles.SequenceEqual(new[] { "runtime" }) || roles.SequenceEqual(new[] { "app", "runtime" }))
+                return Array.AsReadOnly(roles);
+        }
+        throw ContractLockError("package-api.consumer-roles-invalid", $"{label} consumerRoles must be exactly [\"app\"], [\"runtime\"] or [\"app\",\"runtime\"].");
+    }
+
+    private static void ValidatePresentConsumerRoles(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("packageImports", out var imports) || imports.ValueKind != JsonValueKind.Object) return;
+        foreach (var import in imports.EnumerateObject())
+            if (import.Value.ValueKind == JsonValueKind.Object && import.Value.TryGetProperty("consumerRoles", out var roles)) _ = ReadConsumerRoles(roles, import.Name);
+    }
+
+    internal static IReadOnlyList<string> ParseConsumerRolesOption(string value)
+        => value is "app" or "runtime" or "app,runtime" ? Array.AsReadOnly(value.Split(','))
+            : throw ContractLockError("package-api.consumer-roles-invalid", "SunderPackageApiConsumerRoles must be app, runtime or app,runtime.");
 
     private static IReadOnlyDictionary<string, SunderRpcLockedProviderImport> ReadProviderImports(JsonElement root)
     {
@@ -520,7 +577,7 @@ internal static partial class SunderRpcAuthoringDocuments
             foreach (var contract in packageContracts)
             {
                 AddMaterializedBundle(bundles, contract);
-                uses.Add(("runtime", contract.ContractId, contract.ResolvedContractVersion));
+                foreach (var role in import.ConsumerRoles) uses.Add((role, contract.ContractId, contract.ResolvedContractVersion));
                 AddDependency(dependencies, contract.AuthorityId, AuthorityPin.From(contract));
             }
         }

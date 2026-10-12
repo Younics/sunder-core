@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { link, lstat, open, realpath, rename, unlink } from "node:fs/promises";
 import { dirname, parse, resolve, sep } from "node:path";
 import { readProjectDescriptorFile } from "./descriptor-files";
-import { parseBaseline, type OwnedBaseline } from "./rpc-baseline";
-import { MAX_BASELINE_BYTES } from "./rpc-baseline-json";
+import { parseBaseline, writeBaseline, type OwnedBaseline } from "./rpc-baseline";
+import { MAX_BASELINE_BYTES, object, parseOuter } from "./rpc-baseline-json";
+import { isPackageId, isSemanticVersion } from "@sunder/sdk";
 import { markerPath, withOutputLeases } from "./output";
+import { validateRoleUseEvidence } from "./rpc-owned-uses";
 
 export const BASELINE_FILE = "sunder-contracts.owned.json";
 export interface BaselineInput {
@@ -16,6 +18,26 @@ export interface BaselineInput {
 }
 export async function exists(path: string): Promise<boolean> {
   try { await lstat(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+}
+/** Absence may continue only from a complete modern private/import-only receipt. */
+export function assertBaselineFreeEvidence(bytes: Buffer, label: string, expectedPackageId?: string, kind: "receipt" | "export" = "receipt"): void {
+  try {
+    const value = object(parseOuter(bytes));
+    validateRoleUseEvidence(value,kind);
+    if (value.schemaVersion !== 1 || typeof value.packageId !== "string" || !isPackageId(value.packageId)
+      || expectedPackageId !== undefined && value.packageId !== expectedPackageId || typeof value.packageVersion !== "string" || !isSemanticVersion(value.packageVersion)
+      || !Array.isArray(value.contracts) || value.contracts.length > 128) throw new Error("Incomplete generation identity.");
+    const bundles = value.bundles === undefined ? undefined : Array.isArray(value.bundles) ? value.bundles.map(object) : undefined;
+    if (kind === "receipt" && (!bundles || bundles.length !== value.contracts.length)) throw new Error("Incomplete bundle evidence.");
+    for (const item of value.contracts) {
+      const contract = object(item);
+      if (contract.exposure !== "package" && contract.exposure !== "public" || typeof contract.contractVersion !== "string" || !isSemanticVersion(contract.contractVersion)) throw new Error("Incomplete contract identity.");
+      const source = contract.source ?? bundles?.find(bundle => bundle.contractKey === contract.contractKey)?.source;
+      if (kind === "export" && source !== "owned") throw new Error("Project exports require owned source evidence.");
+      if (source !== "owned" && source !== "imported") throw new Error("Incomplete ownership evidence.");
+      if (source === "owned" && (contract.exposure === "public" || contract.contractVersion !== value.packageVersion)) throw new Error("Retained owned contract requires its original baseline.");
+    }
+  } catch (error) { throw new Error(`rpc-authoring.baseline-drift: ${label}: restore the original owned baseline; incomplete, public or legacy generation evidence cannot bootstrap private absence.`, { cause: error }); }
 }
 // Normalize only OS-owned aliases, never an arbitrary project symlink. Directory
 // identity is retained across planning, lease acquisition and final publication.
@@ -57,6 +79,14 @@ export async function captureBaseline(root: string): Promise<BaselineInput> {
 export async function verifyFreshOwnedSource(root: string, input: BaselineInput): Promise<void> {
   await input.revalidate();
   if (input.baseline) return;
+  const marker = resolve(root, ".sunder/generated/rpc/owned-baseline.sha256");
+  if (await exists(marker) && (await readProjectDescriptorFile(root, marker, "Baseline marker", 128)).toString() === "absent\n") {
+    const receiptPath = resolve(root, ".sunder/generated/rpc/authoring-receipt.v1.json");
+    if (await exists(receiptPath)) {
+      assertBaselineFreeEvidence(await readProjectDescriptorFile(root, receiptPath, "Service receipt", 67_108_864), receiptPath);
+      return;
+    }
+  }
   for (const name of ["authoring-receipt.v1.json", "package-export.v1.json", "owned-baseline.sha256"]) {
     if (await exists(resolve(root, ".sunder/generated/rpc", name)))
       throw new Error("rpc-authoring.baseline-drift: Existing owned baseline is required; restore it before changing imports or accepting source with prior receipt/export evidence.");
@@ -69,7 +99,18 @@ export async function withBaselineLease<T>(input: BaselineInput, operation: () =
   return withOutputLeases([input.path], async () => { await input.revalidate(); return operation(); });
 }
 export async function commitBaseline(input: BaselineInput, proposal: Buffer, verifyInputs: () => Promise<void>): Promise<boolean> {
-  parseBaseline(proposal);
+  const parsed = parseBaseline(proposal);
+  if (input.baseline && parsed.packageId !== input.baseline.packageId) throw new Error("rpc-authoring.private-retirement-mutated: Baseline root authority cannot change.");
+  for (const [key, entry] of input.baseline?.retiredPrivateContracts ?? []) {
+    const after = parsed.retiredPrivateContracts?.get(key);
+    if (!after || !writeBaseline(parsed.packageId, new Map([[key, entry]])).equals(writeBaseline(parsed.packageId, new Map([[key, after]]))))
+      throw new Error(`rpc-authoring.private-retirement-mutated: ${key}: preserve complete original archived evidence.`);
+  }
+  for (const [key, entry] of parsed.retiredPrivateContracts ?? []) if (!input.baseline?.retiredPrivateContracts?.has(key)) {
+    const original = input.baseline?.contracts.get(key);
+    if (!original || parsed.contracts.has(key) || !writeBaseline(parsed.packageId, new Map([[key, original]])).equals(writeBaseline(parsed.packageId, new Map([[key, entry]]))))
+      throw new Error(`rpc-authoring.private-retirement-mutated: ${key}: archive additions must equal removed active before-images.`);
+  }
   return withBaselineLease(input, async () => {
     await verifyInputs(); await input.revalidate();
     if (input.baseline?.bytes.equals(proposal)) return false;

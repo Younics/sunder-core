@@ -1,3 +1,4 @@
+using Sunder.Generated.Packages.Docs_Sunder_Quickstart_Services;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Package.Quickstart.Views;
@@ -12,7 +13,7 @@ public sealed class QuickstartViewModel(IPackageContext context, IGreetingServic
 
     public async ValueTask<string> GreetAsync(string name, CancellationToken cancellationToken)
     {
-        var response = await greeting.CreateAsync(new GreetRequest { Name = new GreetingName { Value = name } }, cancellationToken);
-        return $"{response.Message.Value} Invocation {response.InvocationCount.Value}.";
+        var result = await greeting.GreetAsync(name, cancellationToken);
+        return $"{result.Message} Invocation {result.InvocationCount}.";
     }
 }

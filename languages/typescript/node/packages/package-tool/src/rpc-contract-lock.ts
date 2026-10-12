@@ -16,9 +16,17 @@ export interface ArtifactContract extends CacheRequirement {
 export interface PackageArtifact {
   readonly packageId: string; readonly requestedVersionRange: string; readonly includePrerelease: boolean;
   readonly selectedPackageVersion: string; readonly selectedPackageContentIdentity: string; readonly registryOrigin: string | undefined;
-  readonly publicContractCount: number; readonly publicInventorySha256: string; readonly contracts: ReadonlyMap<string, ArtifactContract>;
+  readonly publicContractCount: number; readonly publicInventorySha256: string;
+  readonly modelProjectionBytes: number; readonly modelProjectionSha256: string;
+  readonly contracts: ReadonlyMap<string, ArtifactContract>;
 }
-export interface PackageImport { readonly packageId: string; readonly localName: string; readonly presence: "required" | "optional"; readonly requiredContracts: readonly string[] }
+export type ConsumerRole = "app" | "runtime";
+export interface PackageImport { readonly packageId: string; readonly localName: string; readonly presence: "required" | "optional"; readonly requiredContracts: readonly string[]; readonly consumerRoles: readonly ConsumerRole[] }
+export function consumerRoles(value: unknown, selection = "package import"): readonly ConsumerRole[] {
+  if (!Array.isArray(value) || !['["app"]', '["runtime"]', '["app","runtime"]'].includes(JSON.stringify(value)))
+    contractError("package-api.consumer-roles-invalid", `${selection}: consumerRoles must be exactly ["app"], ["runtime"], or ["app","runtime"].`);
+  return Object.freeze([...value]) as readonly ConsumerRole[];
+}
 export interface ProviderImport { readonly key: string; readonly packageId: string; readonly contractId: string }
 export interface ContractLock {
   readonly exactBytes: Buffer; readonly sha256: string;
@@ -64,6 +72,14 @@ function map(value: OuterObject, field: string): readonly (readonly [string, Out
 }
 
 export function parseContractLock(bytes: Buffer, allowDevelopment = false): ContractLock {
+  return parseLock(bytes, allowDevelopment, false);
+}
+/** Selection-only reader for an explicit V1 reselection. Unpinned artifacts are
+ * not cache requirements/readiness; the proposed lock must pass the strict reader. */
+export function parseContractLockForReselection(bytes: Buffer, allowDevelopment = false): ContractLock {
+  return parseLock(bytes, allowDevelopment, true);
+}
+function parseLock(bytes: Buffer, allowDevelopment: boolean, allowUnpinned: boolean): ContractLock {
   if (typeof allowDevelopment !== "boolean") return contractError("package-api.registry-origin-invalid", "Development Registry mode must be an explicit Boolean.");
   if (bytes.length > 33_554_432) invalid("Contract lock exceeds its byte bound.");
   const root = fields(parseOuter(bytes), ["lockVersion", "packageArtifacts", "packageImports", "providerImports", "platformImports"]);
@@ -89,7 +105,9 @@ export function parseContractLock(bytes: Buffer, allowDevelopment = false): Cont
   };
   for (const [packageId, raw] of map(root, "packageArtifacts")) {
     id(packageId);
-    const order = ["requestedVersionRange", "includePrerelease", "selectedPackageVersion", "selectedPackageContentIdentity", "registryOrigin", "publicContractCount", "publicInventorySha256", "contracts"];
+    const priorSelection = allowUnpinned && !Object.hasOwn(raw,"modelProjectionBytes") && !Object.hasOwn(raw,"modelProjectionSha256");
+    const order = ["requestedVersionRange", "includePrerelease", "selectedPackageVersion", "selectedPackageContentIdentity", "registryOrigin", "publicContractCount", "publicInventorySha256",
+      ...(priorSelection ? [] : ["modelProjectionBytes", "modelProjectionSha256"]), "contracts"];
     const value = fields(raw, order.filter(key => key !== "registryOrigin"), ["registryOrigin"], order);
     const requestedVersionRange = string(value.requestedVersionRange); const includePrerelease = bool(value.includePrerelease);
     const selectedPackageVersion = version(value.selectedPackageVersion); const selectedPackageContentIdentity = digest(value.selectedPackageContentIdentity);
@@ -109,7 +127,8 @@ export function parseContractLock(bytes: Buffer, allowDevelopment = false): Cont
       evidence(contract); contracts.set(contractId, contract);
     }
     const artifact: PackageArtifact = { packageId, requestedVersionRange, includePrerelease, selectedPackageVersion, selectedPackageContentIdentity,
-      registryOrigin: optionalRegistryOrigin(value, allowDevelopment), publicContractCount: integer(value.publicContractCount, 1, 128), publicInventorySha256: digest(value.publicInventorySha256), contracts };
+      registryOrigin: optionalRegistryOrigin(value, allowDevelopment), publicContractCount: integer(value.publicContractCount, 1, 128), publicInventorySha256: digest(value.publicInventorySha256),
+      modelProjectionBytes: priorSelection ? 0 : integer(value.modelProjectionBytes, 1, 4_194_304), modelProjectionSha256: priorSelection ? "" : digest(value.modelProjectionSha256), contracts };
     if (contracts.size !== artifact.publicContractCount) invalid("Public inventory count mismatch.");
     const inventoryHash = createHash("sha256").update("sunder.package-public-api-inventory.v1\0").update(inventoryBytes(artifact)).digest("hex");
     if (inventoryHash !== artifact.publicInventorySha256) contractError("rpc-authoring.hash-mismatch", "Complete public inventory hash mismatch.");
@@ -117,7 +136,8 @@ export function parseContractLock(bytes: Buffer, allowDevelopment = false): Cont
   }
   const consumerNames = new Set<string>(); const providerNames = new Set<string>(); const providerTuples = new Set<string>(); const platformTuples = new Set<string>();
   for (const [packageId, raw] of map(root, "packageImports")) {
-    const value = fields(raw, ["localName", "presence", "requiredContracts"]); const artifact = artifacts.get(id(packageId));
+    if (!Object.hasOwn(raw, "consumerRoles")) contractError("package-api.consumer-roles-migration-required", `${packageId}: run sunder-package api migrate-consumer-roles --project <root>. Omitted review preserves Runtime-only intent; Restore/Build does not migrate.`);
+    const value = fields(raw, ["localName", "presence", "requiredContracts", "consumerRoles"]); const artifact = artifacts.get(id(packageId));
     if (!artifact) invalid("Consumer intent has no artifact.");
     const localName = name(value.localName); unique(consumerNames, localName.toLowerCase(), "package-api.local-name-collision");
     const presence = value.presence; if (presence !== "required" && presence !== "optional") invalid("Explicit required/optional presence is mandatory.");
@@ -129,7 +149,7 @@ export function parseContractLock(bytes: Buffer, allowDevelopment = false): Cont
     if (!consumable.length) contractError("package-api.consumer-api-empty", "Selected inventory has no public package-authority contracts.");
     referenced.add(packageId); dependencies.add(packageId);
     for (const contract of consumable) { require(contract); dependencies.add(contract.authorityId); }
-    consumers.set(packageId, { packageId, localName, presence, requiredContracts: required });
+    consumers.set(packageId, { packageId, localName, presence, requiredContracts: required, consumerRoles: consumerRoles(value.consumerRoles, packageId) });
   }
   for (const [key, raw] of map(root, "providerImports")) {
     name(key); unique(providerNames, key.toLowerCase(), "rpc-authoring.duplicate-projected-key");

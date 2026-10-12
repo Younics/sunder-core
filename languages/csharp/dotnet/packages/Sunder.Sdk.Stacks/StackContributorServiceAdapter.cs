@@ -1,5 +1,6 @@
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Sdk.Stacks;
 
@@ -31,16 +32,16 @@ public sealed class StackContributorServiceAdapter
     }
 
     /// <summary>Returns the captured contributor identity and capabilities.</summary>
-    [SunderRpcMethod(MethodId = "metadata", Idempotency = SunderRpcMethodIdempotency.Idempotent)]
+    [SunderMethod(MethodId = "metadata", Idempotency = SunderServiceIdempotency.Idempotent)]
     public ValueTask<StackContributorMetadata> GetMetadataAsync() => ValueTask.FromResult(_metadata);
 
     /// <summary>Discovers a snapshot of exportable items.</summary>
-    [SunderRpcMethod(MethodId = "list-export-items", Idempotency = SunderRpcMethodIdempotency.Idempotent, Errors = ["stack.method.unsupported"])]
+    [SunderMethod(MethodId = "list-export-items", Idempotency = SunderServiceIdempotency.Idempotent, Errors = ["stack.method.unsupported"])]
     public async ValueTask<StackExportItemList> ListExportItemsAsync(StackExportDiscoveryContext request, CancellationToken cancellationToken)
         => new(await Required(_exporter, "list-export-items").ListExportItemsAsync(request, cancellationToken).ConfigureAwait(false));
 
     /// <summary>Exports domain fragments, registering each payload stream as single-use Host-mediated content.</summary>
-    [SunderRpcMethod(MethodId = "export", Idempotency = SunderRpcMethodIdempotency.Idempotent, Errors = ["stack.method.unsupported"])]
+    [SunderMethod(MethodId = "export", Idempotency = SunderServiceIdempotency.Idempotent, Errors = ["stack.method.unsupported"])]
     public async ValueTask<StackRpcExportContribution> ExportAsync(StackExportRequest request, SunderRpcInvocationContext context, CancellationToken cancellationToken)
     {
         var contribution = await Required(_exporter, "export").ExportAsync(request, cancellationToken).ConfigureAwait(false);
@@ -63,19 +64,19 @@ public sealed class StackContributorServiceAdapter
     }
 
     /// <summary>Previews imports with lazy content handles and Host-stamped owner/contributor identity.</summary>
-    [SunderRpcMethod(MethodId = "preview-import", Idempotency = SunderRpcMethodIdempotency.Idempotent, Errors = ["stack.method.unsupported"])]
+    [SunderMethod(MethodId = "preview-import", Idempotency = SunderServiceIdempotency.Idempotent, Errors = ["stack.method.unsupported"])]
     public ValueTask<StackImportPreview> PreviewImportAsync(StackRpcImportPreviewRequest request, SunderRpcInvocationContext context, CancellationToken cancellationToken)
         => Required(_importer, "preview-import").PreviewImportAsync(new(
             request.Fragments.Select(fragment => ToLocal(context, fragment)).ToArray(), request.InputValues, request.IdRemaps), cancellationToken);
 
     /// <summary>Applies imports with lazy content handles and Host-stamped owner/contributor identity.</summary>
-    [SunderRpcMethod(MethodId = "import", Idempotency = SunderRpcMethodIdempotency.None, Errors = ["stack.method.unsupported"])]
+    [SunderMethod(MethodId = "import", Idempotency = SunderServiceIdempotency.None, Errors = ["stack.method.unsupported"])]
     public ValueTask<StackImportResult> ImportAsync(StackRpcImportRequest request, SunderRpcInvocationContext context, CancellationToken cancellationToken)
         => Required(_importer, "import").ImportAsync(new(
             request.Fragments.Select(fragment => ToLocal(context, fragment)).ToArray(), request.InputValues, request.IdRemaps, request.SelectedActionIds), cancellationToken);
 
     /// <summary>Notifies the contributor after committed effects, replacing caller-supplied owner/contributor identity.</summary>
-    [SunderRpcMethod(MethodId = "import-applied", Idempotency = SunderRpcMethodIdempotency.None, Errors = ["stack.method.unsupported"])]
+    [SunderMethod(MethodId = "import-applied", Idempotency = SunderServiceIdempotency.None, Errors = ["stack.method.unsupported"])]
     public ValueTask ImportAppliedAsync(StackImportAppliedContext request, SunderRpcInvocationContext context, CancellationToken cancellationToken)
         => Required(_appliedHandler, "import-applied").OnStackImportAppliedAsync(
             new(context.Provider.PackageId, _metadata.ContributorId, request.FragmentIds, request.ImportedItems), cancellationToken);

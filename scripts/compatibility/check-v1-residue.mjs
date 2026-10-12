@@ -5,6 +5,18 @@ import { fileURLToPath } from "node:url";
 const scriptRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const forbiddenPaths = [
+  ".github/workflows/sunder-execution-runtime-native-release.yml",
+  ".github/workflows/sunder-execution-runtime-publication.yml",
+  "scripts/release/execution-runtimes/native-release-preflight.sh",
+  "scripts/release/execution-runtimes/native-release.sh",
+  "scripts/release/execution-runtimes/publication_evidence.py",
+  "scripts/release/execution-runtimes/publish-release-set.sh",
+  "scripts/release/execution-runtimes/retained_native.py",
+  "scripts/release/execution-runtimes/validate-lock.sh",
+  "scripts/release/upload-execution-runtime-release-evidence.sh",
+  "scripts/test/release/publication-dry-run.fixture.sh",
+  "scripts/test/release/publication-resume.fixture.sh",
+  "scripts/test/release/upload-execution-runtime-release-evidence.fixture.sh",
   ".github/workflows/sunder-node-sea-ci.yml",
   "languages/typescript/node/packages/package-tool/node-distributions.json",
   "languages/typescript/node/packages/package-tool/src/download.ts",
@@ -81,6 +93,16 @@ const activeNodeProfilePatterns = [
   /sunder\.sea\.smoke/u,
   /SUNDER_(?:REQUIRE_)?NODE_SEA/u,
 ];
+
+// These exact development dependencies carry their publishers' engine ranges.
+// They do not choose Sunder's supported runtime floor. Only the engines.node
+// member of the reviewed, canonical lock entry is exempt from the floor check.
+const reviewedVendorNodeProfiles = new Map([
+  ["@exodus/bytes", "1.16.0"],
+  ["html-encoding-sniffer", "6.0.0"],
+  ["jsdom", "27.4.0"],
+]);
+const reviewedVendorNodeRange = "^20.19.0 || ^22.12.0 || >=24.0.0";
 
 const exactFiles = new Map([
   ["languages/csharp/dotnet/host/Sunder.App/Services/AppWebBridge.cs", [/sunder\.bridge\.v2/u]],
@@ -183,7 +205,9 @@ export async function findV1Residue(repositoryRoot = scriptRoot) {
     if (!await exists(filePath)) continue;
     const text = await readFile(filePath, "utf8");
     for (const pattern of patterns) {
-      if (pattern.test(text)) failures.push(`${relativePath}: contains ${pattern}`);
+      const inspected = relativePath === "languages/typescript/node/package-lock.json"
+        && pattern === activeNodeProfilePatterns[0] ? withoutReviewedVendorNodeProfiles(text) : text;
+      if (pattern.test(inspected)) failures.push(`${relativePath}: contains ${pattern}`);
     }
   }
 
@@ -196,6 +220,31 @@ export async function findV1Residue(repositoryRoot = scriptRoot) {
     }
   }
   return failures.sort();
+}
+
+function withoutReviewedVendorNodeProfiles(text) {
+  let lock;
+  try {
+    lock = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  if (lock?.lockfileVersion !== 3 || !lock.packages || Array.isArray(lock.packages)) return text;
+  for (const [name, version] of reviewedVendorNodeProfiles) {
+    const key = `node_modules/${name}`;
+    const entry = lock.packages[key];
+    const leaf = name.slice(name.lastIndexOf("/") + 1);
+    if (entry?.version !== version || entry.dev !== true
+        || entry.resolved !== `https://registry.npmjs.org/${name}/-/${leaf}-${version}.tgz`
+        || entry.engines?.node !== reviewedVendorNodeRange) continue;
+    const serialize = (value) => `    ${JSON.stringify(key)}: ${JSON.stringify(value, null, 2).replaceAll("\n", "\n    ")}`;
+    // Replace one complete canonical entry only. A duplicate entry or another
+    // occurrence anywhere else remains visible to the normal residue check.
+    text = text.replace(serialize(entry), serialize({
+      ...entry, engines: { ...entry.engines, node: "reviewed vendor development engine" },
+    }));
+  }
+  return text;
 }
 
 async function sourceFiles(root) {

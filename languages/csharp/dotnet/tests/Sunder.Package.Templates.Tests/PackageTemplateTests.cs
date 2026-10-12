@@ -72,7 +72,13 @@ public sealed partial class PackageTemplateTests
                     || entry.FullName.EndsWith(".rpc.json", StringComparison.Ordinal));
                 var service = Assert.Single(archive.Entries, entry => entry.FullName.EndsWith("/SampleService.cs", StringComparison.Ordinal));
                 using var serviceReader = new StreamReader(service.Open());
-                Assert.Contains("[SunderRpcService(", await serviceReader.ReadToEndAsync(), StringComparison.Ordinal);
+                var serviceSource = await serviceReader.ReadToEndAsync();
+                Assert.Contains("[SunderService]", serviceSource, StringComparison.Ordinal);
+                Assert.Contains("using Sunder.Sdk.Services;", serviceSource, StringComparison.Ordinal);
+                Assert.DoesNotContain("Sunder.Sdk.Rpc", serviceSource, StringComparison.Ordinal);
+                Assert.Contains("Task<string> GreetAsync", serviceSource, StringComparison.Ordinal);
+                Assert.Contains("IAsyncEnumerable<string>", serviceSource, StringComparison.Ordinal);
+                Assert.DoesNotContain("SampleRequest", serviceSource, StringComparison.Ordinal);
                 Assert.Single(archive.Entries, entry => entry.FullName.EndsWith("/sunder-contracts.lock.json", StringComparison.Ordinal));
                 Assert.DoesNotContain(archive.Entries, entry => entry.FullName.EndsWith("/sunder-contracts.owned.json", StringComparison.Ordinal));
             }
@@ -172,9 +178,12 @@ public sealed partial class PackageTemplateTests
                 "Stacks",
                 "Stacks.PackageReferences.props"));
             Assert.Empty(stackProperties.Descendants("SunderRpcProvider"));
+            Assert.Empty(stackProperties.Descendants("Target"));
             Assert.Equal("buildTransitive", Assert.Single(stackProperties.Descendants("PackageReference")).Attribute("ExcludeAssets")?.Value);
             var stackSource = await File.ReadAllTextAsync(Path.Combine(output, "Stacks", "StackSupport.cs"));
-            Assert.Contains("SunderRpcProvider(typeof(IPackageStackContributor)", stackSource, StringComparison.Ordinal);
+            Assert.Contains("SunderServiceProvider(typeof(IPackageStackContributor)", stackSource, StringComparison.Ordinal);
+            Assert.Contains("using Sunder.Sdk.Services;", stackSource, StringComparison.Ordinal);
+            Assert.DoesNotContain("Sunder.Sdk.Rpc", stackSource, StringComparison.Ordinal);
             Assert.DoesNotContain("CreateSunderRpcProviderRegistration()", stackSource, StringComparison.Ordinal);
             Assert.DoesNotContain("SunderStackContributorRpc", stackSource, StringComparison.Ordinal);
             var model = await File.ReadAllTextAsync(Path.Combine(output, "Views", "DefaultPackageViewModel.cs"));
@@ -207,8 +216,13 @@ public sealed partial class PackageTemplateTests
         }
     }
 
-    [Fact]
-    public async Task GeneratedPrimaryProject_BuildsCurrentRidAndPacksUniversalPackage()
+    [Theory]
+    [InlineData("Default")]
+    [InlineData("Avalonia")]
+    [InlineData("AvaloniaNoDefaultView")]
+    [InlineData("Stacks")]
+    [InlineData("HostDependency")]
+    public async Task GeneratedPrimaryProject_BuildsCurrentRidAndPacksUniversalPackage(string shapeName)
     {
         var repositoryRoot = FindRepositoryRoot();
         var root = CreateTempDirectory();
@@ -247,7 +261,15 @@ public sealed partial class PackageTemplateTests
                 templatePackage));
 
             var localFeed = Path.Combine(root, "feed");
-            await PackLocalSunderFeedAsync(repositoryRoot, localFeed, currentVersion);
+            var toolConfiguration = await PackLocalSunderFeedAsync(repositoryRoot, localFeed, currentVersion);
+            var catalog = Path.Combine(root, "core-platform-catalog.json");
+            if (shapeName == "Stacks")
+            {
+                var tool = Path.Combine(repositoryRoot, "languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/bin", toolConfiguration + "-sunder-core-transport", "net10.0/Sunder.ExecutionRuntime.Build.dll");
+                Assert.True(File.Exists(tool), "The Stack SDK build did not retain its transport producer: " + tool);
+                AssertSuccess(await RunDotnetAsync(repositoryRoot, tool, "platform-contracts", "export", "--core-root", repositoryRoot,
+                    "--catalog-release", "1.1.0", "--output", catalog));
+            }
 
             var packagesPath = Path.Combine(root, "packages");
             await AssertPackedInternalRpcBindingConsumerAsync(root, localFeed, packagesPath, currentVersion);
@@ -272,7 +294,7 @@ public sealed partial class PackageTemplateTests
                     HasApp: false,
                     HasDependency: true),
             };
-            foreach (var shape in shapes)
+            foreach (var shape in shapes.Where(shape => shape.Name == shapeName))
             {
                 var projectName = "Buildable." + shape.Name;
                 var packageId = "buildable." + shape.Name.ToLowerInvariant();
@@ -314,10 +336,6 @@ public sealed partial class PackageTemplateTests
                 if (shape.Name == "Stacks")
                 {
                     var stackInputs = await CaptureTemplateInputsAsync(output);
-                    AssertSuccess(await RunDotnetAsync(output, "msbuild", primaryProject, "-t:AcceptSunderContracts",
-                        "-p:SunderContractKey=sample", "-p:SunderContractNextVersion=2.0.0", "-nr:false", "-nologo"));
-                    using var stackBaseline = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(output, "sunder-contracts.owned.json")));
-                    Assert.Equal("sample", Assert.Single(stackBaseline.RootElement.GetProperty("contracts").EnumerateObject()).Name);
                     var emptyLock = await File.ReadAllBytesAsync(Path.Combine(output, "sunder-contracts.lock.json"));
                     var gated = await RunDotnetAsync(output, "build", primaryProject, "--no-restore", "--disable-build-servers");
                     Assert.NotEqual(0, gated.ExitCode);
@@ -325,17 +343,14 @@ public sealed partial class PackageTemplateTests
                     var originRequired = await RunDotnetAsync(output, "msbuild", primaryProject, "-t:ImplementSunderPlatformApi", "-nr:false", "-nologo",
                         "-p:SunderContractId=sunder.stack.contributor");
                     Assert.NotEqual(0, originRequired.ExitCode);
-                    Assert.Contains("package-api.registry-origin-invalid", originRequired.StandardOutput + originRequired.StandardError, StringComparison.Ordinal);
+                    Assert.Contains("platform-api.local-input-required", originRequired.StandardOutput + originRequired.StandardError, StringComparison.Ordinal);
                     Assert.Equal(emptyLock, await File.ReadAllBytesAsync(Path.Combine(output, "sunder-contracts.lock.json")));
                     await AssertTemplateInputsAsync(output, stackInputs);
                     Assert.False(Directory.Exists(Path.Combine(output, "bin", "Debug", "net10.0", "sunder-dev")));
-                    continue;
+                    AssertSuccess(await RunDotnetAsync(output, "msbuild", primaryProject, "-t:ImplementSunderPlatformApi", "-nr:false", "-nologo",
+                        "-p:SunderContractId=sunder.stack.contributor", "-p:SunderPlatformCatalogPath=" + catalog));
                 }
                 var authored = await CaptureTemplateInputsAsync(output);
-                AssertSuccess(await RunDotnetAsync(output, "msbuild", primaryProject, "-t:AcceptSunderContracts",
-                    "-p:SunderContractKey=sample", "-p:SunderContractNextVersion=2.0.0", "-nr:false", "-nologo"));
-                AssertSuccess(await RunDotnetAsync(output, "msbuild", primaryProject, "-t:CheckSunderContracts", "-nr:false", "-nologo"));
-                var draft = await File.ReadAllBytesAsync(Path.Combine(output, "sunder-contracts.owned.json"));
                 var build = await RunDotnetAsync(
                     output,
                     "build",
@@ -345,16 +360,15 @@ public sealed partial class PackageTemplateTests
                 AssertSuccess(build);
 
                 Assert.False(Directory.Exists(Path.Combine(output, projectName + ".Protocol")));
-                using var owned = JsonDocument.Parse(draft);
-                var current = owned.RootElement.GetProperty("contracts").GetProperty("sample").GetProperty("current");
-                Assert.Equal("draft", current.GetProperty("state").GetString());
-                var descriptor = SunderRpcContractDescriptor.Parse(System.Text.Encoding.UTF8.GetBytes(current.GetProperty("canonicalDescriptor").GetString()!));
+                Assert.False(File.Exists(Path.Combine(output, "sunder-contracts.owned.json")));
+                var descriptor = SunderRpcContractDescriptor.Parse(await File.ReadAllBytesAsync(Path.Combine(output,
+                    "bin/Debug/net10.0/sunder-dev/payload/shared/contracts/sample.rpc.json")));
                 var generatedBindingPath = Path.Combine(output, "obj", "Debug", "net10.0",
                     "sunder-analysis", System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier, "sunder-rpc", "bindings", "sample.g.cs");
                 Assert.True(File.Exists(generatedBindingPath), $"RPC binding was not generated: {generatedBindingPath}");
                 Assert.Equal(SunderRpcProtocol.DescriptorVersion, descriptor.DescriptorVersion);
                 Assert.Equal(packageId + ".sample", descriptor.ContractId);
-                Assert.Equal("2.0.0", descriptor.Version);
+                Assert.Equal("1.0.0", descriptor.Version);
                 Assert.Matches("^[0-9a-f]{64}$", descriptor.Sha256);
                 Assert.Matches("^[0-9a-f]{64}$", Assert.IsType<string>(descriptor.AbiSha256));
                 Assert.Equal(
@@ -362,12 +376,14 @@ public sealed partial class PackageTemplateTests
                     await File.ReadAllTextAsync(generatedBindingPath));
                 var predecessor = SunderRpcContractDescriptor.Parse(System.Text.Encoding.UTF8.GetBytes((await File.ReadAllTextAsync(Path.Combine(repositoryRoot,
                     "languages/csharp/dotnet/tests/Sunder.Package.Templates.Tests/Fixtures/Sample.before-source.json"))).Replace("SUNDER_PACKAGE_ID_TEXT", packageId, StringComparison.Ordinal)));
-                Assert.Equal(predecessor.GetCanonicalUtf8(), descriptor.GetCanonicalUtf8());
-                Assert.Equal(predecessor.AbiSha256, descriptor.AbiSha256);
-                Assert.Equal(draft, await File.ReadAllBytesAsync(Path.Combine(output, "sunder-contracts.owned.json")));
+                Assert.Equal("2.0.0", predecessor.Version); // Authentic historical private oracle, not current source authority.
+                Assert.NotEqual(predecessor.Sha256, descriptor.Sha256);
+                Assert.NotEqual(predecessor.AbiSha256, descriptor.AbiSha256);
+                Assert.Equal(new[] { "greet", "greet-many" }, Assert.Single(descriptor.Services).Methods.Select(method => method.MethodId).Order(StringComparer.Ordinal));
+                Assert.False(File.Exists(Path.Combine(output, "sunder-contracts.owned.json")));
                 await AssertTemplateInputsAsync(output, authored);
                 if (shape.Name is "Default" or "Avalonia")
-                    await VerifyTemplateRebuildAsync(output, primaryProject, generatedBindingPath, draft);
+                    await VerifyTemplateRebuildAsync(output, primaryProject, generatedBindingPath);
                 foreach (var generatedProject in Directory.EnumerateFiles(output, "*.csproj", SearchOption.AllDirectories))
                 {
                     Assert.True(
@@ -426,11 +442,11 @@ public sealed partial class PackageTemplateTests
                         AssertExactTemplateCapabilities(shape.Name, target);
                     });
                     var contracts = manifest.RootElement.GetProperty("contractBundles").EnumerateArray().ToArray();
-                    Assert.Single(contracts);
+                    Assert.Equal(shape.Name == "Stacks" ? 2 : 1, contracts.Length);
                     var sampleContract = Assert.Single(
                         contracts,
                         contract => contract.GetProperty("contractId").GetString() == packageId + ".sample");
-                    Assert.Equal("2.0.0", sampleContract.GetProperty("version").GetString());
+                    Assert.Equal("1.0.0", sampleContract.GetProperty("version").GetString());
                     Assert.Equal("package", sampleContract.GetProperty("exposure").GetString());
                     Assert.Equal(descriptor.Sha256, sampleContract.GetProperty("descriptorSha256").GetString());
                     Assert.Equal(descriptor.AbiSha256, sampleContract.GetProperty("abiSha256").GetString());
@@ -441,11 +457,11 @@ public sealed partial class PackageTemplateTests
                         var use = Assert.Single(uses);
                         Assert.Equal("app", use.GetProperty("role").GetString());
                         Assert.Equal(packageId + ".sample", use.GetProperty("contractId").GetString());
-                        Assert.Equal("2.0.0", use.GetProperty("contractVersion").GetString());
+                        Assert.Equal("1.0.0", use.GetProperty("contractVersion").GetString());
                         Assert.Equal(descriptor.AbiSha256, use.GetProperty("abiSha256").GetString());
                         Assert.True(use.GetProperty("required").GetBoolean());
                         Assert.Equal(
-                            ["discover", "invoke"],
+                            ["discover", "invoke", "subscribe"],
                             use.GetProperty("actions").EnumerateArray()
                                 .Select(static action => action.GetString()!)
                                 .ToArray());
@@ -456,13 +472,13 @@ public sealed partial class PackageTemplateTests
                         Assert.Empty(uses);
                     }
                     var providers = manifest.RootElement.GetProperty("provides").EnumerateArray().ToArray();
-                    Assert.Single(providers);
+                    Assert.Equal(shape.Name == "Stacks" ? 2 : 1, providers.Length);
                     var sampleProvider = Assert.Single(
                         providers,
-                        provider => provider.GetProperty("providerId").GetString() == packageId + ".sample");
+                        provider => provider.GetProperty("providerId").GetString() == packageId + ".sample.provider");
                     Assert.Equal("runtime", sampleProvider.GetProperty("role").GetString());
                     Assert.Equal(packageId + ".sample", sampleProvider.GetProperty("contractId").GetString());
-                    Assert.Equal("2.0.0", sampleProvider.GetProperty("contractVersion").GetString());
+                    Assert.Equal("1.0.0", sampleProvider.GetProperty("contractVersion").GetString());
                     Assert.Equal("owner", sampleProvider.GetProperty("audience").GetString());
                     Assert.Equal(descriptor.Sha256, sampleProvider.GetProperty("descriptorSha256").GetString());
                     Assert.Equal(descriptor.AbiSha256, sampleProvider.GetProperty("abiSha256").GetString());
@@ -472,15 +488,6 @@ public sealed partial class PackageTemplateTests
                         manifest.RootElement.GetProperty("dependsOn").GetArrayLength());
                 }
 
-                if (shape.Name == "Default")
-                {
-                    var denied = await RunDotnetAsync(output, "msbuild", primaryProject, "-t:PackSunderPackage",
-                        "-p:Configuration=Debug", "-nr:false", "-nologo");
-                    Assert.NotEqual(0, denied.ExitCode);
-                    Assert.True((denied.StandardOutput + denied.StandardError).Contains("FreezeSunderContracts", StringComparison.Ordinal), denied.StandardOutput + denied.StandardError);
-                }
-                AssertSuccess(await RunDotnetAsync(output, "msbuild", primaryProject, "-t:FreezeSunderContracts", "-nr:false", "-nologo"));
-                var frozen = await File.ReadAllBytesAsync(Path.Combine(output, "sunder-contracts.owned.json"));
                 var pack = await RunDotnetAsync(
                     output,
                     "msbuild",
@@ -500,7 +507,7 @@ public sealed partial class PackageTemplateTests
                 Assert.Contains(archive.Entries, entry => entry.FullName == "manifest/sunder-package.json");
                 Assert.Contains(archive.Entries, entry => entry.FullName == "manifest/content-index.json");
                 Assert.Contains(archive.Entries, entry => entry.FullName == "payload/shared/contracts/sample.rpc.json");
-                Assert.DoesNotContain(archive.Entries, entry => entry.FullName == "payload/shared/contracts/sunder.stack.contributor.rpc.json");
+                Assert.Equal(shape.Name == "Stacks", archivePaths.Contains("payload/shared/contracts/sunder.stack.contributor.rpc.json"));
                 Assert.DoesNotContain(archivePaths, path => path.EndsWith(".Protocol.dll", StringComparison.Ordinal));
                 Assert.DoesNotContain(archivePaths, path => path.StartsWith("payload/app/", StringComparison.Ordinal)
                     && (path.EndsWith("/Sunder.Sdk.Worker.dll", StringComparison.Ordinal) || path.EndsWith($"/{projectName}.dll", StringComparison.Ordinal)));
@@ -571,7 +578,7 @@ public sealed partial class PackageTemplateTests
                     Assert.False(File.Exists(prebuiltArchivePath));
                     Assert.Equal(firstArchiveBytes, await File.ReadAllBytesAsync(archivePath));
                 }
-                Assert.Equal(frozen, await File.ReadAllBytesAsync(Path.Combine(output, "sunder-contracts.owned.json")));
+                Assert.False(File.Exists(Path.Combine(output, "sunder-contracts.owned.json")));
                 await AssertTemplateInputsAsync(output, authored);
             }
         }
@@ -581,7 +588,7 @@ public sealed partial class PackageTemplateTests
         }
     }
 
-    private static async Task PackLocalSunderFeedAsync(string repositoryRoot, string localFeed, string version)
+    private static async Task<string> PackLocalSunderFeedAsync(string repositoryRoot, string localFeed, string version)
     {
         Directory.CreateDirectory(localFeed);
         var configuration = "TemplateSdk-" + Guid.NewGuid().ToString("N");
@@ -634,6 +641,7 @@ public sealed partial class PackageTemplateTests
 
         using var buildPackage = ZipFile.OpenRead(Path.Combine(localFeed, $"Sunder.Package.Build.{version}.nupkg"));
         Assert.DoesNotContain(buildPackage.Entries, entry => entry.FullName.Contains("BouncyCastle", StringComparison.Ordinal));
+        return configuration;
     }
 
     private static async Task AssertPackedInternalRpcBindingConsumerAsync(

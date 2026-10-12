@@ -28,7 +28,6 @@ public sealed class InstalledPackagePolicyTests
         Assert.Equal("Allowed", policy.State);
         Assert.Equal(InstalledPackagePolicyRecord.Subject(package), policy.Package);
         Assert.Equal(Platform, Assert.Single(Assert.Single(policy.Snapshots).Platforms.Values).Decision.Catalog);
-        Assert.Single(Assert.Single(policy.Snapshots).Runtimes);
         var before = await File.ReadAllBytesAsync(fixture.Context.Paths.StateFilePath);
         fixture.Context.Clock.Advance(TimeSpan.FromSeconds(1));
         await fixture.Metadata.ReconcileAsync(default);
@@ -39,7 +38,6 @@ public sealed class InstalledPackagePolicyTests
     [Theory]
     [InlineData("package")]
     [InlineData("platform")]
-    [InlineData("runtime")]
     [InlineData("expiry")]
     public async Task LearnedDenialIsPersistedAsPolicyBlockedWithoutRemovingContent(string kind)
     {
@@ -58,12 +56,11 @@ public sealed class InstalledPackagePolicyTests
                 return kind switch
                 {
                     "package" => value with { Packages = value.Packages.Select(item => item with { PackageState = "SecurityBlocked", Disposition = "Denied", ErrorCode = PackagePolicyErrorCodes.SecurityBlocked }).ToArray() },
-                    "platform" => value with
+                    _ => value with
                     {
                         Packages = value.Packages.Select(item => item with { Disposition = "Denied", ErrorCode = PackagePolicyErrorCodes.ContractAuthorityRevoked }).ToArray(),
                         PlatformCatalogs = [new(Platform, "Revoked", "Denied", PackagePolicyErrorCodes.ContractAuthorityRevoked, ObservedAt)],
                     },
-                    _ => value with { Runtimes = value.Runtimes.Select(item => item with { LifecycleState = "revoked", Disposition = "Denied", ErrorCode = ExecutionRuntimeErrorCodes.Revoked, RevokedAtUtc = ObservedAt }).ToArray() },
                 };
             };
             await fixture.AllowAsync(package, [Platform]);
@@ -76,11 +73,6 @@ public sealed class InstalledPackagePolicyTests
         var descriptor = fixture.Store.ToDescriptor(blocked);
         Assert.Equal("PolicyBlocked", descriptor.StatusMessage);
         Assert.Equal(blocked.Policy.ErrorCode, descriptor.PolicyErrorCode);
-        if (kind == "runtime")
-        {
-            Assert.Equal("revoked", Assert.Single(blocked.ExecutionRuntimeBindings).RuntimeLifecycleState);
-            Assert.Equal(2, Assert.Single(blocked.ExecutionRuntimeBindings).RuntimePolicyRevision);
-        }
     }
 
     [Theory]
@@ -123,7 +115,7 @@ public sealed class InstalledPackagePolicyTests
         Assert.Equal("PolicyBlocked", recovered.Policy!.State);
         Assert.Equal(PackagePolicyErrorCodes.SecurityBlocked, recovered.Policy.ErrorCode);
         Assert.True(File.Exists(package.ManifestPath));
-        Assert.Equal(PackagePolicyErrorCodes.SecurityBlocked, Assert.Throws<PackagePolicyDeniedException>(() => restarted.RequireActivation(Origin, recovered.Policy.Package, [])).Code);
+        Assert.Equal(PackagePolicyErrorCodes.SecurityBlocked, Assert.Throws<PackagePolicyDeniedException>(() => restarted.RequireActivation(Origin, recovered.Policy.Package)).Code);
         Assert.Empty(Directory.EnumerateDirectories(fixture.Context.Paths.TransactionRootPath));
     }
 
@@ -139,7 +131,7 @@ public sealed class InstalledPackagePolicyTests
         await fixture.AllowAsync(package);
         await fixture.Metadata.ReconcileAsync(default);
         fixture.Block();
-        var observation = await fixture.Context.FetchAsync([InstalledPackagePolicyRecord.Subject(package)], [], fixture.Runtimes(package));
+        var observation = await fixture.Context.FetchAsync([InstalledPackagePolicyRecord.Subject(package)], []);
         var failing = new PackageLifecyclePolicyCache(fixture.Context.Paths, fixture.Context.Clock, new PolicyCrash(point));
         await Assert.ThrowsAsync<IOException>(() => failing.ObserveAsync(observation));
         Assert.Equal("Allowed", Assert.Single(await fixture.Store.ListAsync()).Policy!.State);
@@ -162,11 +154,11 @@ public sealed class InstalledPackagePolicyTests
         Directory.Delete(Path.Combine(fixture.Context.Paths.RootPath, RuntimeV1StateDescriptor.PackagePolicyDirectory), true);
         var cache = new PackageLifecyclePolicyCache(fixture.Context.Paths, fixture.Context.Clock);
         await cache.RestoreRetainedAsync(retained.Policy.Snapshots, default);
-        cache.RequireActivation(Origin, retained.Policy.Package, fixture.Runtimes(package));
+        cache.RequireActivation(Origin, retained.Policy.Package);
         var roundtrip = Assert.Single(await cache.CaptureInstalledAsync([retained], default)).Policy!;
         Assert.Equal(original, roundtrip.Snapshots.Single().Packages.Values.Single().Lease);
         fixture.Context.Clock.Advance(TimeSpan.FromHours(24));
-        Assert.Equal(PackagePolicyErrorCodes.PolicyExpired, Assert.Throws<PackagePolicyDeniedException>(() => cache.RequireActivation(Origin, retained.Policy.Package, [])).Code);
+        Assert.Equal(PackagePolicyErrorCodes.PolicyExpired, Assert.Throws<PackagePolicyDeniedException>(() => cache.RequireActivation(Origin, retained.Policy.Package)).Code);
     }
 
     [Fact]
@@ -179,7 +171,7 @@ public sealed class InstalledPackagePolicyTests
         await fixture.Context.Cache.InvalidateClockAsync(Origin);
         var cache = new PackageLifecyclePolicyCache(fixture.Context.Paths, fixture.Context.Clock);
         await cache.RestoreRetainedAsync(old.Policy!.Snapshots, default);
-        Assert.Equal(PackagePolicyErrorCodes.PolicyClockInvalid, Assert.Throws<PackagePolicyDeniedException>(() => cache.RequireActivation(Origin, old.Policy.Package, [])).Code);
+        Assert.Equal(PackagePolicyErrorCodes.PolicyClockInvalid, Assert.Throws<PackagePolicyDeniedException>(() => cache.RequireActivation(Origin, old.Policy.Package)).Code);
     }
 
     [Theory]
@@ -197,7 +189,7 @@ public sealed class InstalledPackagePolicyTests
         if (change == "clock") await fixture.Context.Cache.InvalidateClockAsync(Origin);
         if (change == "expiry") fixture.Context.Clock.Advance(TimeSpan.FromHours(24));
         await fixture.AllowAsync(package);
-        fixture.Context.Cache.RequireActivation(Origin, expected.Package, []);
+        fixture.Context.Cache.RequireActivation(Origin, expected.Package);
         var invoked = false;
         await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => fixture.Context.Cache.ExecuteUnderAuthorityFenceAsync([expected], _ => { invoked = true; return Task.FromResult(true); }, default));
         Assert.False(invoked);
@@ -210,7 +202,7 @@ public sealed class InstalledPackagePolicyTests
         var package = fixture.Package();
         await fixture.AllowAsync(package);
         var expected = Assert.Single(await fixture.Context.Cache.CaptureInstalledAsync([package], default)).Policy!;
-        var observation = await fixture.Context.FetchAsync([expected.Package], [], fixture.Runtimes(package));
+        var observation = await fixture.Context.FetchAsync([expected.Package], []);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var operation = fixture.Context.Cache.ExecuteUnderAuthorityFenceAsync([expected], async _ => { entered.SetResult(); await release.Task; return 42; }, default);
@@ -235,7 +227,7 @@ public sealed class InstalledPackagePolicyTests
         var original = CanonicalPackageTestBuilder.CreateInstalledRecord(source, "example.local", "1.0.0");
         original = original with { ExecutionRuntimeBindings = original.ExecutionRuntimeBindings.Where(binding => binding.Rid == PackageTargetSelection.GetCurrentRuntimeIdentifier()).ToArray() };
         var subject = new RegistryPackageVersionIdentity(original.PackageId, original.Version, original.ContentIdentity);
-        if (cached) await fixture.Context.RefreshAsync([subject], [], fixture.Runtimes(original));
+        if (cached) await fixture.Context.RefreshAsync([subject], []);
         fixture.Context.Send = (_, _) => throw new InvalidOperationException("Local installation must not fetch policy.");
         var archive = authoring.GetPath("package.sunderpkg");
         ZipFile.CreateFromDirectory(source, archive);
@@ -296,7 +288,7 @@ public sealed class InstalledPackagePolicyTests
         Directory.Delete(Path.Combine(fixture.Context.Paths.RootPath, RuntimeV1StateDescriptor.PackagePolicyDirectory), true);
         var cache = new PackageLifecyclePolicyCache(fixture.Context.Paths, fixture.Context.Clock);
         await cache.RestoreRetainedAsync(retained.SelectMany(package => package.Policy!.Snapshots), default);
-        foreach (var package in retained) cache.RequireActivation(Origin, package.Policy!.Package, fixture.Runtimes(package));
+        foreach (var package in retained) cache.RequireActivation(Origin, package.Policy!.Package);
     }
 
     [Fact]
@@ -308,7 +300,7 @@ public sealed class InstalledPackagePolicyTests
         await fixture.AllowAsync(package);
         await fixture.Metadata.ReconcileAsync(default);
         fixture.Context.Clock.Advance(TimeSpan.FromHours(1));
-        fixture.Context.Cache.RequireActivation(Origin, InstalledPackagePolicyRecord.Subject(package), []);
+        fixture.Context.Cache.RequireActivation(Origin, InstalledPackagePolicyRecord.Subject(package));
         fixture.Context.Clock.Advance(TimeSpan.FromMinutes(-30));
         await fixture.Metadata.ReconcileAsync(default);
         var retained = Assert.Single(await fixture.Store.ListAsync());
@@ -317,7 +309,7 @@ public sealed class InstalledPackagePolicyTests
         fixture.Context.Clock.Advance(TimeSpan.FromHours(2));
         var cache = new PackageLifecyclePolicyCache(fixture.Context.Paths, fixture.Context.Clock);
         await cache.RestoreRetainedAsync(retained.Policy.Snapshots, default);
-        Assert.Equal(PackagePolicyErrorCodes.PolicyClockInvalid, Assert.Throws<PackagePolicyDeniedException>(() => cache.RequireActivation(Origin, retained.Policy.Package, [])).Code);
+        Assert.Equal(PackagePolicyErrorCodes.PolicyClockInvalid, Assert.Throws<PackagePolicyDeniedException>(() => cache.RequireActivation(Origin, retained.Policy.Package)).Code);
     }
 
     [Fact]
@@ -374,10 +366,8 @@ public sealed class InstalledPackagePolicyTests
             return value with { Provenance = new(InstalledPackageSourceKind.Registry, InstalledPackageVersionPolicy.ExplicitVersion, Origin + "/", id,
                 RequestedVersion: "1.0.0", SourceIdentity: value.ContentIdentity) };
         }
-        internal RegistryRuntimePolicySubject[] Runtimes(InstalledPackageRecord package)
-            => package.ExecutionRuntimeBindings.Select(value => PackagePolicyAdmission.RuntimeSubject(RuntimePackageExecutionRuntimeBinding.FromInstalled(value))).Distinct().ToArray();
         internal Task AllowAsync(InstalledPackageRecord package, IReadOnlyList<RegistryPlatformCatalogIdentity>? platforms = null)
-            => Context.RefreshAsync([InstalledPackagePolicyRecord.Subject(package)], platforms ?? [], Runtimes(package));
+            => Context.RefreshAsync([InstalledPackagePolicyRecord.Subject(package)], platforms ?? []);
         internal void Block() => Context.Response = request => Allowed(request, 2) with
         { Packages = request.Packages.Select(subject => new RegistryPackagePolicyDecision(subject, "SecurityBlocked", "Listed", "Denied", PackagePolicyErrorCodes.SecurityBlocked, "Blocked.", [])).ToArray() };
         public void Dispose() => Context.Dispose();

@@ -732,7 +732,10 @@ internal sealed class AppPackageViewRegistry
     }
 
     private static Control CreateControl(IServiceProvider serviceProvider, Type implementationType)
-        => (Control)ActivatorUtilities.CreateInstance(serviceProvider, implementationType);
+        // Generated composition registers the selected constructor and optional
+        // view-model binding. ActivatorUtilities alone bypasses that factory.
+        => (Control)(serviceProvider.GetService(implementationType)
+            ?? ActivatorUtilities.CreateInstance(serviceProvider, implementationType));
 
     private static string GetSettingsViewId(string packageId) => $"settings:{packageId}";
 

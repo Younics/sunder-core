@@ -799,7 +799,7 @@ public sealed class StacksWindowViewModelTests
             library,
             stack,
             new FakeRuntimeApiClient(),
-            new RegistryPackageInstallService(),
+            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
             (_, _) => Task.CompletedTask,
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
@@ -958,7 +958,7 @@ public sealed class StacksWindowViewModelTests
             library,
             stack,
             runtimeApiClient,
-            new RegistryPackageInstallService(),
+            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
             (_, _) => Task.CompletedTask,
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
@@ -1027,7 +1027,7 @@ public sealed class StacksWindowViewModelTests
             library,
             stack,
             runtimeApiClient,
-            new RegistryPackageInstallService(),
+            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
             (_, _) => Task.CompletedTask,
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
@@ -1099,7 +1099,7 @@ public sealed class StacksWindowViewModelTests
             library,
             stack,
             runtimeApiClient,
-            new RegistryPackageInstallService(),
+            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
             (_, _) => Task.CompletedTask,
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
@@ -1164,7 +1164,7 @@ public sealed class StacksWindowViewModelTests
             library,
             stack,
             runtimeApiClient,
-            new RegistryPackageInstallService(),
+            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
             (_, _) => Task.CompletedTask,
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
@@ -1223,7 +1223,7 @@ public sealed class StacksWindowViewModelTests
             library,
             stack,
             runtimeApiClient,
-            new RegistryPackageInstallService(),
+            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
             (_, _) => Task.CompletedTask,
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
@@ -1288,7 +1288,7 @@ public sealed class StacksWindowViewModelTests
             library,
             stack,
             runtimeApiClient,
-            new RegistryPackageInstallService(),
+            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
             (_, _) => Task.CompletedTask,
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
@@ -1337,7 +1337,7 @@ public sealed class StacksWindowViewModelTests
             library,
             stack,
             new FakeRuntimeApiClient(),
-            new RegistryPackageInstallService(),
+            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
             (_, _) => Task.CompletedTask,
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
@@ -1375,7 +1375,7 @@ public sealed class StacksWindowViewModelTests
             library,
             stack,
             new FakeRuntimeApiClient(),
-            new RegistryPackageInstallService(),
+            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
             (_, _) => Task.CompletedTask,
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
@@ -1492,7 +1492,7 @@ public sealed class StacksWindowViewModelTests
             library,
             stack,
             runtimeApiClient,
-            new RegistryPackageInstallService(),
+            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
             (stamp, _) =>
             {
                 runtimeApiClient.Events.Add("presentation:" + stamp.SessionGeneration);
@@ -1853,7 +1853,7 @@ public sealed class StacksWindowViewModelTests
         }
     }
 
-    private sealed class FakeRuntimeApiClient : IRuntimeStacksClient
+    private sealed class FakeRuntimeApiClient : IRuntimeStacksClient, TestSupport.IReadyRuntimePrerequisiteTestClient
     {
         private string? _exportPath;
         private IReadOnlyList<PackageUiSnapshotDescriptor> _stagedPackageSources = [];

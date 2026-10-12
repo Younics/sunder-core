@@ -8,12 +8,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
-    <ProjectReference Include="..\..\libraries\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="BouncyCastle.Cryptography" />
     <!-- Package.Build keeps its compiler/task dependencies private; this engineering executable needs them at runtime. -->
     <PackageReference Include="Microsoft.Build.Framework" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" />

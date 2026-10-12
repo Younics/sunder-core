@@ -17,7 +17,8 @@ internal sealed record SunderRpcPackageApiRequest(
     string? LocalName = null,
     string? ProviderKey = null,
     string? Candidate = null,
-    string? PlatformCatalog = null);
+    string? PlatformCatalog = null,
+    string? ConsumerRoles = null);
 
 internal sealed record SunderRpcPackageApiResult(bool Changed, SunderRpcContractLock ContractLock, bool CandidateAuthorityUnconfirmed);
 
@@ -29,11 +30,14 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
         string cacheRoot,
         SunderRpcPackageApiRequest request,
         Action<SunderRpcContractLock, SunderRpcContractLock, string>? validateSource = null,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        Action<string>? report = null)
     {
         ValidateRequest(request);
         lockPath = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(lockPath);
-        var before = SunderRpcAuthoringDocuments.ReadContractLock(lockPath, restore.AllowDevelopmentRegistryOrigin);
+        if (request.Operation == "MigrateConsumerRoles") return SunderRpcConsumerRoleMigration.Execute(lockPath, request.PackageId, request.ConsumerRoles,
+            restore.AllowDevelopmentRegistryOrigin, validateSource, report, token);
+        var before = ReadBefore();
         if (request.Operation is "List" or "PlatformList") return new(false, before, false);
         var document = JsonNode.Parse(before.ExactBytes)!.AsObject();
         var artifacts = document["packageArtifacts"]!.AsObject();
@@ -114,11 +118,13 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                     var presence = request.Presence ?? "required";
                     if (consumers[packageId!] is { } consumer)
                     {
-                        if (consumer["localName"]!.GetValue<string>() != name || consumer["presence"]!.GetValue<string>() != presence)
+                        if (consumer["localName"]!.GetValue<string>() != name || consumer["presence"]!.GetValue<string>() != presence
+                            || request.ConsumerRoles is not null && !before.PackageImports[packageId!].ConsumerRoles.SequenceEqual(SunderRpcAuthoringDocuments.ParseConsumerRolesOption(request.ConsumerRoles)))
                             throw Error("package-api.local-name-collision", "An existing consumer intent differs; use targeted update for presence changes.");
                         return new(false, before, request.Candidate is not null);
                     }
-                    consumers[packageId!] = new JsonObject { ["localName"] = name, ["presence"] = presence, ["requiredContracts"] = new JsonArray() };
+                    consumers[packageId!] = new JsonObject { ["localName"] = name, ["presence"] = presence, ["requiredContracts"] = new JsonArray(),
+                        ["consumerRoles"] = new JsonArray(SunderRpcAuthoringDocuments.ParseConsumerRolesOption(request.ConsumerRoles ?? "app,runtime").Select(role => (JsonNode?)JsonValue.Create(role)).ToArray()) };
                 }
                 else
                 {
@@ -146,6 +152,7 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                     if (previous.RegistryOrigin is not null && request.RegistryOrigin is not null)
                         throw Error("package-api.registry-origin-invalid", "Update retains an existing Registry origin and rejects an override.");
                     if (request.Presence is not null && !consumers.ContainsKey(id)) throw Missing();
+                    if (request.ConsumerRoles is not null && !consumers.ContainsKey(id)) throw Missing();
                     var next = await restore.SelectArtifactAsync(id, request.VersionRange ?? previous.RequestedVersionRange,
                         request.IncludePrerelease ?? previous.IncludePrerelease, previous.RegistryOrigin ?? request.RegistryOrigin, request.Candidate, token);
                     if (before.PackageImports.TryGetValue(id, out var consumer))
@@ -155,6 +162,7 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                         RequirePreserved(next, provider.ContractId, "package-api.provider-contract-removed", "Remove the provider source and intent before removing its contract.");
                     artifacts[id] = next;
                     if (request.Presence is not null) consumers[id]!["presence"] = request.Presence;
+                    if (request.ConsumerRoles is not null) consumers[id]!["consumerRoles"] = new JsonArray(SunderRpcAuthoringDocuments.ParseConsumerRolesOption(request.ConsumerRoles).Select(role => (JsonNode?)JsonValue.Create(role)).ToArray());
                 }
                 if (packageId is null)
                     foreach (var entry in before.PlatformImports.Values)
@@ -216,7 +224,8 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
             token.ThrowIfCancellationRequested();
             using var lease = GeneratedOutputLock.Acquire([lockPath], TimeSpan.FromSeconds(30), token);
             validateSource?.Invoke(before, after, stage);
-            if (!SunderRpcAuthoringDocuments.ReadContractLock(lockPath, restore.AllowDevelopmentRegistryOrigin).ExactBytes.AsSpan().SequenceEqual(before.ExactBytes)
+            if (request.Candidate is not null) await restore.VerifyCandidateSelectionAsync(request.Candidate, after, token);
+            if (!ReadBefore().ExactBytes.AsSpan().SequenceEqual(before.ExactBytes)
                 || !SunderRpcAuthoringDocuments.ReadContractLock(stage, restore.AllowDevelopmentRegistryOrigin).ExactBytes.AsSpan().SequenceEqual(bytes))
                 throw Error("rpc-authoring.evidence-mismatch", "The contract lock changed during selection; retry against the current lock.");
             GeneratedOutputPathSafety.EnsureSafeAncestors(lockPath, includeLeaf: true, "contract lock selection");
@@ -237,6 +246,10 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException) { }
             }
         }
+
+        SunderRpcContractLock ReadBefore() => request.Operation == "Update"
+            ? SunderRpcAuthoringDocuments.ReadContractLockForArtifactUpdate(lockPath, request.PackageId, restore.AllowDevelopmentRegistryOrigin)
+            : SunderRpcAuthoringDocuments.ReadContractLock(lockPath, restore.AllowDevelopmentRegistryOrigin);
     }
 
     private static void ValidateReviewedAuthorities(SunderRpcContractLock value)
@@ -268,6 +281,12 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
 
     private static void ValidateRequest(SunderRpcPackageApiRequest request)
     {
+        if (request.ConsumerRoles is not null)
+        {
+            _ = SunderRpcAuthoringDocuments.ParseConsumerRolesOption(request.ConsumerRoles);
+            if (request.Operation is not ("Add" or "Update" or "MigrateConsumerRoles") || request.PackageId is null)
+                throw Error("package-api.consumer-roles-invalid", "A reviewed consumer-role override requires a targeted Add, Update or MigrateSunderPackageApiConsumerRoles operation.");
+        }
         if (request.Operation.StartsWith("Platform", StringComparison.Ordinal))
         {
             if (request.Operation is not ("PlatformImplement" or "PlatformUpdate" or "PlatformUnimplement" or "PlatformList")
@@ -286,14 +305,14 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                 throw Error("platform-api.import-not-found", "Platform command target or options do not apply; update uses locked origins.");
             return;
         }
-        if (request.Operation is not ("Add" or "Update" or "Remove" or "Require" or "Unrequire" or "Implement" or "Unimplement" or "List"))
+        if (request.Operation is not ("Add" or "Update" or "Remove" or "Require" or "Unrequire" or "Implement" or "Unimplement" or "List" or "MigrateConsumerRoles"))
             throw Error("package-api.import-not-found", "Unknown package API operation.");
         foreach (var value in new[] { request.PackageId, request.ContractId, request.VersionRange, request.RegistryOrigin, request.Presence, request.LocalName, request.ProviderKey, request.Candidate, request.PlatformCatalog })
             if (value is not null && string.IsNullOrWhiteSpace(value)) throw Error("package-api.import-not-found", "Supplied command values must be nonempty.");
         if (request.Presence is not null and not ("required" or "optional")) throw Error("package-api.import-not-found", "Presence must be exactly required or optional.");
         if (request.PackageId is not null && !PackageId.TryParse(request.PackageId, out _)
             || request.ContractId is not null && !PackageId.TryParse(request.ContractId, out _)) throw Missing();
-        if (request.Operation is not ("Update" or "List") && request.PackageId is null) throw Missing();
+        if (request.Operation is not ("Update" or "List" or "MigrateConsumerRoles") && request.PackageId is null) throw Missing();
         var needsContract = request.Operation is "Require" or "Unrequire" or "Implement" or "Unimplement";
         if (needsContract != (request.ContractId is not null)) throw Missing();
         if (request.Operation == "List" && request.PackageId is not null) throw Missing();

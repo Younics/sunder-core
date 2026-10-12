@@ -144,8 +144,7 @@ public sealed partial class RuntimeRpcBrokerTests
         using var catalog = new RuntimeRpcCatalog();
         var owner = new RuntimeSessionOwner(NullLogger<RuntimeSessionOwner>.Instance, new RuntimeEventStreamService(), rpcCatalog: catalog, rpcReadiness: readiness);
         var descriptor = Contract();
-        var binding = new RuntimePackageExecutionRuntimeBinding("runtime", "osx-arm64", "sunder.runtime.dotnet", "10.0.0", 1, "sunder.dotnet-worker-module.v1",
-            new('a', 64), new('b', 64), 1, "https://registry.example/", "registry", "test-key", 1, 1, "supported", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
+        var binding = TestExecutionRuntimeLaunchResolver.CreateBinding("runtime", "osx-arm64");
         var consumer = CreatePackage("consumer.package", descriptor, null, true, PackageSourceKind.Dev) with { ExecutionRuntimeBinding = binding };
         var first = CreatePackage("first.package", descriptor, new TestHandler(), false, providerId: "first.provider") with { ExecutionRuntimeBinding = binding };
         var second = CreatePackage("second.package", descriptor, new TestHandler(), false, providerId: "second.provider") with { ExecutionRuntimeBinding = binding };
@@ -156,10 +155,10 @@ public sealed partial class RuntimeRpcBrokerTests
             await owner.PublishAsync(session, owner.Sources.Snapshot(), [], [], owner.Generation);
             await session.CommitRuntimeGenerationAsync(owner.Generation);
             catalog.ActivateSession(session, owner.Generation);
-            Assert.True(owner.EnforceExecutionRuntimePolicy("first.package", "test withdrawal", out var firstCleanup));
+            Assert.True(owner.FaultPackageExecution("first.package", "test withdrawal", out var firstCleanup));
             await firstCleanup;
             Assert.Equal(PackageReadinessState.Ready, owner.State.GetSessionPackage("consumer.package")!.Readiness);
-            Assert.True(owner.EnforceExecutionRuntimePolicy("second.package", "test withdrawal", out var secondCleanup));
+            Assert.True(owner.FaultPackageExecution("second.package", "test withdrawal", out var secondCleanup));
             await secondCleanup;
             Assert.Equal(PackageReadinessState.Failed, owner.State.GetSessionPackage("consumer.package")!.Readiness);
             Assert.Equal(RpcReadinessErrorCodes.RequiredProviderUnsatisfied, owner.State.GetSessionPackage("consumer.package")!.LastError);

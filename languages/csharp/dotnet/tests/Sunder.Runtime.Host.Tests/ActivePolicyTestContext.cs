@@ -14,7 +14,6 @@ internal sealed class ActivePolicyTestContext : IDisposable
     internal static readonly DateTimeOffset ObservedAt = DateTimeOffset.Parse("2026-09-15T12:00:00Z");
     internal static readonly RegistryPackageVersionIdentity Package = new("example.package", "1.0.0", Hash("package"));
     internal static readonly RegistryPlatformCatalogIdentity Platform = new("sunder.core", "1.1.0", Hash("catalog"));
-    internal static readonly RegistryRuntimePolicySubject Runtime = new(new("sunder.runtime.dotnet", "10.0.0", 1, "osx-arm64", "sunder.dotnet.worker.v1"), Hash("manifest"), Hash("artifact"));
     private readonly TemporaryDirectoryScope _directory = TemporaryDirectoryScope.Create("sunder-active-policy");
     private readonly HttpClient _http;
 
@@ -40,22 +39,21 @@ internal sealed class ActivePolicyTestContext : IDisposable
     internal Func<RegistryPolicySynchronizationRequest, RegistryPolicySynchronizationResponse> Response { get; set; } = request => Allowed(request);
 
     internal async Task<RegistryPolicyObservation> FetchAsync(IReadOnlyList<RegistryPackageVersionIdentity>? packages = null,
-        IReadOnlyList<RegistryPlatformCatalogIdentity>? platforms = null, IReadOnlyList<RegistryRuntimePolicySubject>? runtimes = null, CancellationToken token = default)
-        => await Client.SynchronizeAsync(Origin, await Cache.CreateRequestAsync(Origin, packages ?? [Package], platforms ?? [], runtimes ?? [], token), token);
+        IReadOnlyList<RegistryPlatformCatalogIdentity>? platforms = null, CancellationToken token = default)
+        => await Client.SynchronizeAsync(Origin, await Cache.CreateRequestAsync(Origin, packages ?? [Package], platforms ?? [], token), token);
 
     internal async Task RefreshAsync(IReadOnlyList<RegistryPackageVersionIdentity>? packages = null,
-        IReadOnlyList<RegistryPlatformCatalogIdentity>? platforms = null, IReadOnlyList<RegistryRuntimePolicySubject>? runtimes = null)
-        => await Cache.ObserveAsync(await FetchAsync(packages, platforms, runtimes));
+        IReadOnlyList<RegistryPlatformCatalogIdentity>? platforms = null)
+        => await Cache.ObserveAsync(await FetchAsync(packages, platforms));
 
-    internal void Require(RegistryPackageVersionIdentity? package = null, IReadOnlyList<RegistryRuntimePolicySubject>? runtimes = null)
-        => Cache.RequireActivation(Origin, package ?? Package, runtimes ?? []);
+    internal void Require(RegistryPackageVersionIdentity? package = null)
+        => Cache.RequireActivation(Origin, package ?? Package);
 
     internal static RegistryPolicySynchronizationResponse Allowed(RegistryPolicySynchronizationRequest request, long revision = 1)
-        => new(request.Nonce, Origin, new(revision, Hash("package-policy-" + revision)), revision,
+        => new(request.Nonce, Origin, new(revision, Hash("package-policy-" + revision)),
             new(revision, Hash("checkpoint-" + revision), 1, Hash("topology")), ObservedAt, ObservedAt.AddHours(24),
             request.Packages.Select(subject => new RegistryPackagePolicyDecision(subject, "Active", "Listed", "Allowed", null, null, request.PlatformCatalogs)).ToArray(),
-            request.PlatformCatalogs.Select(subject => new RegistryPlatformPolicyDecision(subject, "Supported", "Allowed", null, null)).ToArray(),
-            request.Runtimes.Select(subject => new RegistryRuntimePolicyDecision(subject, "supported", "Allowed", null, null, null)).ToArray());
+            request.PlatformCatalogs.Select(subject => new RegistryPlatformPolicyDecision(subject, "Supported", "Allowed", null, null)).ToArray());
 
     internal static string Hash(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     public void Dispose() { _http.Dispose(); _directory.Dispose(); }

@@ -58,15 +58,13 @@ public sealed partial class ImplementationFirstRpcBuildTests
             var sourcePath = Path.Combine(package, "Mixed.cs");
             var source = await File.ReadAllTextAsync(sourcePath);
             var baselinePath = Path.Combine(package, "sunder-contracts.owned.json");
-            var baseline = await File.ReadAllBytesAsync(baselinePath);
+            Assert.False(File.Exists(baselinePath));
             await File.WriteAllTextAsync(sourcePath, source.Replace("GreetAsync", "WelcomeAsync", StringComparison.Ordinal));
-            var unaccepted = await RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]);
-            Assert.NotEqual(0, unaccepted.ExitCode);
-            Assert.Contains("AcceptSunderContracts", unaccepted.StandardOutput + unaccepted.StandardError, StringComparison.Ordinal);
-            Assert.Equal(baseline, await File.ReadAllBytesAsync(baselinePath));
+            AssertSuccess(await RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]));
+            Assert.False(File.Exists(baselinePath));
             await File.WriteAllTextAsync(sourcePath, source);
             AssertSuccess(await RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]));
-            AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:FreezeSunderContracts;PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet"]));
+            AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet"]));
             var archive = Path.Combine(package, "bin/Debug/net10.0/EditorWorkspace.7.6.5.sunderpkg");
             var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(archive, scope.GetPath("extracted"));
             Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
@@ -90,8 +88,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Directory.CreateDirectory(library);
         var repository = FindRepositoryRoot();
         var baseline = Path.Combine(repository, "languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ImplementationFirstRpc");
-        foreach (var file in new[] { "sunder-contracts.owned.json", "sunder-contracts.lock.json" })
-            File.Copy(Path.Combine(baseline, file), Path.Combine(package, file));
+        File.Copy(Path.Combine(baseline, "sunder-contracts.lock.json"), Path.Combine(package, "sunder-contracts.lock.json"));
         await File.WriteAllTextAsync(Path.Combine(library, "SourceLibrary.csproj"), """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>

@@ -100,7 +100,7 @@
                 <StackPanel Spacing="6">
                   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                     <TextBlock FontWeight="SemiBold" Text="{Binding RuntimeId}" TextWrapping="Wrap" />
-                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding Lifecycle}" />
+                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding StatusText}" />
                   </Grid>
                   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                     <TextBlock Classes="caption" Text="{Binding VersionRange}" TextWrapping="Wrap" />
@@ -108,7 +108,7 @@
                   </Grid>
                   <TextBlock Classes="muted" Text="{Binding Rid}" />
                   <TextBlock Classes="muted" Text="{Binding Availability}" TextWrapping="Wrap" />
-                  <TextBlock Classes="muted" Text="{Binding LifecycleMessage}" TextWrapping="Wrap" />
+                  <TextBlock Classes="muted" Text="{Binding DetailText}" TextWrapping="Wrap" />
                 </StackPanel>
               </Border>
             </DataTemplate>

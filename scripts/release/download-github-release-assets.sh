@@ -11,7 +11,7 @@ destination="$3"
 shift 3
 [[ "$release_id" =~ ^[1-9][0-9]*$ ]] \
   || { printf 'Release ID must be a positive decimal integer.\n' >&2; exit 2; }
-[[ "$tag" =~ ^(app|cli|host|sdk|runtime)/v[A-Za-z0-9.-]+$ ]] \
+[[ "$tag" =~ ^(app|cli|host|sdk)/v[A-Za-z0-9.-]+$ ]] \
   || { printf 'Unexpected release tag: %s\n' "$tag" >&2; exit 2; }
 [[ -d "$destination" && ! -L "$destination" ]] \
   || { printf 'Release asset destination must be a real directory: %s\n' "$destination" >&2; exit 1; }

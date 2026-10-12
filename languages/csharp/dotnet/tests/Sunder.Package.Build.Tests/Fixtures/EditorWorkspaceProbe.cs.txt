@@ -43,7 +43,7 @@ internal static class Probe
         var solution = project.Solution.WithDocumentText(source.Id, SourceText.From(liveSource));
         project = solution.GetProject(project.Id)!;
         var renamed = await VerifyAsync(project, "WelcomeAsync", "Status", "Format");
-        Require(renamed.GetTypeByMetadataName("Example.Generated.IGreetingService")!.GetMembers("GreetAsync").Length == 0, "The old service member survived an unsaved edit.");
+        Require(renamed.GetTypeByMetadataName("Sunder.Generated.Packages.Example_Generated_Services.IGreetingService")!.GetMembers("GreetAsync").Length == 0, "The old service member survived an unsaved edit.");
 
         liveSource = liveSource.Replace("Status.Text", "LiveStatus.Text", StringComparison.Ordinal);
         solution = solution.WithDocumentText(source.Id, SourceText.From(liveSource))
@@ -76,7 +76,7 @@ internal static class Probe
         var compilation = await project.GetCompilationAsync() ?? throw new InvalidOperationException("No workspace compilation.");
         var errors = compilation.GetDiagnostics().Where(value => value.Severity == DiagnosticSeverity.Error).ToArray();
         Require(errors.Length == 0, string.Join(Environment.NewLine, errors.Select(value => value.ToString())));
-        Require(compilation.GetTypeByMetadataName("Example.Generated.IGreetingService")?.GetMembers(method).Length == 1, "Missing live service method " + method);
+        Require(compilation.GetTypeByMetadataName("Sunder.Generated.Packages.Example_Generated_Services.IGreetingService")?.GetMembers(method).Length == 1, "Missing live service method " + method);
         var view = compilation.GetTypeByMetadataName("Example.Generated.GreetingView");
         Require(view?.GetMembers(control).Length == 1 && view.GetMembers("InitializeComponent").Length == 1, "Missing live XAML members.");
         Require(compilation.GetTypeByMetadataName("SourceLibrary.Formatter")?.GetMembers(helper).Length == 1, "Missing live project-reference member " + helper);

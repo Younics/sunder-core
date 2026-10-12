@@ -15,18 +15,11 @@ internal static class RuntimeHostComposition
         RuntimeBearerTokenValidator bearerTokenValidator,
         RuntimeResourcePolicy? resourcePolicy = null,
         string? packageSessionStartupTracePath = null,
-        ExecutionRuntimeHostTrustService? executionRuntimeTrust = null,
-        bool developmentAllowInsecureLoopbackRegistry = false,
         PackageSessionConcurrencyOptions? packageSessionConcurrency = null)
     {
         resourcePolicy ??= RuntimeResourcePolicies.Standard;
         packageSessionConcurrency ??= new PackageSessionConcurrencyOptions();
         packageSessionConcurrency.Validate();
-        executionRuntimeTrust ??= new ExecutionRuntimeHostTrustService(
-            RuntimeRegistryContractMapper.RuntimeTrustProfile.ProfileId,
-            RuntimeRegistryContractMapper.RuntimeTrustProfile.Generation,
-            developmentTrustEnabled: false,
-            productionKeys: []);
         services.AddLogging();
         services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
         services.ConfigureHttpJsonOptions(options =>
@@ -58,9 +51,17 @@ internal static class RuntimeHostComposition
         services.AddSingleton<RuntimeOperationGate>();
         services.AddSingleton<RuntimeResetChallengeService>();
         services.AddSingleton<ExecutionRuntimePhaseTelemetry>();
-        services.AddSingleton(executionRuntimeTrust);
         services.AddSingleton<ExecutionRuntimeStoreLayout>();
-        services.AddSingleton<ExecutionRuntimeLifecyclePolicyCache>();
+        services.AddSingleton<ExecutionRuntimeManagementState>();
+        services.AddSingleton<ExecutionRuntimeManagementPlans>();
+        services.AddSingleton<ExecutionRuntimeInstallationService>();
+        services.AddSingleton<PackageRuntimePrerequisiteService>();
+        services.AddSingleton<ExecutionRuntimeUsageService>();
+        services.AddSingleton<ExecutionRuntimeUpdateService>();
+        services.AddSingleton(provider => new ExecutionRuntimeActivationUpdates(
+            token => provider.GetRequiredService<ExecutionRuntimeUpdateService>().ApplyPreparedWhenStoppedAsync(token),
+            provider.GetRequiredService<ILogger<ExecutionRuntimeActivationUpdates>>()));
+        services.AddHostedService<ExecutionRuntimeUpdateScheduler>();
         services.AddSingleton<IPolicyContinuousClock, PolicyContinuousClock>();
         services.AddSingleton<PackageLifecyclePolicyCache>();
         services.AddSingleton<PackagePolicyAdmission>();
@@ -83,12 +84,11 @@ internal static class RuntimeHostComposition
             provider.GetRequiredService<PackageExecutionRuntimeGarbageCollectionAuthority>());
         services.AddSingleton(provider => new ExecutionRuntimeStore(
             provider.GetRequiredService<ExecutionRuntimeStoreLayout>(),
-            provider.GetRequiredService<ExecutionRuntimeHostTrustService>(),
             provider.GetRequiredService<IExecutionRuntimeGarbageCollectionAuthority>(),
             provider.GetRequiredService<TimeProvider>(),
             hostInstanceId: provider.GetRequiredService<RuntimeProtocolDescriptor>().RuntimeInstanceId,
             telemetry: provider.GetRequiredService<ExecutionRuntimePhaseTelemetry>(),
-            developmentAllowInsecureLoopbackRegistry: developmentAllowInsecureLoopbackRegistry));
+            materializer: provider.GetRequiredService<OfficialRuntimeMaterializer>()));
         services.AddSingleton<IExecutionRuntimeRetentionManager>(provider =>
             provider.GetRequiredService<ExecutionRuntimeStore>());
         services.AddSingleton<LocalExecutionRuntimeBindingResolver>();
@@ -176,17 +176,24 @@ internal static class RuntimeHostComposition
         services.AddSingleton<RegistryCredentialStore>();
         services.AddSingleton<RegistryAuthCoordinator>();
         services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<RegistryAuthCoordinator>());
+        services.AddHttpClient(OfficialRuntimeHttpClient.ClientName, client =>
+        {
+            client.Timeout = Timeout.InfiniteTimeSpan;
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Sunder-Runtime/1.0");
+        }).ConfigurePrimaryHttpMessageHandler(OfficialRuntimeHttpClient.CreateHandler);
+        services.AddSingleton<OfficialRuntimeHttpClient>();
+        services.AddSingleton<OfficialRuntimeResolver>();
+        services.AddSingleton<IOfficialRuntimePlatformProbe, OfficialRuntimePlatformProbe>();
+        services.AddSingleton<OfficialRuntimeMaterializer>();
         services.AddSingleton(provider => new ExecutionRuntimeArtifactDownloader(
-            provider.GetRequiredService<RegistryHttpClient>(),
+            provider.GetRequiredService<OfficialRuntimeHttpClient>(),
             provider.GetRequiredService<ExecutionRuntimeStore>(),
-            provider.GetRequiredService<ExecutionRuntimeHostTrustService>(),
             provider.GetRequiredService<TimeProvider>(),
-            provider.GetRequiredService<ExecutionRuntimePhaseTelemetry>(),
-            developmentAllowInsecureLoopbackRegistry));
+            provider.GetRequiredService<ExecutionRuntimePhaseTelemetry>()));
         services.AddSingleton<ExecutionRuntimeManagementService>();
-        services.AddSingleton<ExecutionRuntimeLifecyclePolicyRefresher>();
         services.AddSingleton<ExecutionRuntimeStartupMaintenance>();
-        services.AddSingleton<RegistryExecutionRuntimeBindingPreparer>();
+        services.AddSingleton<HostExecutionRuntimeBindingPreparer>();
+        services.AddSingleton<IHostExecutionRuntimeBindingPreparer>(provider => provider.GetRequiredService<HostExecutionRuntimeBindingPreparer>());
         services.AddSingleton<RegistryPackageArtifactDownloader>();
         services.AddSingleton<RegistryPackagePlanResolver>();
         services.AddSingleton<RegistryPackageChangeOrchestrator>();

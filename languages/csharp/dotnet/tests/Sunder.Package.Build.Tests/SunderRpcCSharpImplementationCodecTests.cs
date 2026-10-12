@@ -7,12 +7,13 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 
 namespace Sunder.Package.Build.Tests;
 
-public sealed class SunderRpcCSharpImplementationCodecTests
+public sealed partial class SunderRpcCSharpImplementationCodecTests
 {
     [Fact]
     public async Task Unary_PreservesRequiredDefaultsAndOptionalPresence()
@@ -441,13 +442,14 @@ public sealed class SunderRpcCSharpImplementationCodecTests
         var source = $$"""
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
-            [SunderRpcService(SunderRpcExposure.Package)]
+            using Sunder.Sdk.Services;
+            [SunderService]
             public sealed partial class InvalidService
             {
-                [SunderRpcMethod]
+                [SunderMethod]
                 public ValueTask<Bad> EchoAsync(Bad request) => ValueTask.FromResult(request);
             }
-            [SunderRpcTransparent]
+            [SunderTransparentValue]
             {{declaration}}
             """;
         var result = new SunderRpcCSharpSourceCompiler().Compile(new(
@@ -461,10 +463,7 @@ public sealed class SunderRpcCSharpImplementationCodecTests
     }
 
     [Theory]
-    [InlineData("public sealed class Bad { public Bad(SunderRpcOptional<bool> flag) { Flag = flag; } public SunderRpcOptional<bool> Flag { get; init; } = new(false); }", "parameterless JSON constructor")]
-    [InlineData("public sealed class Bad { public Bad() { } [JsonConstructor] public Bad(SunderRpcOptional<bool> flag) { Flag = flag; } public SunderRpcOptional<bool> Flag { get; init; } = new(false); }", "parameterless JSON constructor")]
-    [InlineData("public sealed class Bad { [JsonConstructor] public Bad(SunderRpcOptional<bool> flag = default) { Flag = flag; } public SunderRpcOptional<bool> Flag { get; init; } }", "parameterless JSON constructor")]
-    [InlineData("public readonly record struct Bad { [JsonConstructor] public Bad(SunderRpcOptional<bool> flag) { Flag = flag; } public SunderRpcOptional<bool> Flag { get; init; } }", "parameterless JSON constructor")]
+    [InlineData("public sealed class Bad { public Bad(SunderRpcOptional<bool> flag) { Flag = flag; } public SunderRpcOptional<bool> Flag { get; } }", "setter/init accessor")]
     [InlineData("public sealed class Bad { public SunderRpcOptional<bool> Flag { get; } = new(false); }", "JSON-readable getter and writable setter")]
     public void OptionalConstruction_RejectsShapesThatCannotResetAbsenceBeforePopulation(string declaration, string message)
     {
@@ -472,10 +471,11 @@ public sealed class SunderRpcCSharpImplementationCodecTests
             using System.Text.Json.Serialization;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
-            [SunderRpcService(SunderRpcExposure.Package)]
+            using Sunder.Sdk.Services;
+            [SunderService]
             public sealed partial class InvalidService
             {
-                [SunderRpcMethod]
+                [SunderMethod]
                 public ValueTask<Bad> EchoAsync(Bad request) => ValueTask.FromResult(request);
             }
             {{declaration}}
@@ -517,10 +517,11 @@ public sealed class SunderRpcCSharpImplementationCodecTests
             ("integers", $$"""{"scalar":0,"wrapper":0,"list":[],"map":{},"nullable":null,"optionalNullable":{{value}}}"""),
         ];
 
-    private static RuntimeProbe CompileProbe(string? integerType = null, bool includeRangeBounds = true)
+    private static RuntimeProbe CompileProbe(string? integerType = null, bool includeRangeBounds = true, string? additionalSource = null)
     {
         var sourceText = integerType is null ? Source : Source + "\n" + IntegerSource.Replace("INTEGER", integerType, StringComparison.Ordinal);
-        if (!includeRangeBounds) sourceText = sourceText.Replace("[SunderRpcNumericEnum]", "[SunderRpcNumericEnum(IncludeRangeBounds = false)]", StringComparison.Ordinal);
+        if (additionalSource is not null) sourceText += "\n" + additionalSource;
+        if (!includeRangeBounds) sourceText = sourceText.Replace("[SunderNumericEnum]", "[SunderNumericEnum(IncludeRangeBounds = false)]", StringComparison.Ordinal);
         var compiler = new SunderRpcCSharpSourceCompiler();
         var input = new SunderRpcCSharpCompilerInput("example.codecs", "9.8.7", [new("Codec.cs", sourceText)], References());
         var first = compiler.Compile(input);
@@ -566,7 +567,7 @@ public sealed class SunderRpcCSharpImplementationCodecTests
 
     private static string[] References()
         => ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
-            .Append(typeof(SunderRpcServiceAttribute).Assembly.Location)
+            .Append(typeof(SunderServiceAttribute).Assembly.Location)
             .Append(typeof(SunderWorkerProviderRegistration).Assembly.Location)
             .Distinct(StringComparer.Ordinal).ToArray();
 
@@ -653,21 +654,21 @@ public sealed class SunderRpcCSharpImplementationCodecTests
     private const string IntegerSource = """
         public sealed partial class CodecService
         {
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<IntegerValue> IntegerAsync(IntegerValue request) => Respond(new IntegerValue { Value = request.Value });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<IntegerRecord> IntegersAsync(IntegerRecord request) => Respond(request);
-            [SunderRpcMethod]
+            [SunderMethod]
             public async IAsyncEnumerable<IntegerRecord> IntegerWatchAsync(IntegerRecord request)
             {
                 yield return await IntegersAsync(request);
             }
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<OtherPrimitives> OtherPrimitivesAsync(OtherPrimitives request) => Respond(request);
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<OtherPrimitives> InvalidWideIntegerAsync(OtherPrimitives request) => Respond(request with { Wide = long.MaxValue });
         }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public readonly record struct IntegerValue { public required INTEGER Value { get; init; } }
         public sealed record IntegerRecord
         {
@@ -698,6 +699,7 @@ public sealed class SunderRpcCSharpImplementationCodecTests
         using System.Text.Json.Serialization;
         using System.Threading.Tasks;
         using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         using Sunder.Sdk.Worker;
         namespace Example.Codecs;
         public static class Probe
@@ -707,7 +709,7 @@ public sealed class SunderRpcCSharpImplementationCodecTests
             public static int Calls() => Service.Calls;
             public static bool NullableOutersWereNull() => Service.NullableOutersWereNull;
         }
-        [SunderRpcService(SunderRpcExposure.Package)]
+        [SunderService]
         public sealed partial class CodecService
         {
             public int Calls { get; private set; }
@@ -717,9 +719,9 @@ public sealed class SunderRpcCSharpImplementationCodecTests
                 Calls++;
                 return ValueTask.FromResult(response);
             }
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<Defaults> EchoAsync(Defaults request) => Respond(request);
-            [SunderRpcMethod]
+            [SunderMethod]
             public async IAsyncEnumerable<Defaults> WatchAsync(Defaults request)
             {
                 Calls++;
@@ -731,28 +733,28 @@ public sealed class SunderRpcCSharpImplementationCodecTests
                     OptionalFlag = new(false), OptionalCount = new(0), OptionalText = new(null),
                 };
             }
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<FlagValue> FlagAsync(FlagValue request) => Respond(new FlagValue { Value = request.Value });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<CountValue> CountAsync(CountValue request) => Respond(new CountValue { Value = request.Value });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<TextValue> TextAsync(TextValue request) => Respond(new TextValue { Value = request.Value });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<TextList> ListAsync(TextList request) => Respond(new TextList { Value = request.Value });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<CountMap> MapAsync(CountMap request) => Respond(new CountMap { Value = request.Value });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<NullText> NullTextAsync(NullText request) => Respond(new NullText { Value = request.Value });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<WrappedNullText> WrappedNullTextAsync(WrappedNullText request)
                 => Respond(new WrappedNullText { Value = request.Value with { } });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<NullCount> NullCountAsync(NullCount request) => Respond(new NullCount { Value = request.Value });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<ContentValue> ContentAsync(ContentValue request) => Respond(new ContentValue { Value = request.Value with { } });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<AnyValue> AnyAsync(AnyValue request) => Respond(new AnyValue { Value = request.Value.Clone() });
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<WrappedRecord> NestedAsync(WrappedRecord request)
             {
                 _ = request.Label.Value.Length;
@@ -763,57 +765,57 @@ public sealed class SunderRpcCSharpImplementationCodecTests
                 foreach (var item in request.Scores.Value) _ = item.Value.Value;
                 return Respond(request);
             }
-            [SunderRpcMethod]
+            [SunderMethod]
             public async IAsyncEnumerable<WrappedRecord> WrappedWatchAsync(WrappedRecord request)
             {
                 yield return await NestedAsync(request);
             }
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<Priority> PriorityAsync(Priority request) => Respond(request);
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<Status> StatusAsync(Status request) => Respond(request);
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<EnumRecord> EnumsAsync(EnumRecord request) => Respond(request);
-            [SunderRpcMethod]
+            [SunderMethod]
             public async IAsyncEnumerable<EnumRecord> EnumWatchAsync(EnumRecord request)
             {
                 yield return await EnumsAsync(request);
             }
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<Priority> InvalidPriorityAsync(Priority request) => Respond((Priority)42);
-            [SunderRpcMethod]
+            [SunderMethod]
             public async IAsyncEnumerable<Priority> InvalidPriorityWatchAsync(Priority request)
             {
                 yield return await InvalidPriorityAsync(request);
             }
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<Status> InvalidStatusAsync(Status request) => Respond((Status)42);
-            [SunderRpcMethod]
+            [SunderMethod]
             public async IAsyncEnumerable<Status> InvalidStatusWatchAsync(Status request)
             {
                 yield return await InvalidStatusAsync(request);
             }
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<InitializedOptionals> InitializedOptionalsAsync(InitializedOptionals request) => Respond(request);
-            [SunderRpcMethod]
+            [SunderMethod]
             public async IAsyncEnumerable<InitializedOptionals> InitializedOptionalsWatchAsync(InitializedOptionals request)
             {
                 yield return await InitializedOptionalsAsync(request);
             }
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<InitializedOptionals> InitializedOptionalsOutputAsync() => Respond(new InitializedOptionals());
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<InitializedStruct> InitializedStructAsync(InitializedStruct request) => Respond(request);
-            [SunderRpcMethod]
+            [SunderMethod]
             public async IAsyncEnumerable<InitializedStruct> InitializedStructWatchAsync(InitializedStruct request)
             {
                 yield return await InitializedStructAsync(request);
             }
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<InitializedStruct> InitializedStructOutputAsync() => Respond(new InitializedStruct());
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<Names> NamesAsync(Names request) => Respond(request);
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<Defaults> CombineAsync(int URLValue, string user_ID, bool @event)
                 => Respond(new Defaults { Flag = @event, Count = URLValue, Text = user_ID, Number = null });
         }
@@ -844,29 +846,29 @@ public sealed class SunderRpcCSharpImplementationCodecTests
             public SunderRpcOptional<int> Count { get; init; } = new(7);
             public SunderRpcOptional<string?> Note { get; init; } = new(null);
         }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public sealed class FlagValue
         {
             internal FlagValue(bool unused = false) { }
             public required bool Value { get; set; }
         }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public readonly record struct CountValue { public required int Value { get; init; } }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public sealed record TextValue { public required string Value { get; init; } }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public sealed record TextList { public required IReadOnlyList<TextValue?> Value { get; init; } }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public sealed record CountMap { public required IReadOnlyDictionary<string, CountValue> Value { get; init; } }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public sealed record NullText { public required string? Value { get; init; } }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public sealed record WrappedNullText { public required NullText Value { get; init; } }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public readonly record struct NullCount { public required int? Value { get; init; } }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public sealed record ContentValue { public required SunderRpcContentReference Value { get; init; } }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public sealed record AnyValue { public required JsonElement Value { get; init; } }
         public sealed record WrappedRecord
         {
@@ -885,7 +887,7 @@ public sealed class SunderRpcCSharpImplementationCodecTests
             public required IReadOnlyList<Defaults> Records { get; init; }
             public required IReadOnlyDictionary<string, Defaults> RecordsByKey { get; init; }
         }
-        [SunderRpcNumericEnum]
+        [SunderNumericEnum]
         public enum Priority : long { Negative = -1, Zero = 0, Seven = 7 }
         public enum Status
         {

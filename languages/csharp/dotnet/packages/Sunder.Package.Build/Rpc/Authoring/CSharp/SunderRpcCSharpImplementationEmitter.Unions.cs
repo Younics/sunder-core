@@ -4,9 +4,12 @@ namespace Sunder.Package.Build.Rpc.Authoring.CSharp;
 
 internal static partial class SunderRpcCSharpImplementationEmitter
 {
+    private static bool RequiresSourceValueValidation(SunderRpcCSharpCompiledContract contract)
+        => contract.SourceTypes.Any(static type => type.Union is not null || type.Construction is not null);
+
     private static void EmitUnionSchemaHolder(StringBuilder output, SunderRpcCSharpCompiledContract contract)
     {
-        if (!contract.SourceTypes.Any(static type => type.Union is not null)) return;
+        if (!RequiresSourceValueValidation(contract)) return;
         // Emit once outside the provider loop, so provider count cannot multiply a 4 MiB descriptor.
         output.Append("namespace ").Append(EscapeNamespace(contract.GeneratedLogicalName)).AppendLine()
             .AppendLine("{")
@@ -24,7 +27,7 @@ internal static partial class SunderRpcCSharpImplementationEmitter
 
     private static void EmitUnionConverters(StringBuilder output, SunderRpcCSharpCompiledContract contract)
     {
-        if (!contract.SourceTypes.Any(static type => type.Union is not null)) return;
+        if (!RequiresSourceValueValidation(contract)) return;
 
         output.AppendLine("        [global::System.ThreadStatic]")
             .AppendLine("        private static int UnionCodecDepth;")

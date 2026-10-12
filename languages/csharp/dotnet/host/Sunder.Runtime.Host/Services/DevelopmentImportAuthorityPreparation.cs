@@ -100,7 +100,7 @@ internal sealed class DevelopmentImportAuthorityPreparation(RegistryHttpClient h
         DevelopmentImportAuthorityStore.Validate(evidence, manifest, hash);
         if (subjects.Length > 0 && origin is not null)
         {
-            await synchronizer.RefreshAsync([new(origin, [], subjects, [])], token);
+            await synchronizer.RefreshAsync([new(origin, [], subjects)], token);
             policies.RequirePlatformActivation(origin, subjects);
         }
         await VerifyManifest(); await store.SaveAsync(evidence, manifest, token); await VerifyManifest();

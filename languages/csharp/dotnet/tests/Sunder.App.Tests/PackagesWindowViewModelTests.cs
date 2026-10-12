@@ -861,7 +861,7 @@ public sealed class PackagesWindowViewModelTests
                         ["execution-runtime.v1", "rpc.v1", "worker-protocol.v1", "sdk-baseline-1-1.v1"],
                         ExecutionRuntime: requirement)])),
         };
-        var runtimeArtifact = CreateResolvedRuntimeArtifact(rid, ExecutionRuntimeLifecycleStates.Deprecated);
+        var runtimeArtifact = CreateResolvedRuntimeArtifact(rid, RuntimeExecutionRuntimeSupportState.Supported);
         var runtimeClient = new FakeRuntimeApiClient([])
         {
             RegistryPlanResult = CreateRuntimePlan(requirement, runtimeArtifact),
@@ -879,12 +879,12 @@ public sealed class PackagesWindowViewModelTests
         Assert.Equal(rid, viewModel.Marketplace.CurrentRid);
         Assert.Equal("8 MB", viewModel.Marketplace.PackageDownloadText);
         Assert.Equal("0 bytes (already installed)", viewModel.Marketplace.SharedRuntimeDownloadText);
-        Assert.Contains("lifecycle warning", viewModel.Marketplace.RuntimeCompatibilitySummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("already installed", viewModel.Marketplace.RuntimeCompatibilitySummary, StringComparison.OrdinalIgnoreCase);
         var runtime = Assert.Single(viewModel.Marketplace.ExecutionRuntimeRequirements);
         Assert.Equal("sunder.runtime.dotnet", runtime.RuntimeId);
         Assert.Equal(">=10.0.0 <11.0.0", runtime.VersionRange);
-        Assert.Equal("10.0.1 r2", runtime.ResolvedRuntime);
-        Assert.Equal("Deprecated", runtime.Lifecycle);
+        Assert.Equal("10.0.1", runtime.ResolvedRuntime);
+        Assert.Equal("Installed", runtime.StatusText);
         Assert.Contains("already installed", runtime.Availability, StringComparison.OrdinalIgnoreCase);
         Assert.True(viewModel.CanInstallSelectedMarketplacePackage);
     }
@@ -925,6 +925,37 @@ public sealed class PackagesWindowViewModelTests
         Assert.False(viewModel.Marketplace.HasNoRpcContractUses);
         Assert.False(viewModel.CanInstallSelectedMarketplacePackage);
         Assert.Equal("Declared access unavailable", viewModel.Marketplace.RpcAccessSummary);
+    }
+
+    [Fact]
+    public async Task MarketplaceMissingRuntimeKeepsInstallEntryPointAvailableForPrerequisiteConsent()
+    {
+        var rid = AppPackageTargetEnvironment.CurrentRid;
+        var requirement = new RegistryExecutionRuntimeRequirement("sunder.runtime.dotnet", ">=10.0.0 <11.0.0", "sunder.dotnet-worker-module.v1");
+        var artifact = CreateResolvedRuntimeArtifact(rid, RuntimeExecutionRuntimeSupportState.Supported);
+        var installation = new RuntimeExecutionRuntimeInstallPlan(true, null, "Install runtime first", TestSupport.RuntimeManagementTestClient.Plan(),
+            new(new(requirement.RuntimeId, requirement.VersionRange, requirement.ModuleAbi), artifact,
+                new('f', 64), DateTimeOffset.UtcNow.AddMinutes(5), false, artifact.Distribution.DownloadSize), true);
+        var plan = CreateRuntimePlan(requirement, artifact) with
+        {
+            Success = false,
+            RuntimePrerequisites = new(true, false, "execution-runtime.missing", "Runtime required", new('a', 64), rid,
+                [new(new("sunder.package.agent", "1.0.0", new('a', 64), "runtime", rid), new('a', 64),
+                    new(requirement.RuntimeId, requirement.VersionRange, requirement.ModuleAbi), false, "execution-runtime.missing", null, installation)], []),
+        };
+        var registry = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            VersionDetails = (id, version, _) => Task.FromResult<RegistryPackageVersionDetails?>(CreateRegistryPackageVersionDetails(id, version,
+                targets: [new("runtime", rid, "worker", "lib/Agent.dll", "net10.0", "1.1.0", [], ExecutionRuntime: requirement)])),
+        };
+        using var viewModel = CreateViewModel(new FakeRuntimeApiClient([]) { RegistryPlanResult = plan }, _ => registry, TimeSpan.FromMilliseconds(40));
+        viewModel.RegistryUrlText = "https://registry.example/";
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        await WaitForConditionAsync(() => viewModel.Marketplace.RuntimePreflightLoaded);
+        Assert.True(viewModel.CanInstallSelectedMarketplacePackage);
+        Assert.Contains("runtime first", viewModel.Marketplace.SharedRuntimeDownloadText);
+        Assert.False(Assert.Single(viewModel.Marketplace.ExecutionRuntimeRequirements).IsBlocked);
     }
 
     [Fact]
@@ -1234,28 +1265,10 @@ public sealed class PackagesWindowViewModelTests
             rid,
             new RuntimeExecutionRuntimeRequirement(runtimeId, $"[{version},{version}]", moduleAbi),
             new RuntimeExecutionRuntimeIdentity(
-                runtimeId,
-                version,
-                1,
-                rid,
-                moduleAbi,
-                new string(runtimeId == "node" ? 'c' : 'a', 64),
-                new string(runtimeId == "node" ? 'd' : 'b', 64)),
-            1024,
-            "https://registry.example/",
-            RuntimeExecutionRuntimeAcquisitionSources.Registry,
-            "release-key",
-            1,
-            new RuntimeExecutionRuntimeLifecycle(
-                ExecutionRuntimeLifecycleStates.Supported,
-                now,
-                null,
-                null,
-                null,
-                null,
-                null,
-                1,
-                now),
+                runtimeId == "node" ? ConfiguredOfficialSourceId.Node : ConfiguredOfficialSourceId.DotNet, runtimeId, version, rid, moduleAbi,
+                runtimeId == "node" ? RuntimeExecutionRuntimeChecksumAlgorithm.Sha256 : RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
+                new('a', runtimeId == "node" ? 64 : 128)),
+            TestSupport.RuntimeManagementTestClient.InstalledArtifact(),
             now);
     }
 
@@ -1267,17 +1280,15 @@ public sealed class PackagesWindowViewModelTests
         return new InstalledExecutionRuntimeSummary(
             binding.Runtime,
             healthy ? RuntimeExecutionRuntimeStatuses.Ready : RuntimeExecutionRuntimeStatuses.Unhealthy,
-            binding.ArtifactSize,
+            binding.InstalledArtifact.ArchiveSize,
             1,
-            binding.AcquisitionSource,
-            binding.SigningKeyId,
-            binding.TrustGeneration,
+            binding.InstalledArtifact,
             new RuntimeExecutionRuntimeHealth(
                 healthy ? RuntimeExecutionRuntimeStatuses.Ready : RuntimeExecutionRuntimeStatuses.Unhealthy,
                 now,
                 RepairRecommended: !healthy,
                 healthy ? null : "Integrity verification failed."),
-            binding.Lifecycle,
+            TestSupport.RuntimeManagementTestClient.Support(),
             now);
     }
 
@@ -1354,17 +1365,12 @@ public sealed class PackagesWindowViewModelTests
 
     private static RuntimeRegistryResolveInstallPlanResponse CreateRuntimePlan(
         RegistryExecutionRuntimeRequirement requirement,
-        RuntimeRegistryResolvedExecutionRuntimeArtifact runtimeArtifact)
+        RuntimeExecutionRuntimeVendorArtifact runtimeArtifact)
     {
         var runtimeRequirement = new RuntimeRegistryExecutionRuntimeRequirement(
             requirement.RuntimeId,
             requirement.VersionRange,
             requirement.ModuleAbi);
-        var binding = new RuntimeRegistryPackageTargetRuntimeBinding(
-            SunderPackageFormat.RuntimeHostRole,
-            runtimeArtifact.Identity.Rid,
-            runtimeRequirement,
-            runtimeArtifact.Identity);
         return new RuntimeRegistryResolveInstallPlanResponse(
             true,
             [new RuntimeRegistryPackageInstallPlanItem(
@@ -1393,73 +1399,26 @@ public sealed class PackagesWindowViewModelTests
                     new string('c', 64),
                     new string('d', 64),
                     new string('e', 64),
-                    1)],
-                [binding])],
-            ["The selected execution runtime is deprecated."],
+                    1)])],
             [],
             [],
             [],
-            RuntimeArtifacts: [runtimeArtifact]);
+            [])
+        { RuntimePrerequisites = new(true, true, null, "Ready", new('a', 64), runtimeArtifact.Identity.Rid,
+            [new(new("sunder.package.agent", "1.0.0", new('a', 64), "runtime", runtimeArtifact.Identity.Rid), new('a', 64),
+                new(requirement.RuntimeId, requirement.VersionRange, requirement.ModuleAbi), true, null, runtimeArtifact.Identity, null)], []) };
     }
 
-    private static RuntimeRegistryResolvedExecutionRuntimeArtifact CreateResolvedRuntimeArtifact(
+    private static RuntimeExecutionRuntimeVendorArtifact CreateResolvedRuntimeArtifact(
         string rid,
-        string lifecycleState)
-        => new(
-            new RuntimeRegistryExecutionRuntimeIdentity(
-                "sunder.runtime.dotnet",
-                "10.0.1",
-                2,
-                rid,
-                "sunder.dotnet-worker-module.v1"),
-            new string('1', 64),
-            new string('2', 64),
-            50L * 1024L * 1024L,
-            "release-key",
-            1,
-            new string('3', 64),
-            "native-key",
-            new RuntimeRegistryExecutionRuntimeLifecycle(
-                lifecycleState,
-                DateTimeOffset.UtcNow.AddDays(-2),
-                DateTimeOffset.UtcNow.AddDays(-1),
-                lifecycleState == ExecutionRuntimeLifecycleStates.Deprecated ? DateTimeOffset.UtcNow : null,
-                null,
-                null,
-                null,
-                lifecycleState == ExecutionRuntimeLifecycleStates.Deprecated ? "Upgrade before the support window closes." : null),
-            1,
-            "/runtime");
+        RuntimeExecutionRuntimeSupportState state)
+        => new(TestSupport.RuntimeManagementTestClient.Identity with { Rid = rid },
+            TestSupport.RuntimeManagementTestClient.Distribution() with { DownloadSize = 50L * 1024L * 1024L },
+            TestSupport.RuntimeManagementTestClient.Support() with { State = state });
 
     private static InstalledExecutionRuntimeSummary CreateInstalledRuntime(
-        RuntimeRegistryResolvedExecutionRuntimeArtifact artifact)
-        => new(
-            new RuntimeExecutionRuntimeIdentity(
-                artifact.Identity.RuntimeId,
-                artifact.Identity.Version,
-                artifact.Identity.PackagingRevision,
-                artifact.Identity.Rid,
-                artifact.Identity.ModuleAbi,
-                artifact.ManifestSha256,
-                artifact.ArtifactSha256),
-            RuntimeExecutionRuntimeStatuses.Ready,
-            artifact.ArtifactSize,
-            1,
-            RuntimeExecutionRuntimeAcquisitionSources.Registry,
-            artifact.SigningKeyId,
-            1,
-            new RuntimeExecutionRuntimeHealth(RuntimeExecutionRuntimeStatuses.Ready, DateTimeOffset.UtcNow, false, null),
-            new RuntimeExecutionRuntimeLifecycle(
-                artifact.Lifecycle.State,
-                artifact.Lifecycle.SupportedFromUtc,
-                artifact.Lifecycle.DeprecatedAtUtc,
-                artifact.Lifecycle.InstallBlockedAtUtc,
-                artifact.Lifecycle.ActivationBlockedAtUtc,
-                artifact.Lifecycle.RevokedAtUtc,
-                artifact.Lifecycle.Message,
-                artifact.ObservedRuntimePolicyRevision,
-                DateTimeOffset.UtcNow),
-            DateTimeOffset.UtcNow);
+        RuntimeExecutionRuntimeVendorArtifact artifact)
+        => TestSupport.RuntimeManagementTestClient.Installed() with { Identity = artifact.Identity, Support = artifact.Support };
 
     private static RegistryPackageInstallPlanItem CreatePlanItem(string packageId, string version)
         => new(
@@ -1523,42 +1482,39 @@ public sealed class PackagesWindowViewModelTests
 
         public bool CancelActiveOperationForPackage(string packageId) => false;
 
-        public BackgroundProcessSnapshot EnqueueMarketplaceInstall(
+        public Task<BackgroundProcessSnapshot?> EnqueueMarketplaceInstallAsync(
             string packageId,
             string displayName,
             Uri registryUrl,
             string? version = null,
-            string? tag = "latest")
+            string? tag = "latest", CancellationToken cancellationToken = default)
         {
             MarketplaceInstallPackageId = packageId;
             MarketplaceInstallVersion = version;
-            return CreateSnapshot(packageId, PackageOperationKind.InstallMarketplace, displayName);
+            return Task.FromResult<BackgroundProcessSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.InstallMarketplace, displayName));
         }
 
-        public BackgroundProcessSnapshot EnqueueMarketplaceUpdate(
+        public Task<BackgroundProcessSnapshot?> EnqueueMarketplaceUpdateAsync(
             string packageId,
             string displayName,
-            string version)
-            => CreateSnapshot(packageId, PackageOperationKind.UpdateMarketplace, displayName);
+            string version, CancellationToken cancellationToken = default)
+            => Task.FromResult<BackgroundProcessSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.UpdateMarketplace, displayName));
 
-        public BackgroundProcessSnapshot EnqueueRegistrySourceAdoption(
+        public Task<BackgroundProcessSnapshot?> EnqueueRegistrySourceAdoptionAsync(
             string packageId,
             string displayName,
-            Uri registryUrl)
+            Uri registryUrl, CancellationToken cancellationToken = default)
         {
             AdoptedPackageId = packageId;
             AdoptionRegistryUrl = registryUrl;
-            return CreateSnapshot(packageId, PackageOperationKind.AdoptRegistrySource, displayName);
+            return Task.FromResult<BackgroundProcessSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.AdoptRegistrySource, displayName));
         }
 
-        public BackgroundProcessSnapshot EnqueueUpdateAll()
-            => CreateSnapshot(null, PackageOperationKind.UpdateAll, "All packages");
+        public Task<BackgroundProcessSnapshot?> EnqueueUpdateAllAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<BackgroundProcessSnapshot?>(CreateSnapshot(null, PackageOperationKind.UpdateAll, "All packages"));
 
-        public BackgroundProcessSnapshot EnqueueLocalInstall(
-            string packagePath,
-            string expectedSha256,
-            bool deleteAfterUse)
-            => CreateSnapshot(null, PackageOperationKind.InstallLocal, Path.GetFileName(packagePath));
+        public Task<BackgroundProcessSnapshot?> EnqueueLocalInstallAsync(PackageArchiveSelection selection, CancellationToken cancellationToken = default)
+            => Task.FromResult<BackgroundProcessSnapshot?>(CreateSnapshot(null, PackageOperationKind.InstallLocal, Path.GetFileName(selection.PackagePath)));
 
         public BackgroundProcessSnapshot EnqueueEnable(string packageId, string displayName)
         {
@@ -1737,7 +1693,7 @@ public sealed class PackagesWindowViewModelTests
 
     private sealed class FakeRuntimeApiClient(
         IReadOnlyList<InstalledPackageDescriptor> installedPackages
-    ) : IRuntimePackagesClient
+    ) : IRuntimePackagesClient, TestSupport.IReadyRuntimePrerequisiteTestClient, TestSupport.IUnsupportedPackageUploadRetentionTestClient
     {
         private readonly List<InstalledPackageDescriptor> _installedPackages =
             installedPackages.ToList();

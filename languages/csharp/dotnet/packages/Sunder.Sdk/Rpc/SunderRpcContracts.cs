@@ -656,6 +656,8 @@ public sealed class SunderRpcInvocationContext
         => _authority.OpenContentAsync(reference, cancellationToken);
 
     internal void Revoke() => _authority.Revoke();
+
+    internal CancellationToken RevocationToken => _authority.RevocationToken;
 }
 
 internal interface ISunderRpcInvocationAuthority

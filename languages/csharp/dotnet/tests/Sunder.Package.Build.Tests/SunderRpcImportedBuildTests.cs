@@ -18,6 +18,7 @@ using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 using TaskItem = Microsoft.Build.Utilities.TaskItem;
@@ -41,7 +42,8 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         """;
     private const string ConsumerSource = """
         using Sunder.Sdk.Rpc;
-        using Sunder.Generated.Rpc;
+        using Sunder.Sdk.Services;
+        using Sunder.Generated.Packages.Example_Dependency_Internal;
         public static class Consumer
         {
             public static object Create(ISunderRpcClient rpc) => new DependencyPackageApi(rpc).CExample_Rpc_V1_Minimal;
@@ -50,10 +52,26 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
     private const string ProviderSource = """
         using System.Threading;
         using System.Threading.Tasks;
+        using Sunder.Sdk.Services;
+        using Sunder.Generated.Packages.Example_Dependency_Services;
+        [SunderServiceProvider(typeof(IMinimalProviderService), ProviderId = "example.owner.minimal.provider")]
+        public sealed partial class LocalProvider : IMinimalProviderService
+        {
+            public ValueTask PingAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+        }
+        public static class ProviderRegistrationProbe
+        {
+            public static object Create() => new LocalProvider().CreateSunderRpcProviderRegistration();
+        }
+        """;
+    private const string PlatformProviderSource = """
+        using System.Threading;
+        using System.Threading.Tasks;
         using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         using Sunder.Generated.Rpc;
         using Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal;
-        [SunderRpcProvider(typeof(IMinimalProviderService), ProviderId = "example.owner.minimal.provider")]
+        [SunderServiceProvider(typeof(IMinimalProviderService), ProviderId = "example.owner.minimal.provider")]
         public sealed partial class LocalProvider : IMinimalProviderService
         {
             public ValueTask<Empty> PingAsync(SunderRpcInvocationContext context, Empty request, CancellationToken cancellationToken)
@@ -87,6 +105,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         File.Copy(Fixture("authoring/conformance/valid/cache-entry-receipt.json"), SunderRpcContractCache.GetReceiptPath(_cache, _descriptor.Sha256));
         File.Copy(Fixture("authoring/conformance/valid/minimal-package-owned-baseline.json"), Path.Combine(_root, SunderRpcAuthoringDocuments.OwnedContractsFileName));
         File.Copy(Fixture("authoring/conformance/valid/package-api-contract-lock.json"), LockPath);
+        ModelProjectionTestEvidence.Seed(_cache, SunderRpcAuthoringDocuments.ReadContractLock(LockPath).PackageArtifacts[DependencyId]);
         File.WriteAllText(Path.Combine(_root, "Program.cs"), WorkerSource);
         File.WriteAllText(Path.Combine(_root, "Consumer.cs"), ConsumerSource);
     }
@@ -130,9 +149,11 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ImportedProvider_CompilesRegistrationAndCoalescesOnlyExplicitConsumerGrants(bool consumer)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ImportedProvider_CompilesRegistrationAndCoalescesOnlyExplicitConsumerGrants(bool consumer, bool contextBearing)
     {
         var contractLock = ReadJson(LockPath);
         contractLock["providerImports"]!["minimalProvider"] = new JsonObject { ["packageId"] = DependencyId, ["contractId"] = ContractId };
@@ -143,7 +164,13 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         }
         else contractLock["packageImports"]![DependencyId]!["presence"] = "optional";
         WriteJson(LockPath, contractLock);
-        File.WriteAllText(Path.Combine(_root, "Provider.cs"), ProviderSource);
+        var providerSource = contextBearing ? ProviderSource.Replace(" : IMinimalProviderService", "", StringComparison.Ordinal)
+            .Replace("public ValueTask PingAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;", """
+                public string? Caller { get; private set; }
+                public ValueTask PingAsync(global::Sunder.Sdk.Rpc.SunderRpcInvocationContext context)
+                { Caller = context.CallerPackageId; return ValueTask.CompletedTask; }
+                """, StringComparison.Ordinal) : ProviderSource;
+        File.WriteAllText(Path.Combine(_root, "Provider.cs"), providerSource);
         File.WriteAllText(Path.Combine(_root, "Program.cs"), WorkerSource.Replace("new SunderWorkerOptions([])",
             "new SunderWorkerOptions([new LocalProvider().CreateSunderRpcProviderRegistration()])", StringComparison.Ordinal));
         var generation = Generate();
@@ -171,6 +198,14 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
             Assert.Equal(provider.ContractVersion, registration.ContractVersion);
             Assert.Equal(provider.DescriptorSha256, registration.DescriptorSha256);
             Assert.Equal(provider.AbiSha256, registration.AbiSha256);
+            var local = Activator.CreateInstance(assembly.GetType("LocalProvider")!)!;
+            var bound = (SunderWorkerProviderRegistration)local.GetType().GetMethod("CreateSunderRpcProviderRegistration")!.Invoke(local, null)!;
+            var call = new StackContributorSourceParityTests.ContentHost().Context(new("example.owner", "1.0.0", bound.ProviderId,
+                bound.ContractId, bound.ContractVersion, bound.DescriptorSha256, bound.AbiSha256, Guid.NewGuid(), 1, 1,
+                new("exact-imported-endpoint"), 1, SunderRpcProviderState.Active));
+            var reply = await bound.Handler.InvokeUnaryAsync(call, "example", "ping", JsonSerializer.SerializeToElement(new { }));
+            Assert.Empty(reply.EnumerateObject());
+            if (contextBearing) Assert.Equal("caller.package", local.GetType().GetProperty("Caller")!.GetValue(local));
         }
         finally { context.Unload(); }
     }
@@ -180,8 +215,9 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
     {
         var platform = PlatformFixture();
         File.Copy(Fixture("authoring/conformance/valid/package-api-mixed-authority-contract-lock.json"), LockPath, overwrite: true);
+        ModelProjectionTestEvidence.Seed(_cache, SunderRpcAuthoringDocuments.ReadContractLock(LockPath).PackageArtifacts[DependencyId]);
         using var http = new HttpClient(new RestoreHandler(_ => throw new InvalidOperationException("Offline catalog hydration must not use HTTP.")));
-        Assert.Equal(0, await new SunderRpcContractRestore(http).RestoreAsync(LockPath, _cache, [], platformCatalog: platform.Path));
+        Assert.Equal(1, await new SunderRpcContractRestore(http).RestoreAsync(LockPath, _cache, [], platformCatalog: platform.Path));
         var generation = CreateGeneration();
         AssertSuccess(generation);
         Assert.Single(generation.ContractBundles);
@@ -195,7 +231,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         Assert.Empty(manifest.PlatformImports!);
         using var receipt = JsonDocument.Parse(File.ReadAllBytes(Assert.Single(generation.AuthoringReceipts).ItemSpec));
         Assert.Equal(2, Assert.Single(receipt.RootElement.GetProperty("packageArtifacts").EnumerateArray()).GetProperty("contracts").GetArrayLength());
-        Assert.Equal(3, Directory.GetFiles(_cache).Length);
+        Assert.Equal(5, Directory.GetFiles(_cache).Length);
     }
 
     [Theory]
@@ -209,13 +245,15 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         lockDocument["providerImports"]!["minimalProvider"] = new JsonObject { ["packageId"] = DependencyId, ["contractId"] = ContractId };
         WriteJson(LockPath, lockDocument);
         var providerMetadata = audienceOnly
-            ? "ProviderId = \"example.before\", Audience = ExampleAfterRpcError.Code == \"example.after\" ? SunderRpcProviderAudience.Owner : SunderRpcProviderAudience.Public"
+            ? "ProviderId = \"example.before\", Audience = ExampleAfterRpcError.Code == \"example.after\" ? SunderServiceAudience.Owner : SunderServiceAudience.Public"
             : "ProviderId = ExampleAfterRpcError.Code";
         File.WriteAllText(Path.Combine(_root, "Shadowing.cs"), $$"""
             using Legacy;
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
+            namespace Sunder.Generated.Packages.Example_Owner_Internal.CExample_Owner_Imports { }
             namespace Legacy
             {
                 public static class ExampleAfterRpcError
@@ -225,11 +263,11 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
             }
             namespace Owned
             {
-                [SunderRpcService(SunderRpcExposure.Public)]
-                [SunderRpcDomainError("example.after")]
+                [SunderService(SunderServiceExposure.Public)]
+                [SunderServiceError("example.after")]
                 public sealed partial class ImportsService
                 {
-                    [SunderRpcMethod(Errors = new[] { "example.after" })]
+                    [SunderMethod(Errors = new[] { "example.after" })]
                     public ValueTask<Reply> ReadAsync() => ValueTask.FromResult(new Reply { Value = "ok" });
                 }
                 public sealed record Reply
@@ -239,14 +277,13 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
             }
             namespace ImportedImplementation
             {
-                using Sunder.Generated.Rpc;
-                using Sunder.Generated.Rpc.Imports;
-                using Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal;
-                [SunderRpcProvider(typeof(IMinimalProviderService), {{providerMetadata}})]
+                using Sunder.Generated.Packages.Example_Owner_Internal;
+                using Sunder.Generated.Packages.Example_Owner_Internal.CExample_Owner_Imports;
+                using Sunder.Generated.Packages.Example_Dependency_Services;
+                [SunderServiceProvider(typeof(IMinimalProviderService), {{providerMetadata}})]
                 public sealed partial class LocalProvider : IMinimalProviderService
                 {
-                    public ValueTask<Empty> PingAsync(SunderRpcInvocationContext context, Empty request, CancellationToken cancellationToken)
-                        => ValueTask.FromResult(request);
+                    public ValueTask PingAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
                 }
             }
             """);
@@ -264,7 +301,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         Assert.True(candidate.Success, string.Join(Environment.NewLine, candidate.Diagnostics));
         var owned = Assert.Single(candidate.Contracts);
         Assert.Equal("imports", owned.ContractKey);
-        Assert.Equal("Sunder.Generated.Rpc.Imports", owned.GeneratedLogicalName);
+        Assert.Equal("Sunder.Generated.Packages.Example_Owner_Internal.CExample_Owner_Imports", owned.GeneratedLogicalName);
         var descriptor = owned.Descriptor;
         var baselinePath = Path.Combine(_root, SunderRpcAuthoringDocuments.OwnedContractsFileName);
         var baselineDocument = ReadJson(baselinePath);
@@ -304,8 +341,8 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         var verifiedProvider = Assert.Single(verified.ImportedProviders).Provider;
         Assert.Equal("example.before", acceptedProvider.ProviderId);
         Assert.Equal(audienceOnly ? "example.before" : "example.after", verifiedProvider.ProviderId);
-        Assert.Equal(SunderRpcProviderAudience.Public, acceptedProvider.Audience);
-        Assert.Equal(audienceOnly ? SunderRpcProviderAudience.Owner : SunderRpcProviderAudience.Public, verifiedProvider.Audience);
+        Assert.Equal(SunderServiceAudience.Public, acceptedProvider.Audience);
+        Assert.Equal(audienceOnly ? SunderServiceAudience.Owner : SunderServiceAudience.Public, verifiedProvider.Audience);
         Assert.Equal(audienceOnly, authoring == SunderRpcCSharpImplementationEmitter.Emit(verified.Contracts, verified.ImportedProviders));
         var fingerprint = SunderRpcAuthoringDocuments.ComputeInputFingerprint("example.owner", "1.0.0",
             task.ProjectIdentity, task.Configuration, task.TargetFramework, task.NullableEnabled, [], input.Sources, input.ReferencePaths, baseline, contractLock);
@@ -478,13 +515,16 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         reexport["selectedPackageContentIdentity"] = new string('2', 64);
         reexport["contracts"]![ContractId]!["artifactSource"] = "imported";
         reexport["publicInventorySha256"] = InventorySha256("example.reexport", reexport);
+        ModelProjectionTestEvidence.PinEmptySourceProjection("example.reexport", reexport);
         contractLock["packageArtifacts"]!["example.reexport"] = reexport;
         contractLock["packageImports"]![DependencyId]!["presence"] = "optional";
         contractLock["packageImports"]!["example.reexport"] = new JsonObject
         {
             ["localName"] = "reexport", ["presence"] = "required", ["requiredContracts"] = new JsonArray(ContractId),
+            ["consumerRoles"] = new JsonArray("runtime"),
         };
         WriteJson(LockPath, contractLock);
+        ModelProjectionTestEvidence.Seed(_cache, SunderRpcAuthoringDocuments.ReadContractLock(LockPath).PackageArtifacts["example.reexport"]);
         var generation = Generate();
         var manifest = ReadManifest(BuildManifest(generation).ManifestOutputPath);
         Assert.Single(manifest.ContractBundles!);
@@ -506,6 +546,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         var platform = PlatformFixture();
         UseOwnedFixture();
         File.Copy(Fixture("authoring/conformance/valid/package-api-mixed-authority-contract-lock.json"), LockPath, overwrite: true);
+        ModelProjectionTestEvidence.Seed(_cache, SunderRpcAuthoringDocuments.ReadContractLock(LockPath).PackageArtifacts[DependencyId]);
         var contractLock = ReadJson(LockPath);
         contractLock["packageImports"]![DependencyId]!["presence"] = "optional";
         if (provider)
@@ -541,7 +582,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
             {
                 public void ConfigureAppServices(IServiceCollection services, IPackageContext context) { }
                 public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services) { }
-                public Type OwnedClientType => typeof(Sunder.Generated.Rpc.Greeting.GreetingClient);
+                public Type OwnedClientType => typeof(Sunder.Generated.Packages.Example_Generated_Services.IGreetingService);
             }
             """);
         var app = CreateGeneration("ProjectImport", "app", producer.PackageProjectExports);
@@ -797,7 +838,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
     private void UseOwnedFixture()
     {
         var fixture = Path.Combine(RepositoryRoot(), "languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ImplementationFirstRpc");
-        File.Copy(Path.Combine(fixture, SunderRpcAuthoringDocuments.OwnedContractsFileName), Path.Combine(_root, SunderRpcAuthoringDocuments.OwnedContractsFileName), overwrite: true);
+        File.Delete(Path.Combine(_root, SunderRpcAuthoringDocuments.OwnedContractsFileName));
         File.Copy(Path.Combine(fixture, "Program.cs"), Path.Combine(_root, "Program.cs"), overwrite: true);
         File.WriteAllText(Path.Combine(_root, "GlobalUsings.cs"), "global using System;\nglobal using System.Threading;\nglobal using System.Threading.Tasks;\n");
     }

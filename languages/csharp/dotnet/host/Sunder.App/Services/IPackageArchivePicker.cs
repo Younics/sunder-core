@@ -9,4 +9,5 @@ public sealed record PackageArchiveSelection(
     string PackagePath,
     string Sha256,
     bool DeleteAfterUse,
-    Sunder.Runtime.Contracts.PackageCapabilityConsent? CapabilityConsent = null);
+    Sunder.Runtime.Contracts.PackageCapabilityConsent? CapabilityConsent = null,
+    Sunder.App.ViewModels.LocalPackageInstallConsentViewModel? Review = null);

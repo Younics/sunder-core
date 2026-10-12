@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Package.Build.Rpc.Authoring.CSharp;
 
@@ -26,10 +27,10 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
     internal static SunderRpcCSharpPlatformAdapter CompileCorePlatformAdapter(INamedTypeSymbol service, SunderRpcCSharpImportedContract contract)
     {
         var marker = service.GetAttributes().Select(attribute => attribute.AttributeClass).FirstOrDefault(type =>
-            type is not null && type.ToDisplayString() == typeof(SunderRpcPlatformImportAttribute).FullName
+            type is not null && type.ToDisplayString() == typeof(SunderPlatformImportAttribute).FullName
             && type.ContainingAssembly.Identity.Name == SdkAssemblyIdentity.Name && type.ContainingAssembly.Identity.Version == SdkAssemblyIdentity.Version)
             ?? throw new InvalidDataException("Core domain interface lacks the coordinated SDK platform marker.");
-        var method = marker.ContainingAssembly.GetTypeByMetadataName(typeof(SunderRpcMethodAttribute).FullName!)
+        var method = marker.ContainingAssembly.GetTypeByMetadataName(typeof(SunderMethodAttribute).FullName!)
             ?? throw new InvalidDataException("Core domain interface lacks coordinated SDK method metadata.");
         return CompilePlatformAdapter(service, marker, method, [new("core", contract, "") { IsPlatform = true }], service)
             ?? throw new InvalidDataException("Core domain adapter could not be bound to its source descriptor.");
@@ -67,15 +68,15 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         foreach (var method in declared)
         {
             var metadata = GetAttribute(method, methodAttribute)!;
-            var methodId = GetNamedString(metadata, nameof(SunderRpcMethodAttribute.MethodId));
+            var methodId = GetNamedString(metadata, nameof(SunderMethodAttribute.MethodId));
             var wire = descriptor.Services[0].Methods.SingleOrDefault(value => value.MethodId == methodId);
             if (wire is null || methods.Any(value => value.Descriptor.MethodId == methodId)
                 || method.MethodKind != MethodKind.Ordinary || method.IsStatic || method.IsGenericMethod
                 || method.DeclaredAccessibility != Accessibility.Public || method.ReturnType.NullableAnnotation == NullableAnnotation.Annotated
-                || GetNamedString(metadata, nameof(SunderRpcMethodAttribute.RequestDefinitionName)) is not null
-                || GetNamedString(metadata, nameof(SunderRpcMethodAttribute.OutputDefinitionName)) is not null
-                || GetNamedInt(metadata, nameof(SunderRpcMethodAttribute.Idempotency)) != (int)wire.Idempotency
-                || !GetNamedStrings(metadata, nameof(SunderRpcMethodAttribute.Errors)).Order(StringComparer.Ordinal).SequenceEqual(wire.Errors.Order(StringComparer.Ordinal), StringComparer.Ordinal))
+                || GetNamedString(metadata, nameof(SunderMethodAttribute.RequestDefinitionName)) is not null
+                || GetNamedString(metadata, nameof(SunderMethodAttribute.OutputDefinitionName)) is not null
+                || GetNamedInt(metadata, nameof(SunderMethodAttribute.Idempotency)) != (int)wire.Idempotency
+                || !GetNamedStrings(metadata, nameof(SunderMethodAttribute.Errors)).Order(StringComparer.Ordinal).SequenceEqual(wire.Errors.Order(StringComparer.Ordinal), StringComparer.Ordinal))
                 throw Failure("rpc-authoring.handler-incomplete", "Semantic adapter methods must match every selected method, idempotency and domain-error declaration.", provider);
             ITypeSymbol? request = null; var context = false; var cancellation = false;
             foreach (var parameter in method.Parameters)
@@ -94,7 +95,8 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             {
                 var shape = UnwrapOutput(method.ReturnType, method);
                 if (shape.Kind != "unary") throw Failure("rpc-authoring.handler-incomplete", "Semantic adapters require unary asynchronous methods.", provider);
-                output = shape.OutputType; graph.Validate(wire.OutputSchemaReference, output);
+                output = shape.OutputType ?? throw Failure("rpc-authoring.handler-incomplete", "The adapter result shape is missing.", provider);
+                graph.Validate(wire.OutputSchemaReference, output);
             }
             if (request is null) graph.RequireEmpty(wire.RequestSchemaReference); else graph.Validate(wire.RequestSchemaReference, request);
             methods.Add(new(wire, method, request, output));

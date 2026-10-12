@@ -6,79 +6,44 @@ substitute mocked fixtures for production evidence.
 
 ## Coordinates and approvals
 
-Both SDK and runtime tag workflows require `SUNDER_CORE_RELEASE_APPROVED=approved`,
+The SDK tag workflow requires `SUNDER_CORE_RELEASE_APPROVED=approved`,
 an HTTPS `SUNDER_CORE_RELEASE_APPROVAL_REFERENCE`, and exact
 `SUNDER_CORE_ARTIFACT_SOURCE_COMMIT`. The clean checkout, remote tag target,
-`GITHUB_SHA`, `GITHUB_WORKFLOW_SHA` and workflow ref must agree. Runtime additionally
-requires `SUNDER_CORE_SDK_TAG` at that same commit,
-`SUNDER_EXECUTION_RUNTIME_LOCK_SHA256`, and an existing numeric
-`SUNDER_EXECUTION_RUNTIME_RELEASE_ID` whose draft tag and `target_commitish` agree.
-Existing source/signer/native-runner approvals and pinned drivers remain required.
-Use the protected `sunder-core-release` and
-`sunder-execution-runtime-native-release` environments with required reviewers;
+`GITHUB_SHA`, `GITHUB_WORKFLOW_SHA` and workflow ref must agree.
+Use the protected `sunder-core-release` environment with required reviewers;
 repository/organization variables supply runner labels before job selection.
 Shared coordinates and approval variables used by workflow-level `env` must also
 be repository/organization variables. `GITHUB_REF_PROTECTED` must be `true`;
 operators must configure the branch/tag rulesets and required-reviewer environments.
 Native/coordinator runners must provide Bash, `gh`, `jq`, and Python 3.11+ as
-`python3`, in addition to the existing pinned .NET/signing/native-driver prerequisites.
+`python3`, in addition to the pinned .NET and component acceptance prerequisites.
 
-Publication is only `sunder-execution-runtime-publication.yml`, protected
-`sunder-execution-runtime-publication`, `workflow_dispatch`, `refs/heads/main`.
-Inputs are `runtime_tag`, `release_id`, `native_run_id`, `native_run_attempt`,
-`artifact_source_commit`, `publication_evidence_commit`, `runtime_lock_sha256`,
-and confirmation `publish-approved-retained-runtimes`. Approvals must still match
-those exact coordinates. `SUNDER_CORE_PUBLICATION_EVIDENCE_COMMIT` names the
+`SUNDER_CORE_PUBLICATION_EVIDENCE_COMMIT` names the
 approved direct descendant; it may change only the Core owned baseline's verified
 publication fields and receipt JSON under `eng/release/publication-evidence/`.
-The original frozen baseline content/history and both artifact tags remain intact.
+The original frozen baseline content/history and SDK artifact tag remain intact.
 The evidence's catalog identity must match the original source-derived catalog.
 
 `SUNDER_CORE_REGISTRY_ORIGIN` is the selected canonical credential-free HTTPS origin
-with a terminal slash. Registry administrative credentials are supplied only to the
-publication transaction after all retained-input checks. Approved public-key
-directories are still required for both pre-publication and downloaded-byte
-signature/attestation verification. The retained verifier requires .NET 10 on the
-coordinator; publication runs its DLL, never `dotnet run/build/publish` or a native
-release driver.
+with a terminal slash. Catalog import and its later evidence commit require their
+existing independent Registry authority approval. No catalog signer is introduced.
 
-## Native asset receipt
+## Native component and package evidence
 
-`runtime-native-<release-id>-<native-run-id>-<native-attempt>-receipt.json` is the
-completion marker for that attempt's numbered `-file-001`, `-file-002`, ... assets.
-It has exactly:
+App/Host/CLI native builds and Agent's six-RID generated Worker/App role capture and
+qualified package fan-in remain required. Original official .NET 10 Runtime and
+Node 24 archives instead flow directly through Host; they are not Sunder release
+assets. Native acceptance records Host's exact installed identity and provenance,
+including upstream version, source, RID, checksum and original archive hash/size.
+See [the official runtime contract](../../docs/OFFICIAL-RUNTIME-HANDOFF.md).
 
-- `schemaVersion: 1`, `kind: https://sunderapp.io/acceptance/runtime-native-assets/v1`;
-- `destination: { repository, releaseId, tag }`;
-- `artifactSourceCommit`, `sdkTag`, `runtimeLockSha256`;
-- `invocation: { workflowPath, workflowRef, workflowSha, runId, runAttempt }`;
-- `files`: sorted logical paths with exactly `{ path, sha256, size, assetName, assetId }`.
-
-The 22 files are twelve `.sunderruntime` archives under `execution-runtimes/<rid>/`,
-six original `execution-runtime-receipts/<rid>.json`, `production.lock.json`,
-`release-drivers.v1.json`, `release-set.v1.json`, and `runtime-verifier.zip`.
-The existing engineering release-set validator remains the cryptographic authority;
-the handoff checks its exact receipt/lock/driver/archive byte relationships.
-Numbered release asset IDs, sizes and SHA-256 digests are rechecked independently
-of the receipt. A replaced ID, even for equal bytes, fails. Paths, regular files,
-zip extraction, counts and sizes are bounded and links/traversal are rejected.
-
-The producer uploads and byte-verifies files before uploading the receipt. Partial
-same-attempt uploads are resumable by existing immutable upload helpers; changed
-bytes or a false completion marker fail. Every new native attempt runs the full
-matrix and uses new names. A publisher selects an exact completed successful
-tag-native attempt, not whichever attempt is newest; a newer failed attempt does
-not replace retained successful evidence. Missing assets block publication.
-
-Publication records `artifactSourceCommit`, `publicationEvidenceCommit`, selected
-native coordinates/receipt hash and the separate main workflow SHA/run/attempt in
-the existing recovery journal. `evidenceDiff` records the verified direct parent,
-evidence commit, changed-path allowlist result and publication-only baseline check.
-Existing lookup/upload/per-family promotion and
-post-publication download/resolution verification are retained. Final Registry
-receipts use the existing `execution-runtime-release-...` upload protocol in a
-credential-separated contents-write job. A lost journal recovers through exact
-Registry lookup; it never authorizes changing the selected native bytes.
+The existing production-acceptance decision binds six `core-production-<rid>.json`
+files through `nativeReceipts` (RID, file SHA-256, acceptance-driver SHA-256). Each
+native record contains `runtimeInstallations`, using Host's current
+`InstalledExecutionRuntimeSummary` DTOs, and passed installer/launcher checks with
+durable evidence references. This is test evidence, not a new runtime archive,
+signature or publication family. Source/tag/run/asset and immutable retry checks
+continue to protect actual component and package releases.
 
 ## Stable SDK catalog receipt
 

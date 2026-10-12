@@ -10,6 +10,7 @@ using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Package.Build.Tasks;
 
@@ -264,6 +265,7 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
                 return true;
             }
 
+            completeSourcePlan.Inputs?.Verify();
             var immutableExportPath = generationMode == RpcGenerationMode.ProjectExport
                 ? PublishImmutableProjectExport(intermediateOutputPath, sourcePlan)
                 : null;
@@ -329,6 +331,7 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             }
 
             WriteNewFile(stagingMarkerPath, Utf8NoBom.GetBytes(MarkerContents));
+            completeSourcePlan.Inputs?.Verify();
             _ = ReadTree(stagingPath);
             GeneratedOutputPathSafety.EnsureRegularFile(
                 stagingMarkerPath,
@@ -472,7 +475,7 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             : SourceOutputScope.Implementation;
         return complete with
         {
-            Files = complete.Files.Where(file => file.Scope == scope).ToArray(),
+            Files = complete.Files.Where(file => file.Scope == scope || file.RelativeOutputPath == SunderRpcAuthoringDocuments.ModelProjectionLogicalPath).ToArray(),
             Imports = mode == RpcGenerationMode.ProjectExport ? [] : complete.Imports,
             Projection = mode == RpcGenerationMode.ProjectExport ? null : complete.Projection,
         };
@@ -597,7 +600,8 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
                 exportPackageId,
                 exportPackageVersion,
                 mode == RpcGenerationMode.Implementation ? completeSourcePlan.LockSha256 : null,
-                mode == RpcGenerationMode.Implementation ? completeSourcePlan.Contracts : null);
+                mode == RpcGenerationMode.Implementation ? completeSourcePlan.Contracts : null)
+            { RoleUses = mode == RpcGenerationMode.Implementation ? completeSourcePlan.Projection?.RoleUses ?? [] : [] };
         }
         catch (Exception exception) when (exception is ArgumentException
                                            or NotSupportedException
@@ -630,7 +634,7 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
                 expected.ProjectIdentity,
                 expected.Configuration,
                 expected.TargetFramework,
-                expected.PackageId)
+                expected.PackageId, expected.PackageVersion)
             : ReadAndValidateImplementationExport(expected);
         if (!string.Equals(export.Sha256, expected.ExpectedSha256, StringComparison.Ordinal))
         {
@@ -649,12 +653,14 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             expected.ProjectIdentity,
             expected.Configuration,
             expected.TargetFramework,
-            expected.PackageId);
+            expected.PackageId, expected.PackageVersion);
         if (!string.Equals(export.LockSha256, expected.LockSha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 "The exact-RID contract lock does not match the project-neutral RPC export.");
         }
+        if (!export.RoleUses.Select(SunderRpcAuthoringDocuments.RoleUseIdentity).SequenceEqual(expected.RoleUses.Select(SunderRpcAuthoringDocuments.RoleUseIdentity), StringComparer.Ordinal))
+            throw new InvalidDataException("rpc-authoring.evidence-mismatch: The exact-RID source role uses do not match the project-neutral export.");
         var expectedByKey = expected.Contracts!.ToDictionary(
             static contract => contract.ContractKey,
             StringComparer.Ordinal);
@@ -662,6 +668,11 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             || export.Contracts.Any(contract =>
                 !expectedByKey.TryGetValue(contract.ContractKey, out var source)
                 || source.Exposure != contract.Exposure
+                || source.GeneratedLogicalName != contract.GeneratedLogicalName
+                || !SunderRpcAuthoringDocuments.SameModelProjection(source.ModelProjection, contract.ModelProjection)
+                || !SunderRpcAuthoringDocuments.SameMethodPolicies(source.MethodPolicies, contract.MethodPolicies)
+                || !SunderRpcAuthoringDocuments.SameUsePolicy(source.AppUse, contract.AppUse)
+                || !SunderRpcAuthoringDocuments.SameUsePolicy(source.RuntimeUse, contract.RuntimeUse)
                 || !source.Descriptor.GetCanonicalUtf8().AsSpan()
                     .SequenceEqual(contract.Descriptor.GetCanonicalUtf8())
                 || !source.Descriptor.GetCanonicalAbiProjectionUtf8().AsSpan()
@@ -760,35 +771,25 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
     {
         ValidateSourceDocumentDimensions();
         var files = new List<SourceGeneratedFile>();
-        AddSourceGeneratedFile(
-            files,
-            generatedDirectory,
-            "imports.g.cs",
-            Utf8NoBom.GetBytes("// <auto-generated />\n#nullable enable\n"),
-            compile: true,
-            scope: SourceOutputScope.Implementation);
-        foreach (var contract in export.Contracts.OrderBy(static item => item.ContractKey, StringComparer.Ordinal))
-        {
-            var accessibility = contract.Exposure == SunderRpcExposure.Public
-                ? SunderRpcCSharpAccessibility.Public
-                : SunderRpcCSharpAccessibility.Internal;
-            var source = SunderRpcCSharpGenerator.Generate(
-                contract.Descriptor,
-                contract.GeneratedLogicalName,
-                accessibility);
-            AddSourceGeneratedFile(
-                files,
-                generatedDirectory,
-                Path.Combine("bindings", contract.ContractKey + ".g.cs"),
-                Utf8NoBom.GetBytes(source),
-                compile: true,
-                scope: SourceOutputScope.Implementation);
-        }
+        var sourcePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // The compiler owns the complete projected source set, including shared
+        // models. A second descriptor-only generator here would invent duplicate
+        // public values and discard the export's source-derived model identity.
         foreach (var source in SunderRpcCSharpImportPrepass.PrepareOwnedPackageApi(export, PackageVersion.Trim()))
         {
-            AddSourceGeneratedFile(files, generatedDirectory, source.Path, Utf8NoBom.GetBytes(source.Text),
+            if (!TryNormalizeRelativeOutputFile(source.Path, out var normalized, out var error))
+                throw new InvalidDataException($"rpc-authoring.evidence-mismatch: Project-import generated source '{source.Path}' is invalid. {error}");
+            var relative = normalized.Replace(Path.DirectorySeparatorChar, '/');
+            if (!sourcePaths.Add(relative))
+                throw new InvalidDataException($"rpc-authoring.evidence-mismatch: Project-import generation repeats source path '{relative}'.");
+            // A shared model/union file can declare several types. Membership is
+            // the compiler's exact path set, not one guessed file per definition.
+            AddSourceGeneratedFile(files, generatedDirectory, relative, Utf8NoBom.GetBytes(source.Text),
                 compile: true, scope: SourceOutputScope.Implementation);
         }
+        if (!sourcePaths.Contains("imports.g.cs"))
+            AddSourceGeneratedFile(files, generatedDirectory, "imports.g.cs", Utf8NoBom.GetBytes("// <auto-generated />\n#nullable enable\n"),
+                compile: true, scope: SourceOutputScope.Implementation);
 
         var inputFingerprint = SunderRpcAuthoringDocuments.ComputeProjectImportFingerprint(
             export.Sha256,
@@ -806,6 +807,8 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             receipt,
             compile: false,
             scope: SourceOutputScope.Implementation);
+        AddSourceGeneratedFile(files, generatedDirectory, SunderRpcAuthoringDocuments.ModelProjectionLogicalPath,
+            SunderRpcAuthoringDocuments.PublicModelProjectionBytes(projection), false, SourceOutputScope.Implementation);
         return new(files, [], export.PackageId, export.LockSha256, export.Contracts, [], projection);
     }
 
@@ -842,6 +845,7 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
         IReadOnlySet<string>? allowUnboundImportedProviderKeys = null,
         Action<SunderRpcCSharpCompilationResult>? validateSelection = null)
     {
+        inputSnapshot ??= new SunderRpcInputSnapshot();
         var sources = ReadSourceFiles(projectDirectory, inputSnapshot);
         if (sources is null) return null;
         var ownedContractsPath = ResolveProjectFile(
@@ -859,9 +863,10 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             return SourceAuthoringPlan.Empty;
         }
 
-        var baseline = baselineOverride ?? (allowBootstrap && !GeneratedOutputPathSafety.PathExists(ownedContractsPath)
-            ? null
-            : SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(ownedContractsPath));
+        var baselineExists = GeneratedOutputPathSafety.PathExists(ownedContractsPath);
+        var baseline = baselineOverride ?? (baselineExists ? SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(ownedContractsPath) : null);
+        if (baselineExists) inputSnapshot?.Record(ownedContractsPath, SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(ownedContractsPath).ExactBytes);
+        else inputSnapshot?.ExpectAbsent(ownedContractsPath);
         var contractLock = SunderRpcAuthoringDocuments.ReadContractLock(contractLockPath, AllowDevelopmentRegistryOrigin);
         inputSnapshot?.Record(contractLockPath, contractLock.ExactBytes);
         var imports = SunderRpcCSharpImportPrepass.Prepare(contractLock,
@@ -888,7 +893,8 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             ImportedProviderSurfaces: imports.ProviderSurfaces,
             AllowUnboundImportedProviderKeys: allowUnboundImportedProviderKeys,
             AssemblyName: AssemblyName,
-            GenerateServiceInterfaces: GeneratePackageRoles);
+            GenerateServiceInterfaces: GeneratePackageRoles,
+            ImportedPackageApis: imports.PackageApis);
         var compiler = new SunderRpcCSharpSourceCompiler();
         var resourceInputs = GeneratePackageRoles ? Sunder.Package.Build.Authoring.SunderPackageResourcePlanner.Read(projectDirectory,
             ResourceItems.GroupBy(item => item.GetMetadata("ResourceKind"), StringComparer.Ordinal).Select(group => (group.Key, group.ToArray())).ToArray()) : [];
@@ -919,6 +925,7 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             LogCompilerDiagnostics(accepted.Diagnostics);
             return null;
         }
+        if (baseline is null && !allowBootstrap) VerifyNoLostPublicBaseline(projectDirectory, generatedDirectory);
         baseline ??= SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(
             SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(new(
                 accepted.ResolvedPackageId,
@@ -972,6 +979,11 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             return null;
         }
         if (validateBaseline) SunderRpcAuthoringDocuments.ValidateCompiledContracts(baseline, verified.Contracts);
+        if (accepted.Contracts.Count != verified.Contracts.Count || accepted.Contracts.Any(contract =>
+            verified.Contracts.SingleOrDefault(value => value.ContractKey == contract.ContractKey) is not { } final
+            || !SunderRpcAuthoringDocuments.SameModelProjection(contract.ModelProjection, final.ModelProjection)
+            || !SunderRpcAuthoringDocuments.SameMethodPolicies(contract.MethodPolicies, final.MethodPolicies)))
+            throw new InvalidDataException("rpc-authoring.evidence-mismatch: Source model projection changed after resolving generated members.");
         if (!authoringSource.AsSpan().SequenceEqual(
                 Utf8NoBom.GetBytes(SunderRpcCSharpImplementationEmitter.Emit(verified.Contracts, verified.ImportedProviders))))
         {
@@ -979,6 +991,23 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
                 "rpc-authoring.evidence-mismatch: Regenerated authoring.g.cs changed after resolving generated members.");
         }
 
+        IReadOnlySet<string> presentRoles = new HashSet<string>(StringComparer.Ordinal) { "runtime" };
+        if (GeneratePackageRoles)
+        {
+            var compilation = verified.SourceCompilation!;
+            var ordinary = sources.Select(source => source.Path).ToHashSet(StringComparer.Ordinal);
+            var markup = Sunder.Package.Build.Authoring.SunderPackageResourcePlanner.Markup(compilation, resourceInputs);
+            var roles = Sunder.Package.Build.Authoring.SunderPackageRolePlanner.Plan(compilation,
+                compilation.SyntaxTrees.Where(tree => ordinary.Contains(tree.FilePath)).ToArray(), verified.Contracts.SelectMany(contract => contract.SourceTypes).Select(value => value.SourceType), markup.Types,
+                verified.TrustedImportedModelTypes);
+            if (!roles.Success) { LogCompilerDiagnostics(roles.Diagnostics); return null; }
+            if (roles.Views.Count != 0 || roles.Types.Any(type => type.Roles == Sunder.Package.Build.Authoring.SunderPackageRoleMembership.App))
+                presentRoles = new HashSet<string>(StringComparer.Ordinal) { "app", "runtime" };
+        }
+        foreach (var import in contractLock.PackageImports.Values)
+            if (!import.ConsumerRoles.Any(presentRoles.Contains)) throw new InvalidDataException($"package-api.consumer-roles-unavailable: '{import.PackageId}' has no matching role in this canonical project; add a matching role or explicitly review consumerRoles.");
+
+        SunderRpcAuthoringDocuments.ValidateImportedProviderReferenceUses(contractLock, verified);
         if (validateSelection is not null)
         {
             if (!SelectionProviders(accepted).SequenceEqual(SelectionProviders(verified), StringComparer.Ordinal))
@@ -1000,7 +1029,9 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             references,
             baseline,
             contractLock,
-            AssemblyName);
+            AssemblyName,
+            projectDirectory,
+            inputSnapshot, verified.ImportedUses.Select(use => use.Evidence).ToArray());
         var exportBytes = SunderRpcAuthoringDocuments.WritePackageExport(
             producerVersion,
             ProjectIdentity.Trim(),
@@ -1009,9 +1040,10 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             inputFingerprint,
             contractLock.Sha256,
             baseline.PackageId,
-            accepted.Contracts);
+            PackageVersion.Trim(),
+            accepted.Contracts, accepted.ImportedUses.Select(use => use.Evidence).ToArray());
         var verifiedExport = SunderRpcAuthoringDocuments.WritePackageExport(producerVersion, ProjectIdentity.Trim(), Configuration.Trim(),
-            TargetFramework.Trim(), inputFingerprint, contractLock.Sha256, baseline.PackageId, verified.Contracts);
+            TargetFramework.Trim(), inputFingerprint, contractLock.Sha256, baseline.PackageId, PackageVersion.Trim(), verified.Contracts, verified.ImportedUses.Select(use => use.Evidence).ToArray());
         if (!exportBytes.AsSpan().SequenceEqual(verifiedExport))
             throw new InvalidDataException("rpc-authoring.evidence-mismatch: The project export or consumer policy changed after resolving generated members.");
         AddSourceGeneratedFile(
@@ -1022,10 +1054,10 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             compile: false,
             scope: SourceOutputScope.ProjectExport);
         var receipt = SunderRpcAuthoringDocuments.WriteAuthoringReceipt(
-            producerVersion, inputFingerprint, contractLock, baseline.PackageId, PackageVersion.Trim(), verified, imports);
+            producerVersion, inputFingerprint, contractLock, baseline.PackageId, PackageVersion.Trim(), verified, imports, presentRoles: presentRoles);
         // Registration source does not encode every receipt field, including provider audience.
         var acceptedReceipt = SunderRpcAuthoringDocuments.WriteAuthoringReceipt(
-            producerVersion, inputFingerprint, contractLock, baseline.PackageId, PackageVersion.Trim(), accepted, imports);
+            producerVersion, inputFingerprint, contractLock, baseline.PackageId, PackageVersion.Trim(), accepted, imports, presentRoles: presentRoles);
         if (!acceptedReceipt.AsSpan().SequenceEqual(receipt))
         {
             throw new InvalidDataException(
@@ -1043,18 +1075,34 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
         if (GeneratePackageRoles && !AddPackageRoleSources(files, generatedDirectory, projectDirectory, verified, sources, ownedClients.Sources, inputFingerprint,
                 resourceInputs, ownedClients.FrameworkSources.Where(source => !Sunder.Package.Build.Authoring.SunderFrameworkSourceGenerator.IsRoleGenerated(source.Path)).ToArray(),
                 new[] { frameworkGenerator?.AssemblyInput }.OfType<Sunder.Package.Build.Authoring.SunderPackageFileEvidence>()
-                    .Concat(roleGenerators.Select(generator => generator.AssemblyInput)).ToArray(), roleGenerators))
+                    .Concat(roleGenerators.Select(generator => generator.AssemblyInput)).ToArray(), roleGenerators, contractLock, imports, presentRoles, inputSnapshot!))
             return null;
 
+        if (presentRoles.Contains("app"))
+        {
+            var appReceipt = files.Single(file => file.RelativeOutputPath == SunderRpcAuthoringDocuments.AppAuthoringReceiptFileName);
+            var appProjection = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(appReceipt.Contents, contractLock.Sha256, baseline.PackageId, PackageVersion.Trim());
+            projection = SunderRpcAuthoringDocuments.MergeReceiptProjections([projection, appProjection]);
+        }
+
+        AddSourceGeneratedFile(files, generatedDirectory, SunderRpcAuthoringDocuments.ModelProjectionLogicalPath,
+            SunderRpcAuthoringDocuments.PublicModelProjectionBytes(projection), false, SourceOutputScope.Implementation);
         inputSnapshot?.Verify();
         return new(files, accepted.Contracts, baseline.PackageId, contractLock.Sha256, [], imports.Contracts, projection)
         {
             Baseline = baseline,
+            Inputs = inputSnapshot,
         };
     }
 
     internal IReadOnlyList<SunderRpcCSharpSourceFile>? ReadSourceFiles(string projectDirectory, SunderRpcInputSnapshot? inputSnapshot = null)
     {
+        inputSnapshot?.CaptureSourceMembership(projectDirectory, () => SourceFiles
+            .Where(item => !string.Equals(item.GetMetadata("AutoGen"), "true", StringComparison.OrdinalIgnoreCase))
+            .Select(item => ResolveTaskItemPath(item, projectDirectory)), [IntermediateOutputPath, ProjectExtensionsPath]);
+        foreach (var path in ProjectImports.Select(item => ResolveTaskItemPath(item, projectDirectory))
+                     .Concat(string.IsNullOrWhiteSpace(ProjectFile) ? [] : new[] { Path.GetFullPath(ProjectFile, projectDirectory) }).Distinct(PathComparer))
+            inputSnapshot?.Read(path, 16_777_216, "evaluated RPC project/import input");
         var result = new List<SunderRpcCSharpSourceFile>(SourceFiles.Length);
         var seen = new HashSet<string>(PathComparer);
         foreach (var item in SourceFiles)
@@ -1102,7 +1150,7 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
         var roots = sources.Select(source => CSharpSyntaxTree.ParseText(source.Text, options).GetRoot()).ToArray();
         var names = new HashSet<string>(StringComparer.Ordinal)
         {
-            "SunderRpcService", "SunderRpcServiceAttribute", "SunderRpcProvider", "SunderRpcProviderAttribute",
+            "SunderService", "SunderServiceAttribute", "SunderServiceProvider", "SunderServiceProviderAttribute",
         };
         foreach (var alias in roots.SelectMany(static root => root.DescendantNodes().OfType<UsingDirectiveSyntax>()))
         {
@@ -1414,7 +1462,7 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
                 var item = new TaskItem(sourceSnapshotPaths[contract.ContractKey]);
                 item.SetMetadata("ContractId", contract.Descriptor.ContractId);
                 item.SetMetadata("Version", contract.Descriptor.Version);
-                item.SetMetadata("Exposure", contract.Exposure == SunderRpcExposure.Package ? "package" : "public");
+                item.SetMetadata("Exposure", contract.Exposure == SunderServiceExposure.Package ? "package" : "public");
                 item.SetMetadata("DescriptorPath", $"contracts/{contract.ContractKey}.rpc.json");
                 return (ITaskItem)item;
             })
@@ -1741,13 +1789,14 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
         SunderRpcAuthoringReceiptProjection? Projection)
     {
         public SunderRpcOwnedPackageBaseline? Baseline { get; init; }
+        public SunderRpcInputSnapshot? Inputs { get; init; }
 
         public static SourceAuthoringPlan Empty { get; } = new([], [], string.Empty, string.Empty, [], [], null);
 
         public IEnumerable<ContractOutput> OutputContracts
             => Contracts.Select(static contract => new ContractOutput(contract.ContractKey, contract.Exposure, contract.Descriptor))
                 .Concat(ProjectImports.Select(static contract => new ContractOutput(contract.ContractKey, contract.Exposure, contract.Descriptor)))
-                .Concat(Imports.Select(static contract => new ContractOutput(contract.ContractKey, SunderRpcExposure.Public, contract.Descriptor)));
+                .Concat(Imports.Select(static contract => new ContractOutput(contract.ContractKey, SunderServiceExposure.Public, contract.Descriptor)));
     }
 
     private sealed record ExpectedPackageProjectExport(
@@ -1762,11 +1811,14 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
         string PackageId,
         string PackageVersion,
         string? LockSha256,
-        IReadOnlyList<SunderRpcCSharpCompiledContract>? Contracts);
+        IReadOnlyList<SunderRpcCSharpCompiledContract>? Contracts)
+    {
+        internal IReadOnlyList<SunderRpcRoleUse> RoleUses { get; init; } = [];
+    }
 
     private sealed record ContractOutput(
         string ContractKey,
-        SunderRpcExposure Exposure,
+        SunderServiceExposure Exposure,
         SunderRpcContractDescriptor Descriptor);
 
     private sealed record TreeEntry(string RelativePath, bool IsDirectory, byte[] Contents);

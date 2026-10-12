@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Sunder.Package.Format;
@@ -23,12 +22,6 @@ public sealed class RuntimeRegistryContractCompatibilityTests
         { typeof(RegistryPackageTarget), typeof(RuntimeRegistryPackageTarget) },
         { typeof(RegistryPackageWebView), typeof(RuntimeRegistryPackageWebView) },
         { typeof(RegistryExecutionRuntimeRequirement), typeof(RuntimeRegistryExecutionRuntimeRequirement) },
-        { typeof(RegistryExecutionRuntimeIdentity), typeof(RuntimeRegistryExecutionRuntimeIdentity) },
-        { typeof(RegistryExecutionRuntimeLifecycle), typeof(RuntimeRegistryExecutionRuntimeLifecycle) },
-        { typeof(RegistryResolvedExecutionRuntimeArtifact), typeof(RuntimeRegistryResolvedExecutionRuntimeArtifact) },
-        { typeof(RegistryPackageTargetRuntimeBinding), typeof(RuntimeRegistryPackageTargetRuntimeBinding) },
-        { typeof(RegistryRuntimeOnlyRebindDetails), typeof(RuntimeRegistryRuntimeOnlyRebindDetails) },
-        { typeof(RegistryExecutionRuntimeResolutionConflict), typeof(RuntimeRegistryExecutionRuntimeResolutionConflict) },
         { typeof(RegistryPackageInstallPlanItem), typeof(RuntimeRegistryPackageInstallPlanItem) },
         { typeof(RegistryPackageInstallPlanConflict), typeof(RuntimeRegistryPackageInstallPlanConflict) },
         { typeof(RegistryResolveInstallPlanResponse), typeof(RuntimeRegistryResolveInstallPlanResponse) },
@@ -86,23 +79,21 @@ public sealed class RuntimeRegistryContractCompatibilityTests
                 null,
                 [new RegistryPackageDependency("test.base", ">=1.1.0 <1.2.0")],
                 [new RegistryPackageTarget(
-                    "app",
+                    "runtime",
                     "win-x64",
-                    "web",
-                    "web/index.html",
-                    null,
+                    "worker",
+                    "lib/Test.Worker.dll",
+                    "net10.0",
                     "1.1.0",
-                    ["core.v1"],
-                    [new RegistryPackageWebView(
-                        "test.package.workspace",
-                        "Workspace",
-                        "/workspace",
-                        "assets/workspace.png",
-                        "rightTop",
-                        true)])],
+                    ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"],
+                    [],
+                    new RegistryExecutionRuntimeRequirement(
+                        SunderPackageFormat.DotNetExecutionRuntimeId,
+                        SunderPackageFormat.DotNetExecutionRuntimeVersionRange,
+                        SunderPackageFormat.DotNetWorkerModuleAbi))],
                 [new RegistryPackageProjectionArtifact(
-                    "shared",
-                    null,
+                    "runtime",
+                    "win-x64",
                     new string('a', 64),
                     42,
                     "/download",
@@ -119,7 +110,9 @@ public sealed class RuntimeRegistryContractCompatibilityTests
                 "test.root",
                 RegistryV1ErrorCodes.PackageRequirementUnsatisfied,
                 "Version conflict.")],
-            ["https://artifacts.example"]);
+            ["https://artifacts.example"],
+            "test-resolution",
+            DateTimeOffset.Parse("2026-10-07T00:00:00Z"));
 
         var runtimeResponse = RuntimeRegistryContractMapper.ToRuntime(registryResponse);
         var runtimeJson = JsonSerializer.SerializeToNode(runtimeResponse, JsonOptions)!.AsObject();
@@ -143,6 +136,31 @@ public sealed class RuntimeRegistryContractCompatibilityTests
         var mapped = RuntimeRegistryContractMapper.ToRuntime(registry);
         Assert.True(JsonNode.DeepEquals(JsonSerializer.SerializeToNode(registry.CompatibilityConflicts, JsonOptions),
             JsonSerializer.SerializeToNode(mapped.CompatibilityConflicts, JsonOptions)));
+    }
+
+    [Fact]
+    public void RegistryPlanTargets_RejectUnknownRuntimeRequirementFields()
+    {
+        var json = """
+            {
+              "role":"runtime",
+              "rid":"win-x64",
+              "kind":"worker",
+              "entryPoint":"lib/Test.Worker.dll",
+              "targetFramework":"net10.0",
+              "sdkVersion":"1.1.0",
+              "requiredHostCapabilities":["core.v1"],
+              "views":[],
+              "executionRuntime":{
+                "runtimeId":"sunder.runtime.dotnet",
+                "versionRange":">=10.0.0 <11.0.0",
+                "moduleAbi":"sunder.dotnet-worker-module.v1",
+                "selectedArtifact":"forbidden"
+              }
+            }
+            """;
+
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<RegistryPackageTarget>(json, JsonOptions));
     }
 
     [Fact]

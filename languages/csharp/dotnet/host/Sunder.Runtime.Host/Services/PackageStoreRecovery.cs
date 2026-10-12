@@ -309,7 +309,6 @@ internal sealed class PackageStoreRecovery(
             || journal.DesiredPackages is null
             || journal.Actions is null
             || journal.StorageSnapshots is null
-            || journal.RuntimePolicyUpdates is null
             || !string.Equals(
                 transactionDirectory,
                 Path.Combine(paths.TransactionRootPath, journal.TransactionId),

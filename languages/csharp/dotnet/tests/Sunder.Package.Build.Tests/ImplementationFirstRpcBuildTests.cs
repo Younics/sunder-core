@@ -33,8 +33,8 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var fixture = ResolvePhysicalTemporaryPath(scope.GetPath("fixture"));
         CopyDirectory(fixtureSource, fixture);
         var sourcePath = Path.Combine(fixture, "Program.cs");
-        await File.WriteAllTextAsync(sourcePath, (await File.ReadAllTextAsync(sourcePath)).Replace("[SunderRpcService",
-            "[SunderRpcRuntimeUse(Actions = new[] { \"discover\" })]\n[SunderRpcService", StringComparison.Ordinal));
+        await File.WriteAllTextAsync(sourcePath, (await File.ReadAllTextAsync(sourcePath)).Replace("[SunderService",
+            "[SunderRuntimeUse(Actions = new[] { \"discover\" })]\n[SunderService", StringComparison.Ordinal));
         await File.WriteAllTextAsync(Path.Combine(fixture, "DeclarationProbe.cs"), """
             namespace Example.Generated;
             public static class DeclarationProbe
@@ -132,11 +132,16 @@ public sealed partial class ImplementationFirstRpcBuildTests
             await File.ReadAllTextAsync(authoringPath),
             StringComparison.Ordinal);
 
+        Assert.False(File.Exists(Path.Combine(fixture, SunderRpcAuthoringDocuments.OwnedContractsFileName)));
+        // Keep the original private descriptor as historical shape evidence, not
+        // a live baseline prerequisite. Its current successor uses the package version.
         var baseline = SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(
-            Path.Combine(fixture, SunderRpcAuthoringDocuments.OwnedContractsFileName));
+            Path.Combine(fixture, "History/implementation-first-private.owned.json"));
         var lockSha256 = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(
             Path.Combine(fixture, SunderRpcAuthoringDocuments.ContractLockFileName)))).ToLowerInvariant();
-        var accepted = baseline.Contracts["greeting"].Current!.Descriptor;
+        var expected = System.Text.Json.Nodes.JsonNode.Parse(baseline.Contracts["greeting"].Current!.Descriptor.GetCanonicalUtf8())!;
+        expected["version"] = "7.6.5";
+        var accepted = Sunder.Sdk.Rpc.SunderRpcContractDescriptor.Parse(JsonSerializer.SerializeToUtf8Bytes(expected));
         using (var export = JsonDocument.Parse(await File.ReadAllBytesAsync(exportPath)))
         {
             AssertMatchesSchema(
@@ -166,7 +171,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
         var bundle = Assert.Single(validation.Manifest!.ContractBundles!);
         Assert.Equal("example.generated.greeting", bundle!.ContractId);
-        Assert.Equal("1.0.0", bundle.Version);
+        Assert.Equal("7.6.5", bundle.Version);
         Assert.Equal(accepted.Sha256, bundle.DescriptorSha256);
         Assert.Equal(accepted.AbiSha256, bundle.AbiSha256);
         var provider = Assert.Single(validation.Manifest.Provides!);
@@ -213,7 +218,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             "net10.0-windows",
             "ImplementationFirstRpc.App.dll");
         var appReceiptPath = Path.Combine(appGenerated, SunderRpcAuthoringDocuments.AuthoringReceiptFileName);
-        var appBindingPath = Path.Combine(appGenerated, "bindings", "greeting.g.cs");
+        var appBindingPath = Path.Combine(appGenerated, "bindings", "imports", "example.generated.greeting.g.cs");
         Assert.True(File.Exists(appAssembly));
         Assert.True(File.Exists(appReceiptPath));
         Assert.True(File.Exists(appBindingPath));
@@ -529,7 +534,8 @@ public sealed partial class ImplementationFirstRpcBuildTests
     {
         using var schema = JsonDocument.Parse(File.ReadAllBytes(schemaPath));
         Assert.True(
-            JsonSchemaTestValidator.IsValid(schema.RootElement, instance),
+            ModelProjectionTestEvidence.MatchesAuthoringSchema(schema.RootElement, instance,
+                Path.Combine(FindRepositoryRoot(), "specs/rpc/v1/authoring/rpc-model-projection.schema.json")),
             $"Generated document does not match schema '{schemaPath}'.");
     }
 

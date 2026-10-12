@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -10,47 +10,63 @@ import type { BrowserRpcProvider, SunderBrowserRpc } from "@sunder/sdk/browser";
 import Ajv2020 from "ajv/dist/2020";
 import { loadProject, currentRid } from "../src/model";
 import { generateRpcBindings } from "../src/rpc-bindings";
+import { assertServiceOptions } from "@sunder/sdk";
+import { contractsCommand } from "../src/rpc-contracts";
+import { writeSourceFile as writeFile } from "./service-fixtures";
 
 const exec = promisify(execFile);
 const cli = resolve(__dirname, "../../dist/cli.js");
-const source = `import {rpc} from "@sunder/sdk"; const s=rpc.schema;
-export const packageRpc=rpc.router({contracts:{messages:rpc.contract({exposure:"package",errors:{},definitions:{
-  Message:s.object({message:s.required(s.string({minLength:1,maxLength:256}))})}, services:{messages:{
-  send:rpc.unary({request:s.ref("Message"),response:s.ref("Message")}),
-  watch:rpc.serverStream({request:s.ref("Message"),event:s.ref("Message")})}}})},providers:{messages:rpc.provider({contract:"messages",handlers:{messages:{
-  send(request){return request;}, async *watch(request){yield request;}}}})}});`;
+async function receiptValidator() {
+  const root = resolve(__dirname, "../../../../../../../specs/rpc/v1/authoring");
+  const projection = JSON.parse(await readFile(resolve(root, "rpc-model-projection.schema.json"), "utf8"));
+  const receipt = JSON.parse(await readFile(resolve(root, "authoring-receipt.schema.json"), "utf8"));
+  return new Ajv2020({ strict: false }).addSchema(projection).compile(receipt);
+}
+const source = `import {defineService} from "@sunder/sdk";
+/** @typedef {{message:string}} Message */
+/*ts type Message = {message:string};*/
+export const messages=defineService({
+/** @param {Message} request @returns {Message} */
+send(request/*: Message*/)/*: Message*/{return request;},
+/** @param {Message} request @returns {AsyncIterable<Message>} */
+async *watch(request/*: Message*/)/*: AsyncIterable<Message>*/{yield request;}
+},{exposure:"package", constraints:{"Message.message":{minLength:1,maxLength:256}}});`;
 
 async function project(extension: "ts" | "js", text = source): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-owned-app-"));
   await mkdir(resolve(root, "src")); await mkdir(resolve(root, "app"));
   await writeFile(resolve(root, `src/rpc.${extension}`), text);
-  await writeFile(resolve(root, `src/worker.${extension}`), 'import {runWorker} from "@sunder/sdk"; import {packageRpc} from "./rpc.js"; void runWorker(()=>({providers:packageRpc.providerRegistrations})).catch(()=>{process.exitCode=70;});');
   await writeFile(resolve(root, "app/index.html"), '<!doctype html><html><head><title>Owned App</title></head><body>Owned App</body></html>');
   await writeFile(resolve(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.app", name: "Owned App", version: "1.0.0",
-    entry: `src/worker.${extension}`, workerCapabilities: [], rpc: { module: `src/rpc.${extension}`, export: "packageRpc" },
+    workerCapabilities: [], services: { module: `src/rpc.${extension}` },
     app: { root: "app", entryPoint: "index.html", views: [{ viewId: "example.app.main", displayName: "Owned App", route: "/", defaultPlacement: "middle", showInHotbar: true }] } }));
   await writeFile(resolve(root, "sunder-contracts.lock.json"), `${JSON.stringify({ lockVersion: 1, packageArtifacts: {}, packageImports: {}, providerImports: {}, platformImports: {} }, null, 2)}\n`);
+  if (text.includes('exposure:"public"')) await contractsCommand("accept", root);
   return root;
 }
 
-for (const extension of ["ts", "js"] as const) test(`owned ${extension} App receipts and browser resolvers keep exact identity, ambiguity and role boundaries`, async () => {
-  const root = await project(extension);
+for (const extension of ["ts", "js"] as const) for (const exposure of ["package", "public"] as const)
+test(`owned ${extension} ${exposure} App defaults and managed calls keep exact identity, ambiguity and role boundaries`, async () => {
+  const root = await project(extension, source.replace('exposure:"package"', `exposure:"${exposure}"`));
   try {
     await generateRpcBindings(root);
     const loaded = await loadProject(root);
     const contract = loaded.contracts[0]!;
-    assert.deepEqual(loaded.config.usesContracts, [{ role: "app", contractId: "example.app.messages", contractVersion: "1.0.0", required: true, actions: ["discover", "invoke", "subscribe"] }]);
+    const required = exposure === "package";
+    const policy = { required, actions: ["discover", "invoke", "subscribe"] };
+    assert.deepEqual(loaded.config.usesContracts, [{ role: "app", contractId: "example.app.messages", contractVersion: "1.0.0", ...policy }]);
+    if (exposure === "public") assert.deepEqual(contract.appUse, policy);
     const runtime = JSON.parse(await readFile(resolve(root, ".sunder/generated/rpc/authoring-receipt.v1.json"), "utf8"));
     const app = JSON.parse(await readFile(resolve(root, ".sunder/generated/rpc/app-authoring-receipt.v1.json"), "utf8"));
     assert.deepEqual(runtime.uses, []); assert.equal(runtime.providers.length, 1);
     assert.deepEqual(app.providers, []);
-    assert.deepEqual(app.uses, [{ role: "app", required: true, actions: ["discover", "invoke", "subscribe"], contractKey: "messages" }]);
-    const schema = JSON.parse(await readFile(resolve(__dirname, "../../../../../../../specs/rpc/v1/authoring/authoring-receipt.schema.json"), "utf8"));
-    const validate = new Ajv2020({ strict: false }).compile(schema);
+    assert.deepEqual(app.uses, [{ role: "app", ...policy, contractKey: "messages" }]);
+    if (exposure === "public") for (const receipt of [runtime, app]) assert.deepEqual(receipt.contracts[0].appUse, policy);
+    const validate = await receiptValidator();
     assert.equal(validate(app), true, JSON.stringify(validate.errors));
     assert.equal(validate(runtime), true, JSON.stringify(validate.errors));
     const bundle = resolve(root, "browser-test.cjs");
-    await esbuild({ entryPoints: [resolve(root, `.sunder/generated/rpc/browser.${extension}`)], outfile: bundle, bundle: true, platform: "browser", format: "cjs",
+    await esbuild({ stdin: { contents: `export {Self} from ${JSON.stringify(resolve(root, ".sunder/generated/rpc/api.ts"))}; export {createApiContext} from "@sunder/sdk/browser";`, resolveDir: root, loader: "ts" }, outfile: bundle, bundle: true, platform: "browser", format: "cjs",
       alias: { "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser") } });
     const browser = await readFile(bundle, "utf8");
     assert.doesNotMatch(browser, /node:fs|runWorker|owned-provider-bind/);
@@ -65,25 +81,30 @@ for (const extension of ["ts", "js"] as const) test(`owned ${extension} App rece
       async *subscribe(...args: unknown[]) { calls.push(args); yield { message: "event" }; },
       async *watch() {},
     } as SunderBrowserRpc;
-    interface Client { readonly Messages: { Send(value: { message: string }): Promise<{ message: string }>; Watch(value: { message: string }): AsyncIterable<{ message: string }> } }
-    const { createPackageApi } = require(bundle) as { createPackageApi(rpc: SunderBrowserRpc): { messages: { resolve(): Promise<Client> } } };
-    const api = createPackageApi(rpc);
-    const client = await api.messages.resolve();
-    assert.deepEqual(await client.Messages.Send({ message: "request" }), { message: "response" });
-    for await (const event of client.Messages.Watch({ message: "request" })) assert.deepEqual(event, { message: "event" });
+    const { Self, createApiContext } = require(bundle);
+    const owner = createApiContext("example.app", rpc); const client = owner.api(Self);
+    assert.deepEqual(await client.messages.send({ message: "request" }), { message: "response" });
+    for await (const event of client.messages.watch({ message: "request" })) assert.deepEqual(event, { message: "event" });
     assert.equal((calls[0] as unknown[])[0], good.providerHandle);
     assert.equal((calls[1] as unknown[])[0], good.providerHandle);
+    // Broker denial remains authoritative: owning a public provider/App facade
+    // does not supply the Worker role with a consumer grant or bypass its error.
+    const denial = new Error("rpc.permission-denied");
+    const workerOwner = createApiContext("example.app", { ...rpc, discover: async () => { throw denial; } });
+    await assert.rejects(workerOwner.api(Self).messages.send({ message: "request" }), error => error === denial);
+    workerOwner.dispose(); assert.equal(calls.length, 2);
     for (const changed of [{ packageId: "other.app" }, { contractVersion: "9.9.9" }, { descriptorSha256: "f".repeat(64) }, { abiSha256: "f".repeat(64) }, { state: "inactive" as const }]) {
       providers = [{ ...good, ...changed }];
-      await assert.rejects(api.messages.resolve(), /No active same-package/);
+      await assert.rejects(client.messages.send({ message: "request" }), /No active provider/);
     }
     providers = [];
-    await assert.rejects(api.messages.resolve(), /No active same-package/);
+    await assert.rejects(client.messages.send({ message: "request" }), /No active provider/);
     providers = [good, { ...good, providerId: "example.app.other", providerHandle: "second-handle" }];
-    await assert.rejects(api.messages.resolve(), /ambiguous/);
+    await assert.rejects(client.messages.send({ message: "request" }), /ambiguous/);
     resetRequired = true; providers = [good];
-    await assert.rejects(api.messages.resolve(), /fresh catalog/);
+    await assert.rejects(client.messages.send({ message: "request" }), /fresh snapshot/);
     assert.equal(calls.length, 2); // Rejected discovery never invokes or retries a provider.
+    owner.dispose();
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -145,15 +166,15 @@ test("owned App source projection packs role-isolated leaves and rejects stale p
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-for (const extension of ["ts", "js"] as const) test(`${extension} public App uses require explicit policy and preserve wire identity`, async () => {
+for (const extension of ["ts", "js"] as const) test(`${extension} public App defaults allow explicit readiness/narrowing overrides without changing wire identity`, async () => {
   const publicSource = source.replace('exposure:"package"', 'exposure:"public"');
   const root = await project(extension, publicSource);
   try {
     await generateRpcBindings(root);
     const original = await loadProject(root);
-    assert.deepEqual(original.config.usesContracts, []);
-    const schema = JSON.parse(await readFile(resolve(__dirname, "../../../../../../../specs/rpc/v1/authoring/authoring-receipt.schema.json"), "utf8"));
-    const validate = new Ajv2020({ strict: false }).compile(schema);
+    assert.deepEqual(original.config.usesContracts, [{ role: "app", contractId: "example.app.messages", contractVersion: "1.0.0",
+      required: false, actions: ["discover", "invoke", "subscribe"] }]);
+    const validate = await receiptValidator();
     for (const [declaration, required, actions] of [
       ['{}', false, ["discover", "invoke", "subscribe"]],
       ['{required:true,actions:["invoke","discover"]}', true, ["discover", "invoke"]],
@@ -180,15 +201,66 @@ for (const extension of ["ts", "js"] as const) test(`${extension} public App use
     const bundle = resolve(root, "policy-test.cjs");
     await esbuild({ entryPoints: [resolve(root, ".sunder/generated/rpc/adapter.js")], outfile: bundle,
       bundle: true, platform: "node", format: "cjs", alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser") } });
-    const { bind } = require(bundle) as { bind(router: unknown): void };
     let bound = 0;
-    const router = (policy: unknown) => ({ contracts: { messages: { exposure: "public", appUse: policy,
-      services: { messages: { send: {}, watch: {} } } } }, [Symbol.for("sunder.rpc.owned-provider-bind.v1")]() { bound++; } });
+    const router = (policy: unknown) => ({ options: { exposure: "public", appUse: policy } });
+    const bind = (value: unknown) => { assertServiceOptions(value as never, {exposure:"public",appUse:{actions:["discover"]}}); bound++; };
     bind(router({ actions: ["discover"] }));
     for (const policy of [undefined, {}, { required: true, actions: ["discover"] }, { actions: ["discover", "invoke"] },
-      { actions: ["discover", "discover"] }, { actions: ["discover"], extra: true }]) assert.throws(() => bind(router(policy)), /projection mismatch|App policy mismatch/);
+      { actions: ["discover", "discover"] }, { actions: ["discover"], extra: true }]) assert.throws(() => bind(router(policy)), /metadata differs/);
     assert.equal(bound, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const extension of ["ts", "js"] as const) test(`${extension} public declarations and multiple bindings add no implicit uses and retain declaration-owned policy`, async () => {
+  const declaration = `import {defineService} from "@sunder/sdk";
+import {Self} from "#sunder/api";
+/** @typedef {{message:string}} Message */
+/*ts type Message={message:string};*/
+/** @typedef {{send:(request:Message)=>Message,watch:(request:Message)=>AsyncIterable<Message>}} Messaging */
+/*ts interface Messaging {send(request:Message):Message;watch(request:Message):AsyncIterable<Message>}*/
+/** @type {import("@sunder/sdk").ServiceDefinition<Messaging>} */
+const messages=defineService/*<Messaging>*/(null,{declarationOnly:true,exposure:"public"});
+const handlers={
+  /** @param {Message} request @returns {Message} */
+  send(request/*:Message*/)/*:Message*/{return request;},
+  /** @param {Message} request @returns {AsyncIterable<Message>} */
+  async *watch(request/*:Message*/)/*:AsyncIterable<Message>*/{yield request;}
+};
+/** @param {import("@sunder/sdk").WorkerContext} context */
+export function lookup(context/*:import("@sunder/sdk").WorkerContext*/){return context.api(Self).messages;}
+`;
+  const bindings = `export const first=defineService(handlers,{implements:messages,providerId:"example.first"});
+export const second=defineService(handlers,{implements:messages,providerId:"example.second"});
+`;
+  // Export providers first to prove contract policy cannot depend on source order.
+  const complete = declaration + bindings + "export {messages};\n";
+  const root = await project(extension, complete);
+  try {
+    const path = resolve(root, `src/rpc.${extension}`);
+    const initial = await loadProject(root);
+    for (const text of [declaration + "export {messages};\n", complete]) {
+      await writeFile(path, text); const loaded = await loadProject(root);
+      assert.equal(loaded.config.providers.length, text === complete ? 2 : 0);
+      assert.deepEqual(loaded.config.usesContracts, []); assert.equal(loaded.contracts[0]!.appUse, undefined);
+      for (const receipt of ["authoring-receipt.v1.json", "app-authoring-receipt.v1.json"])
+        assert.deepEqual(JSON.parse(loaded.ownedRpc!.files.get(receipt)!).uses, []);
+    }
+    const explicit = complete.replace('exposure:"public"', 'exposure:"public",appUse:{required:true,actions:["invoke","discover"]},runtimeUse:{actions:["discover"]}');
+    await writeFile(path, explicit); const loaded = await loadProject(root);
+    assert.deepEqual(loaded.contracts[0]!.appUse, {required:true,actions:["discover","invoke"]});
+    assert.deepEqual(loaded.contracts[0]!.runtimeUse, {required:false,actions:["discover"]});
+    assert.deepEqual(loaded.config.usesContracts, [
+      {role:"app",contractId:"example.app.messages",contractVersion:"1.0.0",required:true,actions:["discover","invoke"]},
+      {role:"runtime",contractId:"example.app.messages",contractVersion:"1.0.0",required:false,actions:["discover"]},
+    ]);
+    assert.equal(loaded.contracts[0]!.canonical, initial.contracts[0]!.canonical);
+    assert.equal(loaded.contracts[0]!.descriptorSha256, initial.contracts[0]!.descriptorSha256);
+    assert.equal(loaded.contracts[0]!.abiSha256, initial.contracts[0]!.abiSha256);
+    for (const field of ["appUse", "runtimeUse"]) {
+      await writeFile(path, complete.replace('implements:messages,providerId:"example.first"', `implements:messages,${field}:{},providerId:"example.first"`));
+      await assert.rejects(loadProject(root), /Implementations cannot redeclare.*consumer policy/);
+    }
+  } finally { await rm(root, {recursive:true,force:true}); }
 });
 
 for (const field of ["appUse", "runtimeUse"] as const) test(`${field} rejects invalid static actions, foreign fields and metadata mutation atomically`, async () => {
@@ -203,11 +275,10 @@ for (const field of ["appUse", "runtimeUse"] as const) test(`${field} rejects in
       await assert.rejects(generateRpcBindings(root), /rpc-authoring\./);
       assert.deepEqual(await readFile(receipt), before);
     }
-    const unaryOnly = source.replace('watch:rpc.serverStream({request:s.ref("Message"),event:s.ref("Message")})', '')
-      .replace(', async *watch(request){yield request;}', '');
+    const unaryOnly = `import {defineService} from "@sunder/sdk"; export const messages=defineService({send(){return "ok";}},{exposure:"package"});`;
     await writeFile(resolve(root, "src/rpc.ts"), unaryOnly.replace('exposure:"package"', `exposure:"package",${field}:{actions:["subscribe"]}`));
-    await assert.rejects(generateRpcBindings(root), /(?:app|runtime)-use-invalid/);
-    await writeFile(resolve(root, "src/rpc.ts"), source.replace('const s=rpc.schema;', 'const s=rpc.schema; const policy={required:false}; policy.required=true;')
+    await assert.rejects(generateRpcBindings(root), /actions must be a nonempty applicable/);
+    await writeFile(resolve(root, "src/rpc.ts"), source.replace('export const messages=', 'const policy={required:false}; policy.required=true; export const messages=')
       .replace('exposure:"package"', `exposure:"package",${field}:policy`));
     await assert.rejects(generateRpcBindings(root), /metadata.*mutat|metadata.*escape/i);
     assert.deepEqual(await readFile(receipt), before);
@@ -225,8 +296,7 @@ for (const extension of ["ts", "js"] as const) for (const exposure of ["package"
       const originalReceipt = JSON.parse(await readFile(resolve(root, ".sunder/generated/rpc/authoring-receipt.v1.json"), "utf8"));
       assert.equal(originalReceipt.providers.length, 1);
       assert.deepEqual(originalReceipt.uses, []);
-      const schema = JSON.parse(await readFile(resolve(__dirname, "../../../../../../../specs/rpc/v1/authoring/authoring-receipt.schema.json"), "utf8"));
-      const validate = new Ajv2020({ strict: false }).compile(schema);
+      const validate = await receiptValidator();
       for (const [policy, required, actions] of [
         ['{}', false, ["discover", "invoke", "subscribe"]],
         ['{required:true,actions:["invoke","discover"]}', true, ["discover", "invoke"]],
@@ -252,13 +322,12 @@ for (const extension of ["ts", "js"] as const) for (const exposure of ["package"
       const bundle = resolve(root, "runtime-policy-test.cjs");
       await esbuild({ entryPoints: [resolve(root, ".sunder/generated/rpc/adapter.js")], outfile: bundle, bundle: true,
         platform: "node", format: "cjs", alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser") } });
-      const { bind } = require(bundle) as { bind(router: unknown): void };
-      let bound = 0;
-      const router = (runtimeUse: unknown) => ({ contracts: { messages: { exposure, runtimeUse,
-        services: { messages: { send: {}, watch: {} } } } }, [Symbol.for("sunder.rpc.owned-provider-bind.v1")]() { bound++; } });
+       let bound = 0;
+       const router = (runtimeUse: unknown) => ({ options: { exposure, runtimeUse } });
+       const bind = (value: unknown) => { assertServiceOptions(value as never, {exposure,runtimeUse:{actions:["subscribe"]}}); bound++; };
       bind(router({ actions: ["subscribe"] }));
       for (const policy of [undefined, {}, { required: true, actions: ["subscribe"] }, { actions: ["discover", "subscribe"] },
-        { actions: ["subscribe", "subscribe"] }, { actions: ["subscribe"], extra: true }]) assert.throws(() => bind(router(policy)), /projection mismatch|Runtime policy mismatch/);
+         { actions: ["subscribe", "subscribe"] }, { actions: ["subscribe"], extra: true }]) assert.throws(() => bind(router(policy)), /metadata differs/);
       assert.equal(bound, 1);
     } finally { await rm(root, { recursive: true, force: true }); }
   });

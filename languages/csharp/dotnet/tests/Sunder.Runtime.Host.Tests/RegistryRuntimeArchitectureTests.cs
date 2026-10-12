@@ -2,11 +2,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
 using Sunder.Package.Projections;
@@ -1019,396 +1017,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
         }
     }
 
-    [Theory]
-    [InlineData(ExecutionRuntimeErrorCodes.Revoked)]
-    [InlineData(ExecutionRuntimeErrorCodes.Retired)]
-    [InlineData(ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied)]
-    public async Task RegistryPackagePlan_StartupUpdateCheckHardDenialCommitsEvidenceAndFaultsActivePackage(
-        string conflictCode)
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string requestOrigin = "https://REGISTRY.example";
-            const string packageId = "test.runtime.plan.denied";
-            var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
-            var paths = new RuntimePackagePaths(root);
-            var installedStore = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            await installedStore.WriteAsync([installed]);
-            var item = await CreateRuntimeActionItemAsync(installed, RegistryPackageActionKinds.Keep);
-            var targetBinding = Assert.Single(item.RuntimeBindings);
-            var binding = Assert.Single(installed.ExecutionRuntimeBindings);
-            var receipt = CreateRuntimeReceipt(binding, now);
-            var authoritativeLifecycle = conflictCode switch
-            {
-                ExecutionRuntimeErrorCodes.Revoked => RevokedRuntimeLifecycle(now),
-                ExecutionRuntimeErrorCodes.Retired => RetiredRuntimeLifecycle(now),
-                _ => SupportedRuntimeLifecycle(now),
-            };
-            var planRequests = 0;
-            var releaseRequests = 0;
-            var handler = new DelegateHandler(request =>
-            {
-                if (request.Method == HttpMethod.Get)
-                {
-                    releaseRequests++;
-                    return RuntimeReleaseResponse(
-                        receipt,
-                        authoritativeLifecycle,
-                        runtimePolicyRevision: 2,
-                        now);
-                }
-
-                planRequests++;
-                return RuntimeConflictPlanResponse(
-                    new RegistryExecutionRuntimeResolutionConflict(
-                        conflictCode,
-                        conflictCode switch
-                        {
-                            ExecutionRuntimeErrorCodes.Revoked =>
-                                "The currently bound execution runtime is revoked.",
-                            ExecutionRuntimeErrorCodes.Retired =>
-                                "The currently bound execution runtime is retired and activation-blocked.",
-                            _ => "The currently bound execution runtime is no longer trusted.",
-                        },
-                        targetBinding.Requirement,
-                        targetBinding.Rid,
-                        packageId,
-                        targetBinding.Role,
-                        targetBinding.Runtime),
-                    now,
-                    ["Registry plan warning."]);
-            });
-            var applicationLifetime = new TestApplicationLifetime();
-            var services = new ServiceCollection();
-            services.AddSingleton<IHostApplicationLifetime>(applicationLifetime);
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver(enforceLifecyclePolicy: true);
-            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
-            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
-            provider = services.BuildServiceProvider();
-
-            await WriteRuntimeReceiptAsync(
-                provider.GetRequiredService<ExecutionRuntimeStore>(),
-                provider.GetRequiredService<ExecutionRuntimeStoreLayout>(),
-                receipt);
-            var lifecyclePolicies = provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>();
-            await lifecyclePolicies.ObserveAsync([
-                new ExecutionRuntimeLifecyclePolicyObservation(
-                    receipt,
-                    origin,
-                    SupportedRuntimeLifecycle(now),
-                    RuntimePolicyRevision: 1,
-                    MinimumHostTrustGeneration: 1,
-                    PolicyObservedAtUtc: now.AddMinutes(-1)),
-            ]);
-            var lifecycle = provider.GetRequiredService<InstalledPackageLifecycleService>();
-            await lifecycle.InitializeAsync();
-            var loaded = await lifecycle.LoadInstalledPackagesAsync();
-            Assert.True(loaded.Success, loaded.Message);
-            var packageSessions = provider.GetRequiredService<PackageSessionState>();
-            var active = Assert.Single(packageSessions.ActiveSession.LoadedPackageMap).Value;
-            var oldGeneration = active.Worker.GenerationCompletion;
-            var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
-            var catalogGeneration = coordinator.CatalogGeneration;
-
-            var plan = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().ResolveAsync(
-                RuntimeActionRequest(requestOrigin, packageId),
-                CancellationToken.None);
-
-            Assert.False(plan.Success);
-            var conflict = Assert.Single(plan.RuntimeConflicts);
-            Assert.Equal(conflictCode, conflict.Code);
-            Assert.Equal("blocked-runtime-resolution", plan.ResolutionFingerprint);
-            Assert.Equal(2, plan.RuntimePolicyRevision);
-            Assert.Empty(plan.Errors);
-            Assert.Equal("Registry plan warning.", plan.Warnings[0]);
-            Assert.Contains(plan.Warnings, warning =>
-                warning.Contains("Stopped and faulted", StringComparison.Ordinal));
-            Assert.Equal(1, planRequests);
-            Assert.Equal(1, releaseRequests);
-            Assert.False(applicationLifetime.StopRequested);
-            Assert.Equal(catalogGeneration + 1, coordinator.CatalogGeneration);
-            var persistedBinding = Assert.Single(
-                Assert.Single(await installedStore.ListAsync()).ExecutionRuntimeBindings);
-            Assert.Equal(2, persistedBinding.RuntimePolicyRevision);
-            Assert.Equal(authoritativeLifecycle.State, persistedBinding.RuntimeLifecycleState);
-            Assert.Equal(now, persistedBinding.PolicyObservedAtUtc);
-            Assert.Equal(now, persistedBinding.ResolvedAtUtc);
-            await oldGeneration.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(oldGeneration.IsCompletedSuccessfully);
-            Assert.Empty(packageSessions.ActiveSession.LoadedPackageMap);
-            var faulted = Assert.Single(packageSessions.ActiveSession.GetSessionPackages());
-            Assert.Equal(PackageReadinessState.Failed, faulted.Readiness);
-            var denied = Assert.Single(lifecyclePolicies.CaptureSnapshot().Entries);
-            Assert.Equal(2, denied.RuntimePolicyRevision);
-            Assert.Equal(authoritativeLifecycle.State, denied.Lifecycle.State);
-            Assert.Equal(
-                conflictCode == ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied
-                    ? ExecutionRuntimeTrustDispositions.Denied
-                    : ExecutionRuntimeTrustDispositions.Trusted,
-                denied.TrustDisposition);
-            Assert.Empty(Directory.EnumerateDirectories(paths.TransactionRootPath));
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task RegistryPackagePlan_OrdinarySuccessfulPlanningDoesNotMutateRuntimeState()
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string packageId = "test.runtime.plan.read.only";
-            var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
-            var paths = new RuntimePackagePaths(root);
-            var installedStore = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            await installedStore.WriteAsync([installed]);
-            var item = await CreateRuntimeActionItemAsync(installed, RegistryPackageActionKinds.Keep);
-            var binding = Assert.Single(installed.ExecutionRuntimeBindings);
-            var receipt = CreateRuntimeReceipt(binding, now);
-            var planRequests = 0;
-            var releaseRequests = 0;
-            var handler = new DelegateHandler(request =>
-            {
-                if (request.Method == HttpMethod.Get)
-                {
-                    releaseRequests++;
-                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
-                }
-
-                planRequests++;
-                return PlanResponse(
-                    item,
-                    now: now,
-                    runtimePolicyRevision: 2,
-                    lifecycle: DeprecatedRuntimeLifecycle(now),
-                    exactBinding: binding,
-                    warnings: ["Registry plan warning."]);
-            });
-            var services = new ServiceCollection();
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver(enforceLifecyclePolicy: true);
-            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
-            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
-            provider = services.BuildServiceProvider();
-
-            await WriteRuntimeReceiptAsync(
-                provider.GetRequiredService<ExecutionRuntimeStore>(),
-                provider.GetRequiredService<ExecutionRuntimeStoreLayout>(),
-                receipt);
-            var lifecyclePolicies = provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>();
-            await lifecyclePolicies.ObserveAsync([
-                new ExecutionRuntimeLifecyclePolicyObservation(
-                    receipt,
-                    origin,
-                    SupportedRuntimeLifecycle(now),
-                    RuntimePolicyRevision: 1,
-                    MinimumHostTrustGeneration: 1,
-                    PolicyObservedAtUtc: now.AddMinutes(-1)),
-            ]);
-            var lifecycle = provider.GetRequiredService<InstalledPackageLifecycleService>();
-            await lifecycle.InitializeAsync();
-            var loaded = await lifecycle.LoadInstalledPackagesAsync();
-            Assert.True(loaded.Success, loaded.Message);
-            var packageSessions = provider.GetRequiredService<PackageSessionState>();
-            var activeBefore = Assert.Single(packageSessions.ActiveSession.LoadedPackageMap).Value;
-            var processBefore = WorkerReleaseMetrics.GetProcess(activeBefore.Worker);
-            var policySnapshot = lifecyclePolicies.CaptureSnapshot();
-            var policyBefore = Assert.Single(policySnapshot.Entries);
-            var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
-            var catalogGeneration = coordinator.CatalogGeneration;
-            var catalogJson = await File.ReadAllTextAsync(paths.StateFilePath);
-
-            var plan = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().ResolveAsync(
-                RuntimeActionRequest(origin, packageId),
-                CancellationToken.None);
-
-            Assert.True(plan.Success);
-            Assert.Equal(["Registry plan warning."], plan.Warnings);
-            Assert.Equal(1, planRequests);
-            Assert.Equal(0, releaseRequests);
-            Assert.Equal(catalogGeneration, coordinator.CatalogGeneration);
-            Assert.Equal(catalogJson, await File.ReadAllTextAsync(paths.StateFilePath));
-            Assert.Equal(binding, Assert.Single(
-                Assert.Single(await installedStore.ListAsync()).ExecutionRuntimeBindings));
-            var policyAfter = lifecyclePolicies.CaptureSnapshot();
-            Assert.Equal(policySnapshot.Generation, policyAfter.Generation);
-            Assert.Equal(policyBefore, Assert.Single(policyAfter.Entries));
-            var activeAfter = Assert.Single(packageSessions.ActiveSession.LoadedPackageMap).Value;
-            Assert.Same(activeBefore.Worker, activeAfter.Worker);
-            Assert.False(processBefore.HasExited);
-            Assert.Empty(Directory.EnumerateDirectories(paths.TransactionRootPath));
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task RegistryPackagePlan_HardDenialEnforcementFailurePreservesPlanAndRequestsShutdown()
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string packageId = "test.runtime.plan.enforcement.failure";
-            var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
-            var paths = new RuntimePackagePaths(root);
-            var installedStore = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            await installedStore.WriteAsync([installed]);
-            var item = await CreateRuntimeActionItemAsync(installed, RegistryPackageActionKinds.Keep);
-            var targetBinding = Assert.Single(item.RuntimeBindings);
-            var binding = Assert.Single(installed.ExecutionRuntimeBindings);
-            var receipt = CreateRuntimeReceipt(binding, now);
-            var releaseRequests = 0;
-            var handler = new DelegateHandler(request =>
-            {
-                if (request.Method == HttpMethod.Get)
-                {
-                    releaseRequests++;
-                    return RuntimeReleaseResponse(
-                        receipt,
-                        RevokedRuntimeLifecycle(now),
-                        runtimePolicyRevision: 2,
-                        now);
-                }
-
-                return RuntimeConflictPlanResponse(
-                    new RegistryExecutionRuntimeResolutionConflict(
-                        ExecutionRuntimeErrorCodes.Revoked,
-                        "The currently bound execution runtime is revoked.",
-                        targetBinding.Requirement,
-                        targetBinding.Rid,
-                        packageId,
-                        targetBinding.Role,
-                        targetBinding.Runtime),
-                    now,
-                    ["Registry plan warning."]);
-            });
-            var applicationLifetime = new TestApplicationLifetime();
-            var services = new ServiceCollection();
-            services.AddSingleton<IHostApplicationLifetime>(applicationLifetime);
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver(enforceLifecyclePolicy: true);
-            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
-            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
-            provider = services.BuildServiceProvider();
-
-            await WriteRuntimeReceiptAsync(
-                provider.GetRequiredService<ExecutionRuntimeStore>(),
-                provider.GetRequiredService<ExecutionRuntimeStoreLayout>(),
-                receipt);
-            var lifecyclePolicies = provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>();
-            await lifecyclePolicies.ObserveAsync([
-                new ExecutionRuntimeLifecyclePolicyObservation(
-                    receipt,
-                    origin,
-                    SupportedRuntimeLifecycle(now),
-                    RuntimePolicyRevision: 1,
-                    MinimumHostTrustGeneration: 1,
-                    PolicyObservedAtUtc: now.AddMinutes(-1)),
-            ]);
-            File.Delete(paths.ExecutionRuntimeLifecyclePolicyFilePath);
-            Directory.CreateDirectory(paths.ExecutionRuntimeLifecyclePolicyFilePath);
-            var lifecycle = provider.GetRequiredService<InstalledPackageLifecycleService>();
-            await lifecycle.InitializeAsync();
-            var loaded = await lifecycle.LoadInstalledPackagesAsync();
-            Assert.True(loaded.Success, loaded.Message);
-            var packageSessions = provider.GetRequiredService<PackageSessionState>();
-            var active = Assert.Single(packageSessions.ActiveSession.LoadedPackageMap).Value;
-            var process = WorkerReleaseMetrics.GetProcess(active.Worker);
-            var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
-            var catalogGeneration = coordinator.CatalogGeneration;
-            var catalogJson = await File.ReadAllTextAsync(paths.StateFilePath);
-
-            var plan = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().ResolveAsync(
-                RuntimeActionRequest(origin, packageId),
-                CancellationToken.None);
-
-            Assert.False(plan.Success);
-            Assert.Equal(ExecutionRuntimeErrorCodes.Revoked, Assert.Single(plan.RuntimeConflicts).Code);
-            Assert.Equal("blocked-runtime-resolution", plan.ResolutionFingerprint);
-            Assert.Empty(plan.Errors);
-            Assert.Equal("Registry plan warning.", plan.Warnings[0]);
-            Assert.Contains(plan.Warnings, warning =>
-                warning.Contains("shutdown was requested", StringComparison.OrdinalIgnoreCase));
-            Assert.True(applicationLifetime.StopRequested);
-            Assert.Equal(1, releaseRequests);
-            Assert.Equal(catalogGeneration, coordinator.CatalogGeneration);
-            Assert.Equal(catalogJson, await File.ReadAllTextAsync(paths.StateFilePath));
-            Assert.Equal(binding, Assert.Single(
-                Assert.Single(await installedStore.ListAsync()).ExecutionRuntimeBindings));
-            var trusted = Assert.Single(lifecyclePolicies.CaptureSnapshot().Entries);
-            Assert.Equal(1, trusted.RuntimePolicyRevision);
-            Assert.Equal(ExecutionRuntimeTrustDispositions.Trusted, trusted.TrustDisposition);
-            Assert.False(process.HasExited);
-            Assert.Single(packageSessions.ActiveSession.LoadedPackageMap);
-            Assert.Empty(Directory.EnumerateDirectories(paths.TransactionRootPath));
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
     [Fact]
     public async Task RegistryUpdateAll_UsesRecordedOriginsAndTagsAndSkipsUnmanagedPackages()
     {
@@ -1488,7 +1096,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
                     plan.RegistryOrigin,
                     plan.IncludePrerelease,
                     plan.ExpectedResolutionFingerprint)).ToArray());
-            Assert.Empty(result.RuntimeArtifacts);
             Assert.Equal(
                 [
                     ("https://alpha.example/", "test.alpha", "beta", true),
@@ -1653,320 +1260,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
     }
 
     [Fact]
-    public async Task RegistryRuntimeRebindStage_WhenExpectedCatalogIsStale_RejectsWithoutStage()
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string packageId = "test.rebind.stale.catalog";
-            var paths = new RuntimePackagePaths(root);
-            var store = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            await store.WriteAsync([installed]);
-            var services = new ServiceCollection();
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver();
-            provider = services.BuildServiceProvider();
-            var lifecycle = provider.GetRequiredService<InstalledPackageLifecycleService>();
-            await lifecycle.InitializeAsync();
-            var catalogGeneration = provider.GetRequiredService<PackageStoreCoordinator>().CatalogGeneration;
-            var changed = installed with { IsEnabled = false };
-            await store.WriteAsync([changed]);
-            var desiredBinding = Assert.Single(installed.ExecutionRuntimeBindings) with
-            {
-                RuntimePackagingRevision = 2,
-                RuntimeManifestSha256 = new string('c', 64),
-                RuntimeArtifactSha256 = new string('d', 64),
-            };
-
-            var stage = await lifecycle.StageRegistryAsync(
-                new PackageStoreStageRequest([]),
-                new Dictionary<string, RegistryPackageUploadMetadata>(StringComparer.Ordinal),
-                [installed],
-                [new PackageExecutionRuntimeRebindMutation(packageId, installed, [desiredBinding])]);
-
-            Assert.False(stage.Success);
-            Assert.Null(stage.StageId);
-            Assert.Contains("catalog changed after resolution", stage.OperationResult.Message, StringComparison.OrdinalIgnoreCase);
-            Assert.Equal(catalogGeneration, provider.GetRequiredService<PackageStoreCoordinator>().CatalogGeneration);
-            var persisted = Assert.Single(await store.ListAsync());
-            Assert.False(persisted.IsEnabled);
-            Assert.Equal(Assert.Single(installed.ExecutionRuntimeBindings), Assert.Single(persisted.ExecutionRuntimeBindings));
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task RegistryExecution_RuntimeOnlyRebindSkipsPackageArtifactGetAndCommitsExactBinding()
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string packageId = "test.runtime.rebind";
-            var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
-            var paths = new RuntimePackagePaths(root);
-            var store = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            await store.WriteAsync([installed]);
-            var item = await CreateRuntimeActionItemAsync(installed, RegistryPackageActionKinds.RuntimeOnlyRebind);
-            var resolutionRequests = new List<RegistryResolvePackageChangesRequest>();
-            var artifactGets = 0;
-            var handler = new DelegateHandler(request =>
-            {
-                if (request.Method == HttpMethod.Get)
-                {
-                    artifactGets++;
-                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
-                }
-                resolutionRequests.Add(request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
-                    .GetAwaiter()
-                    .GetResult()!);
-                return PlanResponse(item, now: now);
-            });
-            var services = new ServiceCollection();
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver();
-            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
-            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
-            provider = services.BuildServiceProvider();
-            await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
-            var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
-            var catalogGeneration = coordinator.CatalogGeneration;
-
-            var result = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().ExecuteAsync(
-                RuntimeActionRequest(origin, packageId),
-                CancellationToken.None);
-
-            Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
-            Assert.True(result.RuntimeSessionApplied);
-            Assert.Equal(0, artifactGets);
-            Assert.Equal(
-                new string?[] { null, "test-resolution-fingerprint", "test-resolution-fingerprint" },
-                resolutionRequests.Select(static request => request.ExpectedResolutionFingerprint).ToArray());
-            Assert.Equal(catalogGeneration + 1, coordinator.CatalogGeneration);
-            var persisted = Assert.Single(await store.ListAsync());
-            Assert.Equal(installed.ContentIdentity, persisted.ContentIdentity);
-            Assert.Equal(installed.InstallPath, persisted.InstallPath);
-            var binding = Assert.Single(persisted.ExecutionRuntimeBindings);
-            var plannedRuntime = Assert.Single(item.RuntimeBindings).Runtime;
-            Assert.Equal(plannedRuntime.RuntimeId, binding.RuntimeId);
-            Assert.Equal(plannedRuntime.Version, binding.RuntimeVersion);
-            Assert.Equal(plannedRuntime.PackagingRevision, binding.RuntimePackagingRevision);
-            Assert.Equal(plannedRuntime.Rid, binding.Rid);
-            Assert.Equal(plannedRuntime.ModuleAbi, binding.ModuleAbi);
-            Assert.Equal(new string('1', 64), binding.RuntimeManifestSha256);
-            Assert.Equal(new string('2', 64), binding.RuntimeArtifactSha256);
-            Assert.Equal(4096, binding.RuntimeArtifactSize);
-            Assert.Equal(origin, binding.RegistryOrigin);
-            Assert.Equal(RuntimeExecutionRuntimeAcquisitionSources.Registry, binding.AcquisitionSource);
-            Assert.Equal("sunder.test.release.v1", binding.SigningKeyId);
-            Assert.Equal(1, binding.TrustStoreGeneration);
-            Assert.Equal(1, binding.RuntimePolicyRevision);
-            Assert.Equal(ExecutionRuntimeLifecycleStates.Supported, binding.RuntimeLifecycleState);
-            Assert.Equal(now, binding.PolicyObservedAtUtc);
-            Assert.Equal(now, binding.ResolvedAtUtc);
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task RegistryExecution_RuntimeOnlyRebindCandidateFailurePreservesActiveStateAndCleansCandidate()
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string packageId = "test.runtime.rebind.candidate.failure";
-            var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
-            var paths = new RuntimePackagePaths(root);
-            var store = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            await store.WriteAsync([installed]);
-            var item = await CreateRuntimeActionItemAsync(
-                installed,
-                RegistryPackageActionKinds.RuntimeOnlyRebind);
-            var resolutionRequests = new List<RegistryResolvePackageChangesRequest>();
-            var packageArtifactGets = 0;
-            string? stageId = null;
-            var handler = new DelegateHandler(request =>
-            {
-                if (request.Method == HttpMethod.Get)
-                {
-                    packageArtifactGets++;
-                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
-                }
-                resolutionRequests.Add(request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
-                    .GetAwaiter()
-                    .GetResult()!);
-                if (resolutionRequests.Count == 2)
-                {
-                    stageId = GetOnlyPendingStageId(provider!);
-                }
-                return PlanResponse(item, now: now);
-            });
-            var launchResolver = new CandidateFailingExecutionRuntimeLaunchResolver(root);
-            var services = new ServiceCollection();
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver(launchResolver: launchResolver);
-            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
-            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
-            provider = services.BuildServiceProvider();
-
-            var lifecyclePolicies = provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>();
-            var oldBinding = Assert.Single(installed.ExecutionRuntimeBindings);
-            var oldReceipt = CreateRuntimeReceipt(oldBinding, now);
-            await lifecyclePolicies.ObserveAsync([
-                new ExecutionRuntimeLifecyclePolicyObservation(
-                    oldReceipt,
-                    origin,
-                    SupportedRuntimeLifecycle(now),
-                    RuntimePolicyRevision: 1,
-                    MinimumHostTrustGeneration: 1,
-                    PolicyObservedAtUtc: now.AddMinutes(-1)),
-            ]);
-            var lifecycle = provider.GetRequiredService<InstalledPackageLifecycleService>();
-            await lifecycle.InitializeAsync();
-            var loaded = await lifecycle.LoadInstalledPackagesAsync();
-            Assert.True(loaded.Success, loaded.Message);
-
-            var packageSessions = provider.GetRequiredService<PackageSessionState>();
-            var oldSession = packageSessions.ActiveSession;
-            var oldActive = Assert.Single(oldSession.LoadedPackageMap).Value;
-            var oldWorker = oldActive.Worker;
-            var oldProcess = WorkerReleaseMetrics.GetProcess(oldWorker);
-            var oldLaunch = Assert.Single(launchResolver.Launches);
-            Assert.Equal(oldProcess.Id, oldLaunch.Lease.ProcessId);
-            Assert.False(oldLaunch.Lease.Released);
-            var oldProjectionPath = Assert.IsType<string>(oldSession.SessionFolder);
-            var oldProjectionFiles = CaptureFileTree(oldProjectionPath);
-            var installedFiles = CaptureFileTree(installed.InstallPath);
-            var dataPath = Path.Combine(paths.PackageDataRootPath, packageId, "data", "preserved.txt");
-            Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
-            await File.WriteAllTextAsync(dataPath, "preserve-me");
-            var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
-            var catalogGeneration = coordinator.CatalogGeneration;
-            var catalogBytes = await File.ReadAllBytesAsync(paths.StateFilePath);
-            var policyBefore = lifecyclePolicies.CaptureSnapshot();
-            var policyBytes = await File.ReadAllBytesAsync(paths.ExecutionRuntimeLifecyclePolicyFilePath);
-
-            var result = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().ExecuteAsync(
-                RuntimeActionRequest(origin, packageId),
-                CancellationToken.None);
-
-            Assert.False(result.Success);
-            Assert.Equal(RuntimeRegistryErrorCode.InternalError, result.ErrorCode);
-            Assert.Equal("The package store stage could not be committed.", result.Message);
-            Assert.Equal("The package store stage could not be committed.", Assert.Single(result.Errors));
-            Assert.Equal(0, packageArtifactGets);
-            Assert.Equal(
-                new string?[] { null, "test-resolution-fingerprint" },
-                resolutionRequests.Select(static request => request.ExpectedResolutionFingerprint).ToArray());
-            Assert.Equal(catalogGeneration, coordinator.CatalogGeneration);
-            Assert.Equal(catalogBytes, await File.ReadAllBytesAsync(paths.StateFilePath));
-            var persisted = Assert.Single(await store.ListAsync());
-            Assert.Equal(installed.ContentIdentity, persisted.ContentIdentity);
-            Assert.Equal(installed.InstallPath, persisted.InstallPath);
-            Assert.Equal(oldBinding, Assert.Single(persisted.ExecutionRuntimeBindings));
-            Assert.Equal(installedFiles, CaptureFileTree(installed.InstallPath));
-            Assert.Equal("preserve-me", await File.ReadAllTextAsync(dataPath));
-
-            Assert.Same(oldSession, packageSessions.ActiveSession);
-            var activeAfter = Assert.Single(packageSessions.ActiveSession.LoadedPackageMap).Value;
-            Assert.Same(oldWorker, activeAfter.Worker);
-            oldProcess.Refresh();
-            Assert.False(oldProcess.HasExited);
-            Assert.False(oldLaunch.Lease.Released);
-            Assert.Equal(oldProcess.Id, oldLaunch.Lease.ProcessId);
-            Assert.Equal(oldProjectionFiles, CaptureFileTree(oldProjectionPath));
-
-            var candidateLaunch = Assert.Single(
-                launchResolver.Launches,
-                launch => launch.Identity != oldLaunch.Identity);
-            Assert.NotEqual(oldLaunch.RuntimeRootPath, candidateLaunch.RuntimeRootPath);
-            Assert.NotNull(candidateLaunch.Lease.ProcessId);
-            Assert.True(candidateLaunch.Lease.Released);
-            Assert.True(candidateLaunch.Lease.ProcessExitedAtRelease);
-            Assert.Equal(oldLaunch.ProjectionPath, candidateLaunch.ProjectionPath);
-            Assert.True(Directory.Exists(candidateLaunch.ProjectionPath));
-            var failedStageId = Assert.IsType<string>(stageId);
-            var owner = provider.GetRequiredService<RuntimeSessionOwner>();
-            Assert.False(owner.TryGetStageGeneration(failedStageId, out _));
-            Assert.Equal(RuntimePackageStageState.Failed, owner.GetStageStatus(failedStageId)?.State);
-            Assert.Empty(Directory.EnumerateDirectories(paths.TransactionRootPath));
-
-            var policyAfter = lifecyclePolicies.CaptureSnapshot();
-            Assert.Equal(policyBefore.Generation, policyAfter.Generation);
-            Assert.Equal(policyBefore.Entries, policyAfter.Entries);
-            Assert.Equal(policyBytes, await File.ReadAllBytesAsync(paths.ExecutionRuntimeLifecyclePolicyFilePath));
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Theory]
-    [InlineData(false, ExecutionRuntimeErrorCodes.Missing)]
-    [InlineData(true, ExecutionRuntimeErrorCodes.PolicyRequired)]
-    public async Task LocalPackageStage_RuntimeUnavailableReturnsExactRequirementWithoutRegistryOrMutation(
-        bool writeCompatibleReceipt,
-        string expectedErrorCode)
+    public async Task LocalPackageStage_RuntimeUnavailableReturnsExactRequirementWithoutRegistryOrMutation()
     {
         var root = CreateTempDirectory();
         ServiceProvider? provider = null;
@@ -1976,9 +1270,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
             var paths = new RuntimePackagePaths(root);
             RuntimeLocalState.EnsureInitialized(root);
             var rid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
-            var packageId = writeCompatibleReceipt
-                ? "test.local.runtime.policyrequired"
-                : "test.local.runtime.missing";
+            const string packageId = "test.local.runtime.missing";
             var sourceRoot = Path.Combine(root, "local-package-source");
             CanonicalPackageTestBuilder.WriteExplodedPackage(
                 sourceRoot,
@@ -1988,10 +1280,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 roles: [SunderPackageFormat.RuntimeHostRole],
                 runtimeIdentifiers: [rid]);
             archivePath = await CanonicalPackageTestBuilder.CreateArchiveAsync(sourceRoot);
-            var installedRecord = CanonicalPackageTestBuilder.CreateInstalledRecord(
-                sourceRoot,
-                packageId,
-                "1.0.0");
             var networkCalls = 0;
             var handler = new DelegateHandler(_ =>
             {
@@ -2001,17 +1289,10 @@ public sealed partial class RegistryRuntimeArchitectureTests
             var services = new ServiceCollection();
             services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
             services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
+            services.AddHttpClient(OfficialRuntimeHttpClient.ClientName).ConfigurePrimaryHttpMessageHandler(
+                () => new DelegateHandler(_ => throw new HttpRequestException("Official metadata is offline in this package-only fixture.")));
             provider = services.BuildServiceProvider();
 
-            if (writeCompatibleReceipt)
-            {
-                await WriteRuntimeReceiptAsync(
-                    provider.GetRequiredService<ExecutionRuntimeStore>(),
-                    provider.GetRequiredService<ExecutionRuntimeStoreLayout>(),
-                    CreateRuntimeReceipt(
-                        Assert.Single(installedRecord.ExecutionRuntimeBindings),
-                        DateTimeOffset.Parse("2026-08-28T10:00:00Z")));
-            }
             var lifecycle = provider.GetRequiredService<InstalledPackageLifecycleService>();
             await lifecycle.InitializeAsync();
             var transfers = provider.GetRequiredService<RuntimeContentTransferStore>();
@@ -2045,19 +1326,30 @@ public sealed partial class RegistryRuntimeArchitectureTests
                     UploadId: upload.UploadId),
             ]));
 
-            var requirement =
-                $"{SunderPackageFormat.DotNetExecutionRuntimeId} >=10.0.0 <11.0.0 {SunderPackageFormat.DotNetWorkerModuleAbi}";
-            var ensureCommand =
-                $"sunder runtime ensure {SunderPackageFormat.DotNetExecutionRuntimeId} '>=10.0.0 <11.0.0' {SunderPackageFormat.DotNetWorkerModuleAbi}";
-            var recovery = writeCompatibleReceipt
-                ? $"Run \"{ensureCommand}\" to resolve trusted Registry policy, then retry."
-                : $"Run \"{ensureCommand}\" or 'sunder runtime import --file <artifact.sunderruntime>', then retry.";
-            var expectedMessage =
-                $"{expectedErrorCode}: no installed execution runtime with authoritative local policy satisfies target 'runtime/{rid}' requirement '{requirement}'. {recovery}";
             Assert.False(stage.Success);
             Assert.Null(stage.StageId);
-            Assert.Equal(expectedMessage, stage.OperationResult.Message);
-            Assert.Equal(expectedMessage, Assert.Single(stage.Errors));
+            Assert.Contains("runtime first", stage.OperationResult.Message, StringComparison.Ordinal);
+            Assert.Equal(ExecutionRuntimeErrorCodes.Missing, Assert.Single(stage.Errors));
+            var prerequisites = Assert.IsType<RuntimePackageRuntimePrerequisitePlan>(stage.OperationResult.RuntimePrerequisites);
+            Assert.False(prerequisites.Satisfied);
+            Assert.Equal(ExecutionRuntimeErrorCodes.Missing, prerequisites.ErrorCode);
+            Assert.Equal(rid, prerequisites.Rid);
+            var missing = Assert.Single(prerequisites.Requirements);
+            Assert.Equal(packageId, missing.Package.PackageId);
+            Assert.Equal(SunderPackageFormat.DotNetExecutionRuntimeId, missing.Requirement.RuntimeId);
+            Assert.Equal(SunderPackageFormat.DotNetExecutionRuntimeVersionRange, missing.Requirement.VersionRange);
+            Assert.Equal(SunderPackageFormat.DotNetWorkerModuleAbi, missing.Requirement.ModuleAbi);
+            Assert.False(missing.Satisfied);
+            Assert.Equal(ExecutionRuntimeErrorCodes.Missing, missing.ErrorCode);
+            Assert.Null(missing.InstalledRuntime);
+            Assert.NotNull(missing.Installation);
+            var retainedUpload = transfers.AcquireUpload(
+                upload.UploadId,
+                RuntimeUploadKind.Package,
+                sessionGeneration,
+                consume: false);
+            Assert.NotNull(retainedUpload);
+            Assert.True(File.Exists(retainedUpload.FilePath));
             Assert.Equal(0, Volatile.Read(ref networkCalls));
             Assert.Equal(catalogGeneration, coordinator.CatalogGeneration);
             if (catalogBytes is null)
@@ -2117,7 +1409,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
                     RequestedTag: "latest",
                     SourceIdentity: new string('a', 64)));
             await store.WriteAsync([installed]);
-            var item = await CreateRuntimeActionItemAsync(installed, RegistryPackageActionKinds.Keep);
+            var item = await CreatePackageActionItemAsync(installed, RegistryPackageActionKinds.Keep);
             var resolutionRequests = new List<RegistryResolvePackageChangesRequest>();
             var artifactGets = 0;
             var handler = new DelegateHandler(request =>
@@ -2130,10 +1422,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 resolutionRequests.Add(request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
                     .GetAwaiter()
                     .GetResult()!);
-                return PlanResponse(
-                    item,
-                    now: now,
-                    exactBinding: Assert.Single(installed.ExecutionRuntimeBindings));
+                return PlanResponse(item, now: now);
             });
             var services = new ServiceCollection();
             services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
@@ -2142,8 +1431,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
             services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
             provider = services.BuildServiceProvider();
             await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
-            var lifecyclePolicies = provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>();
-            await lifecyclePolicies.InitializeAsync();
             var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
             var catalogGeneration = coordinator.CatalogGeneration;
             var catalogJson = await File.ReadAllTextAsync(paths.StateFilePath);
@@ -2161,113 +1448,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
             Assert.Equal(catalogGeneration, coordinator.CatalogGeneration);
             Assert.Equal(catalogJson, await File.ReadAllTextAsync(paths.StateFilePath));
             Assert.Empty(Directory.EnumerateDirectories(paths.TransactionRootPath));
-            Assert.Single(lifecyclePolicies.CaptureSnapshot().Entries);
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task RegistryExecution_LifecycleOnlyKeepCommitsBindingAndPolicyCacheTogether()
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string packageId = "test.runtime.keep.lifecycle";
-            var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
-            var paths = new RuntimePackagePaths(root);
-            var store = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            await store.WriteAsync([installed]);
-            var item = await CreateRuntimeActionItemAsync(installed, RegistryPackageActionKinds.Keep);
-            var currentBinding = Assert.Single(installed.ExecutionRuntimeBindings);
-            var lifecycle = DeprecatedRuntimeLifecycle(now);
-            var resolutionRequests = new List<RegistryResolvePackageChangesRequest>();
-            var artifactGets = 0;
-            var handler = new DelegateHandler(request =>
-            {
-                if (request.Method == HttpMethod.Get)
-                {
-                    artifactGets++;
-                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
-                }
-                resolutionRequests.Add(request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
-                    .GetAwaiter()
-                    .GetResult()!);
-                return PlanResponse(
-                    item,
-                    now: now,
-                    runtimePolicyRevision: 2,
-                    lifecycle: lifecycle,
-                    exactBinding: currentBinding);
-            });
-            var services = new ServiceCollection();
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver();
-            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
-            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
-            provider = services.BuildServiceProvider();
-            var packageLifecycle = provider.GetRequiredService<InstalledPackageLifecycleService>();
-            await packageLifecycle.InitializeAsync();
-            var loaded = await packageLifecycle.LoadInstalledPackagesAsync();
-            Assert.True(loaded.Success, loaded.Message);
-            var activeBefore = Assert.Single(
-                provider.GetRequiredService<PackageSessionState>().ActiveSession.LoadedPackageMap).Value;
-            var workerBefore = activeBefore.Worker;
-            var processBefore = WorkerReleaseMetrics.GetProcess(workerBefore);
-            Assert.False(processBefore.HasExited);
-            var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
-            var catalogGeneration = coordinator.CatalogGeneration;
-
-            var result = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().ExecuteAsync(
-                RuntimeActionRequest(origin, packageId),
-                CancellationToken.None);
-
-            Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
-            Assert.False(result.RuntimeSessionApplied);
-            Assert.Equal(0, artifactGets);
-            Assert.Equal(
-                new string?[] { null, "test-resolution-fingerprint", "test-resolution-fingerprint" },
-                resolutionRequests.Select(static request => request.ExpectedResolutionFingerprint).ToArray());
-            Assert.Equal(catalogGeneration + 1, coordinator.CatalogGeneration);
-            var persistedBinding = Assert.Single(Assert.Single(await store.ListAsync()).ExecutionRuntimeBindings);
-            Assert.Equal(currentBinding.RuntimeId, persistedBinding.RuntimeId);
-            Assert.Equal(currentBinding.RuntimeVersion, persistedBinding.RuntimeVersion);
-            Assert.Equal(currentBinding.RuntimePackagingRevision, persistedBinding.RuntimePackagingRevision);
-            Assert.Equal(currentBinding.RuntimeManifestSha256, persistedBinding.RuntimeManifestSha256);
-            Assert.Equal(currentBinding.RuntimeArtifactSha256, persistedBinding.RuntimeArtifactSha256);
-            Assert.Equal(2, persistedBinding.RuntimePolicyRevision);
-            Assert.Equal(ExecutionRuntimeLifecycleStates.Deprecated, persistedBinding.RuntimeLifecycleState);
-            Assert.Equal(now, persistedBinding.PolicyObservedAtUtc);
-            Assert.Equal(now, persistedBinding.ResolvedAtUtc);
-            var cached = Assert.Single(provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>()
-                .CaptureSnapshot().Entries);
-            Assert.Equal(2, cached.RuntimePolicyRevision);
-            Assert.Equal(lifecycle, cached.Lifecycle);
-            Assert.Equal(now, cached.PolicyObservedAtUtc);
-            var activeAfter = Assert.Single(
-                provider.GetRequiredService<PackageSessionState>().ActiveSession.LoadedPackageMap).Value;
-            Assert.Same(workerBefore, activeAfter.Worker);
-            Assert.False(processBefore.HasExited);
         }
         finally
         {
@@ -2363,630 +1543,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
     }
 
     [Fact]
-    public async Task RegistryExecution_StaleLifecycleKeepSecondConfirmationLeavesCatalogAndPolicyCacheUntouched()
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string packageId = "test.runtime.keep.stale";
-            var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
-            var paths = new RuntimePackagePaths(root);
-            var store = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            await store.WriteAsync([installed]);
-            var item = await CreateRuntimeActionItemAsync(installed, RegistryPackageActionKinds.Keep);
-            var currentBinding = Assert.Single(installed.ExecutionRuntimeBindings);
-            var lifecycle = DeprecatedRuntimeLifecycle(now);
-            var resolutionRequests = new List<RegistryResolvePackageChangesRequest>();
-            var handler = new DelegateHandler(request =>
-            {
-                if (request.Method == HttpMethod.Get)
-                {
-                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
-                }
-                resolutionRequests.Add(request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
-                    .GetAwaiter()
-                    .GetResult()!);
-                return PlanResponse(
-                    item,
-                    resolutionFingerprint: resolutionRequests.Count == 3
-                        ? "stale-resolution-fingerprint"
-                        : "test-resolution-fingerprint",
-                    now: now,
-                    runtimePolicyRevision: 2,
-                    lifecycle: lifecycle,
-                    exactBinding: currentBinding);
-            });
-            var services = new ServiceCollection();
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver();
-            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
-            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
-            provider = services.BuildServiceProvider();
-            await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
-            var lifecyclePolicies = provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>();
-            await lifecyclePolicies.InitializeAsync();
-            var before = lifecyclePolicies.CaptureSnapshot();
-            Assert.Empty(before.Entries);
-            Assert.False(File.Exists(paths.ExecutionRuntimeLifecyclePolicyFilePath));
-            var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
-            var catalogGeneration = coordinator.CatalogGeneration;
-            var catalogJson = await File.ReadAllTextAsync(paths.StateFilePath);
-
-            var result = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().ExecuteAsync(
-                RuntimeActionRequest(origin, packageId),
-                CancellationToken.None);
-
-            Assert.False(result.Success);
-            Assert.Equal(RuntimeRegistryErrorCode.Conflict, result.ErrorCode);
-            Assert.Contains("stale", result.Message, StringComparison.OrdinalIgnoreCase);
-            Assert.Equal(
-                new string?[] { null, "test-resolution-fingerprint", "test-resolution-fingerprint" },
-                resolutionRequests.Select(static request => request.ExpectedResolutionFingerprint).ToArray());
-            Assert.Equal(catalogGeneration, coordinator.CatalogGeneration);
-            Assert.Equal(catalogJson, await File.ReadAllTextAsync(paths.StateFilePath));
-            var after = lifecyclePolicies.CaptureSnapshot();
-            Assert.Equal(before.Generation, after.Generation);
-            Assert.Empty(after.Entries);
-            Assert.False(File.Exists(paths.ExecutionRuntimeLifecyclePolicyFilePath));
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task RegistryExecution_SecondStaleConfirmationCarriesFingerprintAndDiscardsStage()
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string packageId = "test.runtime.rebind.stale.confirmation";
-            var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
-            var paths = new RuntimePackagePaths(root);
-            var store = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            await store.WriteAsync([installed]);
-            var item = await CreateRuntimeActionItemAsync(installed, RegistryPackageActionKinds.RuntimeOnlyRebind);
-            var resolutionRequests = new List<RegistryResolvePackageChangesRequest>();
-            var artifactGets = 0;
-            string? stagedId = null;
-            var handler = new DelegateHandler(request =>
-            {
-                if (request.Method == HttpMethod.Get)
-                {
-                    artifactGets++;
-                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
-                }
-                resolutionRequests.Add(request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
-                    .GetAwaiter()
-                    .GetResult()!);
-                if (resolutionRequests.Count == 3)
-                {
-                    stagedId = GetOnlyPendingStageId(provider!);
-                    return PlanResponse(item, resolutionFingerprint: "stale-resolution-fingerprint", now: now);
-                }
-                return PlanResponse(item, now: now);
-            });
-            var services = new ServiceCollection();
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver();
-            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
-            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
-            provider = services.BuildServiceProvider();
-            await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
-            var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
-            var catalogGeneration = coordinator.CatalogGeneration;
-            var catalogJson = await File.ReadAllTextAsync(paths.StateFilePath);
-
-            var result = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().ExecuteAsync(
-                RuntimeActionRequest(origin, packageId),
-                CancellationToken.None);
-
-            Assert.False(result.Success);
-            Assert.Equal(RuntimeRegistryErrorCode.Conflict, result.ErrorCode);
-            Assert.Contains("stale", result.Message, StringComparison.OrdinalIgnoreCase);
-            Assert.Equal(0, artifactGets);
-            Assert.Equal(
-                new string?[] { null, "test-resolution-fingerprint", "test-resolution-fingerprint" },
-                resolutionRequests.Select(static request => request.ExpectedResolutionFingerprint).ToArray());
-            var discardedStageId = Assert.IsType<string>(stagedId);
-            var owner = provider.GetRequiredService<RuntimeSessionOwner>();
-            Assert.False(owner.TryGetStageGeneration(discardedStageId, out _));
-            Assert.Equal(RuntimePackageStageState.Discarded, owner.GetStageStatus(discardedStageId)?.State);
-            Assert.Equal(catalogGeneration, coordinator.CatalogGeneration);
-            Assert.Equal(catalogJson, await File.ReadAllTextAsync(paths.StateFilePath));
-            Assert.Empty(Directory.EnumerateDirectories(paths.TransactionRootPath));
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Theory]
-    [InlineData(1, true, true, false, false, ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied, true)]
-    [InlineData(2, false, true, false, false, ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied, true)]
-    [InlineData(3, false, true, false, false, ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied, true)]
-    [InlineData(1, true, false, false, false, ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied, true)]
-    [InlineData(1, true, true, true, false, ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied, true)]
-    [InlineData(1, true, true, false, true, ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied, true)]
-    [InlineData(1, true, true, false, false, ExecutionRuntimeErrorCodes.Revoked, true)]
-    [InlineData(1, true, true, false, false, ExecutionRuntimeErrorCodes.Retired, true)]
-    [InlineData(1, true, true, false, false, ExecutionRuntimeErrorCodes.PolicyRequired, false)]
-    [InlineData(1, true, true, false, false, ExecutionRuntimeErrorCodes.HostTrustUpdateRequired, false)]
-    public async Task RegistryUpdate_RuntimePolicyConflictEnforcesOnlyExactHardDenials(
-        int deniedPlanRequest,
-        bool dryRun,
-        bool writeReceipt,
-        bool breakPolicyPersistence,
-        bool malformedEvidence,
-        string conflictCode,
-        bool expectedHardDenial)
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string packageId = "test.runtime.trust.denied.active";
-            var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
-            var paths = new RuntimePackagePaths(root);
-            var installedStore = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            await installedStore.WriteAsync([installed]);
-            var item = await CreateRuntimeActionItemAsync(
-                installed,
-                RegistryPackageActionKinds.RuntimeOnlyRebind);
-            var targetBinding = Assert.Single(item.RuntimeBindings);
-            var binding = Assert.Single(installed.ExecutionRuntimeBindings);
-            var currentRuntime = new RegistryExecutionRuntimeIdentity(
-                binding.RuntimeId,
-                binding.RuntimeVersion,
-                binding.RuntimePackagingRevision,
-                binding.Rid,
-                binding.ModuleAbi);
-            var receipt = CreateRuntimeReceipt(binding, now);
-            var authoritativeLifecycle = conflictCode switch
-            {
-                ExecutionRuntimeErrorCodes.Revoked => RevokedRuntimeLifecycle(now),
-                ExecutionRuntimeErrorCodes.Retired => RetiredRuntimeLifecycle(now),
-                _ => SupportedRuntimeLifecycle(now),
-            };
-            var planRequests = 0;
-            var releaseRequests = 0;
-            var handler = new DelegateHandler(request =>
-            {
-                if (request.Method == HttpMethod.Get)
-                {
-                    releaseRequests++;
-                    return RuntimeReleaseResponse(
-                        receipt,
-                        authoritativeLifecycle,
-                        runtimePolicyRevision: 2,
-                        now);
-                }
-                planRequests++;
-                return planRequests == deniedPlanRequest
-                    ? RuntimeConflictPlanResponse(
-                        new RegistryExecutionRuntimeResolutionConflict(
-                            conflictCode,
-                            conflictCode switch
-                            {
-                                ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied =>
-                                    "The currently bound execution runtime is no longer trusted.",
-                                ExecutionRuntimeErrorCodes.Revoked =>
-                                    "The currently bound execution runtime is revoked.",
-                                ExecutionRuntimeErrorCodes.Retired =>
-                                    "The currently bound execution runtime is retired.",
-                                _ => "Registry policy requires a different execution runtime.",
-                            },
-                            targetBinding.Requirement,
-                            targetBinding.Rid,
-                            packageId,
-                            targetBinding.Role,
-                            malformedEvidence ? null : currentRuntime),
-                        now)
-                    : PlanResponse(item, now: now);
-            });
-            var applicationLifetime = new TestApplicationLifetime();
-            var services = new ServiceCollection();
-            services.AddSingleton<IHostApplicationLifetime>(applicationLifetime);
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver(enforceLifecyclePolicy: true);
-            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
-            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
-            provider = services.BuildServiceProvider();
-
-            if (writeReceipt)
-            {
-                await WriteRuntimeReceiptAsync(
-                    provider.GetRequiredService<ExecutionRuntimeStore>(),
-                    provider.GetRequiredService<ExecutionRuntimeStoreLayout>(),
-                    receipt);
-            }
-            var lifecyclePolicies = provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>();
-            await lifecyclePolicies.ObserveAsync([
-                new ExecutionRuntimeLifecyclePolicyObservation(
-                    receipt,
-                    origin,
-                    SupportedRuntimeLifecycle(now),
-                    RuntimePolicyRevision: 1,
-                    MinimumHostTrustGeneration: 1,
-                    PolicyObservedAtUtc: now.AddMinutes(-1)),
-            ]);
-            if (breakPolicyPersistence)
-            {
-                File.Delete(paths.ExecutionRuntimeLifecyclePolicyFilePath);
-                Directory.CreateDirectory(paths.ExecutionRuntimeLifecyclePolicyFilePath);
-            }
-            var dataRoot = Path.Combine(paths.PackageDataRootPath, packageId, "data");
-            Directory.CreateDirectory(dataRoot);
-            var dataPath = Path.Combine(dataRoot, "preserved.txt");
-            await File.WriteAllTextAsync(dataPath, "preserve-me");
-            var lifecycle = provider.GetRequiredService<InstalledPackageLifecycleService>();
-            await lifecycle.InitializeAsync();
-            var loaded = await lifecycle.LoadInstalledPackagesAsync();
-            Assert.True(loaded.Success, loaded.Message);
-            var packageSessions = provider.GetRequiredService<PackageSessionState>();
-            var active = Assert.Single(packageSessions.ActiveSession.LoadedPackageMap).Value;
-            var oldGeneration = active.Worker.GenerationCompletion;
-            var oldProcess = WorkerReleaseMetrics.GetProcess(active.Worker);
-            Assert.False(oldProcess.HasExited);
-            var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
-            var catalogGeneration = coordinator.CatalogGeneration;
-            var catalogJson = await File.ReadAllTextAsync(paths.StateFilePath);
-
-            var result = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().UpdateAsync(
-                new RuntimeRegistryUpdateRequest(
-                    RegistryOrigin: origin,
-                    PackageId: packageId,
-                    DryRun: dryRun),
-                CancellationToken.None);
-
-            Assert.False(result.Success);
-            Assert.Equal(RuntimeRegistryErrorCode.Conflict, result.ErrorCode);
-            Assert.Equal(conflictCode, Assert.Single(result.RuntimeConflicts).Code);
-            Assert.Equal(deniedPlanRequest, planRequests);
-            Assert.Equal(expectedHardDenial && writeReceipt && !malformedEvidence ? 1 : 0, releaseRequests);
-            Assert.Equal("preserve-me", await File.ReadAllTextAsync(dataPath));
-            Assert.Empty(Directory.EnumerateDirectories(paths.TransactionRootPath));
-            var policyCommitted = expectedHardDenial
-                                  && writeReceipt
-                                  && !breakPolicyPersistence
-                                  && !malformedEvidence;
-            if (policyCommitted)
-            {
-                Assert.Equal(catalogGeneration + 1, coordinator.CatalogGeneration);
-                Assert.NotEqual(catalogJson, await File.ReadAllTextAsync(paths.StateFilePath));
-                var persisted = Assert.Single(await installedStore.ListAsync());
-                var persistedBinding = Assert.Single(persisted.ExecutionRuntimeBindings);
-                Assert.Equal(2, persistedBinding.RuntimePolicyRevision);
-                Assert.Equal(authoritativeLifecycle.State, persistedBinding.RuntimeLifecycleState);
-                Assert.Equal(now, persistedBinding.PolicyObservedAtUtc);
-                Assert.Equal(now, persistedBinding.ResolvedAtUtc);
-            }
-            else
-            {
-                Assert.Equal(catalogGeneration, coordinator.CatalogGeneration);
-                Assert.Equal(catalogJson, await File.ReadAllTextAsync(paths.StateFilePath));
-                Assert.Equal(binding, Assert.Single(
-                    Assert.Single(await installedStore.ListAsync()).ExecutionRuntimeBindings));
-            }
-            if (!expectedHardDenial)
-            {
-                Assert.False(applicationLifetime.StopRequested);
-                Assert.DoesNotContain(result.Warnings, warning =>
-                    warning.Contains("Stopped and faulted", StringComparison.Ordinal));
-                Assert.False(oldProcess.HasExited);
-                Assert.Single(packageSessions.ActiveSession.LoadedPackageMap);
-                var trusted = Assert.Single(lifecyclePolicies.CaptureSnapshot().Entries);
-                Assert.Equal(1, trusted.RuntimePolicyRevision);
-                Assert.Equal(ExecutionRuntimeTrustDispositions.Trusted, trusted.TrustDisposition);
-            }
-            else if (writeReceipt && !breakPolicyPersistence && !malformedEvidence)
-            {
-                Assert.False(applicationLifetime.StopRequested);
-                Assert.Contains(result.Warnings, warning =>
-                    warning.Contains("Stopped and faulted", StringComparison.Ordinal));
-                await oldGeneration.WaitAsync(TimeSpan.FromSeconds(5));
-                Assert.True(oldGeneration.IsCompletedSuccessfully);
-                Assert.Empty(packageSessions.ActiveSession.LoadedPackageMap);
-                var faulted = Assert.Single(packageSessions.ActiveSession.GetSessionPackages());
-                Assert.Equal(PackageReadinessState.Failed, faulted.Readiness);
-                var denied = Assert.Single(lifecyclePolicies.CaptureSnapshot().Entries);
-                Assert.Equal(2, denied.RuntimePolicyRevision);
-                Assert.Equal(
-                    conflictCode == ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied
-                        ? ExecutionRuntimeTrustDispositions.Denied
-                        : ExecutionRuntimeTrustDispositions.Trusted,
-                    denied.TrustDisposition);
-                Assert.Equal(authoritativeLifecycle.State, denied.Lifecycle.State);
-            }
-            else
-            {
-                Assert.True(applicationLifetime.StopRequested);
-                Assert.Contains("shutdown was requested", result.Message, StringComparison.OrdinalIgnoreCase);
-                Assert.False(oldProcess.HasExited);
-                Assert.Single(packageSessions.ActiveSession.LoadedPackageMap);
-                var trusted = Assert.Single(lifecyclePolicies.CaptureSnapshot().Entries);
-                Assert.Equal(1, trusted.RuntimePolicyRevision);
-                Assert.Equal(ExecutionRuntimeTrustDispositions.Trusted, trusted.TrustDisposition);
-            }
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task RegistryUpdate_KnownRevocationStopsActiveWorkerAndFaultsPackageWithoutDeletingData()
-    {
-        var root = CreateTempDirectory();
-        ServiceProvider? provider = null;
-        try
-        {
-            const string origin = "https://registry.example/";
-            const string packageId = "test.runtime.revoked.active";
-            const string sharedRuntimePackageId = "test.runtime.revoked.shared";
-            const string unaffectedPackageId = "test.runtime.supported.active";
-            var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
-            var paths = new RuntimePackagePaths(root);
-            var installedStore = new InstalledPackageStore(paths);
-            var installed = WriteInstalledPackage(
-                paths,
-                packageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    packageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('a', 64)));
-            var sharedRuntime = WriteInstalledPackage(
-                paths,
-                sharedRuntimePackageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    sharedRuntimePackageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('d', 64)));
-            var unaffected = WriteInstalledPackage(
-                paths,
-                unaffectedPackageId,
-                "1.0.0",
-                new InstalledPackageProvenanceRecord(
-                    InstalledPackageSourceKind.Registry,
-                    InstalledPackageVersionPolicy.FollowTag,
-                    origin,
-                    unaffectedPackageId,
-                    RequestedTag: "latest",
-                    SourceIdentity: new string('c', 64)));
-            var binding = Assert.Single(installed.ExecutionRuntimeBindings);
-            sharedRuntime = sharedRuntime with { ExecutionRuntimeBindings = [binding] };
-            var unaffectedBinding = Assert.Single(unaffected.ExecutionRuntimeBindings) with
-            {
-                RuntimeVersion = "10.0.2",
-                RuntimePackagingRevision = 2,
-                RuntimeManifestSha256 = new string('c', 64),
-                RuntimeArtifactSha256 = new string('d', 64),
-                RuntimeArtifactSize = 104857601,
-            };
-            unaffected = unaffected with { ExecutionRuntimeBindings = [unaffectedBinding] };
-            await SeedExistingActivePolicyAsync(paths, unaffected);
-            await installedStore.WriteAsync([installed, sharedRuntime, unaffected]);
-            var item = await CreateRuntimeActionItemAsync(installed, RegistryPackageActionKinds.Keep);
-            var targetBinding = Assert.Single(item.RuntimeBindings);
-            var receipt = CreateRuntimeReceipt(binding, now);
-            var unaffectedReceipt = CreateRuntimeReceipt(unaffectedBinding, now);
-            var revoked = RevokedRuntimeLifecycle(now);
-            var planRequests = 0;
-            var releaseRequests = 0;
-            var handler = new DelegateHandler(request =>
-            {
-                if (request.Method == HttpMethod.Get)
-                {
-                    releaseRequests++;
-                    return RuntimeReleaseResponse(receipt, revoked, runtimePolicyRevision: 2, now);
-                }
-                planRequests++;
-                return RuntimeConflictPlanResponse(
-                    new RegistryExecutionRuntimeResolutionConflict(
-                        ExecutionRuntimeErrorCodes.Revoked,
-                        "The currently bound execution runtime is revoked.",
-                        targetBinding.Requirement,
-                        targetBinding.Rid,
-                        packageId,
-                        targetBinding.Role,
-                        targetBinding.Runtime),
-                    now);
-            });
-            var services = new ServiceCollection();
-            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
-            services.UseTestExecutionRuntimeLaunchResolver(enforceLifecyclePolicy: true);
-            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
-            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
-            provider = services.BuildServiceProvider();
-
-            var runtimeStore = provider.GetRequiredService<ExecutionRuntimeStore>();
-            await WriteRuntimeReceiptAsync(
-                runtimeStore,
-                provider.GetRequiredService<ExecutionRuntimeStoreLayout>(),
-                receipt);
-            await WriteRuntimeReceiptAsync(
-                runtimeStore,
-                provider.GetRequiredService<ExecutionRuntimeStoreLayout>(),
-                unaffectedReceipt);
-            var lifecyclePolicies = provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>();
-            await lifecyclePolicies.ObserveAsync([
-                new ExecutionRuntimeLifecyclePolicyObservation(
-                    receipt,
-                    origin,
-                    SupportedRuntimeLifecycle(now),
-                    RuntimePolicyRevision: 1,
-                    MinimumHostTrustGeneration: 1,
-                    PolicyObservedAtUtc: now.AddMinutes(-1)),
-                new ExecutionRuntimeLifecyclePolicyObservation(
-                    unaffectedReceipt,
-                    origin,
-                    SupportedRuntimeLifecycle(now),
-                    RuntimePolicyRevision: 1,
-                    MinimumHostTrustGeneration: 1,
-                    PolicyObservedAtUtc: now.AddMinutes(-1)),
-            ]);
-            var dataRoot = Path.Combine(paths.PackageDataRootPath, packageId, "data");
-            Directory.CreateDirectory(dataRoot);
-            var dataPath = Path.Combine(dataRoot, "preserved.txt");
-            await File.WriteAllTextAsync(dataPath, "preserve-me");
-
-            var lifecycle = provider.GetRequiredService<InstalledPackageLifecycleService>();
-            await lifecycle.InitializeAsync();
-            var loaded = await lifecycle.LoadInstalledPackagesAsync();
-            Assert.True(loaded.Success, loaded.Message);
-            var packageSessions = provider.GetRequiredService<PackageSessionState>();
-            Assert.True(packageSessions.ActiveSession.LoadedPackageMap.Count == 3,
-                string.Join(" | ", packageSessions.GetSessionPackages().Select(value => value.PackageId + ": " + value.LastError)));
-            var active = packageSessions.ActiveSession.LoadedPackageMap[packageId];
-            var sharedRuntimeActive = packageSessions.ActiveSession.LoadedPackageMap[sharedRuntimePackageId];
-            var unaffectedActive = packageSessions.ActiveSession.LoadedPackageMap[unaffectedPackageId];
-            var oldGeneration = active.Worker.GenerationCompletion;
-            var sharedRuntimeGeneration = sharedRuntimeActive.Worker.GenerationCompletion;
-            var oldProcess = WorkerReleaseMetrics.GetProcess(active.Worker);
-            var sharedRuntimeProcess = WorkerReleaseMetrics.GetProcess(sharedRuntimeActive.Worker);
-            var unaffectedProcess = WorkerReleaseMetrics.GetProcess(unaffectedActive.Worker);
-            Assert.False(oldProcess.HasExited);
-            Assert.False(sharedRuntimeProcess.HasExited);
-            Assert.False(unaffectedProcess.HasExited);
-            var coordinator = provider.GetRequiredService<PackageStoreCoordinator>();
-            var catalogGeneration = coordinator.CatalogGeneration;
-
-            var result = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().UpdateAsync(
-                new RuntimeRegistryUpdateRequest(RegistryOrigin: origin, PackageId: packageId),
-                CancellationToken.None);
-
-            Assert.False(result.Success);
-            Assert.Equal(RuntimeRegistryErrorCode.Conflict, result.ErrorCode);
-            Assert.Contains("revoked", result.Message, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains(result.Warnings, warning => warning.Contains("Stopped and faulted", StringComparison.Ordinal));
-            Assert.Equal(1, planRequests);
-            Assert.Equal(1, releaseRequests);
-            await oldGeneration.WaitAsync(TimeSpan.FromSeconds(5));
-            await sharedRuntimeGeneration.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(oldGeneration.IsCompletedSuccessfully);
-            Assert.True(sharedRuntimeGeneration.IsCompletedSuccessfully);
-            var remaining = Assert.Single(packageSessions.ActiveSession.LoadedPackageMap);
-            Assert.Equal(unaffectedPackageId, remaining.Key);
-            Assert.Same(unaffectedActive.Worker, remaining.Value.Worker);
-            Assert.False(unaffectedProcess.HasExited);
-            var faulted = Assert.Single(
-                packageSessions.ActiveSession.GetSessionPackages(),
-                package => package.PackageId == packageId);
-            Assert.Equal(packageId, faulted.PackageId);
-            Assert.Equal(PackageReadinessState.Failed, faulted.Readiness);
-            Assert.Contains("lifecycle policy", faulted.LastError, StringComparison.OrdinalIgnoreCase);
-            var sharedRuntimeFaulted = Assert.Single(
-                packageSessions.ActiveSession.GetSessionPackages(),
-                package => package.PackageId == sharedRuntimePackageId);
-            Assert.Equal(PackageReadinessState.Failed, sharedRuntimeFaulted.Readiness);
-            Assert.Contains("lifecycle policy", sharedRuntimeFaulted.LastError, StringComparison.OrdinalIgnoreCase);
-            var stillReady = Assert.Single(
-                packageSessions.ActiveSession.GetSessionPackages(),
-                package => package.PackageId == unaffectedPackageId);
-            Assert.Equal(PackageReadinessState.Ready, stillReady.Readiness);
-            Assert.Equal("preserve-me", await File.ReadAllTextAsync(dataPath));
-            Assert.Equal(catalogGeneration + 1, coordinator.CatalogGeneration);
-            var persistedPackages = (await installedStore.ListAsync())
-                .ToDictionary(static package => package.PackageId, StringComparer.OrdinalIgnoreCase);
-            foreach (var affectedPackageId in new[] { packageId, sharedRuntimePackageId })
-            {
-                var persistedBinding = Assert.Single(persistedPackages[affectedPackageId].ExecutionRuntimeBindings);
-                Assert.Equal(2, persistedBinding.RuntimePolicyRevision);
-                Assert.Equal(ExecutionRuntimeLifecycleStates.Revoked, persistedBinding.RuntimeLifecycleState);
-                Assert.Equal(now, persistedBinding.PolicyObservedAtUtc);
-                Assert.Equal(now, persistedBinding.ResolvedAtUtc);
-            }
-            Assert.Equal(
-                unaffectedBinding,
-                Assert.Single(persistedPackages[unaffectedPackageId].ExecutionRuntimeBindings));
-            Assert.Empty(Directory.EnumerateDirectories(paths.TransactionRootPath));
-            var cached = Assert.Single(
-                lifecyclePolicies.CaptureSnapshot().Entries,
-                policy => policy.Identity == receipt.Identity);
-            Assert.Equal(2, cached.RuntimePolicyRevision);
-            Assert.Equal(ExecutionRuntimeLifecycleStates.Revoked, cached.Lifecycle.State);
-            var unaffectedCached = Assert.Single(
-                lifecyclePolicies.CaptureSnapshot().Entries,
-                policy => policy.Identity == unaffectedReceipt.Identity);
-            Assert.Equal(1, unaffectedCached.RuntimePolicyRevision);
-            Assert.Equal(ExecutionRuntimeLifecycleStates.Supported, unaffectedCached.Lifecycle.State);
-        }
-        finally
-        {
-            if (provider is not null)
-            {
-                await ShutdownPackageLifecycleAsync(provider);
-                await provider.DisposeAsync();
-            }
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
     public async Task RegistryUpdate_IncludePrereleaseOverrideIsResolverOnlyAndPreservesStoredPolicy()
     {
         var root = CreateTempDirectory();
@@ -3028,7 +1584,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 captured = request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
                     .GetAwaiter()
                     .GetResult();
-                return PlanResponse(artifact.PlanItem, exactBinding: Assert.Single(store.ListAsync().GetAwaiter().GetResult().Single().ExecutionRuntimeBindings));
+                return PlanResponse(artifact.PlanItem);
             });
             var services = new ServiceCollection();
             services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
@@ -3406,7 +1962,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
     [Theory]
     [InlineData("tag")]
     [InlineData("dependency")]
-    [InlineData("runtime-policy")]
     public async Task RegistrySourceAdoption_StalePreviewIsRejectedBeforeDownloadsOrStaging(
         string changedAuthority)
     {
@@ -3455,9 +2010,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
                         new RegistryPackageDependency("test.new.dependency", ">=1.0.0"),
                     ]).ToArray(),
                     artifact.PlanItem.Targets,
-                    artifact.PlanItem.Artifacts,
-                    artifact.PlanItem.RuntimeBindings,
-                    artifact.PlanItem.RuntimeOnlyRebind),
+                    artifact.PlanItem.Artifacts),
                 _ => artifact.PlanItem,
             };
             var resolutionRequests = new List<RegistryResolvePackageChangesRequest>();
@@ -3476,8 +2029,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 var preview = resolutionRequests.Count == 1;
                 return PlanResponse(
                     preview ? artifact.PlanItem : currentItem,
-                    resolutionFingerprint: preview ? previewFingerprint : currentFingerprint,
-                    runtimePolicyRevision: !preview && changedAuthority == "runtime-policy" ? 2 : 1);
+                    resolutionFingerprint: preview ? previewFingerprint : currentFingerprint);
             });
             var services = new ServiceCollection();
             services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
@@ -3583,7 +2135,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
                         [],
                         [],
                         ResolutionFingerprint: resolutionFingerprint,
-                        RuntimePolicyRevision: 1,
                         ExpiresAtUtc: now.AddMinutes(5))),
                 };
             });
@@ -3739,10 +2290,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
                         [],
                         [],
                         [],
-                        RuntimeArtifacts: [],
-                        RuntimeConflicts: [],
                         ResolutionFingerprint: "test-untrusted-artifact-fingerprint",
-                        RuntimePolicyRevision: 1,
                         ExpiresAtUtc: DateTimeOffset.UtcNow.AddMinutes(5))),
                 };
             });
@@ -3856,43 +2404,13 @@ public sealed partial class RegistryRuntimeArchitectureTests
             origin,
             [new RuntimeRegistryPackageChangeRequest(packageId, null, [], "latest")]);
 
-    private static async Task<RegistryPackageInstallPlanItem> CreateRuntimeActionItemAsync(
+    private static async Task<RegistryPackageInstallPlanItem> CreatePackageActionItemAsync(
         InstalledPackageRecord package,
         string actionKind)
     {
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(package.InstallPath);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
         var manifest = Assert.IsType<SunderPackageManifest>(validation.Manifest);
-        var rid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
-        var target = Assert.Single(
-            manifest.Targets ?? [],
-            candidate => candidate is
-            {
-                Role: SunderPackageFormat.RuntimeHostRole,
-                Kind: SunderPackageFormat.WorkerTargetKind,
-                ExecutionRuntime: not null,
-            } && string.Equals(candidate.Rid, rid, StringComparison.Ordinal));
-        var previous = Assert.Single(RegistryPackagePlanResolver.ProjectRuntimeBindings(package, manifest));
-        var next = previous with
-        {
-            Runtime = previous.Runtime with
-            {
-                PackagingRevision = previous.Runtime.PackagingRevision + 1,
-            },
-        };
-        var selected = actionKind switch
-        {
-            RegistryPackageActionKinds.Keep => previous,
-            RegistryPackageActionKinds.RuntimeOnlyRebind => next,
-            _ => throw new ArgumentOutOfRangeException(nameof(actionKind)),
-        };
-        var rebind = actionKind == RegistryPackageActionKinds.RuntimeOnlyRebind
-            ? new RegistryRuntimeOnlyRebindDetails(
-                package.Version,
-                package.Provenance.SourceIdentity!,
-                [previous],
-                [next])
-            : null;
         return new RegistryPackageInstallPlanItem(
             package.PackageId,
             package.Version,
@@ -3903,32 +2421,34 @@ public sealed partial class RegistryRuntimeArchitectureTests
             package.DependsOn.Select(dependency => new RegistryPackageDependency(
                 dependency.PackageId,
                 dependency.VersionRange)).ToArray(),
-            [new RegistryPackageTarget(
-                target!.Role!,
-                target.Rid!,
-                target.Kind!,
-                target.EntryPoint!,
-                target.TargetFramework,
-                target.SdkVersion,
-                (target.RequiredHostCapabilities ?? []).Where(static capability => capability is not null).Select(static capability => capability!).ToArray(),
-                ExecutionRuntime: selected.Requirement)],
-            [],
-            [selected],
-            rebind);
+            (manifest.Targets ?? [])
+                .Where(static target => target is not null)
+                .Select(static target => new RegistryPackageTarget(
+                    target!.Role!,
+                    target.Rid!,
+                    target.Kind!,
+                    target.EntryPoint!,
+                    target.TargetFramework,
+                    target.SdkVersion,
+                    (target.RequiredHostCapabilities ?? []).Where(static capability => capability is not null).Select(static capability => capability!).ToArray(),
+                    (target.Views ?? []).Where(static view => view is not null).Select(static view => new RegistryPackageWebView(
+                        view!.ViewId!,
+                        view.DisplayName!,
+                        view.Route!,
+                        view.Icon,
+                        view.DefaultPlacement!,
+                        view.ShowInHotbar!.Value)).ToArray(),
+                    target.ExecutionRuntime is null
+                        ? null
+                        : new RegistryExecutionRuntimeRequirement(
+                            target.ExecutionRuntime.Id!,
+                            target.ExecutionRuntime.VersionRange!,
+                            target.ExecutionRuntime.ModuleAbi!)))
+                .ToArray(),
+            []);
     }
 
-    private static string GetOnlyPendingStageId(IServiceProvider provider)
-    {
-        var owner = provider.GetRequiredService<RuntimeSessionOwner>();
-        var field = typeof(RuntimeSessionOwner).GetField(
-            "_stageGenerations",
-            BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new MissingFieldException(typeof(RuntimeSessionOwner).FullName, "_stageGenerations");
-        var stages = Assert.IsAssignableFrom<IEnumerable<KeyValuePair<string, long>>>(field.GetValue(owner));
-        return Assert.Single(stages).Key;
-    }
-
-    private static async Task<RegistryArtifactFixture> CreateRegistryArtifactAsync(
+    internal static async Task<RegistryArtifactFixture> CreateRegistryArtifactAsync(
         string root,
         string name,
         string origin,
@@ -3936,7 +2456,8 @@ public sealed partial class RegistryRuntimeArchitectureTests
         string? currentVersion,
         string version,
         IReadOnlyList<string>? runtimeIdentifiers = null,
-        IReadOnlyList<string>? runtimeRequiredHostCapabilities = null)
+        IReadOnlyList<string>? runtimeRequiredHostCapabilities = null,
+        IReadOnlyList<string>? roles = null)
     {
         RuntimeLocalState.EnsureInitialized(root);
         var artifactRoot = Path.Combine(root, "registry-artifacts", name);
@@ -3947,21 +2468,33 @@ public sealed partial class RegistryRuntimeArchitectureTests
             version,
             typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
             runtimeIdentifiers: runtimeIdentifiers,
-            runtimeRequiredHostCapabilities: runtimeRequiredHostCapabilities);
+            runtimeRequiredHostCapabilities: runtimeRequiredHostCapabilities,
+            roles: roles);
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(sourceRoot);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
         var sourceArchiveSha256 = Convert.ToHexString(SHA256.HashData(
                 Encoding.UTF8.GetBytes($"{packageId}:{version}:{name}")))
             .ToLowerInvariant();
         var packageContentIdentity = PackageSessionPreparer.ComputeContentIdentity(sourceRoot);
-        var rid = RuntimeInformation.RuntimeIdentifier;
-        var keys = new[]
+        var rid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
+        var manifestRoles = (validation.Manifest!.Targets ?? [])
+            .Where(static target => target?.Role is not null)
+            .Select(static target => target!.Role!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var keys = new List<SunderPackageProjectionKey>
         {
             SunderPackageProjectionKey.Shared,
-            SunderPackageProjectionKey.Runtime(rid),
-            SunderPackageProjectionKey.App(rid),
         };
-        var artifacts = new List<RegistryPackageProjectionArtifact>(keys.Length);
+        if (manifestRoles.Contains(SunderPackageFormat.RuntimeHostRole, StringComparer.Ordinal))
+        {
+            keys.Add(SunderPackageProjectionKey.Runtime(rid));
+        }
+        if (manifestRoles.Contains(SunderPackageFormat.AppHostRole, StringComparer.Ordinal))
+        {
+            keys.Add(SunderPackageProjectionKey.App(rid));
+        }
+        var artifacts = new List<RegistryPackageProjectionArtifact>(keys.Count);
         var contentByUrl = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var key in keys)
         {
@@ -4002,7 +2535,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
                     : RegistryPackageActionKinds.PackageUpdate,
                 null,
                 [],
-                validation.Manifest!.Targets!
+                 validation.Manifest!.Targets!
                     .Where(static target => target is not null)
                     .Select(static target => new RegistryPackageTarget(
                         target!.Role!,
@@ -4026,62 +2559,17 @@ public sealed partial class RegistryRuntimeArchitectureTests
                                  target.ExecutionRuntime.VersionRange!,
                                  target.ExecutionRuntime.ModuleAbi!)))
                      .ToArray(),
-                 artifacts,
-                 RuntimeBindings: validation.Manifest.Targets!
-                     .Where(target => target is
-                     {
-                         Role: SunderPackageFormat.RuntimeHostRole,
-                         Kind: SunderPackageFormat.WorkerTargetKind,
-                         ExecutionRuntime: not null,
-                     } && string.Equals(target.Rid, rid, StringComparison.Ordinal))
-                     .Select(target => new RegistryPackageTargetRuntimeBinding(
-                         target!.Role!,
-                         target.Rid!,
-                         new RegistryExecutionRuntimeRequirement(
-                             target.ExecutionRuntime!.Id!,
-                             target.ExecutionRuntime.VersionRange!,
-                             target.ExecutionRuntime.ModuleAbi!),
-                         new RegistryExecutionRuntimeIdentity(
-                             target.ExecutionRuntime.Id!,
-                             "10.0.1",
-                             1,
-                             target.Rid!,
-                             target.ExecutionRuntime.ModuleAbi!)))
-                     .ToArray()),
-             contentByUrl);
+                  artifacts),
+              contentByUrl);
     }
 
     private static HttpResponseMessage PlanResponse(
         RegistryPackageInstallPlanItem item,
         string resolutionFingerprint = "test-resolution-fingerprint",
         DateTimeOffset? now = null,
-        long runtimePolicyRevision = 1,
-        RegistryExecutionRuntimeLifecycle? lifecycle = null,
-        InstalledPackageExecutionRuntimeBindingRecord? exactBinding = null,
         IReadOnlyList<string>? warnings = null)
     {
         var observedAtUtc = now ?? DateTimeOffset.UtcNow;
-        lifecycle ??= new RegistryExecutionRuntimeLifecycle(
-            ExecutionRuntimeLifecycleStates.Supported,
-            observedAtUtc.AddDays(-2),
-            observedAtUtc.AddDays(-1),
-            DeprecatedAtUtc: null,
-            InstallBlockedAtUtc: null,
-            ActivationBlockedAtUtc: null,
-            RevokedAtUtc: null,
-            Message: null);
-        var runtimeArtifacts = item.RuntimeBindings.Select(binding => new RegistryResolvedExecutionRuntimeArtifact(
-            binding.Runtime,
-            exactBinding?.RuntimeManifestSha256 ?? new string('1', 64),
-            exactBinding?.RuntimeArtifactSha256 ?? new string('2', 64),
-            exactBinding?.RuntimeArtifactSize ?? 4096,
-            exactBinding?.SigningKeyId ?? "sunder.test.release.v1",
-            exactBinding?.TrustStoreGeneration ?? 1,
-            new string('3', 64),
-            "sunder.test.attestation.v1",
-            lifecycle,
-            runtimePolicyRevision,
-            "https://registry.example/artifacts/test-runtime.sunderruntime")).ToArray();
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = JsonContent.Create(new RegistryResolveInstallPlanResponse(
@@ -4091,165 +2579,10 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 [],
                 [],
                 [],
-                runtimeArtifacts,
-                [],
                 resolutionFingerprint,
-                runtimePolicyRevision,
                 observedAtUtc.AddMinutes(5))),
         };
     }
-
-    private static RegistryExecutionRuntimeLifecycle DeprecatedRuntimeLifecycle(DateTimeOffset observedAtUtc)
-        => new(
-            ExecutionRuntimeLifecycleStates.Deprecated,
-            observedAtUtc.AddDays(-3),
-            observedAtUtc.AddDays(-2),
-            observedAtUtc.AddDays(-1),
-            InstallBlockedAtUtc: null,
-            ActivationBlockedAtUtc: null,
-            RevokedAtUtc: null,
-            Message: "Update to a supported execution runtime.");
-
-    private static RegistryExecutionRuntimeLifecycle SupportedRuntimeLifecycle(DateTimeOffset observedAtUtc)
-        => new(
-            ExecutionRuntimeLifecycleStates.Supported,
-            observedAtUtc.AddDays(-3),
-            observedAtUtc.AddDays(-2),
-            DeprecatedAtUtc: null,
-            InstallBlockedAtUtc: null,
-            ActivationBlockedAtUtc: null,
-            RevokedAtUtc: null,
-            Message: null);
-
-    private static RegistryExecutionRuntimeLifecycle RevokedRuntimeLifecycle(DateTimeOffset observedAtUtc)
-        => new(
-            ExecutionRuntimeLifecycleStates.Revoked,
-            observedAtUtc.AddDays(-3),
-            observedAtUtc.AddDays(-2),
-            observedAtUtc.AddDays(-1),
-            observedAtUtc,
-            observedAtUtc,
-            observedAtUtc,
-            "This execution runtime release was revoked.");
-
-    private static RegistryExecutionRuntimeLifecycle RetiredRuntimeLifecycle(DateTimeOffset observedAtUtc)
-        => new(
-            ExecutionRuntimeLifecycleStates.Retired,
-            observedAtUtc.AddDays(-4),
-            observedAtUtc.AddDays(-3),
-            observedAtUtc.AddDays(-2),
-            observedAtUtc.AddDays(-1),
-            observedAtUtc,
-            RevokedAtUtc: null,
-            Message: "This execution runtime release was retired.");
-
-    private static ExecutionRuntimeReceiptV1 CreateRuntimeReceipt(
-        InstalledPackageExecutionRuntimeBindingRecord binding,
-        DateTimeOffset now)
-    {
-        const string launcherPath = "payload/bin/test-runtime";
-        return new ExecutionRuntimeReceiptV1(
-            ExecutionRuntimeReceiptV1.CurrentSchemaVersion,
-            new ExecutionRuntimeIdentity(
-                binding.RuntimeId,
-                binding.RuntimeVersion,
-                binding.RuntimePackagingRevision,
-                binding.Rid,
-                binding.ModuleAbi),
-            SunderExecutionRuntimeFormat.WorkerProtocol,
-            binding.RuntimeArtifactSha256,
-            binding.RuntimeArtifactSize,
-            binding.RuntimeManifestSha256,
-            new string('d', 64),
-            launcherPath,
-            new string('e', 64),
-            1,
-            [SunderExecutionRuntimeFormat.DotNetExecArgument, SunderExecutionRuntimeFormat.PackageEntryPointPlaceholder],
-            [new ExecutionRuntimeReceiptContentV1(launcherPath, new string('e', 64), 1)],
-            new string('3', 64),
-            "sunder.test.attestation.v1",
-            binding.SigningKeyId,
-            binding.TrustStoreGeneration,
-            ExecutionRuntimeTrustEnvironment.Production,
-            RuntimeExecutionRuntimeAcquisitionSources.Registry,
-            binding.RegistryOrigin,
-            now.AddDays(-1));
-    }
-
-    private static async Task WriteRuntimeReceiptAsync(
-        ExecutionRuntimeStore store,
-        ExecutionRuntimeStoreLayout layout,
-        ExecutionRuntimeReceiptV1 receipt)
-    {
-        await store.InitializeAsync(CancellationToken.None);
-        var path = layout.GetReceiptPath(receipt.Identity);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await DurableJsonDocument.WriteAsync(
-            path,
-            receipt,
-            ExecutionRuntimeStore.JsonOptions,
-            CancellationToken.None);
-    }
-
-    private static HttpResponseMessage RuntimeConflictPlanResponse(
-        RegistryExecutionRuntimeResolutionConflict conflict,
-        DateTimeOffset now,
-        IReadOnlyList<string>? warnings = null)
-        => new(HttpStatusCode.OK)
-        {
-            Content = JsonContent.Create(new RegistryResolveInstallPlanResponse(
-                false,
-                [],
-                warnings ?? [],
-                [],
-                [],
-                [],
-                RuntimeArtifacts: [],
-                RuntimeConflicts: [conflict],
-                ResolutionFingerprint: "blocked-runtime-resolution",
-                RuntimePolicyRevision: 2,
-                ExpiresAtUtc: now.AddMinutes(5))),
-        };
-
-    private static HttpResponseMessage RuntimeReleaseResponse(
-        ExecutionRuntimeReceiptV1 receipt,
-        RegistryExecutionRuntimeLifecycle lifecycle,
-        long runtimePolicyRevision,
-        DateTimeOffset now)
-        => new(HttpStatusCode.OK)
-        {
-            Content = JsonContent.Create(new RegistryExecutionRuntimeReleaseDetails(
-                new RegistryExecutionRuntimeReleaseSummary(
-                    receipt.Identity.RuntimeId,
-                    receipt.Identity.Version,
-                    receipt.Identity.PackagingRevision,
-                    receipt.Identity.ModuleAbi,
-                    receipt.WorkerProtocol,
-                    receipt.TrustGeneration,
-                    lifecycle,
-                    [receipt.Identity.Rid],
-                    now.AddDays(-1)),
-                [new RegistryExecutionRuntimeArtifactDetails(
-                    new RegistryResolvedExecutionRuntimeArtifact(
-                        new RegistryExecutionRuntimeIdentity(
-                            receipt.Identity.RuntimeId,
-                            receipt.Identity.Version,
-                            receipt.Identity.PackagingRevision,
-                            receipt.Identity.Rid,
-                            receipt.Identity.ModuleAbi),
-                        receipt.ManifestSha256,
-                        receipt.ArtifactSha256,
-                        receipt.ArtifactSize,
-                        receipt.SigningKeyId,
-                        receipt.TrustGeneration,
-                        receipt.NativeAttestationSha256,
-                        receipt.NativeAttestationKeyId,
-                        lifecycle,
-                        runtimePolicyRevision,
-                        "https://registry.example/artifacts/test-runtime.sunderruntime"),
-                    receipt.ContentIdentity,
-                    now.AddDays(-1))])),
-        };
 
     private static Dictionary<string, string> ParseQuery(string query)
         => query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
@@ -4322,59 +2655,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 .Order(StringComparer.Ordinal)
                 .ToArray();
 
-    private sealed class CandidateFailingExecutionRuntimeLaunchResolver(string rootPath)
-        : IExecutionRuntimeLaunchResolver
-    {
-        private readonly List<ObservedRuntimeLaunch> _launches = [];
-
-        public IReadOnlyList<ObservedRuntimeLaunch> Launches => _launches;
-
-        public Task<ResolvedExecutionRuntimeLaunch> ResolveAsync(
-            PreparedRuntimePackage package,
-            Guid activationId,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var binding = package.ExecutionRuntimeBinding
-                          ?? throw new InvalidDataException("The process-backed test package is missing its exact runtime binding.");
-            var entryPoint = package.EntryAssemblyPath
-                             ?? throw new InvalidDataException("The process-backed test package is missing its entry point.");
-            var identity = binding.Identity;
-            var candidate = _launches.Count > 0 && identity != _launches[0].Identity;
-            var runtimeRoot = Path.Combine(rootPath, candidate ? "candidate-runtime-root" : "active-runtime-root");
-            Directory.CreateDirectory(runtimeRoot);
-            var lease = new TestExecutionRuntimeProcessLease(runtimeRoot);
-            var arguments = candidate
-                ? new[]
-                {
-                    SunderExecutionRuntimeFormat.DotNetExecArgument,
-                    Path.Combine(runtimeRoot, "missing-candidate-worker.dll"),
-                }
-                :
-                [
-                    SunderExecutionRuntimeFormat.DotNetExecArgument,
-                    Path.GetFullPath(entryPoint),
-                ];
-            _launches.Add(new ObservedRuntimeLaunch(
-                identity,
-                runtimeRoot,
-                package.ShadowFolder,
-                lease));
-            return Task.FromResult(new ResolvedExecutionRuntimeLaunch(
-                runtimeRoot,
-                TestExecutionRuntimeLaunchResolver.Instance.LauncherPath,
-                arguments,
-                lease,
-                identity));
-        }
-    }
-
-    private sealed record ObservedRuntimeLaunch(
-        ExecutionRuntimeIdentity Identity,
-        string RuntimeRootPath,
-        string ProjectionPath,
-        TestExecutionRuntimeProcessLease Lease);
-
     private sealed class FakeHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
@@ -4383,16 +2663,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
-    }
-
-    private sealed class TestApplicationLifetime : IHostApplicationLifetime
-    {
-        public CancellationToken ApplicationStarted => CancellationToken.None;
-        public CancellationToken ApplicationStopping => CancellationToken.None;
-        public CancellationToken ApplicationStopped => CancellationToken.None;
-        public bool StopRequested { get; private set; }
-
-        public void StopApplication() => StopRequested = true;
     }
 
     private sealed class DelegateHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
@@ -4409,7 +2679,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
             => _policy.SendAsync(request, () => send(request, cancellationToken), cancellationToken);
     }
 
-    private sealed record RegistryArtifactFixture(
+    internal sealed record RegistryArtifactFixture(
         RegistryPackageInstallPlanItem PlanItem,
         IReadOnlyDictionary<string, byte[]> ContentByUrl)
     {

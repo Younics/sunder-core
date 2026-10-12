@@ -8,6 +8,7 @@ using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Package.Format;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 
@@ -27,13 +28,12 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
     };
     private const string OwnedSource = """
         using System.Threading.Tasks;
-        using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         namespace Example.Owned;
-        [SunderRpcService(SunderRpcExposure.Public)]
-        [SunderRpcProvider(ProviderId = "example.consumer.owned.provider")]
+        [SunderService(SunderServiceExposure.Public)]
+        [SunderServiceProvider(ProviderId = "example.consumer.owned.provider")]
         public sealed partial class OwnedService
         {
-            [SunderRpcMethod]
             public ValueTask<Response> ReadAsync() => throw new System.NotImplementedException();
         }
         public sealed record Response
@@ -87,11 +87,17 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         Assert.Equal(Fingerprint, root.GetProperty("inputFingerprint").GetString());
         Assert.Equal(contractLock.Sha256, root.GetProperty("lockSha256").GetString());
         var contract = Assert.Single(root.GetProperty("contracts").EnumerateArray());
-        Assert.Equal(new[] { "contractKey", "contractId", "contractVersion", "exposure", "descriptorBytes", "canonicalDescriptor", "descriptorSha256", "abiSha256" },
+        Assert.Equal(new[] { "contractKey", "contractId", "contractVersion", "exposure", "descriptorBytes", "canonicalDescriptor", "descriptorSha256", "abiSha256", "modelProjection" }
+                .Concat(sourceExposure == "Public" ? ["appUse"] : Array.Empty<string>()),
             contract.EnumerateObject().Select(property => property.Name));
+        if (sourceExposure == "Public")
+        {
+            Assert.False(contract.GetProperty("appUse").GetProperty("required").GetBoolean());
+            Assert.Equal(new[] { "discover", "invoke" }, contract.GetProperty("appUse").GetProperty("actions").EnumerateArray().Select(action => action.GetString()));
+        }
         Assert.Equal(compiled.ContractKey, contract.GetProperty("contractKey").GetString());
         Assert.Equal(compiled.Descriptor.ContractId, contract.GetProperty("contractId").GetString());
-        Assert.Equal("1.0.0", contract.GetProperty("contractVersion").GetString());
+        Assert.Equal(sourceExposure == "Package" ? PackageVersion : "1.0.0", contract.GetProperty("contractVersion").GetString());
         Assert.Equal(exposure, contract.GetProperty("exposure").GetString());
         Assert.Equal(compiled.Descriptor.GetCanonicalUtf8().Length, contract.GetProperty("descriptorBytes").GetInt32());
         Assert.Equal(Encoding.UTF8.GetString(compiled.Descriptor.GetCanonicalUtf8()), contract.GetProperty("canonicalDescriptor").GetString());
@@ -146,7 +152,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         var root = AssertReceipt(Write(contractLock, compilation, imports));
 
         Assert.Empty(compilation.Contracts);
-        var expected = shape.GetProperty("expectedRecords");
+        var expected = ModelProjectionTestEvidence.CurrentImportReceiptExpectation(shape.GetProperty("expectedRecords"), contractLock);
         Assert.Equal(expected.EnumerateObject().Select(property => property.Name), root.EnumerateObject().Skip(6).Select(property => property.Name));
         foreach (var record in expected.EnumerateObject())
             Assert.True(JsonElement.DeepEquals(record.Value, root.GetProperty(record.Name)), $"{shapeId}/{record.Name} differs from the parity oracle.");
@@ -167,7 +173,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
                 Assert.DoesNotContain(imports.Contracts, contract => contract.ContractKey == excludedId);
                 Assert.DoesNotContain(root.GetProperty("bundles").EnumerateArray(), bundle => bundle.GetProperty("contractKey").GetString() == excludedId);
                 Assert.DoesNotContain(root.GetProperty("uses").EnumerateArray(), use => use.GetProperty("contractKey").GetString() == excludedId);
-                Assert.False(File.Exists(SunderRpcContractCache.GetDescriptorPath(_cacheRoot, excluded.GetProperty("descriptorSha256").GetString()!)));
+                Assert.True(File.Exists(SunderRpcContractCache.GetDescriptorPath(_cacheRoot, excluded.GetProperty("descriptorSha256").GetString()!)));
             }
         }
     }
@@ -293,6 +299,17 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         Assert.Equal(2, root.GetProperty("packageArtifacts").GetArrayLength());
         Assert.Equal(2, root.GetProperty("packageArtifactImports").GetArrayLength());
         Assert.Equal(2, root.GetProperty("generatedPackageFacades").GetArrayLength());
+        Assert.Equal("Sunder.Generated.Packages.Example_Dependency_Internal.CExample_Rpc_V1_Minimal",
+            Assert.Single(root.GetProperty("generatedBindings").EnumerateArray()).GetProperty("logicalName").GetString());
+        Assert.Equal(new[] { "Sunder.Generated.Packages.Example_Dependency_Internal.DependencyPackageApi",
+                "Sunder.Generated.Packages.Example_Reexport_Internal.ReexportPackageApi" },
+            root.GetProperty("generatedPackageFacades").EnumerateArray().Select(facade => facade.GetProperty("logicalName").GetString()));
+        _ = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(SunderRpcAuthoringDocuments.WriteDeterministicDocument(root),
+            contractLock.Sha256, PackageId, PackageVersion);
+        var stale = JsonNode.Parse(root.GetRawText())!;
+        stale["generatedBindings"]![0]!["logicalName"] = "Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal";
+        Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(
+            SunderRpcAuthoringDocuments.WriteDeterministicDocument(JsonSerializer.SerializeToElement(stale)), contractLock.Sha256, PackageId, PackageVersion));
         var apis = root.GetProperty("packageApiImports").EnumerateArray().ToArray();
         Assert.Equal(new[] { "example.dependency", "example.reexport" }, apis.Select(api => api.GetProperty("packageId").GetString()));
         Assert.True(JsonElement.DeepEquals(apis[0].GetProperty("bundleRefs"), apis[1].GetProperty("bundleRefs")));
@@ -334,6 +351,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         var extra = ChangeDescriptor(json => json["contractId"] = "example.rpc.v1.unselected");
         var document = ProviderLock();
         SetArtifactContracts(document, _descriptor, extra);
+        Cache(extra);
         var contractLock = ReadLock(document);
         var imports = Prepare(contractLock);
 
@@ -348,7 +366,8 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         Assert.Equal(2, artifactImport.GetProperty("publicContractCount").GetInt32());
         Assert.Single(artifactImport.GetProperty("authorityConstraints").EnumerateArray());
         AssertEmpty(root, "uses", "generatedPackageFacades", "packageApiImports");
-        Assert.False(File.Exists(SunderRpcContractCache.GetDescriptorPath(_cacheRoot, extra.Sha256)));
+        Assert.True(File.Exists(SunderRpcContractCache.GetDescriptorPath(_cacheRoot, extra.Sha256)));
+        Assert.DoesNotContain(imports.Contracts, contract => contract.Descriptor.ContractId == extra.ContractId);
     }
 
     [Theory]
@@ -368,7 +387,12 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         var contract = Assert.Single(imports.Contracts);
         if (mutation == "extra")
         {
-            var extra = ChangeDescriptor(json => json["contractId"] = "example.rpc.v1.unselected");
+            var extra = ChangeDescriptor(json =>
+            {
+                json["contractId"] = "example.rpc.v1.unselected";
+                var services = json["services"]!.AsObject(); var service = services["example"]!;
+                services.Remove("example"); services["unselected"] = service;
+            });
             var document = LockDocument();
             SetArtifactContracts(document, _descriptor, extra);
             Cache(extra);
@@ -552,13 +576,13 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
     {
         var contractLock = ReadLock();
         var imports = Prepare(contractLock);
-        var source = "using System.Threading.Tasks; using Sunder.Sdk.Rpc; namespace Example.Many;\n"
+        var source = "using System.Threading.Tasks; using Sunder.Sdk.Services; namespace Example.Many;\n"
             + "public sealed record Response { public required string Value { get; init; } }\n"
             + string.Join('\n', Enumerable.Range(0, ownedCount).Select(index => $$"""
-                [SunderRpcService(SunderRpcExposure.Public)]
+                [SunderService(SunderServiceExposure.Public)]
                 public interface Owned{{index:D3}}Service
                 {
-                    [SunderRpcMethod] ValueTask<Response> ReadAsync();
+                    ValueTask<Response> ReadAsync();
                 }
                 """));
         var compilation = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", source));
@@ -684,7 +708,12 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
     [InlineData(true)]
     public void Parse_RejectsCrossArtifactSelectionsEvenWhenAuthorityCountAndFormatGraphMatch(bool provider)
     {
-        var other = ChangeDescriptor(json => json["contractId"] = "example.rpc.v1.other");
+        var other = ChangeDescriptor(json =>
+        {
+            json["contractId"] = "example.rpc.v1.other";
+            var services = json["services"]!.AsObject(); var service = services["example"]!;
+            services.Remove("example"); services["other"] = service;
+        });
         Cache(other);
         var document = LockDocument();
         AddReexport(document, consumer: !provider, provider: provider);
@@ -696,10 +725,12 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         otherEvidence["artifactSource"] = "imported";
         otherArtifact["contracts"] = new JsonObject { [other.ContractId] = otherEvidence };
         otherArtifact["publicInventorySha256"] = InventorySha256("example.reexport.other", otherArtifact);
+        ModelProjectionTestEvidence.PinEmptySourceProjection("example.reexport.other", otherArtifact);
         document["packageArtifacts"]!["example.reexport.other"] = otherArtifact;
         document["packageImports"]!["example.reexport.other"] = new JsonObject
         {
             ["localName"] = "other", ["presence"] = "required", ["requiredContracts"] = new JsonArray(other.ContractId),
+            ["consumerRoles"] = new JsonArray("runtime"),
         };
         var contractLock = ReadLock(document);
         var imports = Prepare(contractLock);
@@ -802,7 +833,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         }
         var actual = Serialize(document);
         using var schema = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/authoring-receipt.schema.json")));
-        Assert.True(JsonSchemaTestValidator.IsValid(schema.RootElement, JsonSerializer.SerializeToElement(document)));
+        Assert.True(MatchesAuthoringSchema(schema.RootElement, JsonSerializer.SerializeToElement(document)));
         var path = _temporary.GetPath("tampered-receipt.json");
         File.WriteAllBytes(path, actual);
         var timestamp = File.GetLastWriteTimeUtc(path);
@@ -897,18 +928,18 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         string className, string key = "minimalProvider", string providerId = ProviderId, string audience = "Public")
     {
         var interfaceName = "I" + char.ToUpperInvariant(key[0]) + key[1..] + "Service";
+        var servicesNamespace = key == "reexportProvider" ? "Example_Reexport_Services" : "Example_Dependency_Services";
         return new(className + ".cs", $$"""
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
-            using Sunder.Generated.Rpc;
-            using Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal;
+            using Sunder.Sdk.Services;
+            using Sunder.Generated.Packages.{{servicesNamespace}};
             namespace Example.Imported;
-            [SunderRpcProvider(typeof({{interfaceName}}), ProviderId = "{{providerId}}", Audience = SunderRpcProviderAudience.{{audience}})]
+            [SunderServiceProvider(typeof({{interfaceName}}), ProviderId = "{{providerId}}", Audience = SunderServiceAudience.{{audience}})]
             public sealed partial class {{className}} : {{interfaceName}}
             {
-                public ValueTask<Empty> PingAsync(SunderRpcInvocationContext context, Empty request, CancellationToken cancellationToken)
-                    => ValueTask.FromResult(request);
+                public ValueTask PingAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
             }
             """);
     }
@@ -933,15 +964,17 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
 
     private static string[] References()
         => ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Append(typeof(SunderRpcServiceAttribute).Assembly.Location)
+            .Append(typeof(SunderServiceAttribute).Assembly.Location)
             .Append(typeof(SunderWorkerProviderRegistration).Assembly.Location)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     private SunderRpcCSharpImportPrepassResult Prepare(SunderRpcContractLock contractLock)
     {
+        foreach (var artifact in contractLock.PackageArtifacts.Values) ModelProjectionTestEvidence.Seed(_cacheRoot, artifact);
         var requirements = SunderRpcPlatformCatalogCache.Requirements(contractLock);
         if (requirements.Count == 0) return SunderRpcCSharpImportPrepass.Prepare(contractLock, _cacheRoot);
         var catalog = SunderRpcAuthoringJson.WriteCompact(JsonSerializer.SerializeToElement(ReadJson(Fixture("authoring/conformance/valid/platform-catalog.json"))), SunderRpcPlatformCatalogCache.MaximumBytes);
+        foreach (var descriptor in SunderPlatformContractCatalog.Verify(catalog).Contracts) Cache(descriptor);
         SunderRpcPlatformCatalogCache.Publish(_cacheRoot, new Dictionary<string, byte[]> { [requirements[0].ContentIdentity] = catalog }, requirements);
         return SunderRpcCSharpImportPrepass.Prepare(contractLock, _cacheRoot);
     }
@@ -953,7 +986,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
     {
         using var receipt = JsonDocument.Parse(bytes);
         using var schema = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/authoring-receipt.schema.json")));
-        Assert.True(JsonSchemaTestValidator.IsValid(schema.RootElement, receipt.RootElement), "Generated receipt does not conform to authoring-receipt.schema.json.");
+        Assert.True(MatchesAuthoringSchema(schema.RootElement, receipt.RootElement), "Generated receipt does not conform to authoring-receipt.schema.json.");
         Assert.Equal(schema.RootElement.GetProperty("required").EnumerateArray().Select(value => value.GetString()),
             receipt.RootElement.EnumerateObject().Select(property => property.Name));
         var path = _temporary.GetPath("validated-receipt.json");
@@ -1001,6 +1034,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         artifact["selectedPackageContentIdentity"] = new string('2', 64);
         artifact["contracts"]![ContractId]!["artifactSource"] = "imported";
         artifact["publicInventorySha256"] = InventorySha256("example.reexport", artifact);
+        ModelProjectionTestEvidence.PinEmptySourceProjection("example.reexport", artifact);
         document["packageArtifacts"]!["example.reexport"] = artifact;
         if (consumer)
         {
@@ -1029,6 +1063,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         artifact["contracts"] = contracts;
         artifact["publicContractCount"] = descriptors.Length;
         artifact["publicInventorySha256"] = InventorySha256("example.dependency", artifact);
+        ModelProjectionTestEvidence.PinEmptySourceProjection("example.dependency", artifact);
     }
 
     private static string InventorySha256(string packageId, JsonNode artifact)
@@ -1082,6 +1117,8 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
             .Select(path => (path, Sha256(File.ReadAllBytes(path)), File.GetLastWriteTimeUtc(path))).ToArray();
 
     private static byte[] Serialize(JsonObject document) => Encoding.UTF8.GetBytes(document.ToJsonString(JsonOptions) + "\n");
+    private static bool MatchesAuthoringSchema(JsonElement schema, JsonElement instance)
+        => ModelProjectionTestEvidence.MatchesAuthoringSchema(schema, instance, Fixture("authoring/rpc-model-projection.schema.json"));
     private static string Sha256(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     private static JsonObject ReadJson(string path) => JsonNode.Parse(File.ReadAllBytes(path))!.AsObject();
 

@@ -8,7 +8,11 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
 {
     public static SunderRpcCSharpGeneratorModel Build(
         SunderRpcContractDescriptor descriptor,
-        string accessibility)
+        string accessibility,
+        IReadOnlyDictionary<string, SunderRpcCSharpTypeBinding>? typeBindings = null,
+        string? modelsNamespace = null,
+        string? contentTypeName = null,
+        IReadOnlySet<string>? includedDefinitions = null)
     {
         if (!string.Equals(
                 descriptor.SchemaProfile,
@@ -35,38 +39,57 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
             .ToArray();
         var handlerTypeName = topLevelNames.Allocate(
             SunderRpcCSharpSyntax.Identifier(descriptor.ContractId) + "RpcHandler");
+        if (typeBindings is not null && typeBindings.Keys.Any(key => !descriptor.Definitions.ContainsKey(key)))
+            throw new InvalidOperationException("A C# projected type binding names a missing descriptor definition.");
+        var definitionNames = typeBindings is null ? topLevelNames : new SymbolAllocator();
         var orderedDefinitions = descriptor.Definitions
+            .Where(item => includedDefinitions is null || includedDefinitions.Contains(item.Key))
             .OrderBy(static item => item.Key, StringComparer.Ordinal)
             .ToArray();
         var generatedTypeNames = new Dictionary<string, string>(StringComparer.Ordinal);
         var definitionDrafts = new List<DefinitionDraft>();
         foreach (var definition in orderedDefinitions)
         {
+            var binding = typeBindings?.GetValueOrDefault(definition.Key);
+            if (binding is { DeclarationName: null })
+            {
+                generatedTypeNames.Add(definition.Key, binding.ReferenceTypeName);
+                continue;
+            }
             var kind = GetDefinitionKind(definition.Value, descriptor.Definitions);
+            if (binding is not null && kind is null)
+                kind = IsNumericEnumSchema(definition.Value) ? DefinitionKind.NumericEnum : DefinitionKind.Transparent;
             if (kind is null) continue;
-            var typeName = topLevelNames.Allocate(SunderRpcCSharpSyntax.Identifier(definition.Key));
-            generatedTypeNames.Add(definition.Key, typeName);
+            var typeName = definitionNames.Allocate(binding?.DeclarationName ?? SunderRpcCSharpSyntax.Identifier(definition.Key));
+            generatedTypeNames.Add(definition.Key, binding?.ReferenceTypeName ?? typeName);
             definitionDrafts.Add(new DefinitionDraft(definition.Key, typeName, definition.Value, kind.Value));
         }
 
         var inlineTypeNames = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var definition in orderedDefinitions)
         {
+            if (typeBindings?.GetValueOrDefault(definition.Key) is { DeclarationName: null }) continue;
+            var ownerName = typeBindings?.GetValueOrDefault(definition.Key)?.DeclarationName
+                ?? SunderRpcCSharpSyntax.Identifier(definition.Key);
             CollectInlineTaggedUnions(
                 definition.Value,
-                SunderRpcCSharpSyntax.Identifier(definition.Key),
+                ownerName,
+                definition.Key,
+                typeBindings is not null,
                 "",
                 isRoot: true,
                 descriptor.Definitions,
                 inlineTypeNames,
                 definitionDrafts,
-                topLevelNames);
+                definitionNames);
         }
         definitionDrafts = BuildUnionAndEnumDrafts(
             definitionDrafts,
             descriptor.Definitions,
             generatedTypeNames,
-            topLevelNames);
+            definitionNames);
+        if (modelsNamespace is not null)
+            foreach (var key in inlineTypeNames.Keys.ToArray()) inlineTypeNames[key] = "global::" + modelsNamespace + "." + inlineTypeNames[key];
 
         var errorDrafts = descriptor.Errors.Values
             .OrderBy(static declaration => declaration.Code, StringComparer.Ordinal)
@@ -91,9 +114,11 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         var context = new SemanticContext(
             descriptor.Definitions,
             generatedTypeNames,
-            inlineTypeNames);
+            inlineTypeNames,
+            contentTypeName,
+            ScopeInlineNames: typeBindings is not null);
         var definitions = definitionDrafts
-            .Select(definition => BuildDefinition(definition, context))
+            .Select(definition => BuildDefinition(definition, context with { InlineOwner = definition.OwnerDefinitionName ?? definition.Name }) with { DefinitionName = definition.Name, OwnerDefinitionName = definition.OwnerDefinitionName, Schema = definition.Schema })
             .ToArray();
         var errors = errorDrafts
             .Select(error => BuildError(error, context))
@@ -114,7 +139,10 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
             Array.AsReadOnly(definitions),
             Array.AsReadOnly(errors),
             Array.AsReadOnly(services),
-            handlerTypeName);
+            handlerTypeName)
+        {
+            DefinitionTypes = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(orderedDefinitions.ToDictionary(item => item.Key, item => ReferenceType("#/$defs/" + item.Key, context), StringComparer.Ordinal)),
+        };
     }
 
     private static DefinitionKind? GetDefinitionKind(
@@ -134,7 +162,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
     {
         for (var index = 0; index < definitions.Count; index++)
         {
-            if (definitions[index].Kind == DefinitionKind.StringEnum)
+            if (definitions[index].Kind is DefinitionKind.StringEnum or DefinitionKind.NumericEnum or DefinitionKind.Transparent)
             {
                 definitions[index] = definitions[index] with
                 {
@@ -151,7 +179,8 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                 _ = ResolveSchema(variant, schemas, out var definitionName);
                 if (definitionName is not null)
                 {
-                    variantMemberships[definitionName] = variantMemberships.GetValueOrDefault(definitionName) + 1;
+                    var identity = generatedTypeNames.GetValueOrDefault(definitionName, definitionName);
+                    variantMemberships[identity] = variantMemberships.GetValueOrDefault(identity) + 1;
                 }
             }
         }
@@ -180,7 +209,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                 .ToArray();
             var sharesNamedRecords = orderedVariants.All(variant =>
                 variant.DefinitionName is not null
-                && variantMemberships.GetValueOrDefault(variant.DefinitionName) == 1
+                && variantMemberships.GetValueOrDefault(generatedTypeNames.GetValueOrDefault(variant.DefinitionName, variant.DefinitionName)) == 1
                 && generatedTypeNames.ContainsKey(variant.DefinitionName));
             var variants = new List<UnionVariantDraft>(orderedVariants.Length);
             foreach (var variant in orderedVariants)
@@ -191,7 +220,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                 {
                     typeName = generatedTypeNames[variant.DefinitionName!];
                     recordDerivations.Add(
-                        variant.DefinitionName!,
+                        typeName,
                         new RecordDerivationDraft(definition.TypeName, discriminator, variant.Tag!));
                 }
                 else
@@ -213,7 +242,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         {
             var definition = definitions[index];
             if (definition.Kind == DefinitionKind.Record
-                && recordDerivations.TryGetValue(definition.Name, out var derivation))
+                && recordDerivations.TryGetValue(generatedTypeNames[definition.Name], out var derivation))
             {
                 definitions[index] = definition with
                 {
@@ -229,6 +258,8 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
     private static void CollectInlineTaggedUnions(
         JsonElement schema,
         string ownerName,
+        string ownerDefinition,
+        bool scoped,
         string pathName,
         bool isRoot,
         IReadOnlyDictionary<string, JsonElement> schemas,
@@ -239,12 +270,12 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         if (schema.TryGetProperty("$ref", out _)) return;
         if (!isRoot && IsTaggedUnionSchema(schema, schemas))
         {
-            var key = schema.GetRawText();
+            var key = (scoped ? ownerDefinition + "\0" : "") + schema.GetRawText();
             if (!inlineTypeNames.ContainsKey(key))
             {
                 var typeName = topLevelNames.Allocate(ownerName + pathName + "Union");
                 inlineTypeNames.Add(key, typeName);
-                definitions.Add(new DefinitionDraft("\0" + typeName, typeName, schema, DefinitionKind.TaggedUnion));
+                definitions.Add(new DefinitionDraft("\0" + typeName, typeName, schema, DefinitionKind.TaggedUnion, OwnerDefinitionName: ownerDefinition));
             }
         }
         if (schema.TryGetProperty("oneOf", out var oneOf))
@@ -255,6 +286,8 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                 CollectInlineTaggedUnions(
                     variant,
                     ownerName,
+                    ownerDefinition,
+                    scoped,
                     pathName + "Variant" + (index++).ToString(System.Globalization.CultureInfo.InvariantCulture),
                     isRoot: false,
                     schemas,
@@ -271,6 +304,8 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                 CollectInlineTaggedUnions(
                     property.Value,
                     ownerName,
+                    ownerDefinition,
+                    scoped,
                     pathName + SunderRpcCSharpSyntax.Identifier(property.Name),
                     isRoot: false,
                     schemas,
@@ -284,6 +319,8 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
             CollectInlineTaggedUnions(
                 items,
                 ownerName,
+                ownerDefinition,
+                scoped,
                 pathName + "Item",
                 isRoot: false,
                 schemas,
@@ -297,6 +334,8 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
             CollectInlineTaggedUnions(
                 additionalProperties,
                 ownerName,
+                ownerDefinition,
+                scoped,
                 pathName + "Value",
                 isRoot: false,
                 schemas,
@@ -321,6 +360,10 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                     definition.DiscriminatorValue)),
             DefinitionKind.StringEnum => BuildStringEnum(definition),
             DefinitionKind.TaggedUnion => BuildTaggedUnion(definition, context),
+            DefinitionKind.NumericEnum => new SunderRpcCSharpNumericEnumDefinitionModel(definition.TypeName, definition.ConverterTypeName!,
+                definition.Schema.GetProperty("enum").EnumerateArray().Select(value => checked((long)value.GetDouble())).Order().ToArray()),
+            DefinitionKind.Transparent => new SunderRpcCSharpTransparentDefinitionModel(definition.TypeName, definition.ConverterTypeName!,
+                GetTypeName(definition.Schema, context)),
             _ => throw new InvalidOperationException(
                 $"Unsupported generated definition kind '{definition.Kind}'."),
         };
@@ -352,12 +395,13 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                     propertyName,
                     "string",
                     IsRequired: false,
+                    HasNullDefault: false,
                     SunderRpcCSharpPropertySerialization.Default,
                     discriminatorValue));
                 continue;
             }
 
-            var propertyType = GetTypeName(property.Value, context);
+            var propertyType = GetTypeName(property.Value, context, out var hasNullDefault);
             var isRequired = required.Contains(property.Name);
             var allowsNull = SchemaAllowsNull(property.Value, context);
             SunderRpcCSharpPropertySerialization serialization;
@@ -384,6 +428,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                 propertyName,
                 propertyType,
                 isRequired,
+                isRequired && allowsNull && hasNullDefault,
                 serialization,
                 ConstantValue: null));
         }
@@ -558,10 +603,16 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
     }
 
     private static string GetTypeName(JsonElement schema, SemanticContext context)
+        => GetTypeName(schema, context, out _);
+
+    private static string GetTypeName(JsonElement schema, SemanticContext context, out bool hasNullDefault)
     {
+        // Wire nullability alone is insufficient: JsonElement defaults to Undefined,
+        // and a named transparent value can accept wire null while remaining a CLR struct.
+        hasNullDefault = false;
         if (schema.TryGetProperty("$ref", out var reference))
         {
-            return ReferenceType(reference.GetString()!, context);
+            return ReferenceType(reference.GetString()!, context, out hasNullDefault);
         }
         if (schema.TryGetProperty("contentEncoding", out var contentEncoding))
         {
@@ -589,13 +640,13 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         {
             return logicalType.GetString() switch
             {
-                "content-reference" => "global::Sunder.Sdk.Rpc.SunderRpcContentReference",
+                "content-reference" => context.ContentTypeName ?? "global::Sunder.Sdk.Rpc.SunderRpcContentReference",
                 _ => throw new InvalidOperationException("A validated RPC schema has an unsupported logical type."),
             };
         }
         if (schema.TryGetProperty("oneOf", out var oneOf))
         {
-            if (context.InlineTypeNames.TryGetValue(schema.GetRawText(), out var inlineTypeName))
+            if (context.InlineTypeNames.TryGetValue((context.ScopeInlineNames ? context.InlineOwner + "\0" : "") + schema.GetRawText(), out var inlineTypeName))
             {
                 return inlineTypeName;
             }
@@ -606,6 +657,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
                 if (nullCount == 1)
                 {
                     var valueSchema = variants.Single(variant => !IsNullSchema(variant, context));
+                    hasNullDefault = true;
                     return MakeNullable(GetTypeName(valueSchema, context));
                 }
             }
@@ -617,7 +669,9 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
             return "global::System.Text.Json.JsonElement";
         }
 
-        return schema.GetProperty("type").GetString() switch
+        var type = schema.GetProperty("type").GetString();
+        hasNullDefault = type == "null";
+        return type switch
         {
             "string" => "string",
             "integer" => "long",
@@ -636,7 +690,11 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
     }
 
     private static string ReferenceType(string reference, SemanticContext context)
+        => ReferenceType(reference, context, out _);
+
+    private static string ReferenceType(string reference, SemanticContext context, out bool hasNullDefault)
     {
+        hasNullDefault = false;
         var name = reference["#/$defs/".Length..];
         if (context.GeneratedTypeNames.TryGetValue(name, out var generatedTypeName)) return generatedTypeName;
         var schema = context.Schemas[name];
@@ -651,7 +709,7 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
             if (context.GeneratedTypeNames.TryGetValue(name, out generatedTypeName)) return generatedTypeName;
             schema = context.Schemas[name];
         }
-        return GetTypeName(schema, context);
+        return GetTypeName(schema, context with { InlineOwner = name }, out hasNullDefault);
     }
 
     private static bool ReferenceAllowsNull(string reference, SemanticContext context)
@@ -712,6 +770,10 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
            && type.GetString() == "string"
            && schema.TryGetProperty("enum", out var values)
            && values.ValueKind == JsonValueKind.Array;
+
+    private static bool IsNumericEnumSchema(JsonElement schema)
+        => schema.TryGetProperty("type", out var type) && type.GetString() == "integer"
+            && schema.TryGetProperty("enum", out var values) && values.ValueKind == JsonValueKind.Array;
 
     private static bool IsTaggedUnionSchema(
         JsonElement schema,
@@ -783,6 +845,8 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         Record,
         StringEnum,
         TaggedUnion,
+        NumericEnum,
+        Transparent,
     }
 
     private sealed record DefinitionDraft(
@@ -794,7 +858,8 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
         TaggedUnionDraft? Union = null,
         string? BaseTypeName = null,
         string? DiscriminatorName = null,
-        string? DiscriminatorValue = null);
+        string? DiscriminatorValue = null,
+        string? OwnerDefinitionName = null);
 
     private sealed record TaggedUnionDraft(
         string DiscriminatorName,
@@ -836,7 +901,10 @@ internal static class SunderRpcCSharpGeneratorModelBuilder
     private sealed record SemanticContext(
         IReadOnlyDictionary<string, JsonElement> Schemas,
         IReadOnlyDictionary<string, string> GeneratedTypeNames,
-        IReadOnlyDictionary<string, string> InlineTypeNames);
+        IReadOnlyDictionary<string, string> InlineTypeNames,
+        string? ContentTypeName = null,
+        bool ScopeInlineNames = false,
+        string? InlineOwner = null);
 }
 
 internal sealed record SunderRpcCSharpGeneratorModel(
@@ -851,9 +919,28 @@ internal sealed record SunderRpcCSharpGeneratorModel(
     IReadOnlyList<SunderRpcCSharpDefinitionModel> Definitions,
     IReadOnlyList<SunderRpcCSharpErrorModel> Errors,
     IReadOnlyList<SunderRpcCSharpServiceModel> Services,
-    string HandlerTypeName);
+    string HandlerTypeName)
+{
+    internal bool ProjectedRecords { get; init; }
+    internal IReadOnlyDictionary<string, string> DefinitionTypes { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+}
 
-internal abstract record SunderRpcCSharpDefinitionModel(string TypeName);
+// A supplied binding is tooling-owned, not an arbitrary package-author CLR name.
+// Null DeclarationName reuses an existing type without emitting another definition.
+internal sealed record SunderRpcCSharpTypeBinding(string ReferenceTypeName, string? DeclarationName);
+
+internal abstract record SunderRpcCSharpDefinitionModel(string TypeName)
+{
+    internal string DefinitionName { get; init; } = string.Empty;
+    internal string? OwnerDefinitionName { get; init; }
+    internal JsonElement Schema { get; init; }
+}
+
+internal sealed record SunderRpcCSharpNumericEnumDefinitionModel(string TypeName, string ConverterTypeName, IReadOnlyList<long> Values)
+    : SunderRpcCSharpDefinitionModel(TypeName);
+
+internal sealed record SunderRpcCSharpTransparentDefinitionModel(string TypeName, string ConverterTypeName, string ValueTypeName)
+    : SunderRpcCSharpDefinitionModel(TypeName);
 
 internal sealed record SunderRpcCSharpRecordDefinitionModel(SunderRpcCSharpRecordModel Record)
     : SunderRpcCSharpDefinitionModel(Record.TypeName);
@@ -881,6 +968,7 @@ internal sealed record SunderRpcCSharpPropertyModel(
     string Name,
     string TypeName,
     bool IsRequired,
+    bool HasNullDefault,
     SunderRpcCSharpPropertySerialization Serialization,
     string? ConstantValue);
 

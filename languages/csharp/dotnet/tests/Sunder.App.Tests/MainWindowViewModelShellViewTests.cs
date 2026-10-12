@@ -3566,7 +3566,7 @@ public sealed class MainWindowViewModelShellViewTests
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":1,\"minimumSupportedRevision\":1,\"maximumSupportedRevision\":1,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"app-web-rpc.v1\",\"schema-first-rpc.v1\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}",
+                        "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":1,\"minimumSupportedRevision\":1,\"maximumSupportedRevision\":1,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"official-runtime-downloads.v1\",\"app-web-rpc.v1\",\"schema-first-rpc.v1\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}",
                         System.Text.Encoding.UTF8,
                         "application/json"),
                 });

@@ -11,7 +11,10 @@ namespace Sunder.Package.Build.Tasks;
 internal sealed record PackageContractBuildResult(
     SunderPackageManifest Manifest,
     IReadOnlySet<string> RpcRoles,
-    ITaskItem[] Files);
+    ITaskItem[] Files)
+{
+    internal IReadOnlySet<string> ExtendedDeadlineRoles { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+}
 
 internal static class PackageContractBuilder
 {
@@ -90,6 +93,9 @@ internal static class PackageContractBuilder
         var files = new List<ITaskItem>();
         var contents = new Dictionary<string, byte[]>(PathComparer);
         var local = new Dictionary<string, SunderPackageContractBundleManifest>(StringComparer.Ordinal);
+        var descriptors = new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal);
+        var modelProjections = new Dictionary<string, SunderRpcModelProjection>(StringComparer.Ordinal);
+        var methodPolicies = new Dictionary<string, SunderRpcMethodPolicies>(StringComparer.Ordinal);
         var descriptorPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in bundleItems)
         {
@@ -145,6 +151,7 @@ internal static class PackageContractBuilder
                 continue;
             }
             if (!descriptorPath.ToString().StartsWith("contracts/", StringComparison.Ordinal)
+                || descriptorPath.ToString().Equals(SunderRpcAuthoringDocuments.ModelProjectionLogicalPath, StringComparison.OrdinalIgnoreCase)
                 || !descriptorPaths.Add(descriptorPath.ToString()))
             {
                 log.LogError($"SunderContractBundle DescriptorPath '{descriptorPath}' must be unique and under 'contracts/'.");
@@ -213,6 +220,24 @@ internal static class PackageContractBuilder
                 continue;
             }
             bundles.Add(bundle);
+            descriptors.Add(descriptor.ContractId, descriptor);
+            if (receipt is not null && receipt.Contracts.SingleOrDefault(pair => pair.Value.ContractId == descriptor.ContractId) is { Key: not null } evidence)
+            {
+                modelProjections.Add(descriptor.ContractId, receipt.ModelProjections[evidence.Key]);
+                methodPolicies.Add(descriptor.ContractId, receipt.MethodPolicies[evidence.Key]);
+            }
+            else if (receipt is null)
+            {
+                // Descriptor-first authoring has wire types, not source model
+                // identity or typed service-reference claims. Never invent those.
+                modelProjections.Add(descriptor.ContractId, SunderRpcModelProjection.Empty);
+                methodPolicies.Add(descriptor.ContractId, SunderRpcMethodPolicies.Empty);
+            }
+            else
+            {
+                log.LogError($"Sunder contract '{descriptor.ContractId}' requires current compiler model-projection evidence; regenerate its source receipt.");
+                continue;
+            }
             var file = new TaskItem(canonicalPath);
             file.SetMetadata("DescriptorPath", descriptorPath.ToString());
             files.Add(file);
@@ -257,6 +282,14 @@ internal static class PackageContractBuilder
         foreach (var error in errors) log.LogError(error);
         if (log.HasLoggedErrors) return null;
 
+        var projectionBytes = SunderRpcAuthoringDocuments.PublicModelProjectionBytes(manifest, descriptors, modelProjections, methodPolicies);
+        var projectionHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(projectionBytes));
+        var projectionPath = Path.Combine(outputDirectory, projectionHash + ".model-projection.json");
+        var projectionFile = new TaskItem(projectionPath);
+        projectionFile.SetMetadata("DescriptorPath", SunderRpcAuthoringDocuments.ModelProjectionLogicalPath);
+        files.Add(projectionFile);
+        contents.Add(projectionPath, projectionBytes);
+
         // Content-addressed files are published only after all source/receipt/graph checks succeed.
         // Existing descriptor bytes and the previous manifest remain intact on input failure.
         if (publishFiles)
@@ -278,7 +311,17 @@ internal static class PackageContractBuilder
         }
         return new PackageContractBuildResult(manifest,
             uses.Select(static use => use!.Role!).Concat(providers.Select(static provider => provider!.Role!)).ToHashSet(StringComparer.Ordinal),
-            files.ToArray());
+            files.ToArray()) { ExtendedDeadlineRoles = ExtendedDeadlineRoles(manifest, methodPolicies) };
+    }
+
+    internal static IReadOnlySet<string> ExtendedDeadlineRoles(SunderPackageManifest manifest, IReadOnlyDictionary<string, SunderRpcMethodPolicies> policies)
+    {
+        bool Extended(string id) => policies.TryGetValue(id, out var policy)
+            && policy.Services.Values.SelectMany(methods => methods.Values).Any(method => method.TimeoutSeconds > 600);
+        return (manifest.Provides ?? []).Where(provider => provider is not null && Extended(provider.ContractId!)).Select(provider => provider!.Role!)
+            .Concat((manifest.UsesContracts ?? []).Where(use => use is not null && Extended(use.ContractId!)
+                && use.Actions?.Any(action => action is "invoke" or "subscribe") == true).Select(use => use!.Role!))
+            .ToHashSet(StringComparer.Ordinal);
     }
 
     private static GeneratedOutputLock? AcquireBindingSnapshotLock(

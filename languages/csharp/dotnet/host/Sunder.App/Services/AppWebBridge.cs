@@ -72,11 +72,21 @@ internal sealed class AppWebBridge : IAsyncDisposable
         }
     }
 
-    public void NavigationStarting()
+    internal int ProviderHandleCount
+    {
+        get
+        {
+            lock (_gate) return _providerHandles.Count;
+        }
+    }
+
+    public Task NavigationStartingAsync()
     {
         AppWebPendingRequest[] requests;
+        string? retiredNonce;
         lock (_gate)
         {
+            retiredNonce = _trustedNavigation ? _nonce : null;
             _trustedNavigation = false;
             _currentUri = null;
             _documentGeneration = checked(_documentGeneration + 1);
@@ -86,6 +96,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
             _handlesByEndpoint.Clear();
         }
         AppWebPendingRequestRegistry.Cancel(requests);
+        return RetireBrowserAsync(retiredNonce);
     }
 
     public async Task EstablishAsync(Uri uri, CancellationToken cancellationToken = default)
@@ -95,6 +106,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
             return;
         }
         long documentGeneration;
+        string nonce;
         string script;
         lock (_gate)
         {
@@ -102,34 +114,51 @@ internal sealed class AppWebBridge : IAsyncDisposable
             _currentUri = uri;
             _trustedNavigation = true;
             documentGeneration = _documentGeneration;
+            nonce = _nonce;
             script = AppWebBootstrapScriptGenerator.Generate(
                 Protocol,
                 ProtocolVersion,
                 _origin,
-                _nonce,
+                nonce,
                 _limits);
         }
         try
         {
-            await _webView.InvokeScriptAsync(script).WaitAsync(cancellationToken).ConfigureAwait(false);
+            var result = await _webView.InvokeScriptAsync(script).WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(result, "true", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("The package browser bridge did not establish its document lifetime.");
+            }
+            bool current;
+            lock (_gate)
+            {
+                current = _trustedNavigation && _documentGeneration == documentGeneration && Volatile.Read(ref _disposed) == 0;
+            }
+            if (!current) await RetireBrowserAsync(nonce).ConfigureAwait(false);
         }
         catch
         {
+            AppWebPendingRequest[] requests = [];
             lock (_gate)
             {
                 if (_documentGeneration == documentGeneration)
                 {
                     _trustedNavigation = false;
                     _currentUri = null;
+                    requests = _pendingRequests.DetachAll();
+                    _providerHandles.Clear();
+                    _handlesByEndpoint.Clear();
                 }
             }
+            AppWebPendingRequestRegistry.Cancel(requests);
+            await RetireBrowserAsync(nonce).ConfigureAwait(false);
             throw;
         }
     }
 
     public async Task HandleMessageAsync(string? body, CancellationToken cancellationToken = default)
     {
-        var recoveredRequestId = body is null ? null : TryRecoverRequestId(body);
+        var recoveredRequest = body is null ? null : TryRecoverRequest(body);
         if (body is null)
         {
             RejectProtocol("The browser bridge message is empty.");
@@ -138,7 +167,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
         if (Encoding.UTF8.GetByteCount(body) > _limits.MaximumJsonEnvelopeBytes)
         {
             await RejectRecoveredAsync(
-                recoveredRequestId,
+                recoveredRequest,
                 ResourceLimit(
                     "rpc.bridge.request-envelope-limit",
                     "The browser bridge request exceeds its negotiated envelope size limit."))
@@ -159,7 +188,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
         catch (JsonException)
         {
             await RejectRecoveredAsync(
-                    recoveredRequestId,
+                    recoveredRequest,
                     ResourceLimit(
                         "rpc.bridge.request-depth-or-json",
                         "The browser bridge request is invalid or exceeds its negotiated depth limit."))
@@ -168,13 +197,11 @@ internal sealed class AppWebBridge : IAsyncDisposable
         }
         using (document)
         {
-            recoveredRequestId = TryReadSafeRequestId(document.RootElement, out var safeRequestId)
-                ? safeRequestId
-                : null;
+            recoveredRequest = TryReadSafeRequest(document.RootElement);
             if (!TryReadRequest(document.RootElement, out var request, out var error))
             {
                 await RejectRecoveredAsync(
-                        recoveredRequestId,
+                        recoveredRequest,
                         new SunderRpcError(
                             SunderRpcErrorKind.Protocol,
                             "rpc.bridge.request-envelope",
@@ -192,7 +219,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 }
                 catch (SunderRpcException exception)
                 {
-                    await RejectRecoveredAsync(request.RequestId, Sanitize(exception.Error)).ConfigureAwait(false);
+                    await RejectRecoveredAsync(new(request.RequestId, request.Nonce), Sanitize(exception.Error)).ConfigureAwait(false);
                 }
                 return;
             }
@@ -242,7 +269,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
 
             if (immediateError is not null)
             {
-                await RejectRecoveredAsync(request.RequestId, immediateError, protocolRejection)
+                await RejectRecoveredAsync(new(request.RequestId, request.Nonce), immediateError, protocolRejection)
                     .ConfigureAwait(false);
                 return;
             }
@@ -256,19 +283,38 @@ internal sealed class AppWebBridge : IAsyncDisposable
         {
             return;
         }
-        _lifetime.Cancel();
         AppWebPendingRequest[] requests;
+        string? retiredNonce;
         lock (_gate)
         {
+            retiredNonce = _trustedNavigation ? _nonce : null;
             _trustedNavigation = false;
             _currentUri = null;
             requests = _pendingRequests.DetachAll();
             _providerHandles.Clear();
             _handlesByEndpoint.Clear();
         }
+        _lifetime.Cancel();
         AppWebPendingRequestRegistry.CancelAndDispose(requests);
+        await RetireBrowserAsync(retiredNonce).ConfigureAwait(false);
         await _rpc.DisposeAsync().ConfigureAwait(false);
         _lifetime.Dispose();
+    }
+
+    private async Task RetireBrowserAsync(string? nonce)
+    {
+        if (nonce is null) return;
+        try
+        {
+            await _webView.InvokeScriptAsync(AppWebBootstrapScriptGenerator.GenerateRetirement(Protocol, ProtocolVersion, nonce))
+                .WaitAsync(AppShutdownBudgets.UiCleanup).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // Native authority and requests have already retired. A departing document
+            // may no longer accept JavaScript; its notification cannot hold cleanup open.
+            AppSessionLog.WriteInfo($"Package browser retirement notification was unavailable: {exception.GetType().Name}.", visibleInDeveloperLog: false);
+        }
     }
 
     private async Task ExecuteAsync(BridgeRequest request, AppWebPendingRequest pending)
@@ -283,7 +329,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                         var payload = RequireObject(request.Payload, "RPC discover payload", "contractId");
                         var contractId = RequiredText(payload, "contractId", 256);
                         var snapshot = await _rpc.DiscoverAsync(contractId, pending.Token).ConfigureAwait(false);
-                        await FinishResultAsync(request.RequestId, pending, MapCatalog(snapshot)).ConfigureAwait(false);
+                        await FinishResultAsync(request.RequestId, pending, MapCatalog(snapshot, pending)).ConfigureAwait(false);
                         return;
                     }
                 case "rpc.watch":
@@ -300,7 +346,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                                            afterSequence,
                                            pending.Token).WithCancellation(pending.Token).ConfigureAwait(false))
                         {
-                            await SendEventAsync(request.RequestId, pending, MapCatalogEvent(item)).ConfigureAwait(false);
+                            await SendEventAsync(request.RequestId, pending, MapCatalogEvent(item, pending)).ConfigureAwait(false);
                         }
                         await FinishCompleteAsync(request.RequestId, pending).ConfigureAwait(false);
                         return;
@@ -506,31 +552,48 @@ internal sealed class AppWebBridge : IAsyncDisposable
         }
     }
 
-    private object MapCatalog(SunderRpcCatalogSnapshot snapshot)
-        => new
+    private object? MapCatalog(SunderRpcCatalogSnapshot snapshot, AppWebPendingRequest pending)
+    {
+        lock (_gate)
         {
-            revision = snapshot.Revision,
-            sequence = snapshot.Sequence,
-            providers = snapshot.Providers.Select(MapProvider).ToArray(),
-            resetRequired = snapshot.ResetRequired,
-        };
-
-    private object MapCatalogEvent(SunderRpcCatalogEvent value)
-        => new
-        {
-            revision = value.Revision,
-            sequence = value.Sequence,
-            kind = value.Kind switch
+            if (!OwnsDocumentRequest(pending)) return null;
+            return new
             {
-                SunderRpcCatalogEventKind.Added => "added",
-                SunderRpcCatalogEventKind.Removed => "removed",
-                SunderRpcCatalogEventKind.Activated => "activated",
-                SunderRpcCatalogEventKind.Deactivated => "deactivated",
-                SunderRpcCatalogEventKind.Faulted => "faulted",
-                _ => "reset-required",
-            },
-            provider = value.Provider is null ? null : MapProvider(value.Provider),
-        };
+                revision = snapshot.Revision,
+                sequence = snapshot.Sequence,
+                providers = snapshot.Providers.Select(MapProvider).ToArray(),
+                resetRequired = snapshot.ResetRequired,
+            };
+        }
+    }
+
+    private object? MapCatalogEvent(SunderRpcCatalogEvent value, AppWebPendingRequest pending)
+    {
+        lock (_gate)
+        {
+            if (!OwnsDocumentRequest(pending)) return null;
+            return new
+            {
+                revision = value.Revision,
+                sequence = value.Sequence,
+                kind = value.Kind switch
+                {
+                    SunderRpcCatalogEventKind.Added => "added",
+                    SunderRpcCatalogEventKind.Removed => "removed",
+                    SunderRpcCatalogEventKind.Activated => "activated",
+                    SunderRpcCatalogEventKind.Deactivated => "deactivated",
+                    SunderRpcCatalogEventKind.Faulted => "faulted",
+                    _ => "reset-required",
+                },
+                provider = value.Provider is null ? null : MapProvider(value.Provider),
+            };
+        }
+    }
+
+    // Called under the document authority gate, before allocating browser handles.
+    private bool OwnsDocumentRequest(AppWebPendingRequest pending)
+        => _trustedNavigation && _currentUri is not null && pending.DocumentGeneration == _documentGeneration
+           && !pending.IsCompleted && Volatile.Read(ref _disposed) == 0;
 
     private object MapProvider(SunderRpcProviderSnapshot provider)
     {
@@ -912,33 +975,32 @@ internal sealed class AppWebBridge : IAsyncDisposable
             message);
 
     private async Task RejectRecoveredAsync(
-        string? requestId,
+        BridgeCorrelation? request,
         SunderRpcError error,
         string? logMessage = null)
     {
         RejectProtocol(logMessage ?? error.Message);
-        if (!IsId(requestId))
+        if (request is null)
         {
             return;
         }
 
-        string nonce;
         lock (_gate)
         {
             if (!_trustedNavigation
                 || _currentUri is null
+                || !string.Equals(request.Value.Nonce, _nonce, StringComparison.Ordinal)
                 || Volatile.Read(ref _disposed) != 0)
             {
                 return;
             }
-            nonce = _nonce;
         }
         var envelope = new
         {
             protocol = Protocol,
             version = ProtocolVersion,
-            nonce,
-            requestId,
+            nonce = request.Value.Nonce,
+            requestId = request.Value.RequestId,
             type = "error",
             value = (object?)null,
             error = new
@@ -961,31 +1023,30 @@ internal sealed class AppWebBridge : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
-    private static bool TryReadSafeRequestId(JsonElement root, out string? requestId)
+    private static BridgeCorrelation? TryReadSafeRequest(JsonElement root)
     {
-        requestId = null;
         if (root.ValueKind != JsonValueKind.Object)
         {
-            return false;
+            return null;
         }
         var matches = root.EnumerateObject()
-            .Where(static property => property.NameEquals("requestId"))
+            .Where(static property => property.NameEquals("requestId") || property.NameEquals("nonce"))
             .ToArray();
-        if (matches.Length != 1
-            || matches[0].Value.ValueKind != JsonValueKind.String
-            || !IsId(matches[0].Value.GetString()))
+        if (matches.Length != 2 || matches.Select(property => property.Name).Distinct(StringComparer.Ordinal).Count() != 2
+            || matches.Any(property => property.Value.ValueKind != JsonValueKind.String || !IsId(property.Value.GetString())))
         {
-            return false;
+            return null;
         }
-        requestId = matches[0].Value.GetString();
-        return true;
+        return new(root.GetProperty("requestId").GetString()!, root.GetProperty("nonce").GetString()!);
     }
 
-    private static string? TryRecoverRequestId(string body)
+    private static BridgeCorrelation? TryRecoverRequest(string body)
     {
         const int maximumPrefixCharacters = 16 * 1024;
         var prefix = body.AsSpan(0, Math.Min(body.Length, maximumPrefixCharacters));
         byte[] utf8;
+        string? requestId = null;
+        string? nonce = null;
         try
         {
             utf8 = Encoding.UTF8.GetBytes(prefix.ToString());
@@ -1006,21 +1067,24 @@ internal sealed class AppWebBridge : IAsyncDisposable
             while (reader.Read())
             {
                 if (reader.TokenType != JsonTokenType.PropertyName
-                    || reader.CurrentDepth != 1
-                    || !reader.ValueTextEquals("requestId"u8)
-                    || !reader.Read()
-                    || reader.TokenType != JsonTokenType.String)
+                    || reader.CurrentDepth != 1)
                 {
                     continue;
                 }
+                var isRequestId = reader.ValueTextEquals("requestId"u8);
+                var isNonce = reader.ValueTextEquals("nonce"u8);
+                if (!isRequestId && !isNonce) continue;
+                if (!reader.Read() || reader.TokenType != JsonTokenType.String) return null;
                 var value = reader.GetString();
-                return IsId(value) ? value : null;
+                if (!IsId(value) || (isRequestId ? requestId is not null : nonce is not null)) return null;
+                if (isRequestId) requestId = value;
+                else nonce = value;
             }
         }
         catch (JsonException)
         {
         }
-        return null;
+        return requestId is not null && nonce is not null ? new(requestId, nonce) : null;
     }
 
     private static string ErrorKind(SunderRpcErrorKind kind)
@@ -1087,6 +1151,8 @@ internal sealed class AppWebBridge : IAsyncDisposable
         string Method,
         DateTimeOffset? DeadlineUtc,
         JsonElement Payload);
+
+    private readonly record struct BridgeCorrelation(string RequestId, string Nonce);
 
     private sealed record BridgeInvocation(
         string ProviderHandle,

@@ -28,13 +28,14 @@ public sealed partial class SunderPackageRoleProjectionTests
             using WorkerMarker = BackendOnly.Marker;
             using static BackendOnly.Marker;
             using Sunder.Sdk.Packaging;
-            using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
+            using Sunder.Generated.Packages.Example_Notes_Services;
             using System.Threading.Tasks;
             namespace Example;
-            [SunderRpcService]
+            [SunderService]
             public sealed partial class NotesService
             {
-                [SunderRpcMethod] public Task<Note> ReadAsync() => Task.FromResult(new Note { Text = Storage.Read() });
+                public Task<Note> ReadAsync() => Task.FromResult(new Note { Text = Storage.Read() });
             }
             internal static class Storage { public static string Read() => WorkerMarker.Read(); }
             public sealed record Note { public required string Text { get; init; } }
@@ -89,7 +90,7 @@ public sealed partial class SunderPackageRoleProjectionTests
             var collection = new ServiceCollection(); collection.AddSingleton<ISunderRpcClient>(rpc);
             appModule.ConfigureAppServices(collection, context);
             await using var appServices = collection.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
-            var client = appServices.GetRequiredService(appAssembly.GetType("Example.INotesService", true)!);
+            var client = appServices.GetRequiredService(appAssembly.GetType("Sunder.Generated.Packages.Example_Notes_Services.INotesService", true)!);
             await using var lifetime = (IAsyncDisposable)client;
             var viewModel = appServices.GetRequiredService(appAssembly.GetType("Example.NotesViewModel", true)!);
             var remote = (Task)viewModel.GetType().GetMethod("ReadAsync")!.Invoke(viewModel, null)!;
@@ -98,6 +99,22 @@ public sealed partial class SunderPackageRoleProjectionTests
             Assert.Same(appAssembly, remoteNote.GetType().Assembly);
             Assert.Equal("backend", remoteNote.GetType().GetProperty("Text")!.GetValue(remoteNote));
             Assert.Equal(rpc.Created, rpc.Disposed);
+            var callsBeforeScopedCheck = rpc.UnaryCalls;
+            rpc.ScopedTransform = value => value with { SessionGeneration = value.SessionGeneration + 1 };
+            var scopedMismatch = await Assert.ThrowsAsync<SunderRpcException>(() => (Task)viewModel.GetType().GetMethod("ReadAsync")!.Invoke(viewModel, null)!);
+            Assert.Equal(SunderRpcErrorKind.StaleEndpoint, scopedMismatch.Error.Kind);
+            Assert.Equal(callsBeforeScopedCheck, rpc.UnaryCalls);
+            Assert.Equal(rpc.Created, rpc.Disposed);
+            rpc.ScopedTransform = null;
+            var originalProvider = rpc.Provider;
+            var callsBefore = rpc.UnaryCalls;
+            foreach (var version in new[] { "1.0.1", "1.0.0+different-build" })
+            {
+                rpc.Provider = originalProvider with { PackageVersion = version };
+                await Assert.ThrowsAsync<SunderRpcException>(() => (Task)viewModel.GetType().GetMethod("ReadAsync")!.Invoke(viewModel, null)!);
+                Assert.Equal(callsBefore, rpc.UnaryCalls);
+            }
+            rpc.Provider = originalProvider;
             rpc.InvalidateAfterCall = true;
             var stale = (Task)viewModel.GetType().GetMethod("ReadAsync")!.Invoke(viewModel, null)!;
             Assert.Equal(SunderRpcErrorKind.StaleEndpoint, (await Assert.ThrowsAsync<SunderRpcException>(() => stale)).Error.Kind);
@@ -105,7 +122,9 @@ public sealed partial class SunderPackageRoleProjectionTests
             var blocked = (Task)viewModel.GetType().GetMethod("ReadAsync")!.Invoke(viewModel, null)!;
             await rpc.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var stopped = lifetime.DisposeAsync().AsTask();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => blocked);
+            var retired = await Assert.ThrowsAsync<SunderRpcException>(() => blocked);
+            Assert.Equal("rpc.binding.retired", retired.Error.Code);
+            Assert.Equal(SunderRpcRetrySafety.Unsafe, retired.Error.RetrySafety);
             await stopped.WaitAsync(TimeSpan.FromSeconds(5)); Assert.Equal(rpc.Created, rpc.Disposed);
             var configureWorker = workerAssembly.GetType("Sunder.Generated.Package.WorkerEntryPoint", true)!
                 .GetMethod("Create", BindingFlags.Static | BindingFlags.NonPublic, [typeof(IPackageContext), typeof(ISunderRpcClient)])!;
@@ -171,15 +190,34 @@ public sealed partial class SunderPackageRoleProjectionTests
         internal SunderRpcException? Failure;
         internal JsonElement? UnaryResponse;
         internal int UnaryCalls;
+        // Natural clients share a receiver-side catalog observer; dispatch still
+        // must use an owned call scope below.
+        internal bool AllowCatalogDiscovery = true;
+        internal JsonElement? LastRequest;
+        internal Func<SunderRpcProviderSnapshot, SunderRpcProviderSnapshot?>? ScopedTransform;
         internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(SunderRpcCallOptions? options = null, CancellationToken cancellationToken = default)
         { cancellationToken.ThrowIfCancellationRequested(); Created++; return ValueTask.FromResult<ISunderRpcCallScope>(new Scope(this)); }
         public ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(SunderRpcEndpointReference endpoint, CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("Use the owned scope.");
+        {
+            if (!AllowCatalogDiscovery) throw new InvalidOperationException("Use the owned scope.");
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<SunderRpcProviderSnapshot?>(endpoint == Provider.Endpoint ? Provider : null);
+        }
         public ValueTask<bool> TryReportInvariantViolationAsync(SunderRpcEndpointReference endpoint, Exception exception, CancellationToken cancellationToken = default) => ValueTask.FromResult(false);
         public ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(string contractId, CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("Discovery must use the owned scope.");
-        public IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(long afterRevision, long afterSequence, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        {
+            if (!AllowCatalogDiscovery) throw new InvalidOperationException("Discovery must use the owned scope.");
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(new SunderRpcCatalogSnapshot(1, 1, [Provider]));
+        }
+        public async IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(long afterRevision, long afterSequence,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            if (!AllowCatalogDiscovery) throw new NotSupportedException();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            yield break;
+        }
         public ValueTask<JsonElement> InvokeAsync(SunderRpcEndpointReference endpoint, string serviceId, string methodId, JsonElement request, SunderRpcCallOptions? options = null, CancellationToken cancellationToken = default)
             => throw new InvalidOperationException("Use the owned scope.");
         public IAsyncEnumerable<JsonElement> SubscribeAsync(SunderRpcEndpointReference endpoint, string serviceId, string methodId, JsonElement request, SunderRpcCallOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -189,7 +227,7 @@ public sealed partial class SunderPackageRoleProjectionTests
             public DateTimeOffset DeadlineUtc => DateTimeOffset.UtcNow.AddMinutes(1);
             public ValueTask DisposeAsync() { owner.Disposed++; return ValueTask.CompletedTask; }
             public ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(SunderRpcEndpointReference endpoint, CancellationToken cancellationToken = default)
-            { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult<SunderRpcProviderSnapshot?>(owner.Provider); }
+            { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(owner.ScopedTransform is { } transform ? transform(owner.Provider) : owner.Provider); }
             public ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(string contractId, CancellationToken cancellationToken = default)
             { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(new SunderRpcCatalogSnapshot(1, 1, [owner.Provider])); }
             public ValueTask<bool> TryReportInvariantViolationAsync(SunderRpcEndpointReference endpoint, Exception exception, CancellationToken cancellationToken = default) => ValueTask.FromResult(false);
@@ -197,6 +235,7 @@ public sealed partial class SunderPackageRoleProjectionTests
             public async ValueTask<JsonElement> InvokeAsync(SunderRpcEndpointReference endpoint, string serviceId, string methodId, JsonElement request, SunderRpcCallOptions? options = null, CancellationToken cancellationToken = default)
             {
                 owner.UnaryCalls++;
+                owner.LastRequest = request.Clone();
                 if (owner.Failure is { } error) throw error;
                 if (owner.Block) { owner.Started.TrySetResult(); await Task.Delay(Timeout.Infinite, cancellationToken); }
                 var value = owner.UnaryResponse ?? await owner.InvokeHandler(serviceId, methodId, request, cancellationToken);

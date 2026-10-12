@@ -2,7 +2,7 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProcessRequest request, DateTimeOffset queuedAtUtc)
+internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProcessRequest request, DateTimeOffset queuedAtUtc, string? queuedStatus = null)
 {
     public Guid ProcessId { get; } = processId;
 
@@ -14,7 +14,7 @@ internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProces
 
     public BackgroundProcessState State { get; private set; } = BackgroundProcessState.Queued;
 
-    public string StatusText { get; private set; } = "Queued";
+    public string StatusText { get; private set; } = string.IsNullOrWhiteSpace(queuedStatus) ? "Queued" : queuedStatus;
 
     public double? ProgressPercent { get; private set; }
 
@@ -39,10 +39,10 @@ internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProces
         StatusText = "Cancelling...";
     }
 
-    public void MarkQueuedCancelled(DateTimeOffset completedAtUtc)
+    public void MarkQueuedCancelled(DateTimeOffset completedAtUtc, string? statusText = null)
     {
         State = BackgroundProcessState.Cancelled;
-        StatusText = "Cancelled";
+        StatusText = string.IsNullOrWhiteSpace(statusText) ? "Cancelled" : statusText;
         CompletedAtUtc = completedAtUtc;
         DisposeCancellationTokenSource();
     }

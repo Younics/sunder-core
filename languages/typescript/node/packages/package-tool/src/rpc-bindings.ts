@@ -11,6 +11,7 @@ import {
 } from "@sunder/sdk";
 import { readProjectDescriptorFile } from "./descriptor-files";
 import type { RegistryOriginOptions } from "./rpc-contract-lock";
+import { MODEL_PROJECTION_PATH, projectionDocumentBytes } from "./rpc-model-projection";
 import {
   loadProject,
   resolveInside,
@@ -73,6 +74,8 @@ export async function generateRpcBindingsForLoadedProjectLocked(project: LoadedP
   await assertSafeGeneratedOutputParents(project.root, outputRoot);
   const plans: RpcBindingPlan[] = [];
   for (const [outputFile, source] of project.ownedRpc?.files ?? []) plans.push({ outputFile, source });
+  if (!project.ownedRpc && project.contracts.length === 0) plans.push({ outputFile: MODEL_PROJECTION_PATH,
+    source: projectionDocumentBytes(project.config.id, project.config.version, []).toString() });
   for (const [index, binding] of (project.config.rpcBindings ?? []).entries()) {
     const sourcePath = resolveInside(project.root, binding.path, `rpcBindings[${index}].path`);
     if (sourcePath === outputRoot || isInside(outputRoot, sourcePath) || isPortableOwnedOutputPath(binding.path)) {

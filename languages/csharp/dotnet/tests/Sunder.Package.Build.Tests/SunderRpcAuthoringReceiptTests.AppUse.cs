@@ -11,44 +11,45 @@ namespace Sunder.Package.Build.Tests;
 public sealed partial class SunderRpcAuthoringReceiptTests
 {
     [Theory]
-    [InlineData("Public", "", null, "")]
+    [InlineData("Public", "", false, "discover,invoke")]
     [InlineData("Package", "", true, "discover,invoke")]
-    [InlineData("Public", "[SunderRpcAppUse]", false, "discover,invoke")]
-    [InlineData("Package", "[SunderRpcAppUse]", false, "discover,invoke")]
-    [InlineData("Public", "[SunderRpcAppUse(Required = true, Actions = new[] { \"invoke\", \"discover\" })]", true, "discover,invoke")]
-    [InlineData("Public", "[SunderRpcAppUse(Actions = new[] { \"discover\" })]", false, "discover")]
+    [InlineData("Public", "[SunderAppUse]", false, "discover,invoke")]
+    [InlineData("Package", "[SunderAppUse]", false, "discover,invoke")]
+    [InlineData("Public", "[SunderAppUse(Required = true, Actions = new[] { \"invoke\", \"discover\" })]", true, "discover,invoke")]
+    [InlineData("Public", "[SunderAppUse(Actions = new[] { \"discover\" })]", false, "discover")]
+    [InlineData("Public", "[SunderAppUse(Enabled = false)]", null, "")]
     public void AppPolicy_RoundTripsSourceExportAndReceiptsWithoutChangingWireIdentity(string exposure, string attribute, bool? required, string actions)
     {
         var contractLock = ReadLock("minimal-contract-lock.json");
         var imports = Prepare(contractLock);
         var source = OwnedSource.Replace("Exposure.Public", "Exposure." + exposure, StringComparison.Ordinal);
         var original = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", source));
-        var compilation = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", source.Replace("[SunderRpcProvider", attribute + "\n[SunderRpcProvider", StringComparison.Ordinal)));
+        var compilation = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", source.Replace("[SunderServiceProvider", attribute + "\n[SunderServiceProvider", StringComparison.Ordinal)));
         var contract = Assert.Single(compilation.Contracts);
         Assert.Equal(original.Contracts[0].Descriptor.GetCanonicalUtf8(), contract.Descriptor.GetCanonicalUtf8());
         Assert.Equal(original.Contracts[0].Descriptor.AbiSha256, contract.Descriptor.AbiSha256);
         var workerBytes = Write(contractLock, compilation, imports);
         var worker = AssertReceipt(workerBytes);
         Assert.Empty(worker.GetProperty("uses").EnumerateArray());
-        Assert.Equal(attribute.Length != 0, worker.GetProperty("contracts")[0].TryGetProperty("appUse", out _));
+        Assert.Equal(contract.AppUse is not null, worker.GetProperty("contracts")[0].TryGetProperty("appUse", out _));
         Assert.Empty(SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(workerBytes, contractLock.Sha256, PackageId, PackageVersion).Manifest.UsesContracts!);
 
         var exportPath = _temporary.GetPath("package-export.json");
-        var exportBytes = SunderRpcAuthoringDocuments.WritePackageExport("1.0.0", "Owner", "Debug", "net10.0", Fingerprint, contractLock.Sha256, PackageId, compilation.Contracts);
+        var exportBytes = SunderRpcAuthoringDocuments.WritePackageExport("1.0.0", "Owner", "Debug", "net10.0", Fingerprint, contractLock.Sha256, PackageId, PackageVersion, compilation.Contracts);
         File.WriteAllBytes(exportPath, exportBytes);
         using var exportJson = JsonDocument.Parse(exportBytes);
         using var exportSchema = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/package-project-export.schema.json")));
-        Assert.True(JsonSchemaTestValidator.IsValid(exportSchema.RootElement, exportJson.RootElement));
-        var export = SunderRpcAuthoringDocuments.ReadPackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId);
+        Assert.True(MatchesAuthoringSchema(exportSchema.RootElement, exportJson.RootElement));
+        var export = SunderRpcAuthoringDocuments.ReadPackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId, PackageVersion);
         Assert.True(SunderRpcAuthoringDocuments.SameUsePolicy(contract.AppUse, Assert.Single(export.Contracts).AppUse));
-        _ = SunderRpcAuthoringDocuments.ValidatePackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId, contractLock.Sha256, compilation.Contracts);
-        if (attribute.Length != 0)
-            Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ValidatePackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId, contractLock.Sha256, original.Contracts));
+        _ = SunderRpcAuthoringDocuments.ValidatePackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId, PackageVersion, contractLock.Sha256, compilation.Contracts);
+        if (!SunderRpcAuthoringDocuments.SameUsePolicy(contract.AppUse, original.Contracts[0].AppUse))
+            Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ValidatePackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId, PackageVersion, contractLock.Sha256, original.Contracts));
 
         var appBytes = SunderRpcAuthoringDocuments.WriteProjectImportReceipt("1.0.0", Fingerprint, contractLock.Sha256, PackageId, PackageVersion, export.Contracts);
         using var app = JsonDocument.Parse(appBytes);
         using var receiptSchema = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/authoring-receipt.schema.json")));
-        Assert.True(JsonSchemaTestValidator.IsValid(receiptSchema.RootElement, app.RootElement));
+        Assert.True(MatchesAuthoringSchema(receiptSchema.RootElement, app.RootElement));
         Assert.Equal("app", app.RootElement.GetProperty("role").GetString());
         var projection = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(appBytes, contractLock.Sha256, PackageId, PackageVersion);
         Assert.Empty(projection.Manifest.Provides!);
@@ -75,10 +76,10 @@ public sealed partial class SunderRpcAuthoringReceiptTests
     public void AppReceipt_RejectsMissingBroadenedOrMalformedGrants(string mutation)
     {
         var contractLock = ReadLock("minimal-contract-lock.json");
-        var compilation = Compile(Prepare(contractLock), new SunderRpcCSharpSourceFile("Owned.cs", OwnedSource.Replace("[SunderRpcProvider",
-            "[SunderRpcAppUse(Actions = new[] { \"discover\" })]\n[SunderRpcProvider", StringComparison.Ordinal)));
+        var compilation = Compile(Prepare(contractLock), new SunderRpcCSharpSourceFile("Owned.cs", OwnedSource.Replace("[SunderServiceProvider",
+            "[SunderAppUse(Actions = new[] { \"discover\" })]\n[SunderServiceProvider", StringComparison.Ordinal)));
         var contract = Assert.Single(compilation.Contracts);
-        var exports = new[] { new SunderRpcPackageProjectExportContract(contract.ContractKey, contract.Exposure, contract.GeneratedLogicalName, contract.Descriptor) { AppUse = contract.AppUse } };
+        var exports = new[] { new SunderRpcPackageProjectExportContract(contract.ContractKey, contract.Exposure, contract.GeneratedLogicalName, contract.Descriptor, contract.ModelProjection) { AppUse = contract.AppUse } };
         var bytes = SunderRpcAuthoringDocuments.WriteProjectImportReceipt("1.0.0", Fingerprint, contractLock.Sha256, PackageId, PackageVersion, exports);
         _ = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(bytes, contractLock.Sha256, PackageId, PackageVersion);
         var app = JsonNode.Parse(bytes)!.AsObject();

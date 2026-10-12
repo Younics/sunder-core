@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "outDir": "dist-test",
     "declaration": false,
     "sourceMap": false

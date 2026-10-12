@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "packageId": "example.dependency",
+  "packageVersion": "1.2.3",
+  "contracts": [
+    {
+      "contractId": "sunder.stack.contributor",
+      "contractVersion": "2.0.0",
+      "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+      "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+      "modelProjection": {
+        "models": {},
+        "serviceReferences": {}
+      }
+    }
+  ]
+}

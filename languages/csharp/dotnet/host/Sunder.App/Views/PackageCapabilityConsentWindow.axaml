@@ -37,7 +37,7 @@
           <StackPanel Spacing="6">
             <TextBlock FontWeight="SemiBold" Text="Review downloads and changes" />
             <TextBlock Classes="muted"
-                       Text="Execution runtimes are shared by compatible packages. Exact healthy runtimes already on this device are reused instead of downloaded again."
+                       Text="Approve the package changes, permissions and runtime downloads together. Sunder installs required runtimes first, then downloads and installs the packages in order."
                        TextWrapping="Wrap" />
           </StackPanel>
         </Border>
@@ -72,7 +72,7 @@
           </Border>
           <Border Grid.Column="1" Classes="card-surface">
             <StackPanel Spacing="4">
-              <TextBlock Classes="caption" Text="Shared runtime downloads" />
+              <TextBlock Classes="caption" Text="Runtime downloads" />
               <TextBlock Classes="section-title" Text="{Binding SharedRuntimeDownloadText}" />
               <TextBlock Classes="muted" FontSize="11" Text="{Binding SharedRuntimeReuseText}" TextWrapping="Wrap" />
             </StackPanel>
@@ -97,7 +97,7 @@
         </StackPanel>
 
         <StackPanel Spacing="8" IsVisible="{Binding HasExecutionRuntimes}">
-          <TextBlock Classes="section-title" Text="Shared execution runtimes" />
+          <TextBlock Classes="section-title" Text="Package runtimes" />
           <ItemsControl ItemsSource="{Binding ExecutionRuntimes}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:ExecutionRuntimeDownloadItemViewModel">
@@ -109,9 +109,9 @@
                     </Grid>
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                       <TextBlock Classes="caption" Text="{Binding TargetText}" TextWrapping="Wrap" />
-                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding LifecycleText}" />
+                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding SourceText}" />
                     </Grid>
-                    <TextBlock Classes="muted" Text="{Binding LifecycleMessage}" TextWrapping="Wrap" />
+                    <TextBlock Classes="muted" Text="{Binding DetailText}" TextWrapping="Wrap" />
                   </StackPanel>
                 </Border>
               </DataTemplate>
@@ -173,7 +173,7 @@
                 Click="CancelButton_OnClick" />
         <Button Grid.Column="2"
                 Classes="primary-action"
-                Content="Approve and Continue"
+                Content="Approve &amp; Install"
                 Click="ApproveButton_OnClick" />
       </Grid>
     </Border>

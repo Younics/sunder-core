@@ -47,9 +47,8 @@ async function main(): Promise<void> {
       await writeFile(lockPath, await readFile(join(fixtures, "minimal-contract-lock.json")));
       await writeFile(join(project, "sunder-contracts.owned.json"), await readFile(join(fixtures, "minimal-package-owned-baseline.json")));
       await writeFile(join(project, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Live Stack", version: `1.0.${index + 1}`,
-        entry: `src/worker.${extension}`, workerCapabilities: [], rpc: { module: `src/rpc.${extension}`, export: "packageRpc" } }));
-      await writeFile(join(project, `src/rpc.${extension}`), "import {rpc} from '@sunder/sdk'; export const packageRpc=rpc.router({contracts:{},providers:{}});");
-      await writeFile(join(project, `src/worker.${extension}`), "export {packageRpc} from './rpc.js';");
+        workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
+      await writeFile(join(project, `src/rpc.${extension}`), "export {};");
       await packageApiCommand(project, { operation: "platform-implement", contractId: "sunder.stack.contributor", registryOrigin: input.registryOrigin, cacheRoot: cache, fetchImplementation });
     }
     const lockedBytes = await readFile(lockPath); const locked = parseContractLock(lockedBytes);
@@ -64,16 +63,15 @@ async function main(): Promise<void> {
     assert.deepEqual(Buffer.from(catalog.getCanonicalUtf8()), await readFile(join(input.csharpOutput, "catalog.json")));
     if (phase === "revoked") continue;
     await writeFile(join(project, `src/rpc.${extension}`), `
-      import {rpc,RpcError} from '@sunder/sdk'; import {rpcImports} from '#sunder/rpc';
-      export const packageRpc=rpc.router({contracts:{},providers:{stack:rpcImports.stackContributor.provider({id:'example.owner.stack',handlers:{'stack-contributor':{
+      import {defineService,RpcError} from '@sunder/sdk'; import {Implementations} from '#sunder/api';
+      export const stack=defineService({
         metadata(request,context){context.signal.throwIfAborted();return {contributorId:'node-stack',displayName:'Node Stack',supportsExport:true,supportsImport:false,supportsImportApplied:false};},
-        'list-export-items'(request,context){context.signal.throwIfAborted();return {items:[{itemId:'item',displayName:'Item',kind:'sample',defaultSelected:true}]};},
+        listExportItems(request,context){context.signal.throwIfAborted();return {items:[{itemId:'item',displayName:'Item',kind:'sample',defaultSelected:true}]};},
         export(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});},
-        'preview-import'(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});},
+        previewImport(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});},
         import(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});},
-        'import-applied'(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});}
-      }}})}});`);
-    await writeFile(join(project, `src/worker.${extension}`), "import {runWorker} from '@sunder/sdk'; import {packageRpc} from './rpc.js'; export {packageRpc}; void runWorker(()=>({providers:packageRpc.providerRegistrations})).catch(error=>{console.error(error);process.exitCode=70;});");
+        importApplied(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});}
+      },{implements:Implementations.stackContributor,providerId:'example.owner.stack'});`);
     offline = true;
     const options = { contractCacheRoot: cache };
     const loaded = await loadProjectWithOwnedFrame(project, options);

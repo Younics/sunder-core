@@ -158,7 +158,7 @@ public sealed class RuntimeApiClientTests
             RuntimeProtocol.MinimumSupportedRevision,
             RuntimeProtocol.MaximumSupportedRevision,
             Guid.NewGuid(),
-            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
+            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"));
 
     private sealed record RecordedRequest(

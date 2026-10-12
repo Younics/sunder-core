@@ -19,6 +19,7 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "!dist/authoring.*",
     "README.md",
     "LICENSE",
     "NOTICE"
@@ -41,11 +42,18 @@
       "types": "./dist/core.d.ts",
       "require": "./dist/core.js",
       "default": "./dist/core.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "require": "./dist/react.js",
+      "default": "./dist/react.js"
     }
   },
   "engines": {
     "node": ">=24.18.1 <25.0.0"
   },
+  "peerDependencies": { "react": ">=19.2.0 <20.0.0" },
+  "peerDependenciesMeta": { "react": { "optional": true } },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -25,11 +25,12 @@ internal sealed class PackagesOperationCommandCoordinator(
 
         try
         {
-            operationExecutor.EnqueueLocalInstall(
-                selection.PackagePath,
-                selection.Sha256,
-                selection.DeleteAfterUse,
-                selection.CapabilityConsent);
+            setStatusText("Preparing installation review…");
+            if (await operationExecutor.EnqueueLocalInstallAsync(selection) is null)
+            {
+                setStatusText("Installation cancelled before queueing.");
+                return false;
+            }
         }
         catch
         {
@@ -72,15 +73,16 @@ internal sealed class PackagesOperationCommandCoordinator(
         return Task.CompletedTask;
     }
 
-    public Task InstallMarketplacePackageAsync(string packageId, string displayName, string selectedVersion)
+    public async Task InstallMarketplacePackageAsync(string packageId, string displayName, string selectedVersion)
     {
         if (TryResolveRegistryUrl(out var registryUrl))
         {
-            operationExecutor.EnqueueMarketplaceInstall(packageId, displayName, registryUrl, selectedVersion, tag: null);
-            MarkQueued($"Queued install for {packageId} {selectedVersion}.");
+            setStatusText("Preparing installation review…");
+            if (await operationExecutor.EnqueueMarketplaceInstallAsync(packageId, displayName, registryUrl, selectedVersion, tag: null) is not null)
+                MarkQueued($"Queued install for {packageId} {selectedVersion}.");
+            else setStatusText("Installation cancelled before queueing.");
         }
 
-        return Task.CompletedTask;
     }
 
     public Task UpdateInstalledPackageAsync(RegistryPackageUpdate update, string displayName)
@@ -91,31 +93,28 @@ internal sealed class PackagesOperationCommandCoordinator(
         string displayName)
         => EnqueueMarketplaceUpdateAsync(update, displayName);
 
-    public Task AdoptRegistrySourceAsync(string packageId, string displayName)
+    public async Task AdoptRegistrySourceAsync(string packageId, string displayName)
     {
         if (TryResolveRegistryUrl(out var registryUrl))
         {
-            operationExecutor.EnqueueRegistrySourceAdoption(packageId, displayName, registryUrl);
-            MarkQueued($"Queued Registry source adoption for {packageId}.");
+            if (await operationExecutor.EnqueueRegistrySourceAdoptionAsync(packageId, displayName, registryUrl) is not null)
+                MarkQueued($"Queued Registry source adoption for {packageId}.");
+            else setStatusText("Installation cancelled before queueing.");
         }
 
-        return Task.CompletedTask;
     }
 
-    public Task UpdateAllPackagesAsync()
+    public async Task UpdateAllPackagesAsync()
     {
-        operationExecutor.EnqueueUpdateAll();
-        MarkQueued("Queued updates for installed packages.");
-
-        return Task.CompletedTask;
+        if (await operationExecutor.EnqueueUpdateAllAsync() is not null) MarkQueued("Queued updates for installed packages.");
+        else setStatusText("Installation cancelled before queueing.");
     }
 
-    private Task EnqueueMarketplaceUpdateAsync(RegistryPackageUpdate update, string displayName)
+    private async Task EnqueueMarketplaceUpdateAsync(RegistryPackageUpdate update, string displayName)
     {
-        operationExecutor.EnqueueMarketplaceUpdate(update.PackageId, displayName, update.AvailableVersion);
-        MarkQueued($"Queued update for {update.PackageId}.");
-
-        return Task.CompletedTask;
+        if (await operationExecutor.EnqueueMarketplaceUpdateAsync(update.PackageId, displayName, update.AvailableVersion) is not null)
+            MarkQueued($"Queued update for {update.PackageId}.");
+        else setStatusText("Installation cancelled before queueing.");
     }
 
     private bool TryResolveRegistryUrl(out Uri registryUrl)

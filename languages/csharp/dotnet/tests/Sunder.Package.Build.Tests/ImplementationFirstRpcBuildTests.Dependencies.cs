@@ -26,7 +26,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var repository = FindRepositoryRoot();
         var packages = Path.Combine(repository, "languages/csharp/dotnet/packages");
         var baseline = Path.Combine(repository, "languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ImplementationFirstRpc");
-        foreach (var file in new[] { "sunder-contracts.owned.json", "sunder-contracts.lock.json" }) File.Copy(Path.Combine(baseline, file), Path.Combine(root, file));
+        File.Copy(Path.Combine(baseline, "sunder-contracts.lock.json"), Path.Combine(root, "sunder-contracts.lock.json"));
         await File.WriteAllTextAsync(Path.Combine(backend, "Backend.Library.csproj"), """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><NuGetAudit>false</NuGetAudit></PropertyGroup>
@@ -108,7 +108,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             Assert.Contains(plan.RootElement.GetProperty("workerDependencies").GetProperty("libraries").EnumerateArray(), value => value.GetString()!.StartsWith("SQLitePCLRaw.lib.e_sqlite3/", StringComparison.Ordinal));
             Assert.DoesNotContain(plan.RootElement.GetProperty("appDependencies").GetProperty("libraries").EnumerateArray(), value => value.GetString()!.StartsWith("Backend.Library/", StringComparison.Ordinal));
         }
-        AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:FreezeSunderContracts;PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet", offline]));
+        AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet", offline]));
         var archive = Path.Combine(root, "bin/Debug/net10.0/RestoreRoles.7.6.5.sunderpkg");
         var inspection = await SunderPackageArchiveInspector.ExtractAndValidateAsync(archive, scope.GetPath("extracted"));
         Assert.True(inspection.Success, string.Join(Environment.NewLine, inspection.Errors));

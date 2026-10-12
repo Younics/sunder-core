@@ -17,19 +17,16 @@ internal sealed class ExecutionRuntimeStartupMaintenance
     {
         var rootsRemoved = 0;
         var archivesRemoved = 0;
-        var manifestsRemoved = 0;
         try
         {
             var collection = await _store.CollectGarbageAsync(cancellationToken)
                 .ConfigureAwait(false);
             rootsRemoved += collection.RootsRemoved;
             archivesRemoved += collection.ArchivesRemoved;
-            manifestsRemoved += collection.ManifestsRemoved;
             _logger.LogInformation(
-                "Execution-runtime startup maintenance removed {RootCount} roots, {ArchiveCount} archives, and {ManifestCount} manifests",
+                "Execution-runtime startup maintenance removed {RootCount} roots and {ArchiveCount} archives",
                 rootsRemoved,
-                archivesRemoved,
-                manifestsRemoved);
+                archivesRemoved);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -38,10 +35,9 @@ internal sealed class ExecutionRuntimeStartupMaintenance
         {
             _logger.LogWarning(
                 exception,
-                "Execution-runtime startup maintenance failed after confirmed removal of {RootCount} roots, {ArchiveCount} archives, and {ManifestCount} manifests; the failing collection pass may also have completed partial durable work",
+                "Execution-runtime startup maintenance failed after confirmed removal of {RootCount} roots and {ArchiveCount} archives; the failing collection pass may also have completed partial durable work",
                 rootsRemoved,
-                archivesRemoved,
-                manifestsRemoved);
+                archivesRemoved);
         }
     }
 }

@@ -81,7 +81,7 @@ internal sealed class ExecutionRuntimeStoreRecovery(
                 FileShare.Read,
                 16 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            if (stream.Length is <= 0 or > SunderExecutionRuntimeFormat.MaxMetadataBytes)
+            if (stream.Length is <= 0 or > OfficialRuntimeSourcePolicy.MaxMetadataBytes)
             {
                 throw new InvalidDataException(
                     $"Execution runtime transaction journal '{journalPath}' has an invalid size.");

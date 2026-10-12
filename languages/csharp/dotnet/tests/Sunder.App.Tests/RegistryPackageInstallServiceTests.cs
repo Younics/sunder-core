@@ -1,660 +1,241 @@
 using Sunder.App.Services;
-using Sunder.App.ViewModels;
-using Sunder.Registry.Contracts;
+using Sunder.App.Tests.TestSupport;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Abstractions;
 using Xunit;
 
 namespace Sunder.App.Tests;
 
 public sealed class RegistryPackageInstallServiceTests
 {
-    private static readonly string ResolutionFingerprint = new('f', 64);
-
     [Fact]
-    public async Task ApprovedConsentIsForwardedExactlyFromPreflightToInstall()
+    public async Task CombinedApprovalPrecedesBothJobsAndPreservesExactCapabilityConsent()
     {
-        var consent = Consent('a');
-        var runtime = new FakeRuntimeRegistryPackageClient
+        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var client = new RegistryInstallationTestClient();
+        var shown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var approve = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prompts = 0;
+        using var service = new RegistryPackageInstallService((review, _) =>
         {
-            PlanResult = SuccessfulPlan(consent),
-        };
-        RegistryPackageChangePreflight? prompted = null;
-        var service = new RegistryPackageInstallService((preflight, _) =>
-        {
-            prompted = preflight;
-            return Task.FromResult(true);
-        });
-
-        var result = await service.InstallPackageAsync(
-            "demo",
-            "1.2.3",
-            null,
-            allowDowngrade: false,
-            reinstall: false,
-            new FakeRegistryClient(),
-            runtime);
-
-        Assert.True(result.Success);
-        Assert.Equal([consent], prompted!.Plan.RequiredCapabilityConsents);
-        Assert.Single(runtime.PlanRequests);
-        var install = Assert.Single(runtime.InstallRequests);
-        Assert.Equal([consent], install.CapabilityConsents);
-        Assert.Equal(ResolutionFingerprint, install.ExpectedResolutionFingerprint);
-        var expectedPlan = Assert.Single(prompted.ExpectedPlans);
-        Assert.Equal("https://registry.example/", expectedPlan.RegistryOrigin);
-        Assert.False(expectedPlan.IncludePrerelease);
-        Assert.Equal(ResolutionFingerprint, expectedPlan.ExpectedResolutionFingerprint);
+            prompts++;
+            Assert.Empty(queue.ListProcesses());
+            Assert.Equal(1024, review.SharedRuntimeDownloadBytes);
+            Assert.Equal(client.Consents, review.Plan.RequiredCapabilityConsents);
+            shown.SetResult();
+            return approve.Task;
+        }, queue);
+        var task = service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client);
+        await shown.Task;
+        Assert.Empty(client.Installs);
+        Assert.Null(client.InstallConfirmation);
+        approve.SetResult(true);
+        Assert.True((await task.WaitAsync(TimeSpan.FromSeconds(2))).Success);
+        Assert.Equal(1, prompts);
+        var install = Assert.Single(client.Installs);
+        Assert.Equal(client.Consents, install.CapabilityConsents);
+        Assert.Equal(RuntimeManagementTestClient.Hash, install.RuntimePrerequisiteExpectation!.SourceFingerprint);
+        Assert.Equal(2, queue.ListProcesses().Count);
+        Assert.All(queue.ListProcesses(), row => Assert.Equal(BackgroundProcessState.Completed, row.State));
     }
 
     [Fact]
-    public async Task DeclinedConsentReturnsRequirementsWithoutApplyingInstall()
+    public async Task InitialCancelEnqueuesNothingAndDoesNotAcquireRuntime()
     {
-        var consent = Consent('b');
-        var runtime = new FakeRuntimeRegistryPackageClient
-        {
-            PlanResult = SuccessfulPlan(consent),
-        };
-        var service = new RegistryPackageInstallService((_, _) => Task.FromResult(false));
-
-        var result = await service.InstallPackageAsync(
-            "demo",
-            "1.2.3",
-            null,
-            allowDowngrade: false,
-            reinstall: false,
-            new FakeRegistryClient(),
-            runtime);
-
-        Assert.False(result.Success);
-        Assert.Empty(runtime.InstallRequests);
-        Assert.Equal([consent], result.RequiredCapabilityConsents);
-        Assert.Contains("no package changes", result.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task StalePreviewSurfacesRetryMessageWithoutHidingTheConfirmedFingerprint()
-    {
-        const string message =
-            "The Registry package plan changed after it was previewed. Review the current plan and retry; no package changes were applied.";
-        var runtime = new FakeRuntimeRegistryPackageClient
-        {
-            PlanResult = SuccessfulPlan(RuntimeArtifact()),
-            InstallResult = new RuntimeRegistryPackageChangeResult(
-                false,
-                RuntimeRegistryErrorCode.StalePlan,
-                message,
-                false,
-                false,
-                [],
-                [message],
-                [],
-                []),
-        };
-        var service = new RegistryPackageInstallService((_, _) => Task.FromResult(true));
-
-        var result = await service.InstallPackageAsync(
-            "demo",
-            "1.2.3",
-            null,
-            allowDowngrade: false,
-            reinstall: false,
-            new FakeRegistryClient(),
-            runtime);
-
-        Assert.False(result.Success);
-        Assert.Equal(message, result.Message);
-        Assert.Equal(ResolutionFingerprint, Assert.Single(runtime.InstallRequests).ExpectedResolutionFingerprint);
+        using var queue = new BackgroundProcessQueueService();
+        var client = new RegistryInstallationTestClient();
+        using var service = new RegistryPackageInstallService((_, _) => Task.FromResult(false), queue);
+        Assert.False((await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client)).Success);
+        Assert.Empty(queue.ListProcesses());
+        Assert.Null(client.InstallConfirmation);
+        Assert.Empty(client.Installs);
     }
 
     [Theory]
-    [InlineData(false, 50L * 1024L * 1024L, 0L)]
-    [InlineData(true, 0L, 50L * 1024L * 1024L)]
-    public async Task ConfirmationSeparatesPackageBytesFromIncrementalSharedRuntimeBytes(
-        bool runtimeInstalled,
-        long expectedRuntimeDownload,
-        long expectedRuntimeReuse)
+    [InlineData("execution-runtime.download-failed", "Vendor connection refused")]
+    [InlineData("execution-runtime.plan-stale", "Runtime preview changed; review again")]
+    public async Task RuntimeFailureCancelsQueuedPackageAndKeepsExactError(string code, string message)
     {
-        var runtimeArtifact = RuntimeArtifact();
-        var runtime = new FakeRuntimeRegistryPackageClient
-        {
-            PlanResult = SuccessfulPlan(runtimeArtifact),
-            ExecutionRuntimes = runtimeInstalled ? [InstalledRuntime(runtimeArtifact)] : [],
-        };
-        RegistryPackageChangePreflight? prompted = null;
-        var service = new RegistryPackageInstallService((preflight, _) =>
-        {
-            prompted = preflight;
-            return Task.FromResult(true);
-        });
+        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var client = new RegistryInstallationTestClient
+        { InstallHandler = (_, _) => Task.FromResult(new RuntimeExecutionRuntimeOperationResult(false, code, message, "install", null, false)) };
+        using var service = new RegistryPackageInstallService((_, _) => Task.FromResult(true), queue);
+        var result = await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client);
+        Assert.False(result.Success);
+        Assert.Contains(message, result.Message);
+        Assert.Empty(client.Installs);
+        Assert.Single(queue.ListProcesses(), row => row.State == BackgroundProcessState.Failed);
+        Assert.Single(queue.ListProcesses(), row => row.State == BackgroundProcessState.Cancelled);
+    }
 
-        var result = await service.InstallPackageAsync(
-            "demo",
-            "1.2.3",
-            null,
-            allowDowngrade: false,
-            reinstall: false,
-            new FakeRegistryClient(),
-            runtime);
-
-        Assert.True(result.Success);
-        Assert.NotNull(prompted);
-        Assert.Equal(12L * 1024L * 1024L, prompted.PackageDownloadBytes);
-        Assert.Equal(expectedRuntimeDownload, prompted.SharedRuntimeDownloadBytes);
-        Assert.Equal(expectedRuntimeReuse, prompted.ReusedSharedRuntimeBytes);
+    [Theory]
+    [InlineData("version")]
+    [InlineData("artifact")]
+    [InlineData("permissions")]
+    public async Task MaterialDriftWhileQueuedRequiresFreshApproval(string change)
+    {
+        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        queue.Enqueue(new("Other operation", PackageOperationService.PackageStoreGroupKey, BackgroundProcessIndicator.Packages,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup, true, context => release.Task.WaitAsync(context.CancellationToken)));
+        var client = new RegistryInstallationTestClient();
+        var approved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prompts = 0;
+        using var service = new RegistryPackageInstallService((_, _) => { prompts++; approved.SetResult(); return Task.FromResult(true); }, queue);
+        var result = service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client);
+        await approved.Task;
+        if (change == "version") client.PackageVersion = "2.0.0";
+        else if (change == "artifact") client.PackageHash = new('f', 64);
+        else client.Consents = [new("demo", "1.0.0", RuntimeManagementTestClient.Hash, ["new.permission"])];
+        release.SetResult();
+        Assert.Contains("Review the installation again", (await result).Message);
+        Assert.Equal(1, prompts);
+        Assert.Empty(client.Installs);
+        Assert.Null(client.InstallConfirmation);
     }
 
     [Fact]
-    public async Task UpdateConfirmationUsesResolvedPlanForPackageAndRuntimeBytes()
+    public async Task FreshHandlesTimestampsAndRuntimeCacheReuseDoNotAskForRoutineSecondConsent()
     {
-        var runtimeArtifact = RuntimeArtifact();
-        var plan = SuccessfulPlan(runtimeArtifact);
-        var runtime = new FakeRuntimeRegistryPackageClient
-        {
-            PlanResult = plan,
-            InstalledPackages = [ManagedInstalledPackage()],
-            PreviewResult = new RuntimeRegistryPackageChangeResult(
-                true,
-                RuntimeRegistryErrorCode.None,
-                "Preview.",
-                false,
-                false,
-                [],
-                [],
-                [],
-                plan.Items)
-            {
-                PlanExpectations =
-                [
-                    new RuntimeRegistryPackagePlanExpectation(
-                        "https://registry.example/",
-                        false,
-                        ResolutionFingerprint),
-                ],
-                RuntimeArtifacts = plan.RuntimeArtifacts,
-            },
-        };
-        RegistryPackageChangePreflight? prompted = null;
-        var service = new RegistryPackageInstallService((preflight, _) =>
-        {
-            prompted = preflight;
-            return Task.FromResult(true);
-        });
-
-        var result = await service.UpdatePackageAsync("demo", runtime);
-
-        Assert.True(result.Success);
-        Assert.Equal(12L * 1024L * 1024L, prompted!.PackageDownloadBytes);
-        Assert.Equal(50L * 1024L * 1024L, prompted.SharedRuntimeDownloadBytes);
-        Assert.Collection(
-            runtime.UpdateRequests,
-            request => Assert.True(request.DryRun),
-            request =>
-            {
-                Assert.False(request.DryRun);
-                var expectedPlan = Assert.Single(request.ExpectedPlans);
-                Assert.Equal("https://registry.example/", expectedPlan.RegistryOrigin);
-                Assert.False(expectedPlan.IncludePrerelease);
-                Assert.Equal(ResolutionFingerprint, expectedPlan.ExpectedResolutionFingerprint);
-            });
-        Assert.Empty(runtime.PlanRequests);
-    }
-
-    [Fact]
-    public async Task SourceAdoptionConfirmationUsesItsExactPreviewForDisplayConsentAndApplyFence()
-    {
-        var consent = Consent('a');
-        var plan = SuccessfulPlan(RuntimeArtifact()) with
-        {
-            RequiredCapabilityConsents = [consent],
-        };
-        var runtime = new FakeRuntimeRegistryPackageClient
-        {
-            PlanResult = plan,
-            AdoptionPreviewResult = AdoptionPreview(plan),
-        };
-        RegistryPackageChangePreflight? prompted = null;
-        var service = new RegistryPackageInstallService((preflight, _) =>
-        {
-            prompted = preflight;
-            return Task.FromResult(true);
-        });
-
-        var result = await service.AdoptPackageSourceAsync(
-            "demo",
-            new Uri("https://registry.example/"),
-            runtime);
-
+        var client = new RegistryInstallationTestClient { RuntimeReady = true };
+        var prompts = 0;
+        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        using var service = new RegistryPackageInstallService((_, _) => { prompts++; return Task.FromResult(true); }, queue);
+        var result = await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client);
         Assert.True(result.Success, result.Message);
-        Assert.NotNull(prompted);
-        Assert.Equal(12L * 1024L * 1024L, prompted.PackageDownloadBytes);
-        Assert.Equal(50L * 1024L * 1024L, prompted.SharedRuntimeDownloadBytes);
-        Assert.Equal([consent], prompted.Plan.RequiredCapabilityConsents);
-        var expectedPlan = Assert.Single(prompted.ExpectedPlans);
-        Assert.Equal("https://registry.example/", expectedPlan.RegistryOrigin);
-        Assert.Equal(ResolutionFingerprint, expectedPlan.ExpectedResolutionFingerprint);
-        Assert.Equal(ResolutionFingerprint, prompted.Plan.ResolutionFingerprint);
-        var displayedPlan = Assert.Single(new PackageCapabilityConsentViewModel(prompted).RegistryPlans);
-        Assert.Equal("https://registry.example/", displayedPlan.RegistryOrigin);
-        Assert.Equal("Stable versions only", displayedPlan.PrereleasePolicyText);
-        Assert.Equal(ResolutionFingerprint, displayedPlan.ResolutionFingerprint);
-        Assert.Empty(runtime.PlanRequests);
-        Assert.Collection(
-            runtime.AdoptionRequests,
-            request =>
+        Assert.Equal(1, prompts);
+        Assert.Null(client.InstallConfirmation);
+        Assert.True(client.PreviewCount > 1);
+        Assert.Single(client.Installs);
+        var job = Assert.Single(queue.ListProcesses());
+        Assert.Equal("package", job.Metadata["sunder.installationPhase"]);
+        Assert.Equal(BackgroundProcessState.Completed, job.State);
+    }
+
+    [Fact]
+    public async Task HealthyRuntimeBecomingUnavailableAfterApprovalCannotTriggerUnapprovedAcquisition()
+    {
+        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var client = new RegistryInstallationTestClient { RuntimeReady = true };
+        using var service = new RegistryPackageInstallService((_, _) =>
+        {
+            client.RuntimeReady = false;
+            return Task.FromResult(true);
+        }, queue);
+
+        var result = await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client);
+
+        Assert.False(result.Success);
+        Assert.Contains("runtime is not ready", result.Message);
+        Assert.Null(client.InstallConfirmation);
+        Assert.Empty(client.Installs);
+        Assert.Equal(BackgroundProcessState.Failed, Assert.Single(queue.ListProcesses()).State);
+    }
+
+    [Fact]
+    public async Task CacheOnlyRuntimePreviewCannotBeSilentlyUpgradedToRetainedInstallation()
+    {
+        using var queue = new BackgroundProcessQueueService();
+        var runtimes = RuntimeManagementTestClient.Prerequisites(false);
+        var client = new RegistryInstallationTestClient
+        {
+            TransformPreview = preview => preview with
             {
-                Assert.True(request.DryRun);
-                Assert.False(request.Confirm);
-                Assert.Null(request.ExpectedResolutionFingerprint);
+                RuntimePrerequisites = runtimes with
+                {
+                    Requirements = [runtimes.Requirements[0] with { Installation = RuntimeManagementTestClient.InstallPlan(retain: false) }],
+                },
             },
-            request =>
-            {
-                Assert.False(request.DryRun);
-                Assert.True(request.Confirm);
-                Assert.Equal("https://registry.example/", request.RegistryOrigin);
-                Assert.Equal("latest", request.Tag);
-                Assert.Equal(ResolutionFingerprint, request.ExpectedResolutionFingerprint);
-                Assert.Equal([consent], request.CapabilityConsents);
-            });
+        };
+        using var service = new RegistryPackageInstallService((_, _) => throw new InvalidOperationException("Must not ask for approval"), queue);
+
+        Assert.False((await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client)).Success);
+        Assert.Empty(queue.ListProcesses());
+        Assert.Empty(client.InstallPreviews);
+        Assert.Null(client.InstallConfirmation);
+        Assert.Empty(client.Installs);
+    }
+
+    [Fact]
+    public async Task StackBatchWaitsOutsideOneSlotQueueAndCommitsOneBackendTransaction()
+    {
+        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var client = new RegistryInstallationTestClient { PackageIds = ["demo", "other"] };
+        using var service = new RegistryPackageInstallService((_, _) => Task.FromResult(true), queue);
+        var result = await service.InstallPackagesAsync([new() { PackageId = "demo" }, new() { PackageId = "other" }],
+            new Registry(), client).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(2, Assert.Single(client.Batches).Packages.Count);
+        Assert.Empty(client.Installs);
+        var package = Assert.Single(queue.ListProcesses(), row => row.Metadata["sunder.installationPhase"] == "package");
+        Assert.Contains("other", package.Metadata["sunder.installationMembers"]);
+    }
+
+    [Fact]
+    public async Task UpdateAllUsesOneAtomicUpdateInsteadOfPerPackageCommits()
+    {
+        var client = new RegistryInstallationTestClient { PackageIds = ["demo", "other"] };
+        using var service = new RegistryPackageInstallService((_, _) => Task.FromResult(true));
+        Assert.True((await service.UpdateAllAsync(client)).Success);
+        var update = Assert.Single(client.Updates);
+        Assert.Null(update.PackageId);
+        Assert.NotNull(update.RuntimePrerequisiteExpectation);
+        Assert.NotEmpty(update.ExpectedPlans);
+        Assert.Empty(client.Batches);
+    }
+
+    [Fact]
+    public async Task AdoptionRetainsSourceAndFreshPlanExpectations()
+    {
+        var client = new RegistryInstallationTestClient();
+        using var service = new RegistryPackageInstallService((_, _) => Task.FromResult(true));
+        Assert.True((await service.AdoptPackageSourceAsync("demo", new(RuntimeManagementTestClient.Origin), client)).Success);
+        var request = Assert.Single(client.Adoptions);
+        Assert.True(request.Confirm);
+        Assert.Equal(RuntimeManagementTestClient.Origin, request.RegistryOrigin);
+        Assert.NotNull(request.RuntimePrerequisiteExpectation);
+        Assert.NotNull(request.ExpectedResolutionFingerprint);
+        Assert.Equal(client.Consents, request.CapabilityConsents);
+    }
+
+    [Fact]
+    public async Task ChangedVendorChecksumAtSameVersionCannotReuseConsent()
+    {
+        var client = new RegistryInstallationTestClient();
+        using var service = new RegistryPackageInstallService((_, _) =>
+        {
+            client.SelectedRuntime = client.SelectedRuntime with { VendorChecksumDigest = new('b', 128) };
+            return Task.FromResult(true);
+        });
+        var result = await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client);
+        Assert.False(result.Success);
+        Assert.Contains("Review the installation again", result.Message);
+        Assert.Null(client.InstallConfirmation);
+        Assert.Empty(client.Installs);
     }
 
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task SourceAdoptionRejectsInvalidFingerprintOrDifferentPreviewSourceBeforeConfirmation(
-        bool invalidFingerprint)
+    public async Task InvalidOrConflictingPackagePreviewCannotReachConfirmationOrQueue(bool invalidFingerprint)
     {
-        var plan = SuccessfulPlan(RuntimeArtifact());
-        var runtime = new FakeRuntimeRegistryPackageClient
+        using var queue = new BackgroundProcessQueueService();
+        var client = new RegistryInstallationTestClient
         {
-            PlanResult = plan,
-            AdoptionPreviewResult = AdoptionPreview(
-                plan,
-                invalidFingerprint ? "https://registry.example/" : "https://other.example/",
-                invalidFingerprint ? new string('A', 64) : ResolutionFingerprint),
+            TransformPreview = preview => invalidFingerprint
+                ? preview with { ResolutionFingerprint = "invalid" }
+                : preview with { Success = false, Errors = ["Package dependency conflict"] },
         };
-        var promptCalls = 0;
-        var service = new RegistryPackageInstallService((_, _) =>
-        {
-            promptCalls++;
-            return Task.FromResult(true);
-        });
-
-        var result = await service.AdoptPackageSourceAsync(
-            "demo",
-            new Uri("https://registry.example/"),
-            runtime);
-
-        Assert.False(result.Success);
-        Assert.Contains("selected Registry source", result.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(0, promptCalls);
-        Assert.Single(runtime.AdoptionRequests);
+        using var service = new RegistryPackageInstallService((_, _) => throw new InvalidOperationException("Must not ask for approval"), queue);
+        Assert.False((await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client)).Success);
+        Assert.Empty(queue.ListProcesses());
+        Assert.Empty(client.Installs);
+        Assert.Null(client.InstallConfirmation);
     }
 
-    [Fact]
-    public async Task SourceAdoptionPreservesTypedPreviewConflictsWithoutConfirmationOrApply()
+    private sealed class Registry : IRegistryClient
     {
-        var packageConflict = new RuntimeRegistryPackageInstallPlanConflict(
-            "demo",
-            "1.0.0",
-            ">=2.0.0",
-            "dependent",
-            Message: "The package requirement conflicts with the installed version.");
-        var runtimeConflict = new RuntimeRegistryExecutionRuntimeResolutionConflict(
-            ExecutionRuntimeResolutionConflictCodes.RidUnavailable,
-            "No execution runtime is available for this RID.",
-            new RuntimeRegistryExecutionRuntimeRequirement(
-                "sunder.runtime.dotnet",
-                ">=10.0.0 <11.0.0",
-                "sunder.dotnet-worker-module.v1"),
-            "osx-arm64",
-            "demo",
-            "runtime");
-        var plan = SuccessfulPlan(RuntimeArtifact());
-        var runtime = new FakeRuntimeRegistryPackageClient
-        {
-            PlanResult = plan,
-            AdoptionPreviewResult = new RuntimeRegistryPackageChangeResult(
-                false,
-                RuntimeRegistryErrorCode.Conflict,
-                packageConflict.Message,
-                false,
-                false,
-                [],
-                [packageConflict.Message, runtimeConflict.Message],
-                [],
-                plan.Items)
-            {
-                Conflicts = [packageConflict],
-                RuntimeArtifacts = plan.RuntimeArtifacts,
-                RuntimeConflicts = [runtimeConflict],
-            },
-        };
-        var promptCalls = 0;
-        var service = new RegistryPackageInstallService((_, _) =>
-        {
-            promptCalls++;
-            return Task.FromResult(true);
-        });
-
-        var result = await service.AdoptPackageSourceAsync(
-            "demo",
-            new Uri("https://registry.example/"),
-            runtime);
-
-        Assert.False(result.Success);
-        Assert.Equal(packageConflict, Assert.Single(result.Conflicts));
-        Assert.Equal(runtimeConflict, Assert.Single(result.RuntimeConflicts));
-        Assert.Contains(packageConflict.Message, result.Errors);
-        Assert.Contains(runtimeConflict.Message, result.Errors);
-        Assert.Equal(0, promptCalls);
-        Assert.Single(runtime.AdoptionRequests);
-    }
-
-    private static PackageCapabilityConsent Consent(char hashCharacter)
-        => new("demo", "1.2.3", new string(hashCharacter, 64), ["docker-environment.v1"]);
-
-    private static RuntimeRegistryResolveInstallPlanResponse SuccessfulPlan(PackageCapabilityConsent consent)
-        => new(
-            true,
-            [],
-            [],
-            [],
-            [],
-            [],
-            [consent],
-            ResolutionFingerprint: ResolutionFingerprint);
-
-    private static RuntimeRegistryResolveInstallPlanResponse SuccessfulPlan(
-        RuntimeRegistryResolvedExecutionRuntimeArtifact runtimeArtifact)
-        => new(
-            true,
-            [new RuntimeRegistryPackageInstallPlanItem(
-                "demo",
-                null,
-                "1.2.3",
-                new string('f', 64),
-                RegistryPackageActionKinds.PackageInstall,
-                null,
-                [],
-                [],
-                [new RuntimeRegistryPackageProjectionArtifact(
-                    "runtime",
-                    "osx-arm64",
-                    new string('e', 64),
-                    12L * 1024L * 1024L,
-                    "/package",
-                    new string('d', 64),
-                    new string('c', 64),
-                    new string('b', 64),
-                    1)])],
-            [],
-            [],
-            [],
-            [],
-            RuntimeArtifacts: [runtimeArtifact],
-            ResolutionFingerprint: ResolutionFingerprint);
-
-    private static RuntimeRegistryResolvedExecutionRuntimeArtifact RuntimeArtifact()
-        => new(
-            new RuntimeRegistryExecutionRuntimeIdentity(
-                "sunder.runtime.dotnet",
-                "10.0.1",
-                2,
-                "osx-arm64",
-                "sunder.dotnet-worker-module.v1"),
-            new string('1', 64),
-            new string('2', 64),
-            50L * 1024L * 1024L,
-            "release-key",
-            1,
-            new string('3', 64),
-            "native-key",
-            new RuntimeRegistryExecutionRuntimeLifecycle(
-                ExecutionRuntimeLifecycleStates.Supported,
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow,
-                null,
-                null,
-                null,
-                null,
-                null),
-            1,
-            "/runtime");
-
-    private static RuntimeRegistryPackageChangeResult AdoptionPreview(
-        RuntimeRegistryResolveInstallPlanResponse plan,
-        string registryOrigin = "https://registry.example/",
-        string? resolutionFingerprint = null)
-        => new RuntimeRegistryPackageChangeResult(
-            true,
-            RuntimeRegistryErrorCode.None,
-            "Previewed source adoption.",
-            false,
-            false,
-            plan.Warnings,
-            plan.Errors,
-            [],
-            plan.Items,
-            plan.RequiredCapabilityConsents)
-        {
-            PlanExpectations =
-            [
-                new RuntimeRegistryPackagePlanExpectation(
-                    registryOrigin,
-                    false,
-                    resolutionFingerprint ?? ResolutionFingerprint),
-            ],
-            RuntimeArtifacts = plan.RuntimeArtifacts,
-        };
-
-    private static InstalledExecutionRuntimeSummary InstalledRuntime(
-        RuntimeRegistryResolvedExecutionRuntimeArtifact artifact)
-        => new(
-            new RuntimeExecutionRuntimeIdentity(
-                artifact.Identity.RuntimeId,
-                artifact.Identity.Version,
-                artifact.Identity.PackagingRevision,
-                artifact.Identity.Rid,
-                artifact.Identity.ModuleAbi,
-                artifact.ManifestSha256,
-                artifact.ArtifactSha256),
-            RuntimeExecutionRuntimeStatuses.Ready,
-            artifact.ArtifactSize,
-            1,
-            RuntimeExecutionRuntimeAcquisitionSources.Registry,
-            artifact.SigningKeyId,
-            1,
-            new RuntimeExecutionRuntimeHealth(
-                RuntimeExecutionRuntimeStatuses.Ready,
-                DateTimeOffset.UtcNow,
-                false,
-                null),
-            new RuntimeExecutionRuntimeLifecycle(
-                ExecutionRuntimeLifecycleStates.Supported,
-                DateTimeOffset.UtcNow,
-                null,
-                null,
-                null,
-                null,
-                null,
-                1,
-                DateTimeOffset.UtcNow),
-            DateTimeOffset.UtcNow);
-
-    private static InstalledPackageDescriptor ManagedInstalledPackage()
-        => new(
-            "demo",
-            "Demo",
-            "1.0.0",
-            PackageHostRoles.Runtime,
-            null,
-            null,
-            true,
-            [],
-            DateTimeOffset.UtcNow,
-            null,
-            Provenance: new InstalledPackageProvenance(
-                InstalledPackageSourceKind.Registry,
-                InstalledPackageVersionPolicy.FollowTag,
-                "https://registry.example/",
-                "demo",
-                RequestedTag: "latest"));
-
-    private sealed class FakeRegistryClient : IRegistryClient
-    {
-        public Uri RegistryUrl { get; } = new("https://registry.example/");
-
-        public void Dispose() { }
-    }
-
-    private sealed class FakeRuntimeRegistryPackageClient :
-        IRuntimeRegistryPackageClient,
-        IRuntimeExecutionRuntimeClient,
-        IRuntimePackageStoreClient
-    {
-        public required RuntimeRegistryResolveInstallPlanResponse PlanResult { get; init; }
-
-        public List<RuntimeRegistryPackageBatchRequest> PlanRequests { get; } = [];
-
-        public List<RuntimeRegistryPackageRequest> InstallRequests { get; } = [];
-
-        public IReadOnlyList<InstalledExecutionRuntimeSummary> ExecutionRuntimes { get; init; } = [];
-
-        public IReadOnlyList<InstalledPackageDescriptor> InstalledPackages { get; init; } = [];
-
-        public RuntimeRegistryPackageChangeResult? PreviewResult { get; init; }
-
-        public RuntimeRegistryPackageChangeResult? InstallResult { get; init; }
-
-        public RuntimeRegistryPackageChangeResult? AdoptionPreviewResult { get; init; }
-
-        public RuntimeRegistryPackageChangeResult? AdoptionResult { get; init; }
-
-        public List<RuntimeRegistryUpdateRequest> UpdateRequests { get; } = [];
-
-        public List<RuntimeRegistrySourceAdoptionRequest> AdoptionRequests { get; } = [];
-
-        public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(
-            RuntimeRegistryPackageBatchRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            PlanRequests.Add(request);
-            return Task.FromResult(PlanResult);
-        }
-
-        public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(
-            RuntimeRegistryPackageRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            InstallRequests.Add(request);
-            return Task.FromResult(InstallResult ?? new RuntimeRegistryPackageChangeResult(
-                true,
-                RuntimeRegistryErrorCode.None,
-                "Installed.",
-                true,
-                false,
-                [],
-                [],
-                [request.PackageId],
-                []));
-        }
-
-        public Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(
-            RuntimeRegistryPackageBatchRequest request,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(
-            RuntimeRegistryUpdateRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            UpdateRequests.Add(request);
-            if (request.DryRun)
-            {
-                return Task.FromResult(PreviewResult ?? throw new NotSupportedException());
-            }
-            return Task.FromResult(new RuntimeRegistryPackageChangeResult(
-                true,
-                RuntimeRegistryErrorCode.None,
-                "Updated.",
-                true,
-                false,
-                [],
-                [],
-                ["demo"],
-                PlanResult.Items));
-        }
-
-        public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(
-            RuntimeRegistrySourceAdoptionRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            AdoptionRequests.Add(request);
-            if (request.DryRun)
-            {
-                return Task.FromResult(AdoptionPreviewResult ?? throw new NotSupportedException());
-            }
-            return Task.FromResult(AdoptionResult ?? new RuntimeRegistryPackageChangeResult(
-                true,
-                RuntimeRegistryErrorCode.None,
-                "Adopted.",
-                true,
-                false,
-                [],
-                [],
-                [request.PackageId],
-                []));
-        }
-
-        public Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(
-            RuntimeRegistryStarRequest request,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<InstalledExecutionRuntimeSummary>> GetExecutionRuntimesAsync(
-            CancellationToken cancellationToken = default)
-            => Task.FromResult(ExecutionRuntimes);
-
-        public Task<RuntimeExecutionRuntimeImpact> GetExecutionRuntimeImpactAsync(
-            RuntimeExecutionRuntimeIdentity identity,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<RuntimeExecutionRuntimeOperationResult> RepairExecutionRuntimeAsync(
-            RuntimeExecutionRuntimeIdentity identity,
-            RuntimeExecutionRuntimeImpact impact,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(
-            CancellationToken cancellationToken = default)
-            => Task.FromResult(InstalledPackages);
-
-        public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(
-            string packageId,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageStoreStageResult> StagePackageStoreChangesAsync(
-            PackageStoreStageRequest request,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> CommitPackageStoreStageAsync(
-            string stageId,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<RuntimePackageStageStatus> GetPackageStoreStageStatusAsync(
-            string stageId,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task DiscardPackageStoreStageAsync(
-            string stageId,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
+        public Uri RegistryUrl => new(RuntimeManagementTestClient.Origin);
         public void Dispose() { }
     }
 }

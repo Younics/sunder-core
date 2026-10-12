@@ -17,11 +17,14 @@ internal static class PackageContractValidator
             return;
         }
         PackageRpcImportValidator.Validate(manifest, errors);
+        var descriptors = new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal);
         var localContracts = ValidateBundles(
             manifest.ContractBundles,
             physicalFiles,
             errors,
-            validateDescriptorPayload);
+            validateDescriptorPayload,
+            descriptors);
+        if (validateDescriptorPayload) ValidateModelProjection(manifest, physicalFiles, descriptors, errors);
         var targetRoles = (manifest.Targets ?? [])
             .Take(SunderPackageFormat.MaxTargets)
             .Where(static target => target is not null && SunderPackageTargetKey.TryCreate(target.Role, target.Rid, out _))
@@ -42,7 +45,8 @@ internal static class PackageContractValidator
         IReadOnlyList<SunderPackageContractBundleManifest?>? bundles,
         IReadOnlyDictionary<string, string> physicalFiles,
         ICollection<string> errors,
-        bool validateDescriptorPayload)
+        bool validateDescriptorPayload,
+        IDictionary<string, SunderRpcContractDescriptor> descriptors)
     {
         if (bundles is { Count: > SunderPackageFormat.MaxContractBundles })
         {
@@ -103,7 +107,7 @@ internal static class PackageContractValidator
 
                 if (validateDescriptorPayload)
                 {
-                    applicableActions = ValidateDescriptor(bundle, logical, physicalFiles, errors);
+                    applicableActions = ValidateDescriptor(bundle, logical, physicalFiles, errors, descriptors);
                 }
             }
 
@@ -136,7 +140,8 @@ internal static class PackageContractValidator
         SunderPackageContractBundleManifest bundle,
         string logicalPath,
         IReadOnlyDictionary<string, string> physicalFiles,
-        ICollection<string> errors)
+        ICollection<string> errors,
+        IDictionary<string, SunderRpcContractDescriptor> descriptors)
     {
         var physicalPath = SunderPackageFormat.SharedPayloadRoot + logicalPath;
         if (!physicalFiles.TryGetValue(physicalPath, out var filePath))
@@ -163,6 +168,8 @@ internal static class PackageContractValidator
                 return null;
             }
             descriptor = SunderRpcContractDescriptor.Parse(bytes);
+            if (!descriptors.TryAdd(descriptor.ContractId, descriptor))
+                errors.Add($"Contract '{descriptor.ContractId}' must have exactly one descriptor/version in an artifact.");
         }
         catch (Exception exception) when (exception is SunderRpcDescriptorException
                                                or IOException
@@ -202,6 +209,30 @@ internal static class PackageContractValidator
             actions.Add(SunderPackageFormat.SubscribeContractAction);
         }
         return actions;
+    }
+
+    private static void ValidateModelProjection(SunderPackageManifest manifest,
+        IReadOnlyDictionary<string, string> physicalFiles,
+        IReadOnlyDictionary<string, SunderRpcContractDescriptor> descriptors, ICollection<string> errors)
+    {
+        if (!physicalFiles.TryGetValue(SunderPackageFormat.RpcModelProjectionPath, out var path))
+        {
+            errors.Add($"Package is missing required public model projection sidecar '{SunderPackageFormat.RpcModelProjectionPath}'.");
+            return;
+        }
+        try
+        {
+            using var stream = File.OpenRead(path);
+            if (stream.Length is <= 0 or > SunderPackageFormat.MaxRpcModelProjectionBytes)
+                throw new InvalidDataException("Model projection sidecar must be nonempty and at most 4 MiB.");
+            var bytes = new byte[(int)stream.Length]; stream.ReadExactly(bytes);
+            if (stream.ReadByte() != -1) throw new IOException("Model projection sidecar changed size during validation.");
+            SunderRpcModelProjectionDocument.Parse(bytes).Validate(manifest, descriptors);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            errors.Add($"Package model projection sidecar is invalid: {exception.Message}");
+        }
     }
 
     private static void ValidateUses(

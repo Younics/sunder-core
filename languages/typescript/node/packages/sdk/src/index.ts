@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./worker-types";
 export * from "./resource-profile";
 export {
   FrameDecoder,
@@ -9,8 +10,14 @@ export {
 } from "./framing";
 export type { FrameLimits } from "./framing";
 export * from "./worker";
-export { rpc } from "./authoring";
-export type { RpcSchema, RpcSchemaValue, RpcContract, RpcHandlers, RpcProvider, RpcImportedProvider } from "./authoring";
+export * from "./services";
+export * from "./api";
+export {SunderContent} from "./content";
+export type {SunderContentOptions,SunderContentStreamOptions} from "./content";
+export {contentFromFile} from "./content-node";
+export * from "./service-reference";
+export {ServiceBindingLifetime} from "./service-bindings";
+export * from "./resources";
 export * from "./storage";
 export * from "./generator";
 export * from "./timestamp";

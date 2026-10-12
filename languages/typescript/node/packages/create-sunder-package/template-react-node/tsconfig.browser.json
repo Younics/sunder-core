@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
     "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "Bundler",
@@ -12,5 +14,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["app/**/*.ts", "app/**/*.tsx"]
+  "include": ["app/**/*.ts", "app/**/*.tsx", "app/**/*.js", "app/**/*.jsx"]
 }

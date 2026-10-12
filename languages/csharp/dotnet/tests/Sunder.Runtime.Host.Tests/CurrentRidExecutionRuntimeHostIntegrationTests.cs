@@ -15,8 +15,8 @@ namespace Sunder.Runtime.Host.Tests;
 
 [Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class CurrentRidDotNetRuntimeHostIntegrationTests(
-    SignedCurrentRidExecutionRuntimeFixture executionRuntimes)
-    : IClassFixture<SignedCurrentRidExecutionRuntimeFixture>
+    OfficialRuntimeFixture executionRuntimes)
+    : IClassFixture<OfficialRuntimeFixture>
 {
     private const string ProviderPackageId = "test.worker.interop";
     private const string CallerPackageId = "sunder.interop.dotnet.self.caller";
@@ -24,11 +24,11 @@ public sealed class CurrentRidDotNetRuntimeHostIntegrationTests(
 
     [Fact]
     [Trait("Category", "CurrentRidExecutionRuntime")]
-    public async Task SignedCurrentRidDotNetRuntime_LaunchesThinWorkerAndRevisionOnlyRebindIsAtomic()
+    public async Task OfficialCurrentRidDotNetRuntime_LaunchesThinWorkerAndRebindIsAtomic()
     {
-        var runtimeVersion = CurrentRidRuntimeHostTestSupport.GetCurrentDotNetVersion();
-        var firstReceipt = await executionRuntimes.EnsureDotNetAsync(runtimeVersion, packagingRevision: 1);
-        var firstPolicy = await executionRuntimes.ObserveSupportedAsync(firstReceipt);
+        const string firstRuntimeVersion = "10.0.11";
+        const string secondRuntimeVersion = "10.0.12";
+        var firstReceipt = await executionRuntimes.EnsureDotNetAsync(firstRuntimeVersion);
         var root = CurrentRidRuntimeHostTestSupport.CreateRoot("dotnet");
         var paths = new RuntimePackagePaths(Path.Combine(root, "runtime-host"));
         var installedStore = new InstalledPackageStore(paths);
@@ -57,7 +57,7 @@ public sealed class CurrentRidDotNetRuntimeHostIntegrationTests(
             Assert.True(install.Success, string.Join(Environment.NewLine, install.Errors));
             var installed = Assert.Single(await installedStore.ListAsync());
             var firstBinding = Assert.Single(installed.ExecutionRuntimeBindings);
-            CurrentRidRuntimeHostTestSupport.AssertBindingMatches(firstBinding, firstReceipt, firstPolicy);
+            CurrentRidRuntimeHostTestSupport.AssertBindingMatches(firstBinding, firstReceipt);
             CurrentRidRuntimeHostTestSupport.AssertPackageContainsNoRuntime(installed.InstallPath);
             CurrentRidRuntimeHostTestSupport.AssertRuntimeLaunch(
                 host.ActiveSession.LoadedPackageMap[ProviderPackageId],
@@ -97,9 +97,8 @@ public sealed class CurrentRidDotNetRuntimeHostIntegrationTests(
             var oldProcessIds = CurrentRidRuntimeHostTestSupport.GetActiveProcessIds(host);
             Assert.True(await host.DeletePackageStateAsync(CallerPackageId, CallerStateKey));
 
-            var secondReceipt = await executionRuntimes.EnsureDotNetAsync(runtimeVersion, packagingRevision: 2);
-            var secondPolicy = await executionRuntimes.ObserveSupportedAsync(secondReceipt);
-            var desiredBinding = SignedCurrentRidExecutionRuntimeFixture.CreateBinding(secondReceipt, secondPolicy);
+            var secondReceipt = await executionRuntimes.EnsureDotNetAsync(secondRuntimeVersion);
+            var desiredBinding = OfficialRuntimeFixture.CreateBinding(secondReceipt);
             var successfulStage = await host.StageExecutionRuntimeRebindAsync(installed, [desiredBinding]);
             Assert.True(successfulStage.Success, string.Join(Environment.NewLine, successfulStage.Errors));
             Assert.Equal(transferTree, CurrentRidRuntimeHostTestSupport.CaptureFileTreeIfExists(paths.TransferRootPath));
@@ -138,23 +137,20 @@ public sealed class CurrentRidDotNetRuntimeHostIntegrationTests(
 
             var activeAfterSuccessfulRebind = host.ActiveSession;
             var activeProcessIds = CurrentRidRuntimeHostTestSupport.GetActiveProcessIds(host);
-            var failedReceipt = await executionRuntimes.EnsureFailingDotNetAsync(
-                runtimeVersion,
-                packagingRevision: 3);
-            var failedPolicy = await executionRuntimes.ObserveSupportedAsync(failedReceipt);
-            var failedBinding = SignedCurrentRidExecutionRuntimeFixture.CreateBinding(failedReceipt, failedPolicy);
-            var failedStage = await host.StageExecutionRuntimeRebindAsync(rebound, [failedBinding]);
-            Assert.True(failedStage.Success, string.Join(Environment.NewLine, failedStage.Errors));
-            var failedCandidate = host.GetStagedStoreSession(failedStage.StageId!);
-            Assert.NotNull(failedCandidate);
-            var failedCandidateTemporaryPaths = failedCandidate!.LoadedPackageMap.Values
-                .Select(static package => Assert.IsType<ProcessRuntimeWorker>(package.Worker).WorkerTemporaryPath)
-                .ToArray();
-
-            var failedCommit = await host.CommitRegistryPackageStoreStageAsync(
-                failedStage.StageId!,
-                static (_, _) => Task.CompletedTask);
-            Assert.False(failedCommit.Success);
+            var failedBinding = OfficialRuntimeFixture.CreateBinding(firstReceipt);
+            var entryPointPath = CurrentRidRuntimeHostTestSupport.GetInstalledRuntimeEntryPointPath(rebound);
+            var originalEntryPointBytes = await File.ReadAllBytesAsync(entryPointPath);
+            try
+            {
+                await File.WriteAllTextAsync(entryPointPath, "not a managed assembly");
+                var failedStage = await host.StageExecutionRuntimeRebindAsync(rebound, [failedBinding]);
+                Assert.False(failedStage.Success);
+                Assert.Null(failedStage.StageId);
+            }
+            finally
+            {
+                await File.WriteAllBytesAsync(entryPointPath, originalEntryPointBytes);
+            }
             Assert.Same(activeAfterSuccessfulRebind, host.ActiveSession);
             Assert.Equal(activeProcessIds, CurrentRidRuntimeHostTestSupport.GetActiveProcessIds(host));
             Assert.All(activeProcessIds, static processId => Assert.True(
@@ -168,7 +164,6 @@ public sealed class CurrentRidDotNetRuntimeHostIntegrationTests(
             Assert.Equal(
                 "preserve-me",
                 (await host.GetPackageStateAsync(ProviderPackageId, "rebind.preserved"))?.Value);
-            await CurrentRidRuntimeHostTestSupport.AssertDirectoriesRemovedAsync(failedCandidateTemporaryPaths);
 
             await host.ShutdownAsync();
             initialized = false;
@@ -192,24 +187,17 @@ public sealed class CurrentRidDotNetRuntimeHostIntegrationTests(
 
 [Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class CurrentRidNodeRuntimeHostIntegrationTests(
-    SignedCurrentRidExecutionRuntimeFixture executionRuntimes)
-    : IClassFixture<SignedCurrentRidExecutionRuntimeFixture>
+    OfficialRuntimeFixture executionRuntimes)
+    : IClassFixture<OfficialRuntimeFixture>
 {
     [Node24Fact]
     [Trait("Category", "CurrentRidExecutionRuntime")]
-    public async Task SignedCurrentRidNode24Runtime_LaunchesThinWorkerAndRoutesCrossLanguageRpc()
+    public async Task OfficialCurrentRidNode24Runtime_LaunchesThinWorkerAndRoutesCrossLanguageRpc()
     {
         var node = Node24Availability.Current;
         Assert.True(node.IsAvailable, node.UnavailableReason);
-        var nodeReceipt = await executionRuntimes.EnsureNodeAsync(
-            node.Version!,
-            packagingRevision: 1,
-            node.ExecutablePath!);
-        await executionRuntimes.ObserveSupportedAsync(nodeReceipt);
-        var dotnetReceipt = await executionRuntimes.EnsureDotNetAsync(
-            CurrentRidRuntimeHostTestSupport.GetCurrentDotNetVersion(),
-            packagingRevision: 1);
-        await executionRuntimes.ObserveSupportedAsync(dotnetReceipt);
+        var nodeReceipt = await executionRuntimes.EnsureNodeAsync("24.21.0");
+        var dotnetReceipt = await executionRuntimes.EnsureDotNetAsync("10.0.12");
         var root = CurrentRidRuntimeHostTestSupport.CreateRoot("node24");
         var paths = new RuntimePackagePaths(Path.Combine(root, "runtime-host"));
         var installedStore = new InstalledPackageStore(paths);
@@ -230,12 +218,10 @@ public sealed class CurrentRidNodeRuntimeHostIntegrationTests(
                 nodePackage,
                 Path.Combine(root, "node-provider"),
                 "sunder.node.runtimebacked");
-            var nodeCaller = CurrentRidRuntimeHostTestSupport.CreatePackageVariant(
+            var nodeCaller = await CurrentRidRuntimeHostTestSupport.CreateNodeCallerAsync(
+                node,
                 nodePackage,
-                Path.Combine(root, "node-caller"),
-                "sunder.interop.node.caller",
-                includeProviders: false,
-                consumePublicContracts: true);
+                Path.Combine(root, "node-caller"));
             var dotnetProvider = CurrentRidRuntimeHostTestSupport.CreatePackageVariant(
                 CurrentRidRuntimeHostTestSupport.GetInteropWorkerDevPackage(),
                 Path.Combine(root, "dotnet-provider"),
@@ -286,7 +272,9 @@ public sealed class CurrentRidNodeRuntimeHostIntegrationTests(
             load = await host.LoadStartupDevPackagesAsync([dotnetProvider, nodeCaller]);
             Assert.True(
                 load.Success,
-                string.Join(Environment.NewLine, load.Errors) + Environment.NewLine + CurrentRidRuntimeHostTestSupport.FormatLogs(logs));
+                string.Join(Environment.NewLine, load.Errors) + Environment.NewLine + CurrentRidRuntimeHostTestSupport.FormatLogs(logs)
+                + Environment.NewLine + (File.Exists(Path.Combine(root, "node-caller-error.log"))
+                    ? await File.ReadAllTextAsync(Path.Combine(root, "node-caller-error.log")) : string.Empty));
             Assert.Equal(2, host.ActiveSession.LoadedPackageMap.Count);
             CurrentRidRuntimeHostTestSupport.AssertRuntimeLaunch(
                 host.ActiveSession.LoadedPackageMap["sunder.interop.node.caller"],
@@ -325,7 +313,7 @@ internal static class CurrentRidRuntimeHostTestSupport
         RuntimePackagePaths paths,
         InstalledPackageStore installedStore,
         RuntimeContentTransferStore transfers,
-        SignedCurrentRidExecutionRuntimeFixture executionRuntimes,
+        OfficialRuntimeFixture executionRuntimes,
         ILogger<RuntimePackageSessionTestHost>? logger = null)
         => new(
             logger ?? NullLogger<RuntimePackageSessionTestHost>.Instance,
@@ -339,7 +327,6 @@ internal static class CurrentRidRuntimeHostTestSupport
             },
             executionRuntimeLaunchResolver: executionRuntimes.LaunchResolver,
             localExecutionRuntimeBindingResolver: executionRuntimes.LocalBindingResolver,
-            executionRuntimeLifecyclePolicies: executionRuntimes.LifecyclePolicies,
              processPolicy: new RuntimeProcessPolicyOptions
              {
                  StartupTimeout = TimeSpan.FromSeconds(30),
@@ -450,6 +437,42 @@ internal static class CurrentRidRuntimeHostTestSupport
         File.WriteAllText(
             manifestPath,
             manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        // This low-level activation probe changes only the fixture package identity.
+        // Retain every source-generated contract projection; missing producer output fails.
+        var projectionPath = Path.Combine(destinationRoot, SunderPackageFormat.RpcModelProjectionPath);
+        var projection = SunderRpcModelProjectionDocument.Parse(File.ReadAllBytes(projectionPath));
+        Assert.Equal(originalId, projection.PackageId);
+        File.WriteAllBytes(projectionPath, new SunderRpcModelProjectionDocument(
+            projection.SchemaVersion, packageId, projection.PackageVersion, projection.Contracts).ToCanonicalUtf8());
+        CanonicalPackageTestBuilder.WriteContentIndex(destinationRoot);
+        return destinationRoot;
+    }
+
+    public static async Task<string> CreateNodeCallerAsync(Node24Probe node, string sourceRoot, string destinationRoot)
+    {
+        CreatePackageVariant(sourceRoot, destinationRoot, "sunder.interop.node.caller", includeProviders: false, consumePublicContracts: true);
+        var nodeRoot = Path.Combine(WorkerReleaseMetrics.FindRepositoryRoot(), "languages", "typescript", "node");
+        var sdk = Path.Combine(nodeRoot, "packages", "sdk", "dist", "index.js");
+        var configure = Path.Combine(nodeRoot, "fixtures", "runtime-backed-worker", "src", "worker.ts");
+        var entry = Path.Combine(Path.GetDirectoryName(destinationRoot)!, "node-caller-entry.mjs");
+        var errorLog = Path.Combine(Path.GetDirectoryName(destinationRoot)!, "node-caller-error.log");
+        var output = Path.Combine(destinationRoot, "payload", "runtime", "shared", "bin", "worker.cjs");
+        Assert.True(File.Exists(output), "The runtime-backed fixture's shared module layout changed.");
+        // The generated provider entry binds Self to its authored package id. Rebranding that
+        // binary as a caller must fail. This independently permissioned low-level RPC probe
+        // uses its own Worker entry, without a provider's generated Self token or registration.
+        await File.WriteAllTextAsync(entry, $$"""
+            import { runWorker } from {{JsonSerializer.Serialize(sdk)}};
+            import { configure } from {{JsonSerializer.Serialize(configure)}};
+            import { writeFile } from "node:fs/promises";
+            void runWorker(context => ({ ...configure(context), providers: [] })).catch(async error => {
+              await writeFile({{JsonSerializer.Serialize(errorLog)}}, String(error?.stack ?? error).slice(0, 16384));
+              process.exitCode = 70;
+            });
+            """);
+        await RunCheckedAsync(node.ExecutablePath!,
+            ["--input-type=module", "-e", "import { build } from 'esbuild'; await build({ entryPoints: [process.argv[1]], outfile: process.argv[2], bundle: true, platform: 'node', format: 'cjs', target: 'node24' });", entry, output],
+            nodeRoot, TimeSpan.FromMinutes(1));
         CanonicalPackageTestBuilder.WriteContentIndex(destinationRoot);
         return destinationRoot;
     }
@@ -470,20 +493,37 @@ internal static class CurrentRidRuntimeHostTestSupport
 
     public static void AssertBindingMatches(
         InstalledPackageExecutionRuntimeBindingRecord actual,
-        ExecutionRuntimeReceiptV1 receipt,
-        ExecutionRuntimeLifecyclePolicyEntryV1 policy)
+        ExecutionRuntimeReceiptV1 receipt)
     {
-        var expected = SignedCurrentRidExecutionRuntimeFixture.CreateBinding(receipt, policy) with
+        var expected = OfficialRuntimeFixture.CreateBinding(receipt) with
         {
             ResolvedAtUtc = actual.ResolvedAtUtc,
         };
         Assert.Equal(expected, actual);
     }
 
+    public static string GetInstalledRuntimeEntryPointPath(InstalledPackageRecord package)
+    {
+        var manifest = JsonNode.Parse(File.ReadAllText(package.ManifestPath))?.AsObject()
+                       ?? throw new InvalidDataException("Installed package manifest was empty.");
+        var targets = manifest["targets"]?.AsArray()
+                      ?? throw new InvalidDataException("Installed package manifest has no targets.");
+        var target = targets
+            .OfType<JsonObject>()
+            .Single(item => item["role"]?.GetValue<string>() == SunderPackageFormat.RuntimeHostRole
+                && item["rid"]?.GetValue<string>() == PackageTargetSelection.GetCurrentRuntimeIdentifier());
+        var entryPoint = target["entryPoint"]?.GetValue<string>()
+                         ?? throw new InvalidDataException("Installed runtime target has no entry point.");
+        var path = Path.Combine([package.InstallPath, "payload", SunderPackageFormat.RuntimeHostRole,
+            PackageTargetSelection.GetCurrentRuntimeIdentifier(), .. entryPoint.Split('/')]);
+        Assert.True(File.Exists(path), $"Installed runtime entry point does not exist: {path}");
+        return path;
+    }
+
     public static void AssertRuntimeLaunch(
         ActiveLoadedPackage package,
         ExecutionRuntimeReceiptV1 receipt,
-        SignedCurrentRidExecutionRuntimeFixture executionRuntimes)
+        OfficialRuntimeFixture executionRuntimes)
     {
         Assert.Equal(receipt.Identity, package.ExecutionRuntimeBinding?.Identity);
         var worker = Assert.IsType<ProcessRuntimeWorker>(package.Worker);
@@ -498,7 +538,7 @@ internal static class CurrentRidRuntimeHostTestSupport
             Path.GetFullPath(executablePath!).StartsWith(
                 Path.GetFullPath(executionRuntimes.GetRuntimeRoot(receipt)) + Path.DirectorySeparatorChar,
                 StringComparison.Ordinal),
-            "Worker process did not launch from the signed execution-runtime store.");
+            "Worker process did not launch from the official execution-runtime store.");
         Assert.False(
             Path.GetFullPath(executablePath!).StartsWith(
                 Path.GetFullPath(package.Source.SourceFolder) + Path.DirectorySeparatorChar,

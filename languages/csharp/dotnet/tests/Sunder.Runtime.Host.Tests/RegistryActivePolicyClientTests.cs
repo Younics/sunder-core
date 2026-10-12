@@ -13,8 +13,6 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class RegistryActivePolicyClientTests
 {
     private static RegistryPackageVersionIdentity Package => ActivePolicyTestContext.Package;
-    private static RegistryRuntimePolicySubject Runtime => ActivePolicyTestContext.Runtime;
-
     [Fact]
     public async Task Request_IsAnonymousNoStoreFreshNonceAndCanonicalTupleOrder()
     {
@@ -52,7 +50,6 @@ public sealed class RegistryActivePolicyClientTests
     [InlineData("hash")]
     [InlineData("platform-omission")]
     [InlineData("package-contradiction")]
-    [InlineData("runtime-contradiction")]
     [InlineData("platform-contradiction")]
     public async Task RejectsIncompleteOrContradictoryResponses(string mutation)
     {
@@ -68,16 +65,15 @@ public sealed class RegistryActivePolicyClientTests
                 "timezone" => response with { ObservedAtUtc = response.ObservedAtUtc.ToOffset(TimeSpan.FromHours(1)) },
                 "missing" => response with { Packages = [] },
                 "extra" => response with { Packages = [.. response.Packages, response.Packages[0] with { Package = Package with { Version = "2.0.0" } }] },
-                "revision" => response with { RuntimePolicyRevision = 0 },
+                "revision" => response with { PackagePolicy = response.PackagePolicy with { Revision = 0 } },
                 "hash" => response with { Checkpoint = response.Checkpoint with { Digest = "bad" } },
                 "platform-omission" => response with { PlatformCatalogs = [] },
                 "package-contradiction" => response with { Packages = [response.Packages[0] with { VersionAvailability = "SecurityBlocked" }] },
-                "runtime-contradiction" => response with { Runtimes = [response.Runtimes[0] with { LifecycleState = "revoked" }] },
                 "platform-contradiction" => response with { PlatformCatalogs = [response.PlatformCatalogs[0] with { LifecycleState = "Revoked" }] },
                 _ => throw new InvalidOperationException(),
             };
         };
-        await Assert.ThrowsAsync<InvalidDataException>(() => context.FetchAsync(platforms: [Platform], runtimes: [Runtime]));
+        await Assert.ThrowsAsync<InvalidDataException>(() => context.FetchAsync(platforms: [Platform]));
         Assert.False(File.Exists(context.Cache.FilePath(Origin)));
     }
 
@@ -100,7 +96,7 @@ public sealed class RegistryActivePolicyClientTests
                 case "unknown": json["unexpected"] = true; break;
                 case "missing": json.Remove("platformCatalogs"); break;
                 case "null": json["packagePolicy"] = null; break;
-                case "number": json["runtimePolicyRevision"] = "1"; break;
+                case "number": json["packagePolicy"] = "1"; break;
                 case "case": json["Nonce"] = json["nonce"]!.DeepClone(); json.Remove("nonce"); break;
             }
             var bytes = json.ToJsonString();

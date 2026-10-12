@@ -6,7 +6,8 @@ import { resolve } from "node:path";
 import { FrameDecoder, encodeFrame, formatUtcTimestamp, type JsonValue } from "@sunder/sdk";
 import { currentRid } from "../src/model";
 
-export async function exerciseOwnedWorker(root: string, dev = false, contractVersion = "1.0.0", scaffold?: { readonly packageName: string; readonly app: boolean }): Promise<void> {
+export async function exerciseOwnedWorker(root: string, dev = false, contractVersion = "1.0.0", scaffold?: { readonly packageName: string; readonly app: boolean }, runtimeModule?: string,
+  consumer?: (invokeUnary: (method: string, request: JsonValue) => Promise<JsonValue>) => Promise<void>): Promise<void> {
   const target = resolve(root, "dist", ...(dev ? ["sunder-dev"] : ["targets", currentRid()]));
   const manifest = JSON.parse(await readFile(resolve(target, "manifest/sunder-package.json"), "utf8"));
   const providers = manifest.provides.map(({ role: _role, audience: _audience, ...identity }: Record<string, JsonValue>) => identity);
@@ -20,7 +21,7 @@ export async function exerciseOwnedWorker(root: string, dev = false, contractVer
   const temporary = resolve(root, "worker-temp");
   const workspace = resolve(root, "workspace");
   await mkdir(temporary, { recursive: true }); await mkdir(workspace, { recursive: true });
-  const child = spawn(process.execPath, [resolve(target, "payload/runtime", dev ? "shared" : currentRid(), "bin/worker.cjs")], {
+  const child = spawn(process.execPath, [runtimeModule ?? resolve(target, "payload/runtime", dev ? "shared" : currentRid(), "bin/worker.cjs")], {
     env: { SUNDER_WORKER_PROTOCOL: "sunder.worker.v1", SUNDER_PACKAGE_ID: manifest.id, SUNDER_PACKAGE_VERSION: manifest.version,
       SUNDER_ACTIVATION_ID: identity.activationId, SUNDER_SESSION_ID: identity.sessionId, SUNDER_PACKAGE_CONTENT_ROOT: target, SUNDER_WORKER_TEMP_ROOT: temporary },
     stdio: "pipe",
@@ -60,9 +61,9 @@ export async function exerciseOwnedWorker(root: string, dev = false, contractVer
     send({ type: "host.activate", sessionGeneration: 1, workspaceRootPath: workspace }); assert.equal((await next()).type, "worker.activated");
     if (scaffold) {
       invoke("send", "send", { message: "packed scaffold" });
-      assert.deepEqual(await next(), { type: "worker.result", id: "send", value: { message: `Hello from ${scaffold.packageName}: packed scaffold` } });
+      assert.deepEqual(await next(), { type: "worker.result", id: "send", value: `Hello from ${scaffold.packageName}: packed scaffold` });
       invoke("stream", "watch", { message: "packed scaffold" }, "server-stream");
-      assert.deepEqual(await next(), { type: "worker.event", id: "stream", value: { message: "Watching packed scaffold" } });
+      assert.deepEqual(await next(), { type: "worker.event", id: "stream", value: "Watching packed scaffold" });
       assert.deepEqual(await next(), { type: "worker.complete", id: "stream" });
       const invalidRequests: JsonValue[] = [{ message: 42 }, { message: "" }, { message: "valid", extra: true }, {}];
       for (const [index, request] of invalidRequests.entries()) {
@@ -98,6 +99,14 @@ export async function exerciseOwnedWorker(root: string, dev = false, contractVer
     const fault = await next(); assert.equal(fault.type, "worker.error"); assert.doesNotMatch(JSON.stringify(fault.error), /Private implementation failure/);
     invoke("profile", "oversized", value);
     const exhausted = await next(); assert.equal(exhausted.type, "worker.error"); assert.equal((exhausted.error as Record<string, JsonValue>).kind, "resource-exhausted");
+    }
+    if (consumer) {
+      let call = 0;
+      await consumer(async (method, request) => {
+        const id = `consumer-${++call}`; invoke(id, method, request);
+        const result = await next(); assert.equal(result.type, "worker.result", JSON.stringify(result)); assert.equal(result.id, id);
+        return result.value!;
+      });
     }
     send({ type: "host.shutdown", shutdownId: "done", reason: "test" }); assert.equal((await next()).type, "worker.shutdown-ack");
   } finally { child.kill("SIGKILL"); }

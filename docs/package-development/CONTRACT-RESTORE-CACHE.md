@@ -17,9 +17,11 @@ PATH. Platform hydration accepts exact canonical catalog content without catalog
 signing keys or trust bundles. Local selections omit `registryOrigin` and never
 infer a default Registry. Explicit Development-Registry transport is described below.
 Present null or malformed origins remain invalid; absence alone denotes local selection.
-Loading an unpublished package with imports also requires explicit
-[Runtime development import preparation](DEVELOPMENT-IMPORTS.md) after building its
-canonical development folder. Descriptor cache integrity alone is not Host import authority.
+Loading an unpublished package with imports also requires
+[Runtime development import evidence](DEVELOPMENT-IMPORTS.md). Current C# local builds
+emit the reviewed selection's manifest-bound handoff beside `sunder-dev`; other outputs
+and Registry imports use explicit preparation. Descriptor cache integrity alone is not
+Host import authority.
 Node V3 source generation consumes restored package-consumer
 and provider imports offline. Provider-only intent materializes its selected descriptor
 without generating consumer uses.

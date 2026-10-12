@@ -1,0 +1,39 @@
+{
+  "requirement": {
+    "runtimeId": "sunder.runtime.node",
+    "versionRange": "\u003E=24.18.1 \u003C25.0.0",
+    "moduleAbi": "sunder.node-worker-module.v1"
+  },
+  "artifact": {
+    "identity": {
+      "sourceId": "node",
+      "runtimeId": "sunder.runtime.node",
+      "vendorVersion": "24.18.1",
+      "rid": "linux-arm64",
+      "moduleAbi": "sunder.node-worker-module.v1",
+      "vendorChecksumAlgorithm": "sha256",
+      "vendorChecksumDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "distribution": {
+      "downloadUrl": "https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-arm64.tar.gz",
+      "metadataUrl": "https://nodejs.org/dist/index.json",
+      "metadataSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "checksumUrl": "https://nodejs.org/dist/v24.18.1/SHASUMS256.txt",
+      "checksumDocumentSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "archiveFormat": "tar.gz",
+      "materializationProfile": "node-runtime.v1",
+      "downloadSize": null
+    },
+    "support": {
+      "state": "Supported",
+      "supportLine": "24",
+      "observedAtUtc": "2026-10-08T10:00:00+00:00",
+      "endOfLifeAtUtc": null,
+      "message": null
+    }
+  },
+  "resolutionFingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "expiresAtUtc": "2026-10-08T10:05:00+00:00",
+  "alreadyInstalled": false,
+  "downloadSize": null
+}

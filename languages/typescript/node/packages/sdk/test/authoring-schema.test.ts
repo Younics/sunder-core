@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, dirname, relative, resolve } from "node:path";
 import test from "node:test";
+import { isDeepStrictEqual } from "node:util";
 import Ajv2020 from "ajv/dist/2020";
 import type { ValidateFunction } from "ajv";
 import {
@@ -44,6 +45,9 @@ interface DescriptorContextExpectation {
 
 interface ImmutableArtifactEvidence {
   readonly inventoryFixturePath: string;
+  readonly modelProjectionFixturePath: string;
+  readonly modelProjectionBytes: number;
+  readonly modelProjectionSha256: string;
   readonly packageId: string;
   readonly packageVersion: string;
   readonly packageContentIdentity: string;
@@ -101,6 +105,7 @@ interface LoadedDocument {
   readonly value: JsonValue;
   readonly bytes: Buffer;
   readonly descriptorIdentity?: DescriptorIdentity;
+  readonly strictJsonError?: SyntaxError;
 }
 
 interface MaterializationGraph {
@@ -118,6 +123,7 @@ interface LoadedCase {
   readonly generatedContexts?: readonly LoadedDocument[];
   readonly materialization?: MaterializationGraph;
   readonly expectedAggregateCounts?: JsonObject;
+  readonly strictJsonError?: SyntaxError;
 }
 
 interface SemanticWorld {
@@ -134,8 +140,23 @@ const conformanceRoot = resolve(authoringRoot, "conformance");
 const EXPECTATIONS_PATH = resolve(conformanceRoot, "expectations.json");
 const SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";
 const INVENTORY_DOMAIN = "sunder.package-public-api-inventory.v1\0";
-const EXPECTED_AUTHORING_CASE_COUNT = 59;
-const EXPECTED_AUTHORING_INDEX_SHA256 = "0aebae9087e88c162acb17f4b17ef1511fb419f2b490cf7421177b526dbc488d";
+const EXPECTED_AUTHORING_CASE_COUNT = 92;
+const EXPECTED_AUTHORING_FILE_COUNT = 83;
+const EXPECTED_AUTHORING_INDEX_SHA256 = "c2201962dfea5eb596d00911866bcf63238b0c7d8c69a6c64db4fa0adc864a22";
+const EXPECTED_AUTHORING_PROJECTION_SHA256 = "897da8418a8e9abcb8a5fb12f3598646890636e5c84efabbb48dbeef47c9d3d0";
+const MODEL_PROJECTION_REFERENCE = "rpc-model-projection.schema.json#/$defs/modelProjection";
+const METHOD_POLICIES_REFERENCE = "rpc-model-projection.schema.json#/$defs/methodPolicies";
+const ROLE_USE_REFERENCE = "authoring-receipt.schema.json#/$defs/roleUse";
+const externalSchemaDefinitions = new Map<string, JsonValue>();
+const projectionSchemaErrors: Readonly<Record<string, readonly string[]>> = {
+  "invalid/rpc-model-projection-missing-map.json": [
+    'required|/contracts/0/modelProjection|#/$defs/modelProjection/required|{"missingProperty":"models"}',
+  ],
+  "invalid/rpc-model-projection-reference-extra-field.json": [
+    'maxProperties|/contracts/0/modelProjection/serviceReferences/Empty|#/$defs/modelProjection/properties/serviceReferences/additionalProperties/maxProperties|{"limit":2}',
+    'additionalProperties|/contracts/0/modelProjection/serviceReferences/Empty|#/$defs/modelProjection/properties/serviceReferences/additionalProperties/additionalProperties|{"additionalProperty":"endpoint"}',
+  ],
+};
 
 const byteLimits: Readonly<Record<string, number>> = {
   "authoring-receipt.schema.json": 67_108_864,
@@ -145,6 +166,7 @@ const byteLimits: Readonly<Record<string, number>> = {
   "package-project-export.schema.json": 67_108_864,
   "package-public-inventory.schema.json": 1_048_576,
   "platform-catalog.schema.json": 67_108_864,
+  "rpc-model-projection.schema.json": 4_194_304,
 };
 
 class StrictJsonParser {
@@ -363,11 +385,13 @@ function mergeSchemaDescription(
   if (isObject(schema.properties)) {
     for (const [key, child] of Object.entries(schema.properties)) {
       if (!target.properties.has(key)) target.propertyOrder.push(key);
-      target.properties.set(key, child);
+      const previous = target.properties.get(key);
+      target.properties.set(key, previous === undefined ? child : { allOf: [previous, child] });
     }
   }
-  if (schema.additionalProperties !== undefined) target.additionalProperties = schema.additionalProperties;
-  if (schema.items !== undefined) target.items = schema.items;
+  if (schema.additionalProperties !== undefined) target.additionalProperties = target.additionalProperties === undefined
+    ? schema.additionalProperties : { allOf: [target.additionalProperties, schema.additionalProperties] };
+  if (schema.items !== undefined) target.items = target.items === undefined ? schema.items : { allOf: [target.items, schema.items] };
   if (Array.isArray(schema.allOf)) {
     for (const member of schema.allOf) mergeConditionalDescription(target, member, value, root, active);
   }
@@ -417,6 +441,11 @@ function matchesSchemaCondition(value: JsonValue, schema: JsonValue, root: JsonO
 }
 
 function resolveInternalReference(root: JsonObject, reference: string): JsonValue {
+  if (reference === MODEL_PROJECTION_REFERENCE || reference === METHOD_POLICIES_REFERENCE || reference === ROLE_USE_REFERENCE) {
+    const definition = externalSchemaDefinitions.get(reference);
+    assert.ok(definition, `Missing local schema reference '${reference}'.`);
+    return definition;
+  }
   assert.ok(reference.startsWith("#/"), `External schema reference '${reference}' is not standalone.`);
   let value: JsonValue = root;
   for (const encoded of reference.slice(2).split("/")) {
@@ -539,15 +568,29 @@ async function compileSchemas(): Promise<Map<string, CompiledSchema>> {
   const names = (await readdir(authoringRoot))
     .filter(name => name.endsWith(".schema.json"))
     .sort(ordinal);
-  assert.equal(names.length, 7, "The authoring format must expose exactly seven standalone schemas.");
-  const result = new Map<string, CompiledSchema>();
+  assert.equal(names.length, 8, "The authoring format must expose exactly eight locally resolved schemas.");
+  const roots = new Map<string, JsonObject>();
+  const ajv = new Ajv2020({ strict: true, allErrors: true });
   for (const name of names) {
     const bytes = await readFile(resolve(authoringRoot, name));
     const root = objectValue(parseOuterJson(bytes, bytes.byteLength, 512), name);
     assert.equal(root.$schema, SCHEMA_DIALECT, name);
+    roots.set(name, root);
+    ajv.addSchema(root);
+  }
+  const projection = roots.get("rpc-model-projection.schema.json")!;
+  // These sibling fragments are self-contained; schema identifiers never cause I/O.
+  for (const reference of [MODEL_PROJECTION_REFERENCE, METHOD_POLICIES_REFERENCE]) {
+    const definition = resolveInternalReference(projection, reference.slice(reference.indexOf("#")));
+    assertLocalReferences(definition, reference);
+    externalSchemaDefinitions.set(reference, definition);
+  }
+  externalSchemaDefinitions.set(ROLE_USE_REFERENCE,resolveInternalReference(roots.get("authoring-receipt.schema.json")!,"#/$defs/roleUse"));
+  const result = new Map<string, CompiledSchema>();
+  for (const [name, root] of roots) {
     const id = stringValue(root.$id, `${name}.$id`);
-    const ajv = new Ajv2020({ strict: true, allErrors: true });
-    const validate = ajv.compile(root);
+    const validate = ajv.getSchema(id);
+    assert.ok(validate, `Missing compiled schema '${id}'.`);
     result.set(name, { ajv, id, root, validate });
   }
   return result;
@@ -663,8 +706,15 @@ async function loadFixtureDocument(
 ): Promise<LoadedDocument> {
   const bytes = await readFile(resolve(conformanceRoot, fixturePath));
   const maximumBytes = byteLimits[schemaFileName(schemaPath)]!;
-  const value = parseOuterJson(bytes, maximumBytes, 16);
-  return { path: fixturePath, schemaPath, value, bytes };
+  try {
+    return { path: fixturePath, schemaPath, value: parseOuterJson(bytes, maximumBytes, 16), bytes };
+  } catch (error) {
+    // JSON Schema cannot express duplicate/case-colliding member rejection.
+    // Keep that negative result while independently checking its schema shape.
+    if (schemaFileName(schemaPath) !== "rpc-model-projection.schema.json"
+      || !(error instanceof SyntaxError) || !error.message.startsWith("ASCII-case-colliding JSON member")) throw error;
+    return { path: fixturePath, schemaPath, value: JSON.parse(bytes.toString("utf8")) as JsonValue, bytes, strictJsonError: error };
+  }
 }
 
 async function generateRecipe(
@@ -701,6 +751,7 @@ async function generateRecipe(
         canonicalDescriptor: source.canonicalDescriptor,
         descriptorSha256: source.descriptorSha256,
         abiSha256: source.abiSha256,
+        modelProjection: { models: {}, serviceReferences: {} },
       };
     });
     return { value: base, identities: new Map() };
@@ -828,7 +879,11 @@ async function identityDiagnostic(
   if (record.etag !== undefined && record.etag !== `"${identity.descriptorSha256}"`) {
     return "rpc-authoring.hash-mismatch";
   }
-  return null;
+  if(isObject(record.modelProjection)&&isObject(record.modelProjection.serviceReferences)){
+    const optional=optionalReferenceMembersDiagnostic(record.modelProjection.optionalServiceReferenceMembers,identity.descriptor,record.modelProjection.serviceReferences);
+    if(optional!==null)return optional;
+  }
+  return methodPoliciesDiagnostic(record.methodPolicies, identity.descriptor);
 }
 
 function authoringContext(
@@ -1035,7 +1090,9 @@ async function lockDiagnostic(lock: JsonObject, world: SemanticWorld): Promise<s
       && evidence.packageVersion === artifact.selectedPackageVersion
       && evidence.packageContentIdentity === artifact.selectedPackageContentIdentity
       && evidence.publicContractCount === artifact.publicContractCount
-      && evidence.publicInventorySha256 === artifact.publicInventorySha256);
+      && evidence.publicInventorySha256 === artifact.publicInventorySha256
+      && evidence.modelProjectionBytes === artifact.modelProjectionBytes
+      && evidence.modelProjectionSha256 === artifact.modelProjectionSha256);
     if (immutableEvidence.length !== 1) {
       return "rpc-authoring.evidence-mismatch";
     }
@@ -1280,6 +1337,18 @@ function materializationHasConflict(graph: MaterializationGraph): boolean {
 }
 
 async function baselineDiagnostic(baseline: JsonObject, world: SemanticWorld): Promise<string | null> {
+  if (baseline.retiredPrivateContracts !== undefined) {
+    const archive = objectValue(baseline.retiredPrivateContracts, "retired private contracts");
+    if (baseline.authorityKind !== "package") return "rpc-authoring.authority-mismatch";
+    if (Object.keys(archive).length + Object.keys(objectValue(baseline.contracts, "active contracts")).length > 128) return "rpc-authoring.baseline-combined-limit";
+    for (const record of Object.values(archive)) {
+      const entry = objectValue(record, "retired contract");
+      const snapshots = [...arrayValue(entry.history, "retired history"), ...(entry.current ? [entry.current] : [])];
+      if (snapshots.some(value => objectValue(value, "retired snapshot").exposure !== "package")) return "rpc-authoring.private-retirement-public-evidence";
+    }
+    const retained = cloneJson(baseline); delete retained.retiredPrivateContracts; retained.contracts = archive;
+    const diagnostic = await baselineDiagnostic(retained, world); if (diagnostic !== null) return diagnostic;
+  }
   const authorityKind = stringValue(baseline.authorityKind, "baseline authority kind");
   const authorityId = stringValue(baseline.authorityId, "baseline authority id");
   if (authorityKind === "package" && authorityId !== baseline.packageId) {
@@ -1350,8 +1419,8 @@ async function baselineDiagnostic(baseline: JsonObject, world: SemanticWorld): P
               && inventory.packageVersion === publication.packageVersion
               && inventory.packageContentIdentity === publication.packageContentIdentity;
           });
-          if (matchingInventories.length !== 1) return "rpc-authoring.evidence-mismatch";
-          world.consumedContexts.add(matchingInventories[0]!.path);
+          if (matchingInventories.length > 1 || snapshot.exposure === "public" && matchingInventories.length !== 1) return "rpc-authoring.evidence-mismatch";
+          if (matchingInventories.length === 1) world.consumedContexts.add(matchingInventories[0]!.path);
           if (snapshot.exposure === "public") {
             const inventory = objectValue(matchingInventories[0]!.value, matchingInventories[0]!.path);
             const inventoryContract = arrayValue(inventory.contracts, "publication inventory contracts")
@@ -1470,8 +1539,9 @@ async function projectExportDiagnostic(project: JsonObject, world: SemanticWorld
     world,
     document => authoringContext(document, "owned-contracts.schema.json"),
   );
-  if (baselineDocuments.length !== 1) return "rpc-authoring.evidence-mismatch";
-  const baseline = objectValue(baselineDocuments[0]!.value, baselineDocuments[0]!.path);
+  const exported = arrayValue(project.contracts, "project export contracts").map(value => objectValue(value, "export contract"));
+  if (baselineDocuments.length > 1 || baselineDocuments.length === 0 && exported.some(contract => contract.exposure === "public")) return "rpc-authoring.evidence-mismatch";
+  const baseline = baselineDocuments.length ? objectValue(baselineDocuments[0]!.value, baselineDocuments[0]!.path) : { authorityKind: "package", packageId: project.packageId!, authorityId: project.packageId!, contracts: {} };
   if (baseline.authorityKind !== "package" || baseline.packageId !== project.packageId
     || baseline.authorityId !== project.packageId) return "rpc-authoring.authority-mismatch";
   const contracts = arrayValue(project.contracts, "project export contracts")
@@ -1481,6 +1551,7 @@ async function projectExportDiagnostic(project: JsonObject, world: SemanticWorld
   const identities = contracts.map(contract => `${String(contract.contractId)}\0${String(contract.contractVersion)}`);
   if (new Set(identities).size !== identities.length) return "rpc-authoring.duplicate-projected-key";
   for (const contract of contracts) {
+    if (contract.exposure === "package" && contract.contractVersion !== project.packageVersion) return "rpc-authoring.private-version-mismatch";
     if (contract.source !== "owned" || contract.authorityKind !== "package"
       || contract.authorityId !== project.packageId) return "rpc-authoring.authority-mismatch";
     const diagnostic = await identityDiagnostic(
@@ -1496,6 +1567,7 @@ async function projectExportDiagnostic(project: JsonObject, world: SemanticWorld
     const contract = objectValue(value, `project baseline contract '${contractKey}'`);
     if (contract.current === undefined) continue;
     const snapshot = objectValue(contract.current, `project baseline current '${contractKey}'`);
+    if (snapshot.exposure !== "public") continue;
     expectedContracts.push({
       contractKey,
       contractId: contract.contractId!,
@@ -1510,7 +1582,10 @@ async function projectExportDiagnostic(project: JsonObject, world: SemanticWorld
       abiSha256: snapshot.abiSha256!,
     });
   }
-  if (!jsonEqual(project.contracts!, expectedContracts)) return "rpc-authoring.evidence-mismatch";
+  // Baselines freeze descriptor/ABI bytes, not later compiler projection metadata.
+  const publicContracts = contracts.filter(contract => contract.exposure === "public")
+    .map(({ modelProjection: _projection, methodPolicies: _policies, ...contract }) => contract);
+  if (!jsonEqual(publicContracts, expectedContracts)) return "rpc-authoring.evidence-mismatch";
   return null;
 }
 
@@ -1594,6 +1669,8 @@ function receiptArtifactsFromLock(lock: JsonObject): JsonValue[] {
       ...(artifact.registryOrigin === undefined ? {} : { registryOrigin: artifact.registryOrigin }),
       publicContractCount: artifact.publicContractCount!,
       publicInventorySha256: artifact.publicInventorySha256!,
+      modelProjectionBytes: artifact.modelProjectionBytes!,
+      modelProjectionSha256: artifact.modelProjectionSha256!,
       contracts: Object.entries(objectValue(artifact.contracts, `lock artifact '${packageId}' contracts`))
         .map(([contractId, contract]): JsonValue => ({
           contractId,
@@ -2078,7 +2155,118 @@ async function semanticDiagnosticForDocument(
   if (fileName === "package-project-export.schema.json") return projectExportDiagnostic(document, world);
   if (fileName === "cache-entry-receipt.schema.json") return cacheReceiptDiagnostic(document, world);
   if (fileName === "authoring-receipt.schema.json") return receiptDiagnostic(document, world);
+  if (fileName === "rpc-model-projection.schema.json") return modelProjectionDiagnostic(document, world);
   return catalogDiagnostic(document, world);
+}
+
+async function modelProjectionDiagnostic(document: JsonObject, world: SemanticWorld): Promise<string | null> {
+  const invalid = "rpc-authoring.model-projection-invalid";
+  const contracts = arrayValue(document.contracts, "projection contracts").map(value => objectValue(value, "projection contract"));
+  if (!isSortedUnique(contracts.map(contract => projectedKey(contract, "contractId", "contractVersion")))
+    || new Set(contracts.map(contract => contract.contractId)).size !== contracts.length) return invalid;
+  const contexts = resolveContexts(world, context => authoringContext(context, "package-public-inventory.schema.json")
+    || authoringContext(context, "package-project-export.schema.json"));
+  if (contexts.length === 0) return contracts.length === 0 ? null : invalid;
+  if (contexts.length !== 1) return invalid;
+  const context = objectValue(contexts[0]!.value, "projection evidence");
+  if (context.packageId !== document.packageId || context.packageVersion !== document.packageVersion) return invalid;
+  const expected = arrayValue(context.contracts, "projection evidence contracts").map(value => objectValue(value, "projection evidence contract"))
+    .filter(contract => contract.exposure === undefined || contract.exposure === "public");
+  if (!isDeepStrictEqual(contracts.map(contract => projectedKey(contract, "contractId", "contractVersion")),
+    expected.map(contract => projectedKey(contract, "contractId", "contractVersion")).sort(ordinal))) return invalid;
+  const descriptors = new Map<string, RpcContractDescriptor>();
+  for (const contract of expected) {
+    const id = stringValue(contract.contractId, "projection evidence id");
+    const version = stringValue(contract.contractVersion, "projection evidence version");
+    if (await identityDiagnostic(contract, id, version, world.identities) !== null) return invalid;
+    const identity = typeof contract.canonicalDescriptor === "string"
+      ? await descriptorIdentity(contract.canonicalDescriptor) : world.identities.get(descriptorKey(id, version));
+    if (identity === undefined) return invalid;
+    descriptors.set(id, identity.descriptor);
+  }
+  for (const contract of contracts) {
+    const selected = expected.find(candidate => candidate.contractId === contract.contractId)!;
+    if (contract.descriptorSha256 !== selected.descriptorSha256 || contract.abiSha256 !== selected.abiSha256) return invalid;
+    const descriptor = descriptors.get(String(contract.contractId))!;
+    if (methodPoliciesDiagnostic(contract.methodPolicies, descriptor) !== null) return invalid;
+    if (selected.methodPolicies !== undefined && !isDeepStrictEqual(contract.methodPolicies, selected.methodPolicies)) return invalid;
+    const projection = objectValue(contract.modelProjection, "model projection");
+    const models = objectValue(projection.models, "projection models");
+    const references = objectValue(projection.serviceReferences, "projection references");
+    if(optionalReferenceMembersDiagnostic(projection.optionalServiceReferenceMembers,descriptor,references)!==null)return invalid;
+    const keys = [...Object.keys(models), ...Object.keys(references)];
+    if (!isSortedUnique(Object.keys(models)) || !isSortedUnique(Object.keys(references))
+      || new Set(keys.map(asciiCaseFold)).size !== keys.length
+      || keys.some(key => !Object.hasOwn(descriptor.$defs, key))) return invalid;
+    if (selected.modelProjection !== undefined && !isDeepStrictEqual(projection, selected.modelProjection)) return invalid;
+    for (const [definition, value] of Object.entries(references)) {
+      const target = objectValue(value, "projected service target");
+      const targetDescriptor = descriptors.get(String(target.contractId));
+      if (targetDescriptor === undefined || !Object.hasOwn(targetDescriptor.services, String(target.serviceId))) return invalid;
+      const locator = descriptor.$defs[definition] as unknown as JsonObject;
+      const fields = ["packageId", "packageVersion", "providerId", "contractId", "contractVersion", "descriptorSha256", "abiSha256",
+        "activationId", "activationEpoch", "sessionGeneration", "endpoint"];
+      if (locator.type !== "object" || locator.additionalProperties !== false || !isObject(locator.properties)
+        || !Array.isArray(locator.required) || !isDeepStrictEqual([...locator.required].sort(), [...fields].sort())
+        || !isDeepStrictEqual(Object.keys(locator.properties).sort(), [...fields].sort())
+        || !isDeepStrictEqual(Object.keys(locator).sort(), ["additionalProperties", "properties", "required", "type"])) return invalid;
+      for (const field of fields) {
+        const expectedShape = field === "activationId" ? { type: "string", format: "uuid" }
+          : field === "activationEpoch" || field === "sessionGeneration" ? { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER }
+          : { type: "string", minLength: field.endsWith("Sha256") ? 64 : field.endsWith("Version") ? 5 : 1,
+            maxLength: field.endsWith("Sha256") ? 64 : field.endsWith("Version") || field === "endpoint" ? 256 : 128 };
+        // The descriptor parser uses prototype-free JSON records; that storage
+        // choice is not part of the eleven-field schema's value identity.
+        if (!isDeepStrictEqual(cloneJson(locator.properties[field]!), expectedShape)) return invalid;
+      }
+    }
+  }
+  return null;
+}
+
+function optionalReferenceMembersDiagnostic(value:JsonValue|undefined,descriptor:RpcContractDescriptor,references:JsonObject):string|null{
+  if(value===undefined)return null;const invalid="rpc-authoring.model-projection-invalid";
+  if(!isObject(value)||!Object.keys(value).length||Object.keys(value).length>256||!isSortedUnique(Object.keys(value))||new Set(Object.keys(value).map(asciiCaseFold)).size!==Object.keys(value).length)return invalid;
+  let count=0;
+  const resolve=(input:unknown):{schema:JsonObject;reference?:string}|undefined=>{
+    let value=input as JsonValue|undefined;const seen=new Set<string>();let reference:string|undefined;
+    while(isObject(value)&&typeof value.$ref==="string"){
+      const key=value.$ref.slice("#/$defs/".length);if(seen.has(key))return;seen.add(key);if(Object.hasOwn(references,key))reference=key;value=descriptor.$defs[key] as JsonValue|undefined;
+    }
+    return isObject(value)?{schema:value,...reference?{reference}:{}}:undefined;
+  };
+  for(const [owner,members] of Object.entries(value)){
+    if(!Array.isArray(members)||!members.length||members.length>256||members.some(member=>typeof member!=="string"||!member.length||[...member].length>128||/[\ud800-\udfff]/u.test(member))||!isSortedUnique(members as string[])||new Set((members as string[]).map(asciiCaseFold)).size!==members.length||(count+=members.length)>4096)return invalid;
+    const record=descriptor.$defs[owner] as JsonValue|undefined;if(!isObject(record)||record.type!=="object"||!isObject(record.properties)||!Array.isArray(record.required))return invalid;
+    for(const member of members as string[]){
+      if(!record.required.includes(member)||!Object.hasOwn(record.properties,member))return invalid;
+      const nullable=resolve(record.properties[member])?.schema;
+      if(!nullable||!Array.isArray(nullable.oneOf)||nullable.oneOf.length!==2)return invalid;
+      const alternatives=nullable.oneOf.map(resolve);
+      if(alternatives.filter(item=>item?.schema.type==="null").length!==1||alternatives.filter(item=>item?.reference!==undefined).length!==1)return invalid;
+    }
+  }
+  return null;
+}
+
+function methodPoliciesDiagnostic(value: JsonValue | undefined, descriptor: RpcContractDescriptor): string | null {
+  if (value === undefined) return null;
+  const invalid = "rpc-authoring.model-projection-invalid";
+  if (!isObject(value) || Object.keys(value).length === 0 || Object.keys(value).length > 64 || !isSortedUnique(Object.keys(value))) return invalid;
+  let count = 0;
+  for (const [serviceId, methods] of Object.entries(value)) {
+    if (!Object.hasOwn(descriptor.services, serviceId) || !isObject(methods)
+      || Object.keys(methods).length === 0 || !isSortedUnique(Object.keys(methods))) return invalid;
+    count += Object.keys(methods).length;
+    if (count > 512) return invalid;
+    for (const [methodId, policy] of Object.entries(methods)) {
+      if (!Object.hasOwn(descriptor.services[serviceId]!.methods, methodId) || !isObject(policy)
+        || !isDeepStrictEqual(Object.keys(policy), ["timeoutSeconds"])
+        || typeof policy.timeoutSeconds !== "number" || !Number.isInteger(policy.timeoutSeconds)
+        || policy.timeoutSeconds < 1 || policy.timeoutSeconds > 2100) return invalid;
+    }
+  }
+  return null;
 }
 
 async function semanticDiagnostics(
@@ -2087,7 +2275,11 @@ async function semanticDiagnostics(
   schemas: ReadonlyMap<string, CompiledSchema>,
   canonicalIdentities: ReadonlyMap<string, DescriptorIdentity>,
   immutableArtifacts: readonly ImmutableArtifactEvidence[],
+  contextDependencies: ReadonlyMap<string, readonly LoadedDocument[]> = new Map(),
 ): Promise<{ diagnostics: string[]; consumedContexts: Set<string> }> {
+  if (loaded.strictJsonError !== undefined) {
+    return { diagnostics: ["rpc-authoring.model-projection-invalid"], consumedContexts: new Set() };
+  }
   const identities = new Map(canonicalIdentities);
   for (const [key, value] of loaded.identities) identities.set(key, value);
   const main: LoadedDocument = {
@@ -2106,9 +2298,11 @@ async function semanticDiagnostics(
     } else {
       assert.ok(context.descriptorIdentity, `Descriptor context '${context.path}' has no validated identity.`);
     }
+    const dependencies = new Map(allContexts.filter(candidate => candidate !== context).map(candidate => [candidate.path, candidate]));
+    for (const dependency of contextDependencies.get(context.path) ?? []) dependencies.set(dependency.path, dependency);
     const contextDiagnostic = await semanticDiagnosticForDocument(context.schemaPath, context.value, {
       schemas,
-      contexts: allContexts.filter(candidate => candidate !== context),
+      contexts: [...dependencies.values()],
       consumedContexts: new Set(),
       identities,
       immutableArtifacts: selectedImmutableArtifacts,
@@ -2139,21 +2333,31 @@ async function jsonPaths(directory: string, prefix = ""): Promise<string[]> {
   return result.sort(ordinal);
 }
 
-function assertStandaloneReferences(value: JsonValue, path: string): void {
+function assertLocalReferences(value: JsonValue, path: string): void {
   if (Array.isArray(value)) {
-    value.forEach((item, index) => assertStandaloneReferences(item, `${path}[${index}]`));
+    value.forEach((item, index) => assertLocalReferences(item, `${path}[${index}]`));
     return;
   }
   if (!isObject(value)) return;
   if (value.$ref !== undefined) {
     assert.equal(typeof value.$ref, "string", `${path}.$ref`);
-    assert.ok((value.$ref as string).startsWith("#/$defs/"), `${path} has external $ref '${String(value.$ref)}'.`);
+    assert.ok((value.$ref as string).startsWith("#/$defs/") || value.$ref === MODEL_PROJECTION_REFERENCE || value.$ref === METHOD_POLICIES_REFERENCE || value.$ref === ROLE_USE_REFERENCE,
+      `${path} has an unreviewed external $ref '${String(value.$ref)}'.`);
   }
-  for (const [key, child] of Object.entries(value)) assertStandaloneReferences(child, `${path}.${key}`);
+  for (const [key, child] of Object.entries(value)) assertLocalReferences(child, `${path}.${key}`);
 }
 
-test("Node independently enforces the durable RPC V1 authoring schema oracle", async () => {
+test("authoring schema source files retain deterministic two-space formatting", async () => {
+  for (const name of (await readdir(authoringRoot)).filter(name => name.endsWith(".schema.json"))) {
+    const bytes = await readFile(resolve(authoringRoot, name));
+    const value = parseOuterJson(bytes, bytes.byteLength, 512);
+    assert.ok(bytes.equals(Buffer.from(`${JSON.stringify(value, null, 2)}\n`)), `${name} must use deterministic two-space JSON.`);
+  }
+});
+
+test("Node independently enforces the durable RPC V1 authoring schema oracle", async testContext => {
   const expectationBytes = await readFile(EXPECTATIONS_PATH);
+  assert.equal(sha256(expectationBytes), EXPECTED_AUTHORING_INDEX_SHA256, "Shared current authoring index bytes drifted.");
   const expectations = parseOuterJson(expectationBytes, 4 * 1024 * 1024, 64) as unknown as AuthoringExpectations;
   assert.equal(expectations.formatVersion, 1);
   assert.equal(expectations.schemaDialect, SCHEMA_DIALECT);
@@ -2167,7 +2371,7 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
   assert.equal(Buffer.from(INVENTORY_DOMAIN, "utf8").toString("hex"), "73756e6465722e7061636b6167652d7075626c69632d6170692d696e76656e746f72792e763100");
 
   const schemas = await compileSchemas();
-  for (const [name, schema] of schemas) assertStandaloneReferences(schema.root, name);
+  for (const [name, schema] of schemas) assertLocalReferences(schema.root, name);
   const canonical = await loadCanonicalIdentities(expectations);
   const immutableArtifactKeys = expectations.immutableArtifactEvidence.map(evidence => evidence.inventoryFixturePath);
   assert.ok(isSortedUnique(immutableArtifactKeys), "Immutable artifact evidence must have unique canonical ordering.");
@@ -2177,6 +2381,13 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
     assert.match(evidence.packageContentIdentity, /^[0-9a-f]{64}$/u);
     assert.ok(Number.isSafeInteger(evidence.publicContractCount) && evidence.publicContractCount >= 0 && evidence.publicContractCount <= 128);
     assert.match(evidence.publicInventorySha256, /^[0-9a-f]{64}$/u);
+    const projectionBytes = await readFile(resolve(conformanceRoot, evidence.modelProjectionFixturePath));
+    assert.equal(projectionBytes.length, evidence.modelProjectionBytes);
+    assert.equal(sha256(projectionBytes), evidence.modelProjectionSha256);
+    const projection = objectValue(parseOuterJson(projectionBytes, byteLimits["rpc-model-projection.schema.json"]!), "selected projection");
+    assert.equal(projection.packageId, evidence.packageId);
+    assert.equal(projection.packageVersion, evidence.packageVersion);
+    assert.equal(arrayValue(projection.contracts, "selected projection contracts").length, evidence.publicContractCount);
   }
   const indexedPaths = new Set<string>();
   const documents = new Map<string, LoadedDocument>();
@@ -2196,7 +2407,12 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
       indexedPaths.add(fixture.fixturePath);
       const document = await loadFixtureDocument(fixture.fixturePath, fixture.schemaPath);
       documents.set(fixture.fixturePath, document);
-      cases.push({ expectation: fixture, value: document.value, bytes: document.bytes, identities: new Map() });
+      if (document.strictJsonError !== undefined) {
+        assert.equal(fixture.schemaValid, true);
+        assert.equal(fixture.semanticValid, false);
+        assert.equal(fixture.expectedSemanticDiagnosticId, "rpc-authoring.model-projection-invalid");
+      }
+      cases.push({ expectation: fixture, value: document.value, bytes: document.bytes, identities: new Map(), strictJsonError: document.strictJsonError });
     } else {
       const generated = await generateRecipe(fixture.recipe!, schemas, canonical.byName);
       cases.push({ expectation: fixture, ...generated });
@@ -2241,7 +2457,7 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
         semanticContextFixturePaths: expected.semanticContextFixturePaths ?? [],
         semanticDescriptorContexts: expected.semanticDescriptorContexts ?? [],
         schemaValid: expected.schemaValid,
-        expectedSchemaErrors: expected.expectedSchemaErrors ?? [],
+        expectedSchemaErrors: expected.expectedSchemaErrors ?? projectionSchemaErrors[expected.fixturePath ?? ""] ?? [],
         semanticValid: expected.semanticValid,
         expectedSemanticDiagnosticId: expected.expectedSemanticDiagnosticId,
       };
@@ -2249,11 +2465,12 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
   };
   assert.equal(
     sha256(JSON.stringify(frozenIndex)),
-    EXPECTED_AUTHORING_INDEX_SHA256,
+    EXPECTED_AUTHORING_PROJECTION_SHA256,
     "Authoring path/hash/diagnostic index drifted.",
   );
 
   const actualFixturePaths = (await jsonPaths(conformanceRoot)).filter(path => path !== "expectations.json");
+  assert.equal(actualFixturePaths.length, EXPECTED_AUTHORING_FILE_COUNT, "Authoring fixture file count drifted.");
   assert.deepEqual(actualFixturePaths, [...indexedPaths].sort(ordinal));
   for (const name of schemas.keys()) {
     const represented = representation.get(name);
@@ -2272,8 +2489,8 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
     assert.equal(bytes.includes(0x0d), false, `${path} must use LF line endings.`);
     assert.equal(bytes.some(value => value > 0x7f), false, `${path} must be ASCII corpus data.`);
     assert.equal(bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), false, `${path} must not have a BOM.`);
-    const value = parseOuterJson(bytes, bytes.byteLength, 512);
-    assert.equal(bytes.toString("utf8"), `${JSON.stringify(value, null, 2)}\n`, `${path} must use deterministic two-space JSON.`);
+    const value = documents.get(path.replace(/^conformance\//u, ""))?.value ?? parseOuterJson(bytes, bytes.byteLength, 512);
+    if (!path.endsWith(".schema.json")) assert.equal(bytes.toString("utf8"), `${JSON.stringify(value, null, 2)}\n`, `${path} must use deterministic two-space JSON.`);
   }
 
   for (const loaded of cases) {
@@ -2282,14 +2499,16 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
     const valid = validate(loaded.value) as boolean;
     assert.equal(valid, fixture.schemaValid, fixture.fixturePath ?? String(fixture.recipe?.id));
     if (!fixture.schemaValid) {
-      assert.ok(fixture.expectedSchemaKeyword, "Invalid structural cases must name their expected keyword.");
+      const expectedErrors = fixture.expectedSchemaErrors ?? projectionSchemaErrors[fixture.fixturePath ?? ""];
+      const expectedKeyword = fixture.expectedSchemaKeyword ?? expectedErrors?.[0]?.split("|", 1)[0];
+      assert.ok(expectedKeyword, "Invalid structural cases must name their expected keyword.");
       assert.ok(
-        validate.errors?.some(error => error.keyword === fixture.expectedSchemaKeyword),
-        `${fixture.fixturePath ?? String(fixture.recipe?.id)} expected '${fixture.expectedSchemaKeyword}': ${JSON.stringify(validate.errors)}`,
+        validate.errors?.some(error => error.keyword === expectedKeyword),
+        `${fixture.fixturePath ?? String(fixture.recipe?.id)} expected '${expectedKeyword}': ${JSON.stringify(validate.errors)}`,
       );
       const signatures = ajvErrorSignatures(validate);
-      assert.ok(fixture.expectedSchemaErrors, "Invalid structural cases must freeze their exact Ajv errors.");
-      assert.deepEqual(signatures, fixture.expectedSchemaErrors, fixture.fixturePath ?? String(fixture.recipe?.id));
+      assert.ok(expectedErrors, "Invalid structural cases must freeze their exact Ajv errors.");
+      assert.deepEqual(signatures, expectedErrors, fixture.fixturePath ?? String(fixture.recipe?.id));
     } else {
       assert.equal(fixture.expectedSchemaKeyword, undefined);
       assert.equal(fixture.expectedSchemaErrors, undefined);
@@ -2309,6 +2528,12 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
   let expectedFileHashes = 0;
   let expectedInventoryHashes = 0;
   let expectedEnvelopeHashes = 0;
+  const contextDependencies = new Map(cases.filter(loaded => loaded.expectation.fixturePath !== undefined).map(loaded => [
+    loaded.expectation.fixturePath!, (loaded.expectation.semanticContextFixturePaths ?? []).flatMap(path => {
+      const document = documents.get(path);
+      return document === undefined ? [] : [document];
+    }),
+  ]));
   for (const loaded of cases) {
     const expected = loaded.expectation;
     if (expected.expectedFileSha256 !== undefined) {
@@ -2335,10 +2560,10 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
   }
   assert.deepEqual(
     [expectedFileHashes, expectedInventoryHashes, expectedEnvelopeHashes],
-    [4, 4, 1],
+    [9, 4, 1],
   );
 
-  for (const loaded of cases) {
+  const assertSemanticCase = async (loaded: LoadedCase): Promise<void> => {
     const expected = loaded.expectation;
     const contextPaths = expected.semanticContextFixturePaths ?? [];
     const descriptorContexts = expected.semanticDescriptorContexts ?? [];
@@ -2382,9 +2607,10 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
     assert.equal(new Set(expectedConsumedContextPaths).size, expectedConsumedContextPaths.length, "Duplicate semantic context path.");
     if (!expected.schemaValid) {
       assert.equal(expected.semanticValid, false);
-      assert.equal(expected.expectedSemanticDiagnosticId, null);
+      assert.equal(expected.expectedSemanticDiagnosticId,
+        schemaFileName(expected.schemaPath) === "rpc-model-projection.schema.json" ? "rpc-authoring.model-projection-invalid" : null);
       assert.equal(contexts.length, 0);
-      continue;
+      return;
     }
     const result = await semanticDiagnostics(
       loaded,
@@ -2392,6 +2618,7 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
       schemas,
       canonical.byKey,
       expectations.immutableArtifactEvidence,
+      contextDependencies,
     );
     assert.deepEqual([...result.consumedContexts].sort(ordinal), expectedConsumedContextPaths.sort(ordinal));
     assert.equal(result.diagnostics.length === 0, expected.semanticValid, expected.fixturePath ?? String(expected.recipe?.id));
@@ -2407,6 +2634,9 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
       assert.ok(expectedCounts);
       for (const key of Object.keys(expectedCounts)) assert.equal(counts[key], expectedCounts[key]);
     }
+  };
+  for (const loaded of cases) {
+    await testContext.test(loaded.expectation.fixturePath ?? String(loaded.expectation.recipe?.id), () => assertSemanticCase(loaded));
   }
 
   const catalogCase = cases.find(value => value.expectation.fixturePath === "valid/platform-catalog.json");
@@ -2421,6 +2651,18 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
     value,
     bytes: Buffer.from(JSON.stringify(value), "utf8"),
   });
+  const bindProjectionEvidence = (packageId: string, artifact: JsonObject, fixturePath: string) => {
+    const source = documents.get(fixturePath);
+    assert.ok(source, fixturePath);
+    const projection = cloneJson(objectValue(source.value, fixturePath));
+    projection.packageId = packageId;
+    projection.packageVersion = artifact.selectedPackageVersion!;
+    const schema = schemas.get("rpc-model-projection.schema.json")!;
+    const bytes = Buffer.from(writeDocument(projection, schema.root, schema.root));
+    artifact.modelProjectionBytes = bytes.length;
+    artifact.modelProjectionSha256 = sha256(bytes);
+    return { modelProjectionFixturePath: `in-memory:${packageId}`, modelProjectionBytes: bytes.length, modelProjectionSha256: sha256(bytes) };
+  };
   const catalogContext = (value: JsonObject, path = "in-memory-catalog"): LoadedDocument => contextDocument(
     path,
     "../platform-catalog.schema.json",
@@ -2543,6 +2785,11 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
     packageVersion: "1.0.0",
     ...cloneJson(samePackageRecords),
   };
+  // Only this in-memory current-format receipt is adapted; the sealed parity
+  // records retain their original descriptor and projection bytes.
+  for (const value of arrayValue(samePackageReceipt.contracts, "same-package contracts")) {
+    objectValue(value, "same-package contract").modelProjection = { models: {}, serviceReferences: {} };
+  }
   assert.equal(receiptValidator(samePackageReceipt), true, JSON.stringify(receiptValidator.errors));
   assert.equal(await receiptDiagnostic(samePackageReceipt, mutationWorld([minimalLockDocument])), null);
   const narrowedOwnedUseReceipt = cloneJson(samePackageReceipt);
@@ -2892,6 +3139,7 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
     writeCompact(buildMetadataInventory, packageInventorySchema.root, packageInventorySchema.root),
   );
   const buildMetadataEvidence: ImmutableArtifactEvidence = {
+    ...bindProjectionEvidence("example.dependency", buildMetadataArtifact, "valid/rpc-model-projection-nonempty.json"),
     inventoryFixturePath: "build-metadata-inventory",
     packageId: "example.dependency",
     packageVersion: "1.2.3+build-meta",
@@ -2947,9 +3195,11 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
     localName: "reexport",
     presence: "required",
     requiredContracts: ["example.rpc.v1.minimal"],
+    consumerRoles: ["runtime"],
   };
   const coalescedEvidence: ImmutableArtifactEvidence[] = [
     {
+      ...bindProjectionEvidence("example.dependency", coalescedDependencyArtifact, "valid/rpc-model-projection-mixed-authority.json"),
       inventoryFixturePath: "coalesced-dependency-inventory",
       packageId: "example.dependency",
       packageVersion: stringValue(coalescedDependencyArtifact.selectedPackageVersion, "coalesced package version"),
@@ -2958,6 +3208,7 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
       publicInventorySha256: stringValue(coalescedDependencyArtifact.publicInventorySha256, "coalesced package inventory hash"),
     },
     {
+      ...bindProjectionEvidence("example.reexport", reexportArtifact, "valid/rpc-model-projection-nonempty.json"),
       inventoryFixturePath: "coalesced-reexport-inventory",
       packageId: "example.reexport",
       packageVersion: stringValue(reexportArtifact.selectedPackageVersion, "reexport package version"),
@@ -3156,9 +3407,11 @@ test("Node independently enforces the durable RPC V1 authoring schema oracle", a
     localName: "other",
     presence: "required",
     requiredContracts: ["example.rpc.v1.minimal"],
+    consumerRoles: ["runtime"],
   };
   assert.equal(lockValidator(conflictingBundleLock), true, JSON.stringify(lockValidator.errors));
   const otherArtifactEvidence: ImmutableArtifactEvidence = {
+    ...bindProjectionEvidence("example.other", otherArtifact, "valid/rpc-model-projection-nonempty.json"),
     inventoryFixturePath: "other-inventory",
     packageId: "example.other",
     packageVersion: stringValue(otherArtifact.selectedPackageVersion, "other package version"),

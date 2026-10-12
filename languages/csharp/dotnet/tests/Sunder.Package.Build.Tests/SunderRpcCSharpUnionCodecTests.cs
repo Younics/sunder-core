@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 
@@ -33,6 +34,18 @@ public sealed class SunderRpcCSharpUnionCodecTests
         }
         Assert.Equal("Branch", probe.LastVariant());
         Assert.Equal(6, probe.Calls());
+    }
+
+    [Fact]
+    public async Task SourcePolymorphismAnnotationsDoNotCompeteWithTheExplicitRpcUnionCodec()
+    {
+        using var probe = CompileProbe();
+        var json = Payload();
+        AssertJson(json, await probe.RoundTrip("echo", json));
+        var events = await probe.Stream("watch", json);
+        Assert.Equal(2, events.Count);
+        AssertJson(json, events[0]);
+        AssertJson(Tagged("Case"), events[1]);
     }
 
     [Fact]
@@ -294,25 +307,26 @@ public sealed class SunderRpcCSharpUnionCodecTests
         const string source = """
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
-            [SunderRpcService(SunderRpcExposure.Package)]
+            using Sunder.Sdk.Services;
+            [SunderService]
             public interface MultiService
             {
-                [SunderRpcMethod] ValueTask<Value> EchoAsync(Value request);
+                [SunderMethod] ValueTask<Value> EchoAsync(Value request);
             }
-            [SunderRpcProvider(typeof(MultiService), ProviderId = "example.unions.first")]
+            [SunderServiceProvider(typeof(MultiService), ProviderId = "example.unions.first")]
             public sealed partial class FirstProvider : MultiService
             {
                 public ValueTask<Value> EchoAsync(Value request) => ValueTask.FromResult(request);
             }
-            [SunderRpcProvider(typeof(MultiService), ProviderId = "example.unions.second")]
+            [SunderServiceProvider(typeof(MultiService), ProviderId = "example.unions.second")]
             public sealed partial class SecondProvider : MultiService
             {
                 public ValueTask<Value> EchoAsync(Value request) => ValueTask.FromResult(request);
             }
-            [SunderRpcUnion(typeof(First), typeof(Second)), SunderRpcDiscriminator("kind")]
+            [SunderUnion(typeof(First), typeof(Second)), SunderDiscriminator("kind")]
             public abstract record Value;
-            [SunderRpcVariant("first")] public sealed record First : Value;
-            [SunderRpcVariant("second")] public sealed record Second : Value;
+            [SunderVariant("first")] public sealed record First : Value;
+            [SunderVariant("second")] public sealed record Second : Value;
             """;
         var compiler = new SunderRpcCSharpSourceCompiler();
         var input = new SunderRpcCSharpCompilerInput("example.unions", "1.0.0", [new("Multi.cs", source)], References());
@@ -364,22 +378,23 @@ public sealed class SunderRpcCSharpUnionCodecTests
     [InlineData("concrete-only")]
     public void ConcreteVariantOrdering_PreservesFrozenTaggedDefinitionsAndTwoPassBytes(string order)
     {
-        const string direct = "[SunderRpcMethod] public ValueTask<A> DirectAsync(A request) => ValueTask.FromResult(request);";
-        const string union = "[SunderRpcMethod] public ValueTask<U> UnionAsync(U request) => ValueTask.FromResult(request);";
+        const string direct = "[SunderMethod] public ValueTask<A> DirectAsync(A request) => ValueTask.FromResult(request);";
+        const string union = "[SunderMethod] public ValueTask<U> UnionAsync(U request) => ValueTask.FromResult(request);";
         var source = $$"""
             using System.Collections.Generic;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
-            [SunderRpcService(SunderRpcExposure.Package)]
+            using Sunder.Sdk.Services;
+            [SunderService]
             public sealed partial class DirectService
             {
                 {{(order == "union-first" ? union + "\n" + direct : direct + (order == "concrete-only" ? "" : "\n" + union))}}
             }
-            [SunderRpcUnion(typeof(A), typeof(B)), SunderRpcDiscriminator("kind")]
+            [SunderUnion(typeof(A), typeof(B)), SunderDiscriminator("kind")]
             public abstract record U;
-            [SunderRpcVariant("a")]
+            [SunderVariant("a")]
             public sealed record A : U { public required IReadOnlyList<A> Children { get; init; } }
-            [SunderRpcVariant("b")]
+            [SunderVariant("b")]
             public sealed record B : U;
             """;
         var (contract, _) = CompileContract(source);
@@ -394,7 +409,7 @@ public sealed class SunderRpcCSharpUnionCodecTests
     }
 
     [Theory]
-    [InlineData("[SunderRpcTransparent] public sealed record First : Value { public required string Value { get; init; } }", "public abstract record Value;", "cannot be transparent")]
+    [InlineData("[SunderTransparentValue] public sealed record First : Value { public required string Value { get; init; } }", "public abstract record Value;", "cannot be transparent")]
     [InlineData("public sealed record First : Value;", "public abstract record Value { public required string Common { get; init; } }", "cannot inherit payload property")]
     [InlineData("public sealed record First : Value { [System.Text.Json.Serialization.JsonPropertyName(\"kind\")] public required string Tag { get; init; } }", "public abstract record Value;", "colliding property identity")]
     [InlineData("public sealed record First : Value { [System.Text.Json.Serialization.JsonPropertyName(\"Kind\")] public required string Tag { get; init; } }", "public abstract record Value;", "collid")]
@@ -403,17 +418,18 @@ public sealed class SunderRpcCSharpUnionCodecTests
         var source = $$"""
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
-            [SunderRpcService(SunderRpcExposure.Package)]
+            using Sunder.Sdk.Services;
+            [SunderService]
             public sealed partial class InvalidService
             {
-                [SunderRpcMethod] public ValueTask<First> ConcreteAsync(First request) => ValueTask.FromResult(request);
-                [SunderRpcMethod] public ValueTask<Value> EchoAsync(Value request) => ValueTask.FromResult(request);
+                [SunderMethod] public ValueTask<First> ConcreteAsync(First request) => ValueTask.FromResult(request);
+                [SunderMethod] public ValueTask<Value> EchoAsync(Value request) => ValueTask.FromResult(request);
             }
-            [SunderRpcUnion(typeof(First), typeof(Second)), SunderRpcDiscriminator("kind")]
+            [SunderUnion(typeof(First), typeof(Second)), SunderDiscriminator("kind")]
             {{union}}
-            [SunderRpcVariant("first")]
+            [SunderVariant("first")]
             {{first}}
-            [SunderRpcVariant("second")]
+            [SunderVariant("second")]
             public sealed record Second : Value;
             """;
         var result = new SunderRpcCSharpSourceCompiler().Compile(new(
@@ -431,12 +447,13 @@ public sealed class SunderRpcCSharpUnionCodecTests
         const string source = """
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
-            [SunderRpcService(SunderRpcExposure.Package)]
+            using Sunder.Sdk.Services;
+            [SunderService]
             public sealed partial class InvalidService
             {
-                [SunderRpcMethod] public ValueTask<Value> EchoAsync(Value request) => ValueTask.FromResult(request);
+                [SunderMethod] public ValueTask<Value> EchoAsync(Value request) => ValueTask.FromResult(request);
             }
-            [SunderRpcUnion(typeof(First), typeof(Second))]
+            [SunderUnion(typeof(First), typeof(Second))]
             public abstract record Value;
             public sealed record First : Value { public required bool Flag { get; init; } }
             public sealed record Second : Value { public required bool Flag { get; init; } }
@@ -536,7 +553,7 @@ public sealed class SunderRpcCSharpUnionCodecTests
 
     private static string[] References()
         => ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
-            .Append(typeof(SunderRpcServiceAttribute).Assembly.Location)
+            .Append(typeof(SunderServiceAttribute).Assembly.Location)
             .Append(typeof(SunderWorkerProviderRegistration).Assembly.Location)
             .Distinct(StringComparer.Ordinal).ToArray();
 
@@ -643,6 +660,7 @@ public sealed class SunderRpcCSharpUnionCodecTests
         using System.Text.Json.Serialization;
         using System.Threading.Tasks;
         using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         using Sunder.Sdk.Worker;
         namespace Example.Unions;
         public static class Probe
@@ -652,7 +670,7 @@ public sealed class SunderRpcCSharpUnionCodecTests
             public static int Calls() => Service.Calls;
             public static string LastVariant() => Service.LastVariant;
         }
-        [SunderRpcService(SunderRpcExposure.Package)]
+        [SunderService]
         public sealed partial class UnionService
         {
             public int Calls { get; private set; }
@@ -663,54 +681,54 @@ public sealed class SunderRpcCSharpUnionCodecTests
                 LastVariant = value.GetType().Name;
                 return ValueTask.FromResult(value);
             }
-            [SunderRpcMethod] public ValueTask<Signal> EchoAsync(Signal request) => Respond(request);
-            [SunderRpcMethod] public async IAsyncEnumerable<Signal> WatchAsync(Signal request)
+            [SunderMethod] public ValueTask<Signal> EchoAsync(Signal request) => Respond(request);
+            [SunderMethod] public async IAsyncEnumerable<Signal> WatchAsync(Signal request)
             {
                 yield return await EchoAsync(request);
                 yield return new Marker();
             }
-            [SunderRpcMethod] public ValueTask<Choice> ChoiceAsync(Choice request) => Respond(request);
-            [SunderRpcMethod] public ValueTask<ConcreteNode> ConcreteAsync(ConcreteNode request) => Respond(request);
-            [SunderRpcMethod] public async IAsyncEnumerable<ConcreteNode> ConcreteWatchAsync(ConcreteNode request)
+            [SunderMethod] public ValueTask<Choice> ChoiceAsync(Choice request) => Respond(request);
+            [SunderMethod] public ValueTask<ConcreteNode> ConcreteAsync(ConcreteNode request) => Respond(request);
+            [SunderMethod] public async IAsyncEnumerable<ConcreteNode> ConcreteWatchAsync(ConcreteNode request)
             {
                 yield return await ConcreteAsync(request);
             }
-            [SunderRpcMethod] public ValueTask<Payload> ConcretePayloadAsync(Payload request) => Respond(request);
-            [SunderRpcMethod] public ValueTask<Marker> ConcreteMarkerAsync(Marker request) => Respond(request);
-            [SunderRpcMethod] public ValueTask<ConcreteValue> WrappedConcreteAsync(ConcreteValue request) => Respond(request);
-            [SunderRpcMethod] public ValueTask<ConstructorNode> ConstructedAsync(ConstructorNode request) => Respond(request);
-            [SunderRpcMethod] public async IAsyncEnumerable<ConstructorNode> ConstructedWatchAsync(ConstructorNode request)
+            [SunderMethod] public ValueTask<Payload> ConcretePayloadAsync(Payload request) => Respond(request);
+            [SunderMethod] public ValueTask<Marker> ConcreteMarkerAsync(Marker request) => Respond(request);
+            [SunderMethod] public ValueTask<ConcreteValue> WrappedConcreteAsync(ConcreteValue request) => Respond(request);
+            [SunderMethod] public ValueTask<ConstructorNode> ConstructedAsync(ConstructorNode request) => Respond(request);
+            [SunderMethod] public async IAsyncEnumerable<ConstructorNode> ConstructedWatchAsync(ConstructorNode request)
             {
                 yield return await ConstructedAsync(request);
             }
-            [SunderRpcMethod] public async IAsyncEnumerable<Choice> ChoiceWatchAsync(Choice request)
+            [SunderMethod] public async IAsyncEnumerable<Choice> ChoiceWatchAsync(Choice request)
             {
                 yield return await ChoiceAsync(request);
             }
-            [SunderRpcMethod] public ValueTask<Envelope> NestedAsync(Envelope request) => Respond(request);
-            [SunderRpcMethod] public async IAsyncEnumerable<Envelope> NestedWatchAsync(Envelope request)
+            [SunderMethod] public ValueTask<Envelope> NestedAsync(Envelope request) => Respond(request);
+            [SunderMethod] public async IAsyncEnumerable<Envelope> NestedWatchAsync(Envelope request)
             {
                 yield return await NestedAsync(request);
             }
-            [SunderRpcMethod] public ValueTask<Signal> UnknownAsync(Signal request) => Respond<Signal>(new UnknownSignal());
-            [SunderRpcMethod] public async IAsyncEnumerable<Signal> UnknownWatchAsync(Signal request)
+            [SunderMethod] public ValueTask<Signal> UnknownAsync(Signal request) => Respond<Signal>(new UnknownSignal());
+            [SunderMethod] public async IAsyncEnumerable<Signal> UnknownWatchAsync(Signal request)
             {
                 yield return await UnknownAsync(request);
             }
-            [SunderRpcMethod] public ValueTask<Choice> UnknownChoiceAsync(Choice request) => Respond<Choice>(new UnknownChoice());
-            [SunderRpcMethod] public ValueTask<Signal> InvalidAsync(Signal request)
+            [SunderMethod] public ValueTask<Choice> UnknownChoiceAsync(Choice request) => Respond<Choice>(new UnknownChoice());
+            [SunderMethod] public ValueTask<Signal> InvalidAsync(Signal request)
                 => Respond<Signal>(new Payload { Flag = false, Count = new() { Value = 11 }, Priority = Priority.Zero, Text = null, Escaped = false });
-            [SunderRpcMethod] public ValueTask<Signal> CollisionAsync(Signal request) => Respond<Signal>(new CollisionSignal());
-            [SunderRpcMethod] public ValueTask<Signal> NullAsync(Signal request)
+            [SunderMethod] public ValueTask<Signal> CollisionAsync(Signal request) => Respond<Signal>(new CollisionSignal());
+            [SunderMethod] public ValueTask<Signal> NullAsync(Signal request)
             {
                 Calls++;
                 return ValueTask.FromResult<Signal>(null!);
             }
-            [SunderRpcMethod] public async IAsyncEnumerable<Signal> NullWatchAsync(Signal request)
+            [SunderMethod] public async IAsyncEnumerable<Signal> NullWatchAsync(Signal request)
             {
                 yield return await NullAsync(request);
             }
-            [SunderRpcMethod] public ValueTask<Signal> CycleAsync(Signal request)
+            [SunderMethod] public ValueTask<Signal> CycleAsync(Signal request)
             {
                 var children = new List<Signal?>();
                 var branch = new Branch
@@ -722,11 +740,14 @@ public sealed class SunderRpcCSharpUnionCodecTests
                 return Respond<Signal>(branch);
             }
         }
-        [SunderRpcDefinition("WireSignal")]
-        [SunderRpcUnion(typeof(Payload), typeof(Marker), typeof(Branch), typeof(CollisionSignal), typeof(ConcreteNode), typeof(ConstructorNode))]
-        [SunderRpcDiscriminator("k\n\"\\\u96ea")]
+        [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
+        [JsonDerivedType(typeof(Payload), "payload")]
+        [JsonDerivedType(typeof(Marker), "marker")]
+        [SunderValue("WireSignal")]
+        [SunderUnion(typeof(Payload), typeof(Marker), typeof(Branch), typeof(CollisionSignal), typeof(ConcreteNode), typeof(ConstructorNode))]
+        [SunderDiscriminator("k\n\"\\\u96ea")]
         public abstract record Signal;
-        [SunderRpcDefinition("WirePayload"), SunderRpcVariant("case")]
+        [SunderValue("WirePayload"), SunderVariant("case")]
         public sealed partial record Payload : Signal
         {
             public required bool Flag { get; init; }
@@ -735,9 +756,9 @@ public sealed class SunderRpcCSharpUnionCodecTests
             public required string? Text { get; init; }
             public SunderRpcOptional<int> OptionalCount { get; init; } = new(9);
         }
-        [SunderRpcVariant("Case")]
+        [SunderVariant("Case")]
         public sealed record Marker : Signal;
-        [SunderRpcVariant("\t\r\n\"\\caf\u00e9\U0001f680")]
+        [SunderVariant("\t\r\n\"\\caf\u00e9\U0001f680")]
         public sealed record Branch : Signal
         {
             public required IReadOnlyList<Signal?> Children { get; init; }
@@ -746,7 +767,7 @@ public sealed class SunderRpcCSharpUnionCodecTests
             public required Choice Choice { get; init; }
             public SunderRpcOptional<Signal?> OptionalChild { get; init; } = new(new Marker());
         }
-        [SunderRpcVariant("node")]
+        [SunderVariant("node")]
         public sealed record ConcreteNode : Signal
         {
             public required IReadOnlyList<ConcreteNode> Children { get; init; }
@@ -755,9 +776,9 @@ public sealed class SunderRpcCSharpUnionCodecTests
             public SunderRpcOptional<ConcreteNode?> Next { get; init; } = new(null);
             public SunderRpcOptional<ConcreteNode> Peer { get; init; }
         }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public sealed record ConcreteValue { public required ConcreteNode Value { get; init; } }
-        [SunderRpcVariant("constructor")]
+        [SunderVariant("constructor")]
         public sealed record ConstructorNode : Signal
         {
             [JsonConstructor, System.Diagnostics.CodeAnalysis.SetsRequiredMembers]
@@ -771,7 +792,7 @@ public sealed class SunderRpcCSharpUnionCodecTests
             public required IReadOnlyList<ConstructorNode> Children { get; init; }
         }
         public sealed record UnknownSignal : Signal;
-        [SunderRpcVariant("collision"), JsonConverter(typeof(CollisionConverter))]
+        [SunderVariant("collision"), JsonConverter(typeof(CollisionConverter))]
         public sealed record CollisionSignal : Signal;
         public sealed class CollisionConverter : JsonConverter<CollisionSignal>
         {
@@ -787,28 +808,28 @@ public sealed class SunderRpcCSharpUnionCodecTests
                 writer.WriteEndObject();
             }
         }
-        [SunderRpcUnion(typeof(RecordChoice), typeof(WrappedChoice))]
+        [SunderUnion(typeof(RecordChoice), typeof(WrappedChoice))]
         public abstract record Choice;
         public sealed record RecordChoice : Choice
         {
-            [SunderRpcFacet(ConstantString = "record")] public required string Kind { get; init; }
+            [SunderValueConstraints(ConstantString = "record")] public required string Kind { get; init; }
             public required Status State { get; init; }
             public required IReadOnlyList<CountValue> Values { get; init; }
         }
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public sealed record WrappedChoice : Choice { public required ChoiceData Value { get; init; } }
         public sealed record ChoiceData
         {
-            [SunderRpcFacet(ConstantString = "wrapped")] public required string Kind { get; init; }
+            [SunderValueConstraints(ConstantString = "wrapped")] public required string Kind { get; init; }
             public required IReadOnlyDictionary<string, Status> Values { get; init; }
         }
         public sealed record UnknownChoice : Choice;
-        [SunderRpcTransparent]
+        [SunderTransparentValue]
         public readonly record struct CountValue
         {
-            [SunderRpcFacet(Minimum = "0", Maximum = "10")] public required int Value { get; init; }
+            [SunderValueConstraints(Minimum = "0", Maximum = "10")] public required int Value { get; init; }
         }
-        [SunderRpcNumericEnum] public enum Priority { Zero = 0, Seven = 7 }
+        [SunderNumericEnum] public enum Priority { Zero = 0, Seven = 7 }
         public enum Status
         {
             [JsonStringEnumMemberName("ready\n\"\\")] Ready,

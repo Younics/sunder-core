@@ -920,7 +920,7 @@ internal sealed class PackageSessionState(
             out recoveryRequest,
             out _);
 
-    internal bool HandleExecutionRuntimePolicyFault(
+    internal bool HandlePackageExecutionFault(
         string packageId,
         RuntimePackageGeneration runtimeGeneration,
         long expectedGeneration,

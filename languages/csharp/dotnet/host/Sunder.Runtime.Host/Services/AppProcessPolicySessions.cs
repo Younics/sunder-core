@@ -137,7 +137,7 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
     {
         if (request.SnapshotId is not { Length: 32 } id || snapshots.PolicySource(id) is not { } source
             || PackageUiSnapshotStore.PolicySubject(source) != request.Package) throw Required();
-        await admission.RequireAsync(source, null, token);
+        await admission.RequireAsync(source, token);
         await _gate.WaitAsync(token);
         try
         {
@@ -146,7 +146,7 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
             await RequireLoadedAllowedAsync(entry);
             if (entry.Record.State != RuntimeAppPolicySessionStates.Active || entry.Process?.Probe() != AppPolicyProcessState.Alive
                 || !ReferenceEquals(source, snapshots.PolicySource(id))) throw Required();
-            admission.Require(source, null);
+            admission.Require(source);
             var development = source.Kind == PackageSourceKind.Dev;
             var subject = new RegistryPackageVersionIdentity(request.Package.PackageId, request.Package.Version, request.Package.PackageContentIdentity);
             var developmentPlatforms = development && source.DevelopmentImports is not { IsLocal: true }
@@ -178,7 +178,7 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
             // conservative loaded record, but never return an obsolete permission.
             await RequireLoadedAllowedAsync(entry);
             if (entry.Process?.Probe() != AppPolicyProcessState.Alive || !ReferenceEquals(source, snapshots.PolicySource(id))) throw Required();
-            admission.Require(source, null);
+            admission.Require(source);
             var lease = development ? developmentPlatforms.Length == 0 ? null : policies.PlatformLease(origin!, developmentPlatforms) : policies.PackageLease(origin!, subject);
             return new(true, null, Guid.NewGuid().ToString("N"), request.Session, request.Package, lease) { Development = development };
         }
@@ -277,7 +277,7 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
     internal IReadOnlyList<PackagePolicySubjects> CapturePolicySubjects() => _sessions.Values.SelectMany(entry => entry.Record.Loaded)
         .Where(loaded => loaded.RegistryOrigin is not null)
         .Select(loaded => new PackagePolicySubjects(loaded.RegistryOrigin!,
-            loaded.Development ? [] : [new(loaded.Package.PackageId, loaded.Package.Version, loaded.Package.PackageContentIdentity)], loaded.Platforms, [])).ToArray();
+            loaded.Development ? [] : [new(loaded.Package.PackageId, loaded.Package.Version, loaded.Package.PackageContentIdentity)], loaded.Platforms)).ToArray();
 
     private string? LoadedDenial(AppPolicySessionFile record)
     {
@@ -285,7 +285,7 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
         {
             if (!loaded.Development)
             {
-                try { policies.RequireActivation(loaded.RegistryOrigin!, new(loaded.Package.PackageId, loaded.Package.Version, loaded.Package.PackageContentIdentity), []); }
+                try { policies.RequireActivation(loaded.RegistryOrigin!, new(loaded.Package.PackageId, loaded.Package.Version, loaded.Package.PackageContentIdentity)); }
                 catch (PackagePolicyDeniedException error) { return error.Code; }
             }
             else if (loaded.Platforms.Count > 0)

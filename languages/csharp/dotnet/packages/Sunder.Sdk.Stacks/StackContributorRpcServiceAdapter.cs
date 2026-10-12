@@ -1,11 +1,12 @@
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Wire = Sunder.Sdk.Stacks.Wire;
 
 namespace Sunder.Sdk.Stacks;
 
-[SunderRpcService(SunderRpcExposure.Public,
+[SunderService(SunderServiceExposure.Public,
     ContractId = SunderStackContributorRpc.ContractId, ServiceId = SunderStackContributorRpc.ServiceId)]
-[SunderRpcDomainError("stack.method.unsupported",
+[SunderServiceError("stack.method.unsupported",
     Description = "The contributor does not implement the requested optional Stack operation.")]
 internal sealed partial class StackContributorRpcServiceAdapter
 {
@@ -16,7 +17,7 @@ internal sealed partial class StackContributorRpcServiceAdapter
     public StackContributorRpcServiceAdapter(IPackageStackContributor contributor)
         => _adapter = new(contributor);
 
-    [SunderRpcMethod(MethodId = "metadata", Idempotency = SunderRpcMethodIdempotency.Idempotent)]
+    [SunderMethod(MethodId = "metadata", Idempotency = SunderServiceIdempotency.Idempotent)]
     public async ValueTask<Wire.StackContributorMetadata> GetMetadataAsync(StackRpcEmpty request)
     {
         var value = await _adapter.GetMetadataAsync().ConfigureAwait(false);
@@ -24,7 +25,7 @@ internal sealed partial class StackContributorRpcServiceAdapter
             SupportsExport = value.SupportsExport, SupportsImport = value.SupportsImport, SupportsImportApplied = value.SupportsImportApplied };
     }
 
-    [SunderRpcMethod(MethodId = "list-export-items", Idempotency = SunderRpcMethodIdempotency.Idempotent,
+    [SunderMethod(MethodId = "list-export-items", Idempotency = SunderServiceIdempotency.Idempotent,
         Errors = ["stack.method.unsupported"])]
     public async ValueTask<Wire.StackExportItemList> ListExportItemsAsync(
         Wire.StackExportDiscoveryContext request,
@@ -39,7 +40,7 @@ internal sealed partial class StackContributorRpcServiceAdapter
             },
         };
 
-    [SunderRpcMethod(MethodId = "export", Idempotency = SunderRpcMethodIdempotency.Idempotent,
+    [SunderMethod(MethodId = "export", Idempotency = SunderServiceIdempotency.Idempotent,
         Errors = ["stack.method.unsupported"])]
     public async ValueTask<Wire.StackRpcExportContribution> ExportAsync(
         Wire.StackExportRequest request,
@@ -59,7 +60,7 @@ internal sealed partial class StackContributorRpcServiceAdapter
         };
     }
 
-    [SunderRpcMethod(MethodId = "preview-import", Idempotency = SunderRpcMethodIdempotency.Idempotent,
+    [SunderMethod(MethodId = "preview-import", Idempotency = SunderServiceIdempotency.Idempotent,
         Errors = ["stack.method.unsupported"])]
     public async ValueTask<Wire.StackImportPreview> PreviewImportAsync(
         Wire.StackRpcImportPreviewRequest request,
@@ -72,7 +73,7 @@ internal sealed partial class StackContributorRpcServiceAdapter
                 request.IdRemaps.ToPublic()),
             context, cancellationToken).ConfigureAwait(false));
 
-    [SunderRpcMethod(MethodId = "import", Idempotency = SunderRpcMethodIdempotency.None,
+    [SunderMethod(MethodId = "import", Idempotency = SunderServiceIdempotency.None,
         Errors = ["stack.method.unsupported"])]
     public async ValueTask<Wire.StackImportResult> ImportAsync(
         Wire.StackRpcImportRequest request,
@@ -86,7 +87,7 @@ internal sealed partial class StackContributorRpcServiceAdapter
                 request.SelectedActionIds.ToPublic()),
             context, cancellationToken).ConfigureAwait(false));
 
-    [SunderRpcMethod(MethodId = "import-applied", Idempotency = SunderRpcMethodIdempotency.None,
+    [SunderMethod(MethodId = "import-applied", Idempotency = SunderServiceIdempotency.None,
         Errors = ["stack.method.unsupported"])]
     public async ValueTask<StackRpcEmpty> ImportAppliedAsync(
         Wire.StackImportAppliedContext request,

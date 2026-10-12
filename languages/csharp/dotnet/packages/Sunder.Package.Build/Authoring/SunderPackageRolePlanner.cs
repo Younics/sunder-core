@@ -6,6 +6,7 @@ using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Package.Build.Authoring;
 
@@ -19,7 +20,8 @@ internal static class SunderPackageRolePlanner
         CSharpCompilation compilation,
         IReadOnlyList<SyntaxTree> ordinaryTrees,
         IEnumerable<INamedTypeSymbol>? portableValues = null,
-        IReadOnlyList<SunderPackageMarkupType>? markupTypes = null)
+        IReadOnlyList<SunderPackageMarkupType>? markupTypes = null,
+        IReadOnlySet<INamedTypeSymbol>? trustedImportedModelTypes = null)
     {
         ArgumentNullException.ThrowIfNull(compilation);
         ArgumentNullException.ThrowIfNull(ordinaryTrees);
@@ -51,8 +53,8 @@ internal static class SunderPackageRolePlanner
         var roleAttribute = sdk.GetTypeByMetadataName(typeof(SunderPackageCodeRoleAttribute).FullName!)!;
         var viewAttribute = sdk.GetTypeByMetadataName(typeof(SunderPackageViewAttribute).FullName!)!;
         var settingsAttribute = sdk.GetTypeByMetadataName(typeof(SunderPackageSettingsViewAttribute).FullName!)!;
-        var serviceAttribute = sdk.GetTypeByMetadataName(typeof(SunderRpcServiceAttribute).FullName!)!;
-        var providerAttribute = sdk.GetTypeByMetadataName(typeof(SunderRpcProviderAttribute).FullName!)!;
+        var serviceAttribute = sdk.GetTypeByMetadataName(typeof(SunderServiceAttribute).FullName!)!;
+        var providerAttribute = sdk.GetTypeByMetadataName(typeof(SunderServiceProviderAttribute).FullName!)!;
         var controls = compilation.GetTypeByMetadataName("Avalonia.Controls.Control");
         if (controls?.ContainingAssembly.Identity.Name != "Avalonia.Controls") controls = null;
 
@@ -158,6 +160,10 @@ internal static class SunderPackageRolePlanner
         foreach (var use in markupTypes ?? [])
         {
             var type = compilation.Assembly.GetTypeByMetadataName(use.MetadataName);
+            // These symbols were proven against regenerated, pinned model source
+            // in this compilation. Binding to their shape is not source ownership
+            // or permission to consume their authority's service API.
+            if (use.IsBindingDataType && type is not null && trustedImportedModelTypes?.Contains(type) == true) continue;
             if (type is null || !nodes.TryGetValue(Owner(type), out var node))
                 diagnostics.Add(new("package-authoring.xaml-type-invalid", $"Markup type '{use.MetadataName}' is not ordinary package source.", use.Path, use.Line, use.Column));
             else if (node.Fixed is { } fixedRole && (fixedRole & SunderPackageRoleMembership.App) == 0)

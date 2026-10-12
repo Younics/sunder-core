@@ -48,7 +48,7 @@ internal static partial class SunderRpcCSharpImplementationEmitter
         if (providerNamespace is not null) output.Append("namespace ").Append(providerNamespace).AppendLine("\n{");
         output.Append("partial class ").Append(EscapeIdentifier(provider.SourceType.Name)).AppendLine("\n{")
             .Append("    public ").Append(hidesRegistration ? "new " : string.Empty)
-            .AppendLine("global::Sunder.Sdk.Worker.SunderWorkerProviderRegistration CreateSunderRpcProviderRegistration()")
+            .Append("global::Sunder.Sdk.Worker.SunderWorkerProviderRegistration ").Append(provider.RegistrationFactory).AppendLine("()")
             .AppendLine("        => new(")
             .Append("            \"").Append(EscapeString(provider.ProviderId)).AppendLine("\",")
             .Append("            \"").Append(EscapeString(contract.Descriptor.ContractId)).AppendLine("\",")
@@ -58,7 +58,10 @@ internal static partial class SunderRpcCSharpImplementationEmitter
             .Append("            new global::").Append(EscapeNamespace(contract.GeneratedLogicalName)).Append('.').Append(model.HandlerTypeName)
             .Append("(new global::").Append(EscapeNamespace(contract.GeneratedLogicalName)).Append('.').Append(bridge)
             .Append("(new ").Append(adapterType).Append("((").Append(adapter.DomainInterface.ToDisplayString(TypeDisplayFormat)).AppendLine(")this))));");
-        EmitProviderDeclaration(output, contract.Descriptor, provider.ProviderId, hidesRegistration);
+        EmitProviderDeclaration(output, contract.Descriptor, provider, hidesRegistration);
+        output.Append("    internal ").Append(hidesRegistration ? "new " : "")
+            .Append("global::Sunder.Sdk.Worker.SunderWorkerProviderRegistration ").Append(provider.ServicesFactory)
+            .Append("(global::Sunder.Sdk.Rpc.ISunderRpcClient receiver, global::System.IServiceProvider services) => ").Append(provider.RegistrationFactory).AppendLine("();");
         output.AppendLine("}");
         if (providerNamespace is not null) output.AppendLine("}");
         output.Append("namespace ").Append(EscapeNamespace(contract.GeneratedLogicalName)).AppendLine("\n{")

@@ -169,7 +169,7 @@ internal sealed class AppProcessPolicySupervisor : IAppPackagePolicy, IAsyncDisp
     {
         var now = _clock();
         var evidence = lease.Clock;
-        if (lease.Watermark is not { PackagePolicyRevision: > 0, RuntimePolicyRevision: > 0, CheckpointSequence: > 0, TopologyGeneration: > 0 }
+        if (lease.Watermark is not { PackagePolicyRevision: > 0, CheckpointSequence: > 0, TopologyGeneration: > 0 }
             || lease.ResponseNonce is not { Length: 32 } || lease.ResponseSha256 is not { Length: 64 }
             || lease.ObservedAtUtc is null || lease.ValidUntilUtc - lease.ObservedAtUtc != TimeSpan.FromSeconds(RuntimePolicyTiming.LeaseSeconds)
             || evidence is null || evidence.BootSessionId != now.BootSessionId || evidence.ClockSource != now.Source || evidence.TicksPerSecond != now.Frequency

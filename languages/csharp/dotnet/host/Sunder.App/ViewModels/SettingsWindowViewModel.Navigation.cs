@@ -33,7 +33,11 @@ public sealed partial class SettingsWindowViewModel
 
         _selectionLoadRequest.Invalidate();
         ApplyCoreSelection(item);
-        if (IsCliSelection)
+        if (IsPackageRuntimesSelection && _windowVisible && PackageRuntimes is not null)
+        {
+            await PackageRuntimes.ActivateAsync();
+        }
+        else if (IsCliSelection)
         {
             await RefreshCliStatusAsync(showSuccessStatus: false);
         }

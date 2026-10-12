@@ -46,7 +46,7 @@ expected_coordinator_sha="${SUNDER_PRODUCTION_ACCEPTANCE_COORDINATOR_SHA256:-}"
 [[ "$GH_REPO" == "Younics/sunder-core" ]] \
   || { printf 'Expected GitHub repository Younics/sunder-core, received %s.\n' "$GH_REPO" >&2; exit 2; }
 
-for required_command in find gh jq sort; do
+for required_command in find gh jq python3 sort; do
   command -v "$required_command" >/dev/null 2>&1 \
     || { printf '%s is required to verify production acceptance.\n' "$required_command" >&2; exit 127; }
 done
@@ -85,6 +85,7 @@ jq -e \
   --arg expected_coordinator_sha "$expected_coordinator_sha" \
   --arg component_check "$required_component_check" '
     .schemaVersion == 1
+    and keys == ["checks","decision","invocation","kind","nativeReceipts","release","schemaVersion"]
     and .kind == "https://sunderapp.io/acceptance/production/v1"
     and .decision == "accepted"
     and .release == {
@@ -107,7 +108,7 @@ jq -e \
     }
     and (.invocation.coordinatorSha256 | test("^[0-9a-f]{64}$"))
     and ($expected_coordinator_sha == "" or .invocation.coordinatorSha256 == $expected_coordinator_sha)
-    and (.checks | type == "array" and length >= 6)
+    and (.checks | type == "array" and length >= 5)
     and ([.checks[].id] | length == (unique | length))
     and all(.checks[];
       (.id | test("^[a-z][a-z0-9-]+$"))
@@ -118,8 +119,10 @@ jq -e \
     and ([.checks[] | select(.id == "production-install")] | length == 1)
     and ([.checks[] | select(.id == "production-update")] | length == 1)
     and ([.checks[] | select(.id == "production-recovery")] | length == 1)
-    and ([.checks[] | select(.id == "production-migration")] | length == 1)
     and ([.checks[] | select(.id == $component_check)] | length == 1)
+    and ([.nativeReceipts[].rid] | sort) == ["linux-arm64","linux-x64","osx-arm64","osx-x64","win-arm64","win-x64"]
+    and all(.nativeReceipts[]; keys == ["driverSha256","rid","sha256"]
+      and (.sha256 | test("^[0-9a-f]{64}$")) and (.driverSha256 | test("^[0-9a-f]{64}$")))
   ' "$decision" >/dev/null \
   || { printf 'Production acceptance decision is incomplete or not bound to the selected release.\n' >&2; exit 1; }
 
@@ -171,9 +174,7 @@ done < <(jq -r '.files[] | [.path, .sha256, (.size | tostring)] | @tsv' "$manife
 
 rids=(win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64)
 for rid in "${rids[@]}"; do
-  [[ -f "$evidence_directory/core-production-$rid.json" \
-      && -f "$evidence_directory/runtime-native-output-$rid.json" \
-      && -f "$evidence_directory/runtime-reproducibility-$rid.json" ]] \
+  [[ -f "$evidence_directory/core-production-$rid.json" ]] \
     || { printf "Production acceptance is missing durable native receipts for '%s'.\n" "$rid" >&2; exit 1; }
 done
 jq -s -e \
@@ -190,7 +191,9 @@ jq -s -e \
     length == 6
     and ([.[].rid] | sort) == ["linux-arm64","linux-x64","osx-arm64","osx-x64","win-arm64","win-x64"]
     and all(.[];
-      .decision == "accepted"
+      keys == ["checks","decision","evidence","invocation","kind","release","rid","runnerProfile","runtimeInstallations","schemaVersion"]
+      and .schemaVersion == 1 and .kind == "https://sunderapp.io/acceptance/core-native/v1"
+      and .decision == "accepted"
       and .release == {
         repository:$repository,component:$component,releaseId:$release_id,tag:$tag,sourceSha:$source_sha,
         publicationRunId:$publication_run_id,publicationRunAttempt:$publication_run_attempt
@@ -200,65 +203,27 @@ jq -s -e \
       and .invocation.workflowSha == $workflow_sha
       and .invocation.runId == $run_id
       and .invocation.runAttempt == $run_attempt
-      and (.invocation.driverSha256 | test("^[0-9a-f]{64}$")))
+      and (.invocation.driverSha256 | test("^[0-9a-f]{64}$"))
+      and (.checks | type == "array" and length > 0)
+      and ([.checks[].id] | length) == ([.checks[].id] | unique | length)
+      and ([.checks[].id] | index("official-runtime-install-launch") != null)
+      and ([.checks[].id] | index("official-runtime-source-checksum") != null)
+      and ([.checks[].id] | index("ambient-runtime-isolation") != null)
+      and all(.checks[]; .status == "passed" and (.evidenceIds | type == "array" and length > 0))
+      and (.evidence | type == "array" and length > 0)
+      and all(.evidence[]; (.sha256 | test("^[0-9a-f]{64}$")) and (.size | type == "number" and floor == . and . > 0))
+      and ([.checks[].evidenceIds[]] | unique | sort) == ([.evidence[].id] | sort))
   ' "$evidence_directory"/core-production-*.json >/dev/null \
   || { printf 'Durable Core native receipts do not bind the selected invocation and reviewed driver digests.\n' >&2; exit 1; }
-jq -s -e \
-  --arg repository "$GH_REPO" \
-  --arg workflow_sha "$production_workflow_sha" \
-  --arg run_id "$production_run_id" \
-  --arg run_attempt "$production_run_attempt" '
-    length == 6
-    and ([.[].rid] | sort) == ["linux-arm64","linux-x64","osx-arm64","osx-x64","win-arm64","win-x64"]
-    and all(.[];
-      .repository == $repository
-      and .invocation == {workflowSha:$workflow_sha,runId:$run_id,runAttempt:$run_attempt}
-      and (.releaseDriverSha256 | test("^[0-9a-f]{64}$")))
-  ' "$evidence_directory"/runtime-reproducibility-*.json >/dev/null \
-  || { printf 'Durable runtime reproducibility receipts do not bind reviewed release-driver digests.\n' >&2; exit 1; }
 for rid in "${rids[@]}"; do
   core_receipt="$evidence_directory/core-production-$rid.json"
-  native_receipt="$evidence_directory/runtime-native-output-$rid.json"
-  reproduction="$evidence_directory/runtime-reproducibility-$rid.json"
-  jq -e \
-    --arg rid "$rid" \
-    --arg native_receipt_sha "$(hash_file "$native_receipt")" \
-    --slurpfile native_receipt "$native_receipt" '
-      .schemaVersion == 1
-      and .kind == "https://sunderapp.io/acceptance/runtime-reproducibility/v1"
-      and .rid == $rid
-      and .nativeOutputReceiptSha256 == $native_receipt_sha
-      and .releaseDriverSha256 == $native_receipt[0].releaseDriverSha256
-      and .runtimeLockSha256 == $native_receipt[0].runtimeLockSha256
-      and $native_receipt[0].schemaVersion == 1
-      and $native_receipt[0].kind == "https://sunderapp.io/acceptance/runtime-native-output/v1"
-      and $native_receipt[0].rid == $rid
-      and ($native_receipt[0].releaseDriverSha256 | test("^[0-9a-f]{64}$"))
-      and ($native_receipt[0].artifacts | length) == 2
-      and ([ $native_receipt[0].artifacts[] | {path:.archiveFile,sha256:.archiveSha256,size:.archiveSize}] | sort_by(.path)) == .firstBuild
-      and .firstBuild == .secondBuild
-    ' "$reproduction" >/dev/null \
-    || { printf "Durable runtime native receipt for '%s' does not bind its reviewed driver and reproducible archives.\n" "$rid" >&2; exit 1; }
-  jq -e \
-    --arg rid "$rid" \
-    --arg reproduction_sha "$(hash_file "$reproduction")" \
-    --slurpfile native_receipt "$native_receipt" \
-    --slurpfile reproduction "$reproduction" '
-      .rid == $rid
-      and .runtimeLockSha256 == $native_receipt[0].runtimeLockSha256
-      and .reproducibilitySha256 == $reproduction_sha
-      and ([.runtimeArtifacts[] | {
-        runtimeId,version,packagingRevision,rid,moduleAbi,workerProtocol,
-        minimumHostTrustGeneration,releaseSigningKeyId,nativeAttestationKeyId
-      }] | sort_by(.runtimeId))
-        == ([$native_receipt[0].artifacts[] | {
-          runtimeId,version,packagingRevision,rid,moduleAbi,workerProtocol,
-          minimumHostTrustGeneration,releaseSigningKeyId,nativeAttestationKeyId
-        }] | sort_by(.runtimeId))
-      and ([.runtimeArtifacts[] | {path:.archiveFile,sha256:.archiveSha256,size:.archiveSize}] | sort_by(.path))
-        == $reproduction[0].firstBuild
-    ' "$core_receipt" >/dev/null \
-    || { printf "Durable Core native receipt for '%s' does not bind the canonical runtime receipts.\n" "$rid" >&2; exit 1; }
+  jq -e --arg rid "$rid" --arg sha "$(hash_file "$core_receipt")" \
+    --arg driver "$(jq -er '.invocation.driverSha256' "$core_receipt")" '
+      [.nativeReceipts[] | select(.rid == $rid and .sha256 == $sha and .driverSha256 == $driver)] | length == 1
+    ' "$decision" >/dev/null \
+    || { printf 'Native acceptance bytes/driver differ from the coordinator decision.\n' >&2; exit 1; }
+  python3 -B "$(dirname "$0")/official_runtime_evidence.py" "$core_receipt" --rid "$rid" \
+    || { printf "Durable Core native evidence for '%s' does not contain verified Host installation records.\n" "$rid" >&2; exit 1; }
 done
 
 if [[ "$candidate_only" == "true" ]]; then

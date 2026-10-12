@@ -1,10 +1,11 @@
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Local = Sunder.Sdk.Stacks;
 
 namespace Sunder.Sdk.Stacks.Wire;
 
 // These values retain the shipped aliases and absent/non-null members without changing the public local DTOs.
-[SunderRpcTransparent, SunderRpcDefinition("Id"), SunderRpcFacet(MinLength = 1, MaxLength = 256)]
+[SunderTransparentValue, SunderValue("Id"), SunderValueConstraints(MinLength = 1, MaxLength = 256)]
 internal readonly record struct Id
 {
     public required string Value { get; init; }
@@ -14,7 +15,7 @@ internal readonly record struct Id
         => value is null ? default(SunderRpcOptional<Id>) : new Id { Value = value };
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinLength = 0, MaxLength = 4096)]
+[SunderTransparentValue, SunderValueConstraints(MinLength = 0, MaxLength = 4096)]
 internal readonly record struct ShortText
 {
     public required string Value { get; init; }
@@ -24,7 +25,7 @@ internal readonly record struct ShortText
         => value is null ? default(SunderRpcOptional<ShortText>) : new ShortText { Value = value };
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinLength = 0, MaxLength = 1000000)]
+[SunderTransparentValue, SunderValueConstraints(MinLength = 0, MaxLength = 1000000)]
 internal readonly record struct Text
 {
     public required string Value { get; init; }
@@ -34,25 +35,25 @@ internal readonly record struct Text
         => value is null ? default(SunderRpcOptional<Text>) : new Text { Value = value };
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinLength = 2, MaxLength = 1000000)]
+[SunderTransparentValue, SunderValueConstraints(MinLength = 2, MaxLength = 1000000)]
 internal readonly record struct JsonText
 {
     public required string Value { get; init; }
 }
 
-[SunderRpcTransparent, SunderRpcFacet(Minimum = "1", Maximum = "2147483647")]
+[SunderTransparentValue, SunderValueConstraints(Minimum = "1", Maximum = "2147483647")]
 internal readonly record struct SchemaVersion
 {
     public required int Value { get; init; }
 }
 
-[SunderRpcTransparent, SunderRpcDefinition("SunderRpcContentReference")]
+[SunderTransparentValue, SunderValue("SunderRpcContentReference")]
 internal sealed class ContentReference
 {
     public required SunderRpcContentReference Value { get; init; }
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StringList
 {
     public required IReadOnlyList<Text> Value { get; init; }
@@ -60,14 +61,14 @@ internal sealed class StringList
         => new() { Value = value.Select(item => (Text)item).ToArray() };
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class IdList
 {
     public required IReadOnlyList<Id> Value { get; init; }
     public IReadOnlyList<string> ToPublic() => Value.Select(item => item.Value).ToArray();
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinProperties = 0, MaxProperties = 10000, MinLength = 1, MaxLength = 1024)]
+[SunderTransparentValue, SunderValueConstraints(MinProperties = 0, MaxProperties = 10000, MinLength = 1, MaxLength = 1024)]
 internal sealed class StringMap
 {
     public required IReadOnlyDictionary<string, Text> Value { get; init; }
@@ -83,7 +84,7 @@ internal sealed class StackRpcPayloadFile
     public required ContentReference Content { get; init; }
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackRpcPayloadFileList
 {
     public required IReadOnlyList<StackRpcPayloadFile> Value { get; init; }
@@ -127,7 +128,7 @@ internal sealed class StackExportItemDetail
 
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackExportItemDetailList
 {
     public required IReadOnlyList<StackExportItemDetail> Value { get; init; }
@@ -152,7 +153,7 @@ internal sealed class StackExportItemDescriptor
 
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackExportItemDescriptorList
 {
     public required IReadOnlyList<StackExportItemDescriptor> Value { get; init; }
@@ -175,7 +176,7 @@ internal sealed class StackExportDetailSelection
         SensitivityOverride.IsPresent ? SensitivityOverride.Value : null);
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackExportDetailSelectionList
 {
     public required IReadOnlyList<StackExportDetailSelection> Value { get; init; }
@@ -190,7 +191,7 @@ internal sealed class StackExportItemSelection
         ItemId, Details.IsPresent ? Details.Value.Value.Select(item => item.ToPublic()).ToArray() : null);
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackExportItemSelectionList
 {
     public required IReadOnlyList<StackExportItemSelection> Value { get; init; }
@@ -219,7 +220,7 @@ internal sealed class StackRequiredInputDescriptor
 
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackRequiredInputDescriptorList
 {
     public required IReadOnlyList<StackRequiredInputDescriptor> Value { get; init; }
@@ -241,7 +242,7 @@ internal sealed class StackPackageRequirement
 
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackPackageRequirementList
 {
     public required IReadOnlyList<StackPackageRequirement> Value { get; init; }
@@ -274,7 +275,7 @@ internal sealed class StackRpcFragmentExport
 
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackRpcFragmentExportList
 {
     public required IReadOnlyList<StackRpcFragmentExport> Value { get; init; }
@@ -303,7 +304,7 @@ internal sealed class StackRpcFragmentImport
         Files.IsPresent ? Files.Value.Value.Select(file => new Local.StackRpcPayloadFile(file.RelativePath, file.Content.Value)).ToArray() : null);
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackRpcFragmentImportList
 {
     public required IReadOnlyList<StackRpcFragmentImport> Value { get; init; }
@@ -330,7 +331,7 @@ internal sealed class StackImportAction
     };
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackImportActionList
 {
     public required IReadOnlyList<StackImportAction> Value { get; init; }
@@ -348,7 +349,7 @@ internal sealed class StackImportConflict
     };
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackImportConflictList
 {
     public required IReadOnlyList<StackImportConflict> Value { get; init; }
@@ -387,7 +388,7 @@ internal sealed class StackImportedItem
     public Local.StackImportedItem ToPublic() => new(ItemId, DisplayName, Kind);
 }
 
-[SunderRpcTransparent, SunderRpcFacet(MinItems = 0, MaxItems = 10000)]
+[SunderTransparentValue, SunderValueConstraints(MinItems = 0, MaxItems = 10000)]
 internal sealed class StackImportedItemList
 {
     public required IReadOnlyList<StackImportedItem> Value { get; init; }

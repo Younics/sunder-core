@@ -12,6 +12,7 @@ public enum RuntimeEventKind
     PackageRecoveryStarted = 7,
     PackageRecoverySucceeded = 8,
     PackageRecoverySuspended = 9,
+    ExecutionRuntimesChanged = 10,
 }
 
 public enum RuntimeOperationPhase

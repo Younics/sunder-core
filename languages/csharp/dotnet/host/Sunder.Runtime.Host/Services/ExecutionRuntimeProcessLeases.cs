@@ -333,6 +333,18 @@ internal sealed class ExecutionRuntimeLeaseRegistry
         return identities;
     }
 
+    internal async Task<IReadOnlyList<ExecutionRuntimeProcessLeaseV1>> ReadLeasesUnderFenceAsync(CancellationToken token)
+    {
+        var result = new List<ExecutionRuntimeProcessLeaseV1>();
+        foreach (var path in EnumerateLeaseFiles())
+        {
+            var lease = await ReadAsync(path, token);
+            Validate(lease, path);
+            result.Add(lease);
+        }
+        return result;
+    }
+
     public bool HasActiveLeaseUnderFence(string contentIdentity)
     {
         ExecutionRuntimeStoreLayout.ValidateSha256(contentIdentity, nameof(contentIdentity));

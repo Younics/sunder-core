@@ -105,5 +105,4 @@ public sealed record RegistryPolicyStatusV1(
     [property: JsonRequired] RegistryPolicyIdentity? PackagePolicy,
     [property: JsonRequired] RegistryPolicyIdentity? PublicationAuthorityPolicy,
     [property: JsonRequired] RegistryPolicyIdentity? AuthorizationPolicy,
-    [property: JsonRequired] long? AuthorizationGeneration,
-    [property: JsonRequired] long? RuntimePolicyRevision);
+    [property: JsonRequired] long? AuthorizationGeneration);

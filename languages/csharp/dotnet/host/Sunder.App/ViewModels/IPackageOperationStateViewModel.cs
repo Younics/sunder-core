@@ -29,7 +29,8 @@ internal static class PackageOperationStateProjector
     public static string FormatStatus(BackgroundProcessSnapshot snapshot)
         => snapshot.State switch
         {
-            BackgroundProcessState.Queued => $"Queued: {snapshot.Title}",
+            BackgroundProcessState.Queued => string.IsNullOrWhiteSpace(snapshot.StatusText) || snapshot.StatusText == "Queued"
+                ? $"Queued: {snapshot.Title}" : snapshot.StatusText,
             BackgroundProcessState.Running => snapshot.StatusText,
             BackgroundProcessState.Cancelling => "Cancelling...",
             _ => snapshot.StatusText,

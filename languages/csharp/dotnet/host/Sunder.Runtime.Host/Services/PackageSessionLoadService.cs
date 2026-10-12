@@ -57,8 +57,7 @@ internal sealed partial class PackageSessionLoadService
         IReadOnlyList<InstalledPackageRecord> packages,
         IReadOnlyDictionary<string, string>? preparationSourcePaths = null,
         CancellationToken cancellationToken = default,
-        PackageSessionStartupTraceAttempt? startupTrace = null,
-        ExecutionRuntimeLifecyclePolicySnapshot? runtimePolicyAuthority = null)
+        PackageSessionStartupTraceAttempt? startupTrace = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var warnings = new List<string>();
@@ -91,8 +90,7 @@ internal sealed partial class PackageSessionLoadService
                             physicalSourceRoot,
                             sessionFolder,
                             token,
-                            startupTrace?.GetInstalledPackage(package),
-                            runtimePolicyAuthority)
+                            startupTrace?.GetInstalledPackage(package))
                         .ConfigureAwait(false);
                 }).ConfigureAwait(false);
         }
@@ -146,8 +144,7 @@ internal sealed partial class PackageSessionLoadService
         string physicalSourceRoot,
         string sessionFolder,
         CancellationToken cancellationToken,
-        PackageSessionStartupTracePackage? packageTrace,
-        ExecutionRuntimeLifecyclePolicySnapshot? runtimePolicyAuthority)
+        PackageSessionStartupTracePackage? packageTrace)
     {
         var errors = new List<string>();
         packageTrace?.BeginProjection();
@@ -208,7 +205,6 @@ internal sealed partial class PackageSessionLoadService
                     errors,
                     cancellationToken,
                     packageTrace,
-                    runtimePolicyAuthority,
                     validation)
                 .ConfigureAwait(false);
             if (preparedPackage is not null)

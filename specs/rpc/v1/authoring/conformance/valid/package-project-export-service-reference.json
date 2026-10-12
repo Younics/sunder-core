@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "producer": {
+    "name": "Sunder.Package.Build",
+    "version": "1.0.0",
+    "language": "csharp"
+  },
+  "projectIdentity": "Example.Package",
+  "configuration": "Release",
+  "targetFramework": "net10.0",
+  "inputFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "lockSha256": "48300c172fe8e323956ee95aa7cde02e30ca9ebd330179e328e3209fe31ead5a",
+  "packageId": "example.owner",
+  "packageVersion": "1.0.0",
+  "contracts": [
+    {
+      "contractKey": "serviceReference",
+      "contractId": "example.rpc.v1.servicereference",
+      "contractVersion": "2.0.0",
+      "exposure": "public",
+      "source": "owned",
+      "authorityKind": "package",
+      "authorityId": "example.owner",
+      "descriptorBytes": 1371,
+      "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"type\":\"object\"},\"Locator\":{\"additionalProperties\":false,\"properties\":{\"abiSha256\":{\"maxLength\":64,\"minLength\":64,\"type\":\"string\"},\"activationEpoch\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"},\"activationId\":{\"format\":\"uuid\",\"type\":\"string\"},\"contractId\":{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"},\"contractVersion\":{\"maxLength\":256,\"minLength\":5,\"type\":\"string\"},\"descriptorSha256\":{\"maxLength\":64,\"minLength\":64,\"type\":\"string\"},\"endpoint\":{\"maxLength\":256,\"minLength\":1,\"type\":\"string\"},\"packageId\":{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"},\"packageVersion\":{\"maxLength\":256,\"minLength\":5,\"type\":\"string\"},\"providerId\":{\"maxLength\":128,\"minLength\":1,\"type\":\"string\"},\"sessionGeneration\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"packageId\",\"packageVersion\",\"providerId\",\"contractId\",\"contractVersion\",\"descriptorSha256\",\"abiSha256\",\"activationId\",\"activationEpoch\",\"sessionGeneration\",\"endpoint\"],\"type\":\"object\"}},\"contractId\":\"example.rpc.v1.servicereference\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"resolve\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Locator\"}}}}},\"version\":\"2.0.0\"}",
+      "descriptorSha256": "d57b0bc9b7f4c3bb9446813ee700589b65cdf92e5c3a453b416f6264e04c1bcb",
+      "abiSha256": "3523858ff9d050290a2bca0f32d69af85cdff75cfe632dedbfe98ceece1b0c60",
+      "modelProjection": {
+        "models": {},
+        "serviceReferences": {
+          "Locator": {
+            "contractId": "example.rpc.v1.servicereference",
+            "serviceId": "example"
+          }
+        }
+      }
+    }
+  ]
+}

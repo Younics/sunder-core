@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sunder.dev/specs/rpc/v1/authoring/rpc-model-projection.schema.json",
+  "title": "Sunder RPC Model Projection V1",
+  "description": "Required public-only artifact sidecar. Exact descriptor linkage, public coverage, ordinal ordering, normalized model closures and eleven-field service-reference schemas are additionally validated by tooling. Maximum 4194304 UTF-8 bytes, depth 16, and 524288 keys/values/containers.",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 4,
+  "required": [
+    "schemaVersion",
+    "packageId",
+    "packageVersion",
+    "contracts"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "packageId": {
+      "$ref": "#/$defs/packageId"
+    },
+    "packageVersion": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "contracts": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/contract"
+      }
+    }
+  },
+  "$defs": {
+    "packageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:\\.[a-z0-9]+)*$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 256,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 6,
+      "required": [
+        "contractId",
+        "contractVersion",
+        "descriptorSha256",
+        "abiSha256",
+        "modelProjection"
+      ],
+      "properties": {
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "descriptorSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "abiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "modelProjection": {
+          "$ref": "#/$defs/modelProjection"
+        },
+        "methodPolicies": {
+          "$ref": "#/$defs/methodPolicies"
+        }
+      }
+    },
+    "methodPolicies": {
+      "description": "Optional ordinary call hints, omitted when empty. Keys must resolve in the exact descriptor. At most 64 services and 512 methods total across this contract; existing document budgets still apply. The host clamps effective deadlines. These hints do not affect descriptor/ABI hashes or RPC framing.",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 512,
+        "propertyNames": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "maxProperties": 1,
+          "required": [
+            "timeoutSeconds"
+          ],
+          "properties": {
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2100
+            }
+          }
+        }
+      }
+    },
+    "modelProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 3,
+      "required": [
+        "models",
+        "serviceReferences"
+      ],
+      "properties": {
+        "models": {
+          "type": "object",
+          "minProperties": 0,
+          "maxProperties": 256,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._-]+$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          }
+        },
+        "serviceReferences": {
+          "type": "object",
+          "minProperties": 0,
+          "maxProperties": 256,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._-]+$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "maxProperties": 2,
+            "required": [
+              "contractId",
+              "serviceId"
+            ],
+            "properties": {
+              "contractId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-z0-9]+(?:\\.[a-z0-9]+)*$"
+              },
+              "serviceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+              }
+            }
+          }
+        },
+        "optionalServiceReferenceMembers": {
+          "description": "Explicit per-record wire-member absence policy; omitted when empty. Owners are concrete reachable record definitions, including borrowed definitions without a models entry. Every member must be a direct wire-required nullable serviceReferences occurrence; aliases are resolved. At most 4096 members total. Absence is strict, never inferred from nullability. Policy participates in model identity closure and source/reexport/role byte agreement without changing descriptors or ABI hashes.",
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 256,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._-]+$"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        }
+      }
+    }
+  }
+}

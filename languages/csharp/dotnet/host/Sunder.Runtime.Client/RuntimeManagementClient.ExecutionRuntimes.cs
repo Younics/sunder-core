@@ -4,7 +4,7 @@ namespace Sunder.Runtime.Client;
 
 public sealed partial class RuntimeManagementClient
 {
-    private const string ExecutionRuntimeFeature = RuntimeProtocolFeatures.ExecutionRuntimeManagementV1;
+    private const string ExecutionRuntimeFeature = RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1;
 
     public Task<IReadOnlyList<InstalledExecutionRuntimeSummary>> GetExecutionRuntimesAsync(
         CancellationToken token = default)
@@ -53,19 +53,6 @@ public sealed partial class RuntimeManagementClient
             request,
             ExecutionRuntimeFeature,
             token);
-
-    public async Task<RuntimeExecutionRuntimeOperationResult> ImportExecutionRuntimeAsync(
-        string filePath,
-        CancellationToken token = default)
-    {
-        var upload = await UploadExecutionRuntimeAsync(filePath, token).ConfigureAwait(false);
-        return await PostAsync<RuntimeExecutionRuntimeImportRequest, RuntimeExecutionRuntimeOperationResult>(
-                "execution-runtimes/import",
-                new RuntimeExecutionRuntimeImportRequest(upload.UploadId),
-                ExecutionRuntimeFeature,
-                token)
-            .ConfigureAwait(false);
-    }
 
     public Task<RuntimeExecutionRuntimeOperationResult> VerifyExecutionRuntimeAsync(
         RuntimeExecutionRuntimeIdentity identity,
@@ -133,12 +120,5 @@ public sealed partial class RuntimeManagementClient
             token);
 
     private static string BuildExecutionRuntimePath(RuntimeExecutionRuntimeIdentity identity)
-    {
-        ArgumentNullException.ThrowIfNull(identity);
-        return $"execution-runtimes/{Uri.EscapeDataString(identity.RuntimeId)}"
-               + $"/versions/{Uri.EscapeDataString(identity.Version)}"
-               + $"/revisions/{identity.PackagingRevision}"
-               + $"/{Uri.EscapeDataString(identity.Rid)}"
-               + $"/abis/{Uri.EscapeDataString(identity.ModuleAbi)}";
-    }
+        => ExecutionRuntimeApiPath(RuntimeApiRoutes.ExecutionRuntime(identity));
 }

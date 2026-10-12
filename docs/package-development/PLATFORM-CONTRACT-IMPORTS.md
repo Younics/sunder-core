@@ -18,12 +18,14 @@ origins provide the chosen authority and integrity model.
 
 ## Select And Implement
 
-Select a platform contract before implementing it. A fresh project may select imports
-before its first owned Accept. Initial dependency configuration validates exact
-catalog/inventory hashes, generated names and stable inputs without requiring the
-partially selected source graph to compile. Configure all imports, then first Accept
-compiles the complete graph. Accepted projects retain full source checks; missing
-baselines with prior generated evidence are rejected. For a completely local workflow:
+Select a platform contract before implementing it. A fresh project may configure
+imports before generation or its first public owned Accept. Initial dependency
+configuration validates exact catalog/inventory hashes, generated names and stable
+inputs while permitting the newly selected provider surface to remain temporarily
+unbound. Generation requires the complete implementation. Public owned services
+retain explicit acceptance/freezing and lost-baseline protections; a private-only
+or imported-provider-only project needs no owned baseline transition. For a completely
+local workflow:
 
 ```powershell
 dotnet msbuild Package.csproj -t:ImplementSunderPlatformApi `
@@ -49,14 +51,26 @@ prerelease, package presence and package-candidate selection overrides are
 rejected. The default key for `sunder.stack.contributor` is `stackContributor`;
 `SunderPackageApiLocalName` / `--local-name` resolves an explicit key collision.
 
-C# generates `Sunder.Generated.Rpc.IStackContributorService`; Node exposes
-`rpcImports.stackContributor.provider(...)` from `#sunder/rpc`. The command permits
-its selected new surface to be temporarily unbound. Ordinary Build/generate then
-requires a complete local implementation. Bind the provider, then run
-`AcceptSunderContracts` / `contracts accept` before first generation. An absent baseline
-with prior receipt/export evidence is rejected; restore the original baseline.
-No contract schema or version inventory
-is copied into authored source.
+C# generates `Sunder.Generated.Rpc.IStackContributorService`. Node exposes the
+lock-derived `Implementations.stackContributor` service contract from `#sunder/api`.
+Import `defineService` from `@sunder/sdk` and bind a complete ordinary method record
+with `defineService(methods, { implements: Implementations.stackContributor })`.
+The generated types define every required method, request/result and invocation
+context; checked JavaScript uses the same contextual signatures. Multiple
+implementations require distinct stable `providerId` values.
+
+The configured `services.module` exports the definitions; the tool generates
+registration, dispatch and the Worker bootstrap. Providing an imported/platform
+contract creates no App or Runtime consumer uses, even though its descriptor is
+public. No schema or version inventory is copied into source, and there is no
+schema-constructor or `serviceTypes` fallback.
+
+Once the selected provider is implemented, run generation/Build normally. Node
+private-only and imported-provider-only projects do not need `contracts accept`
+or `freeze`; current private versions follow the full package version. If the
+project also declares owned public services, accept/freeze those public identities
+explicitly. Retained public receipt/export evidence cannot replace a deleted public
+baseline. The same public/private lifecycle distinction applies to the .NET targets.
 
 `UpdateSunderPlatformApi` / `platform update [contract]` uses locked origins and the
 current coordinated range. Global `UpdateSunderPackageApi` / `api update` also updates
@@ -121,9 +135,9 @@ publication authority. See the
 ## Stack Domain Contributors
 
 The `--withStacks` template now uses a partial contributor marked with
-`[SunderRpcProvider(typeof(IPackageStackContributor), ProviderId = "my.package.stack")]`
+`[SunderServiceProvider(typeof(IPackageStackContributor), ProviderId = "my.package.stack")]`
 and calls its generated `CreateSunderRpcProviderRegistration()`. The SDK interface's
-`SunderRpcPlatformImportAttribute` identifies a local semantic adapter and a platform
+`SunderPlatformImportAttribute` in `Sunder.Sdk.Services` identifies a local semantic adapter and a platform
 family; it cannot declare ownership or select a version.
 
 Explicit platform selection supplies the complete six-method descriptor before first

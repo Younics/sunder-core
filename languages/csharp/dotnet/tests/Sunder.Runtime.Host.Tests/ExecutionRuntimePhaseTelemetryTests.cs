@@ -72,12 +72,12 @@ public sealed class ExecutionRuntimePhaseTelemetryTests
 
     [Fact]
     [Trait("Capability", "Process")]
-    public async Task SignedLaunchProcessLeaseHealthAndGarbageCollectionEmitCorrelatedSafeTelemetry()
+    public async Task OfficialLaunchProcessLeaseHealthAndGarbageCollectionEmitCorrelatedSafeTelemetry()
     {
         var logs = new RecordingLogSink();
         var telemetry = new ExecutionRuntimePhaseTelemetry(
             logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
-        var fixture = new SignedSyntheticExecutionRuntimeFixture(telemetry);
+        var fixture = new OfficialRuntimeFixture(telemetry);
         await fixture.InitializeAsync();
         try
         {
@@ -87,7 +87,6 @@ public sealed class ExecutionRuntimePhaseTelemetryTests
                 "runtime.telemetry",
                 "normal");
             var activated = await fixture.CreateWorkerAsync(package);
-            Assert.DoesNotContain(activated.Warnings, IsLifecycleWarning);
             try
             {
                 await activated.Worker.ComposeAsync().WaitAsync(TimeSpan.FromSeconds(10));
@@ -96,41 +95,6 @@ public sealed class ExecutionRuntimePhaseTelemetryTests
             finally
             {
                 await activated.Worker.DisposeAsync();
-            }
-
-            var deprecatedPackage = fixture.CreatePackage(
-                SyntheticRuntimeKind.DotNet,
-                "runtime.deprecated.warning",
-                "normal");
-            deprecatedPackage = deprecatedPackage with
-            {
-                ExecutionRuntimeBinding = deprecatedPackage.ExecutionRuntimeBinding! with
-                {
-                    RuntimeLifecycleState = ExecutionRuntimeLifecycleStates.Deprecated,
-                },
-            };
-            string expectedWarning;
-            await using (var launch = await fixture.Resolver.ResolveAsync(
-                             deprecatedPackage,
-                             Guid.NewGuid(),
-                             CancellationToken.None))
-            {
-                expectedWarning = Assert.IsType<string>(launch.ActivationWarning);
-            }
-            var warnings = new List<string> { expectedWarning };
-            var deprecated = await fixture.CreateWorkerAsync(
-                deprecatedPackage,
-                activationWarnings: warnings);
-            try
-            {
-                Assert.Equal(1, deprecated.Warnings.Count(warning => string.Equals(
-                    warning,
-                    expectedWarning,
-                    StringComparison.Ordinal)));
-            }
-            finally
-            {
-                await deprecated.Worker.DisposeAsync();
             }
 
             await fixture.Store.CollectGarbageAsync(TimeSpan.Zero, CancellationToken.None);
@@ -178,8 +142,8 @@ public sealed class ExecutionRuntimePhaseTelemetryTests
                 ExecutionRuntimePhaseNames.GarbageCollection);
             Assert.NotEqual(correlationId, garbageCollectionCorrelation);
             Assert.Null(garbageCollection.Properties["RuntimeId"]);
-            Assert.Null(garbageCollection.Properties["RuntimeVersion"]);
-            Assert.Null(garbageCollection.Properties["RuntimePackagingRevision"]);
+            Assert.Null(garbageCollection.Properties["RuntimeVendorVersion"]);
+            Assert.Null(garbageCollection.Properties["RuntimeVendorChecksumDigest"]);
             Assert.Null(garbageCollection.Properties["RuntimeRid"]);
             Assert.Null(garbageCollection.Properties["Bytes"]);
             Assert.Null(garbageCollection.Properties["CacheHit"]);
@@ -193,8 +157,4 @@ public sealed class ExecutionRuntimePhaseTelemetryTests
             await fixture.DisposeAsync();
         }
     }
-
-    private static bool IsLifecycleWarning(string warning)
-        => warning.Contains("uses deprecated execution runtime", StringComparison.Ordinal)
-           || warning.Contains("uses retired execution runtime", StringComparison.Ordinal);
 }

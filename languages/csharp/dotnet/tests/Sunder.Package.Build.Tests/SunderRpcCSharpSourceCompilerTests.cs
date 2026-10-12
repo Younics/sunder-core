@@ -4,12 +4,13 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 
 namespace Sunder.Package.Build.Tests;
 
-public sealed class SunderRpcCSharpSourceCompilerTests
+public sealed partial class SunderRpcCSharpSourceCompilerTests
 {
     private static readonly string ParityRoot = Path.Combine(AppContext.BaseDirectory, "RpcAuthoringParity");
 
@@ -25,10 +26,11 @@ public sealed class SunderRpcCSharpSourceCompilerTests
             .EnumerateArray()
             .Single(candidate => candidate.GetProperty("id").GetString() == fixtureId);
         var sourcePath = Path.Combine(ParityRoot, fixture.GetProperty("sources").GetProperty("csharp").GetString()!);
+        var historical = new HistoricalSourceProjection(File.ReadAllText(sourcePath));
         var result = new SunderRpcCSharpSourceCompiler().Compile(new(
             fixture.GetProperty("packageId").GetString()!,
             fixture.GetProperty("packageVersion").GetString()!,
-            [new(sourcePath, File.ReadAllText(sourcePath))],
+            [new(sourcePath, historical.CurrentText)],
             CompilationReferences()));
 
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics.Select(FormatDiagnostic)));
@@ -52,9 +54,13 @@ public sealed class SunderRpcCSharpSourceCompilerTests
                 $"{fixtureId}/{contractKey} ABI");
             Assert.Equal(expected.GetProperty("abiSha256").GetString(), actual.Descriptor.AbiSha256);
 
-            var expectedBinding = fixture.GetProperty("generatedBindings").EnumerateArray()
-                .Single(binding => binding.GetProperty("contractKey").GetString() == contractKey);
-            Assert.Equal(expectedBinding.GetProperty("csharpLogicalName").GetString(), actual.GeneratedLogicalName);
+            // Historical wire tuples are still exact; current transport namespaces
+            // are authority-qualified rather than the captured alias-based Rpc namespace.
+            var packageStem = string.Join("_", fixture.GetProperty("packageId").GetString()!.Split('.')
+                .Select(segment => char.ToUpperInvariant(segment[0]) + segment[1..]));
+            var contractStem = string.Join("_", expected.GetProperty("contractId").GetString()!.Split('.')
+                .Select(segment => char.ToUpperInvariant(segment[0]) + segment[1..]));
+            Assert.Equal($"Sunder.Generated.Packages.{packageStem}_Internal.C{contractStem}", actual.GeneratedLogicalName);
             var expectedProviders = fixture.GetProperty("providers").EnumerateArray()
                 .Where(provider => provider.GetProperty("contractKey").GetString() == contractKey)
                 .ToArray();
@@ -74,9 +80,9 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     {
         var ordinary = Assert.Single(CompileSource(SimpleServiceSource).Contracts).Descriptor;
         var explicitlyAbsent = Assert.Single(CompileSource(SimpleServiceSource.Replace(
-            "SunderRpcExposure.Package)", "SunderRpcExposure.Package, IncludeSchemaDialect = false)", StringComparison.Ordinal)).Contracts).Descriptor;
+            "SunderServiceExposure.Package)", "SunderServiceExposure.Package, IncludeSchemaDialect = false)", StringComparison.Ordinal)).Contracts).Descriptor;
         var annotatedResult = CompileSource(SimpleServiceSource.Replace(
-            "SunderRpcExposure.Package)", "SunderRpcExposure.Package, IncludeSchemaDialect = true)", StringComparison.Ordinal));
+            "SunderServiceExposure.Package)", "SunderServiceExposure.Package, IncludeSchemaDialect = true)", StringComparison.Ordinal));
         Assert.True(annotatedResult.Success, string.Join(Environment.NewLine, annotatedResult.Diagnostics.Select(FormatDiagnostic)));
         var annotated = Assert.Single(annotatedResult.Contracts).Descriptor;
         var expected = JsonNode.Parse(ordinary.GetCanonicalUtf8())!.AsObject();
@@ -96,10 +102,11 @@ public sealed class SunderRpcCSharpSourceCompilerTests
             using System.Collections.Generic;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
-            [SunderRpcService(SunderRpcExposure.Public)]
+            using Sunder.Sdk.Services;
+            [SunderService(SunderServiceExposure.Public)]
             public sealed partial class DeepService
             {
-                [SunderRpcMethod]
+                [SunderMethod]
                 public ValueTask<Value> EchoAsync(Value request) => ValueTask.FromResult(request);
             }
             public sealed record Value
@@ -119,14 +126,14 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     {
         var source = SimpleServiceSource + """
 
-            [SunderRpcTransparent, SunderRpcFacet(Minimum = "0")]
+            [SunderTransparentValue, SunderValueConstraints(Minimum = "0")]
             public readonly record struct CollectionIndex { public required long Value { get; init; } }
             public sealed record Unrelated { public required string Text { get; init; } }
             """;
         var ordinary = Assert.Single(CompileSource(source).Contracts).Descriptor;
         Assert.DoesNotContain("CollectionIndex", ordinary.Definitions.Keys);
-        var result = CompileSource(source.Replace("SunderRpcExposure.Package)",
-            "SunderRpcExposure.Package, AdditionalDefinitions = new[] { typeof(CollectionIndex), typeof(GreetingResult) })", StringComparison.Ordinal));
+        var result = CompileSource(source.Replace("SunderServiceExposure.Package)",
+            "SunderServiceExposure.Package, AdditionalDefinitions = new[] { typeof(CollectionIndex), typeof(GreetingResult) })", StringComparison.Ordinal));
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics.Select(FormatDiagnostic)));
         var retained = Assert.Single(result.Contracts).Descriptor;
         var expected = JsonNode.Parse(ordinary.GetCanonicalUtf8())!.AsObject();
@@ -143,8 +150,8 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     [InlineData("new[] { typeof(System.Collections.Generic.List<string>) }")]
     public void Compile_AdditionalDefinitionsRejectInvalidOrDuplicateTypes(string value)
     {
-        var result = CompileSource(SimpleServiceSource.Replace("SunderRpcExposure.Package)",
-            $"SunderRpcExposure.Package, AdditionalDefinitions = {value})", StringComparison.Ordinal));
+        var result = CompileSource(SimpleServiceSource.Replace("SunderServiceExposure.Package)",
+            $"SunderServiceExposure.Package, AdditionalDefinitions = {value})", StringComparison.Ordinal));
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "rpc-authoring.value-invalid");
     }
@@ -152,18 +159,18 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     [Fact]
     public void Compile_AdditionalDefinitionsAreBoundedAndCannotBypassDefinitionNameCollisions()
     {
-        var oversized = CompileSource(SimpleServiceSource.Replace("SunderRpcExposure.Package)",
-            "SunderRpcExposure.Package, AdditionalDefinitions = new[] { " + string.Join(", ", Enumerable.Repeat("typeof(GreetingResult)", 257)) + " })", StringComparison.Ordinal));
+        var oversized = CompileSource(SimpleServiceSource.Replace("SunderServiceExposure.Package)",
+            "SunderServiceExposure.Package, AdditionalDefinitions = new[] { " + string.Join(", ", Enumerable.Repeat("typeof(GreetingResult)", 257)) + " })", StringComparison.Ordinal));
         Assert.False(oversized.Success);
         Assert.Contains(oversized.Diagnostics, diagnostic => diagnostic.Message.Contains("at most 256", StringComparison.Ordinal));
         var collision = CompileSource((SimpleServiceSource + """
 
-            [SunderRpcDefinition("Retained")]
+            [SunderValue("Retained")]
             public sealed record First { public required string Value { get; init; } }
-            [SunderRpcDefinition("Retained")]
+            [SunderValue("Retained")]
             public sealed record Second { public required string Value { get; init; } }
-            """).Replace("SunderRpcExposure.Package)",
-                "SunderRpcExposure.Package, AdditionalDefinitions = new[] { typeof(First), typeof(Second) })", StringComparison.Ordinal));
+            """).Replace("SunderServiceExposure.Package)",
+                "SunderServiceExposure.Package, AdditionalDefinitions = new[] { typeof(First), typeof(Second) })", StringComparison.Ordinal));
         Assert.False(collision.Success);
         Assert.Contains(collision.Diagnostics, diagnostic => diagnostic.Id == "rpc-authoring.identity-collision");
     }
@@ -181,7 +188,9 @@ public sealed class SunderRpcCSharpSourceCompilerTests
         string camel)
     {
         Assert.True(SunderRpcCSharpNaming.TryCreate(source, suffix, out var actual));
-        Assert.Equal(new(lowerKebab, contractSuffix, pascal, camel), actual);
+        Assert.NotNull(actual);
+        Assert.Equal((lowerKebab, contractSuffix, pascal, camel),
+            (actual.LowerKebab, actual.ContractSuffix, actual.Pascal, actual.Camel));
     }
 
     [Theory]
@@ -203,6 +212,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
                 .Single(source => source.GetProperty("language").GetString() == "csharp");
             var relativePath = csharp.GetProperty("path").GetString()!;
             var sourcePath = Path.Combine(ParityRoot, relativePath);
+            var historical = new HistoricalSourceProjection(File.ReadAllText(sourcePath));
             var fixtureId = fixture.GetProperty("id").GetString()!;
             var packageId = fixture.TryGetProperty("packageId", out var packageIdElement)
                 ? packageIdElement.GetString()!
@@ -224,14 +234,31 @@ public sealed class SunderRpcCSharpSourceCompilerTests
             var result = new SunderRpcCSharpSourceCompiler().Compile(new(
                 packageId,
                 packageVersion,
-                [new(sourcePath, File.ReadAllText(sourcePath))],
+                [new(sourcePath, historical.CurrentText)],
                 CompilationReferences(),
                 OwnedContractIdsByServiceMetadataName: baseline));
 
             var expectedDiagnostic = fixture.GetProperty("diagnosticId").GetString()!;
             Assert.False(result.Success);
             var diagnostic = Assert.Single(result.Diagnostics);
-            Assert.Equal(expectedDiagnostic, diagnostic.Id);
+            if (fixtureId is "source-limit-contract-identity" or "source-limit-package-id-derived-contract")
+            {
+                // The reference-target prepass now validates this identity before
+                // CompileService can produce the historical source-local limit diagnostic.
+                // Keep the frozen fixture and require the exact current rejection instead.
+                Assert.Equal("rpc-authoring.source-limit-exceeded", expectedDiagnostic);
+                Assert.Equal("rpc-authoring.model-projection-invalid", diagnostic.Id);
+                Assert.Equal("Model projection identity must use the canonical package-ID grammar.", diagnostic.Message);
+                Assert.Empty(result.Contracts);
+                Assert.Null(diagnostic.Path);
+                Assert.Empty(diagnostic.RelatedSpans ?? []);
+                var limit = fixture.GetProperty("limit");
+                Assert.Equal(limit.GetProperty("actual").GetInt32(), limit.GetProperty("derivedIdentity").GetString()!.Length);
+                Assert.True(limit.GetProperty("actual").GetInt32() > limit.GetProperty("maximum").GetInt32());
+                continue;
+            }
+            Assert.True(expectedDiagnostic == diagnostic.Id,
+                $"{fixtureId}: expected {expectedDiagnostic}, actual {FormatDiagnostic(diagnostic)}");
             var expectedSpans = csharp.GetProperty("spans").EnumerateArray().ToArray();
             var actualSpans = new List<SunderRpcCSharpSourceSpan>();
             if (diagnostic.Path is not null)
@@ -248,7 +275,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
             for (var index = 0; index < expectedSpans.Length; index++)
             {
                 var expectedSpan = expectedSpans[index];
-                var actualSpan = actualSpans[index];
+                var actualSpan = historical.OriginalSpan(actualSpans[index]);
                 Assert.Equal(relativePath.Replace('\\', '/'), Path.GetRelativePath(ParityRoot, actualSpan.Path).Replace('\\', '/'));
                 Assert.Equal(expectedSpan.GetProperty("startLine").GetInt32(), actualSpan.StartLine);
                 Assert.Equal(expectedSpan.GetProperty("startColumn").GetInt32(), actualSpan.StartColumn);
@@ -259,9 +286,9 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     }
 
     [Fact]
-    public void Compile_NewContractVersion_IsIndependentOfPackageVersion()
+    public void Compile_NewPublicContractVersion_IsIndependentOfPackageVersion()
     {
-        var result = CompileSource(SimpleServiceSource, packageVersion: "9.8.7");
+        var result = CompileSource(SimpleServiceSource.Replace("Exposure.Package", "Exposure.Public", StringComparison.Ordinal), packageVersion: "9.8.7");
 
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics.Select(FormatDiagnostic)));
         Assert.Equal("1.0.0", Assert.Single(result.Contracts).Descriptor.Version);
@@ -274,11 +301,12 @@ public sealed class SunderRpcCSharpSourceCompilerTests
             using System;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
             Console.WriteLine("starting");
-            [SunderRpcService(SunderRpcExposure.Package)]
+            [SunderService(SunderServiceExposure.Package)]
             public sealed partial class GreetingService
             {
-                [SunderRpcMethod]
+                [SunderMethod]
                 public ValueTask<GreetingResult> GreetAsync(GreetingRequest request)
                     => ValueTask.FromResult(new GreetingResult { Message = request.Name });
             }
@@ -303,10 +331,10 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     }
 
     [Fact]
-    public void Compile_AcceptedContractVersion_ComesFromOwnedBaseline()
+    public void Compile_AcceptedPublicContractVersion_ComesFromOwnedBaseline()
     {
         var result = CompileSource(
-            SimpleServiceSource,
+            SimpleServiceSource.Replace("Exposure.Package", "Exposure.Public", StringComparison.Ordinal),
             packageVersion: "9.8.7",
             baseline: new Dictionary<string, SunderRpcCSharpOwnedContractIdentity>(StringComparer.Ordinal)
             {
@@ -325,11 +353,12 @@ public sealed class SunderRpcCSharpSourceCompilerTests
             .AppendLine("using System;")
             .AppendLine("using System.Threading.Tasks;")
             .AppendLine("using Sunder.Sdk.Rpc;")
+            .AppendLine("using Sunder.Sdk.Services;")
             .AppendLine("namespace Example.Depth;")
-            .AppendLine("[SunderRpcService(SunderRpcExposure.Package)]")
+            .AppendLine("[SunderService(SunderServiceExposure.Package)]")
             .AppendLine("public sealed partial class DepthService")
             .AppendLine("{")
-            .AppendLine("    [SunderRpcMethod]")
+            .AppendLine("    [SunderMethod]")
             .AppendLine("    public ValueTask<Depth00> RunAsync(Depth00 request) => throw new NotImplementedException();")
             .AppendLine("}");
         for (var index = 0; index < definitionCount; index++)
@@ -359,14 +388,14 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     public void Compile_NumericEnumCanPreserveAClosedSetWithoutExplicitBounds()
     {
         var source = SimpleServiceSource.Replace("required string Message", "required Priority Message", StringComparison.Ordinal)
-            + "\n[SunderRpcNumericEnum] public enum Priority { Low = -1, Normal = 0, High = 7 }";
+            + "\n[SunderNumericEnum] public enum Priority { Low = -1, Normal = 0, High = 7 }";
         var baseline = CompileSource(source);
         Assert.True(baseline.Success, string.Join(Environment.NewLine, baseline.Diagnostics));
         var original = Assert.Single(baseline.Contracts).Descriptor;
-        var explicitDefault = CompileSource(source.Replace("[SunderRpcNumericEnum]", "[SunderRpcNumericEnum(IncludeRangeBounds = true)]", StringComparison.Ordinal));
+        var explicitDefault = CompileSource(source.Replace("[SunderNumericEnum]", "[SunderNumericEnum(IncludeRangeBounds = true)]", StringComparison.Ordinal));
         Assert.True(explicitDefault.Success, string.Join(Environment.NewLine, explicitDefault.Diagnostics));
         Assert.Equal(original.GetCanonicalUtf8(), Assert.Single(explicitDefault.Contracts).Descriptor.GetCanonicalUtf8());
-        var result = CompileSource(source.Replace("[SunderRpcNumericEnum]", "[SunderRpcNumericEnum(IncludeRangeBounds = false)]", StringComparison.Ordinal));
+        var result = CompileSource(source.Replace("[SunderNumericEnum]", "[SunderNumericEnum(IncludeRangeBounds = false)]", StringComparison.Ordinal));
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
         var expected = JsonNode.Parse(original.GetCanonicalUtf8())!;
         var definition = expected["$defs"]!["Priority"]!.AsObject();
@@ -384,18 +413,19 @@ public sealed class SunderRpcCSharpSourceCompilerTests
             using System;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
             namespace Example.Numeric;
-            [SunderRpcService(SunderRpcExposure.Package)]
+            [SunderService(SunderServiceExposure.Package)]
             public sealed partial class NumericService
             {
-                [SunderRpcMethod]
+                [SunderMethod]
                 public ValueTask<Result> RunAsync(Result request) => throw new NotImplementedException();
             }
             public sealed record Result
             {
                 public required Priority Priority { get; init; }
             }
-            [SunderRpcNumericEnum]
+            [SunderNumericEnum]
             public enum Priority : long
             {
                 First = 1,
@@ -403,8 +433,8 @@ public sealed class SunderRpcCSharpSourceCompilerTests
             }
             """;
 
-        var result = CompileSource(source.Replace("[SunderRpcNumericEnum]",
-            $"[SunderRpcNumericEnum(IncludeRangeBounds = {includeRangeBounds.ToString().ToLowerInvariant()})]", StringComparison.Ordinal), packageId: "example.numeric");
+        var result = CompileSource(source.Replace("[SunderNumericEnum]",
+            $"[SunderNumericEnum(IncludeRangeBounds = {includeRangeBounds.ToString().ToLowerInvariant()})]", StringComparison.Ordinal), packageId: "example.numeric");
 
         Assert.False(result.Success);
         Assert.Equal("rpc-authoring.value-invalid", Assert.Single(result.Diagnostics).Id);
@@ -418,6 +448,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
             using System.Threading.Tasks;
             using Sunder.Sdk.Packaging;
             using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
             using Sunder.Sdk.Worker;
             [assembly: SunderPackage(Id = "example.generated", Name = "Generated")]
             namespace Example.Generated;
@@ -426,10 +457,10 @@ public sealed class SunderRpcCSharpSourceCompilerTests
                 public static SunderWorkerProviderRegistration Create()
                     => new GreetingService().CreateSunderRpcProviderRegistration();
             }
-            [SunderRpcService(SunderRpcExposure.Package)]
+            [SunderService(SunderServiceExposure.Package)]
             public sealed partial class GreetingService
             {
-                [SunderRpcMethod]
+                [SunderMethod]
                 public ValueTask<GreetingResult> GreetAsync(
                     GreetingRequest request,
                     SunderRpcInvocationContext context,
@@ -454,7 +485,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
         var generated = SunderRpcCSharpImplementationEmitter.Emit(first.Contracts);
         Assert.Contains("CreateSunderRpcProviderRegistration", generated, StringComparison.Ordinal);
         Assert.Contains("example.generated.greeting.provider", generated, StringComparison.Ordinal);
-        Assert.Contains("\"1.0.0\"", generated, StringComparison.Ordinal);
+        Assert.Contains("\"7.6.5\"", generated, StringComparison.Ordinal);
 
         var second = new SunderRpcCSharpSourceCompiler().Compile(new(
             string.Empty,
@@ -473,11 +504,12 @@ public sealed class SunderRpcCSharpSourceCompilerTests
         const string source = """
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
             namespace @allows.@extension;
-            [SunderRpcService(SunderRpcExposure.Package)]
+            [SunderService(SunderServiceExposure.Package)]
             public sealed partial class @field
             {
-                [SunderRpcMethod]
+                [SunderMethod]
                 public ValueTask<Response> @args(Request request)
                     => ValueTask.FromResult(new Response { Value = request.Value });
             }
@@ -504,7 +536,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     {
         var ordinary = Assert.Single(CompileSource(SimpleServiceSource).Contracts).Descriptor;
         var result = CompileSource(SimpleServiceSource.Replace("public required string Message",
-            "[SunderRpcFacet(AllowedStrings = new[] { \"dispatched\", \"result\" })] public required string Message", StringComparison.Ordinal));
+            "[SunderValueConstraints(AllowedStrings = new[] { \"dispatched\", \"result\" })] public required string Message", StringComparison.Ordinal));
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics.Select(FormatDiagnostic)));
         var expected = JsonNode.Parse(ordinary.GetCanonicalUtf8())!.AsObject();
         expected["$defs"]!["GreetingResult"]!["properties"]!["message"]!["enum"] = new JsonArray("dispatched", "result");
@@ -524,7 +556,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     public void Compile_AllowedStringsRejectsInvalidSelectionsAndNonPlainStrings(string selection, string type)
     {
         var source = SimpleServiceSource.Replace("public required string Message",
-            $"[SunderRpcFacet(AllowedStrings = {selection})] public required {type} Message", StringComparison.Ordinal);
+            $"[SunderValueConstraints(AllowedStrings = {selection})] public required {type} Message", StringComparison.Ordinal);
         var result = CompileSource(source);
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "rpc-authoring.value-invalid");
@@ -535,7 +567,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     {
         var selection = "new[] { " + string.Join(", ", Enumerable.Range(0, 257).Select(value => "\"value" + value + "\"")) + " }";
         var result = CompileSource(SimpleServiceSource.Replace("public required string Message",
-            $"[SunderRpcFacet(AllowedStrings = {selection})] public required string Message", StringComparison.Ordinal));
+            $"[SunderValueConstraints(AllowedStrings = {selection})] public required string Message", StringComparison.Ordinal));
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("1..256", StringComparison.Ordinal));
     }
@@ -546,7 +578,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     [InlineData("MaxProperties = 5, JsonObjectOnly = true")]
     public void Compile_JsonObjectOnlyPreservesTheRawObjectShape(string facets)
     {
-        var source = SimpleServiceSource.Replace("public required string Message", $"[SunderRpcFacet({facets})] public required System.Text.Json.JsonElement Message", StringComparison.Ordinal);
+        var source = SimpleServiceSource.Replace("public required string Message", $"[SunderValueConstraints({facets})] public required System.Text.Json.JsonElement Message", StringComparison.Ordinal);
         var result = CompileSource(source);
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics.Select(FormatDiagnostic)));
         var descriptor = Assert.Single(result.Contracts).Descriptor;
@@ -565,7 +597,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     [InlineData("SunderRpcContentReference")]
     public void Compile_JsonObjectOnlyRejectsNonRawJsonTargets(string type)
     {
-        var result = CompileSource(SimpleServiceSource.Replace("public required string Message", $"[SunderRpcFacet(JsonObjectOnly = true)] public required {type} Message", StringComparison.Ordinal));
+        var result = CompileSource(SimpleServiceSource.Replace("public required string Message", $"[SunderValueConstraints(JsonObjectOnly = true)] public required {type} Message", StringComparison.Ordinal));
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "rpc-authoring.value-invalid");
     }
@@ -576,7 +608,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
         var source = SimpleServiceSource.Replace("public sealed partial class GreetingService", "public partial class GreetingService", StringComparison.Ordinal)
             + """
 
-                [SunderRpcProvider(typeof(GreetingService), ProviderId = "example.versioning.secondary")]
+                [SunderServiceProvider(typeof(GreetingService), ProviderId = "example.versioning.secondary")]
                 public sealed partial class SecondaryProvider : GreetingService;
                 """;
         var result = CompileSource(source);
@@ -644,7 +676,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     [InlineData("new string[] { null }")]
     public void Compile_AppUseRejectsInvalidOrInapplicableActions(string actions)
     {
-        var source = SimpleServiceSource.Replace("[SunderRpcService", $"[SunderRpcAppUse(Actions = {actions})]\n[SunderRpcService", StringComparison.Ordinal);
+        var source = SimpleServiceSource.Replace("[SunderService", $"[SunderAppUse(Actions = {actions})]\n[SunderService", StringComparison.Ordinal);
         var result = CompileSource(source);
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "rpc-authoring.app-use-invalid");
@@ -653,7 +685,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     [Fact]
     public void Compile_AppUseMustBeOnTheOwningService()
     {
-        var result = CompileSource(SimpleServiceSource.Replace("public sealed record GreetingResult", "[SunderRpcAppUse]\npublic sealed record GreetingResult", StringComparison.Ordinal));
+        var result = CompileSource(SimpleServiceSource.Replace("public sealed record GreetingResult", "[SunderAppUse]\npublic sealed record GreetingResult", StringComparison.Ordinal));
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "rpc-authoring.app-use-invalid");
     }
@@ -667,7 +699,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     [InlineData("new string[] { null }")]
     public void Compile_RuntimeUseRejectsInvalidOrInapplicableActions(string actions)
     {
-        var result = CompileSource(SimpleServiceSource.Replace("[SunderRpcService", $"[SunderRpcRuntimeUse(Actions = {actions})]\n[SunderRpcService", StringComparison.Ordinal));
+        var result = CompileSource(SimpleServiceSource.Replace("[SunderService", $"[SunderRuntimeUse(Actions = {actions})]\n[SunderService", StringComparison.Ordinal));
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "rpc-authoring.runtime-use-invalid");
     }
@@ -675,7 +707,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
     [Fact]
     public void Compile_RuntimeUseMustBeOnTheOwningService()
     {
-        var result = CompileSource(SimpleServiceSource.Replace("public sealed record GreetingResult", "[SunderRpcRuntimeUse]\npublic sealed record GreetingResult", StringComparison.Ordinal));
+        var result = CompileSource(SimpleServiceSource.Replace("public sealed record GreetingResult", "[SunderRuntimeUse]\npublic sealed record GreetingResult", StringComparison.Ordinal));
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "rpc-authoring.runtime-use-invalid");
     }
@@ -741,7 +773,7 @@ public sealed class SunderRpcCSharpSourceCompilerTests
         var trustedPlatformAssemblies = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")
                                         ?? throw new InvalidOperationException("Trusted platform assemblies are unavailable.");
         return trustedPlatformAssemblies.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Append(typeof(SunderRpcServiceAttribute).Assembly.Location)
+            .Append(typeof(SunderServiceAttribute).Assembly.Location)
             .Append(typeof(SunderWorkerProviderRegistration).Assembly.Location)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -769,19 +801,19 @@ public sealed class SunderRpcCSharpSourceCompilerTests
             + $"Actual:   {System.Text.Encoding.UTF8.GetString(actual, start, actualLength)}");
     }
 
-    private static string Exposure(SunderRpcExposure exposure)
+    private static string Exposure(SunderServiceExposure exposure)
         => exposure switch
         {
-            SunderRpcExposure.Package => "package",
-            SunderRpcExposure.Public => "public",
+            SunderServiceExposure.Package => "package",
+            SunderServiceExposure.Public => "public",
             _ => throw new ArgumentOutOfRangeException(nameof(exposure)),
         };
 
-    private static string Audience(SunderRpcProviderAudience audience)
+    private static string Audience(SunderServiceAudience audience)
         => audience switch
         {
-            SunderRpcProviderAudience.Owner => "owner",
-            SunderRpcProviderAudience.Public => "public",
+            SunderServiceAudience.Owner => "owner",
+            SunderServiceAudience.Public => "public",
             _ => throw new ArgumentOutOfRangeException(nameof(audience)),
         };
 
@@ -789,11 +821,12 @@ public sealed class SunderRpcCSharpSourceCompilerTests
         using System;
         using System.Threading.Tasks;
         using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         namespace Example.Versioning;
-        [SunderRpcService(SunderRpcExposure.Package)]
+        [SunderService(SunderServiceExposure.Package)]
         public sealed partial class GreetingService
         {
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<GreetingResult> GreetAsync() => throw new NotImplementedException();
         }
         public sealed record GreetingResult

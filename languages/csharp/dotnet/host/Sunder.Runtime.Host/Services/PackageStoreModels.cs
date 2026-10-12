@@ -28,12 +28,6 @@ internal sealed record PackageExecutionRuntimeRebindMutation(
     IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> DesiredBindings)
     : PackageStoreChange;
 
-internal sealed record PackageExecutionRuntimePolicyUpdateMutation(
-    string PackageId,
-    InstalledPackageRecord ExpectedPackage,
-    IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> DesiredBindings)
-    : PackageStoreChange;
-
 internal sealed record PackageLifecyclePolicyUpdateMutation(
     string PackageId,
     InstalledPackageRecord ExpectedPackage,
@@ -47,11 +41,6 @@ internal sealed record RegistryPackageUploadMetadata(
     internal Sunder.Registry.Contracts.RegistryPackageResolutionPolicy? ResolutionPolicy { get; init; }
     internal IReadOnlyList<Sunder.Package.Format.SunderPackageTargetKey>? AcquiredTargets { get; init; }
 }
-
-internal sealed record LocalExecutionRuntimePolicyAuthority(
-    long Generation,
-    IReadOnlyList<ExecutionRuntimeIdentity> InstallationIdentities,
-    IReadOnlyList<ExecutionRuntimeIdentity> ActivationIdentities);
 
 internal enum PackageStoreTransactionPhase
 {
@@ -124,9 +113,7 @@ internal sealed record PackageStorePreparedStage(
     IReadOnlyList<InstalledPackageRecord> ProspectivePackages,
     IReadOnlyDictionary<string, string> PreparationSourcePaths,
     PackageOperationResult Result,
-    long BaseCatalogGeneration,
-    LocalExecutionRuntimePolicyAuthority? LocalRuntimePolicyAuthority = null,
-    ExecutionRuntimeLifecyclePolicySnapshot? RegistryRuntimePolicyAuthority = null);
+    long BaseCatalogGeneration);
 
 internal sealed record PackageStoreStagePreparation(
     PackageStorePreparedStage? Stage,
@@ -198,7 +185,7 @@ internal sealed record PackageStoreTransactionJournal(
     IReadOnlyList<InstalledPackageRecord> DesiredPackages,
     IReadOnlyList<PackageStoreJournalAction> Actions,
     IReadOnlyList<PackageStoreStorageSnapshot> StorageSnapshots,
-    IReadOnlyList<ExecutionRuntimeLifecyclePolicyEntryV1> RuntimePolicyUpdates = null!);
+    IReadOnlyList<string>? Reserved = null);
 
 internal sealed record PendingStoreStage(
     string StageId,
@@ -208,8 +195,5 @@ internal sealed record PendingStoreStage(
     IReadOnlyList<PreparedPackageArchiveMutation> PreparedArchives,
     PackageOperationResult Result,
     long BaseCatalogGeneration,
-    IReadOnlyList<ExecutionRuntimeLifecyclePolicyEntryV1> RuntimePolicyUpdates,
-    ExecutionRuntimeLifecyclePolicySnapshot? RegistryRuntimePolicyAuthority = null,
     LocalExecutionRuntimeBindingSnapshot? LocalBindingAuthority = null,
-    LocalExecutionRuntimePolicyAuthority? LocalRuntimePolicyAuthority = null,
     IReadOnlyList<InstalledPackagePolicyRecord>? PackagePolicyAuthority = null);

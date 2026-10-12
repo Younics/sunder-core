@@ -32,8 +32,6 @@ if (startupOptions.WaitForDebugger)
 }
 
 var builder = WebApplication.CreateBuilder(args);
-var executionRuntimeDevelopment = ExecutionRuntimeDevelopmentConfiguration.ReadAndClear(
-    builder.Environment.IsDevelopment());
 builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes);
 if (builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any())
@@ -84,9 +82,6 @@ try
         new RuntimeBearerTokenValidator(bearerToken),
         runtimeResourcePolicy.EffectivePolicy,
         packageSessionStartupTracePath,
-        executionRuntimeTrust: executionRuntimeDevelopment.Trust,
-        developmentAllowInsecureLoopbackRegistry:
-            executionRuntimeDevelopment.AllowInsecureLoopbackRegistry,
         packageSessionConcurrency: new PackageSessionConcurrencyOptions
         {
             MaximumPreparationConcurrency = startupOptions.PackagePreparationConcurrency,

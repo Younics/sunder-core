@@ -12,8 +12,7 @@ internal static class CoreSettingsContentProvider
             ],
             "runtime" =>
             [
-                "Runtime settings will control shell behavior, loading preferences, and runtime diagnostics.",
-                "Package-specific configuration is rendered below the Packages separator when a package contributes a config schema.",
+                "Package Runtimes manages the .NET and Node.js runtimes used to run packages.",
             ],
             "updates" =>
             [

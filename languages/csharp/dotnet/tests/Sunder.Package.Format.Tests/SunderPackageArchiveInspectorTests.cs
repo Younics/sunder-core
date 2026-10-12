@@ -12,142 +12,6 @@ namespace Sunder.Package.Format.Tests;
 
 public sealed partial class SunderPackageArchiveInspectorTests
 {
-    public static TheoryData<string, string, string, string> RuntimeOwnershipCases => new()
-    {
-        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "win-x64", "linux-arm64" },
-        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "win-arm64", "osx-x64" },
-        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "linux-x64", "win-arm64" },
-        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "linux-arm64", "osx-arm64" },
-        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "osx-x64", "win-x64" },
-        { "sunder.runtime.dotnet", "sunder.dotnet-worker-module.v1", "osx-arm64", "linux-x64" },
-        { "sunder.runtime.node", "sunder.node-worker-module.v1", "win-x64", "linux-arm64" },
-        { "sunder.runtime.node", "sunder.node-worker-module.v1", "win-arm64", "osx-x64" },
-        { "sunder.runtime.node", "sunder.node-worker-module.v1", "linux-x64", "win-arm64" },
-        { "sunder.runtime.node", "sunder.node-worker-module.v1", "linux-arm64", "osx-arm64" },
-        { "sunder.runtime.node", "sunder.node-worker-module.v1", "osx-x64", "win-x64" },
-        { "sunder.runtime.node", "sunder.node-worker-module.v1", "osx-arm64", "linux-x64" },
-    };
-
-    [Theory]
-    [MemberData(nameof(RuntimeOwnershipCases))]
-    public void RuntimeOwnershipClassifier_FindsRuntimeBytesAfterInnocuousPackageRename(
-        string runtimeId,
-        string moduleAbi,
-        string runtimeRid,
-        string foreignPackageRid)
-    {
-        var runtimeBytes = "real runtime bytes"u8.ToArray();
-        var runtimeSha256 = Convert.ToHexStringLower(SHA256.HashData(runtimeBytes));
-        var inventory = CreateRuntimeOwnershipInventory(
-            runtimeId,
-            moduleAbi,
-            runtimeRid,
-            "payload/runtime/bin/runtime-launcher",
-            runtimeSha256,
-            runtimeBytes.Length);
-        var packagePath = $"payload/runtime/{foreignPackageRid}/lib/innocent.dat";
-
-        var owned = SunderExecutionRuntimeOwnershipClassifier.Classify(
-            [new SunderPackageContentIndexEntry(packagePath, runtimeSha256, runtimeBytes.Length)],
-            [inventory]);
-
-        var file = Assert.Single(owned);
-        Assert.Equal(packagePath, file.PackagePath);
-        var match = Assert.Single(file.Matches);
-        Assert.Equal(runtimeRid, match.Rid);
-        Assert.True(match.Sha256Match);
-        Assert.False(match.RelativePathMatch);
-        Assert.False(match.FileNameMatch);
-    }
-
-    [Theory]
-    [MemberData(nameof(RuntimeOwnershipCases))]
-    public void RuntimeOwnershipClassifier_FindsRuntimeRelativePathAcrossForeignRidWithDifferentBytes(
-        string runtimeId,
-        string moduleAbi,
-        string runtimeRid,
-        string foreignPackageRid)
-    {
-        var inventory = CreateRuntimeOwnershipInventory(
-            runtimeId,
-            moduleAbi,
-            runtimeRid,
-            "payload/runtime/bin/runtime-launcher",
-            new string('a', 64),
-            100);
-
-        var owned = SunderExecutionRuntimeOwnershipClassifier.Classify(
-            [new SunderPackageContentIndexEntry(
-                $"payload/runtime/{foreignPackageRid}/bin/runtime-launcher",
-                new string('b', 64),
-                50)],
-            [inventory]);
-
-        var match = Assert.Single(Assert.Single(owned).Matches);
-        Assert.Equal(runtimeRid, match.Rid);
-        Assert.True(match.RelativePathMatch);
-        Assert.True(match.FileNameMatch);
-        Assert.False(match.Sha256Match);
-    }
-
-    [Fact]
-    public void RuntimeOwnershipClassifier_FindsRuntimePathWithDifferentBytes()
-    {
-        var inventory = CreateRuntimeOwnershipInventory(
-            "sunder.runtime.dotnet",
-            "sunder.dotnet-worker-module.v1",
-            "linux-x64",
-            "payload/runtime/shared/Microsoft.NETCore.App/10.0.1/System.Private.CoreLib.dll",
-            new string('a', 64),
-            100);
-
-        var owned = SunderExecutionRuntimeOwnershipClassifier.Classify(
-            [new SunderPackageContentIndexEntry(
-                "payload/runtime/linux-x64/lib/System.Private.CoreLib.dll",
-                new string('b', 64),
-                50)],
-            [inventory]);
-
-        var match = Assert.Single(Assert.Single(owned).Matches);
-        Assert.True(match.FileNameMatch);
-        Assert.False(match.Sha256Match);
-    }
-
-    [Fact]
-    public void RuntimeOwnershipClassifier_IgnoresRuntimeProvenanceAndLicenseContent()
-    {
-        var inventory = new SunderExecutionRuntimeOwnershipInventory(
-            "sunder.runtime.node",
-            "24.0.0",
-            1,
-            "linux-x64",
-            "sunder.node-worker-module.v1",
-            new string('c', 64),
-            [
-                new SunderExecutionRuntimeContentRecord
-                {
-                    Path = "payload/licenses/LICENSE",
-                    Sha256 = new string('d', 64),
-                    Size = 10,
-                },
-                new SunderExecutionRuntimeContentRecord
-                {
-                    Path = SunderExecutionRuntimeFormat.NativeAttestationPath,
-                    Sha256 = new string('e', 64),
-                    Size = 20,
-                },
-            ]);
-
-        var owned = SunderExecutionRuntimeOwnershipClassifier.Classify(
-            [
-                new SunderPackageContentIndexEntry("payload/shared/LICENSE", new string('d', 64), 10),
-                new SunderPackageContentIndexEntry("payload/shared/attestation.json", new string('e', 64), 20),
-            ],
-            [inventory]);
-
-        Assert.Empty(owned);
-    }
-
     [Theory]
     [InlineData(0)]
     [InlineData(2)]
@@ -168,22 +32,6 @@ public sealed partial class SunderPackageArchiveInspectorTests
             $"Package manifest must declare archiveFormatVersion {SunderPackageFormat.CurrentArchiveFormatVersion}.",
             result.Errors);
     }
-
-    private static SunderExecutionRuntimeOwnershipInventory CreateRuntimeOwnershipInventory(
-        string runtimeId,
-        string moduleAbi,
-        string rid,
-        string path,
-        string sha256,
-        long size)
-        => new(
-            runtimeId,
-            runtimeId == "sunder.runtime.node" ? "24.0.0" : "10.0.1",
-            1,
-            rid,
-            moduleAbi,
-            new string('f', 64),
-            [new SunderExecutionRuntimeContentRecord { Path = path, Sha256 = sha256, Size = size }]);
 
     [Theory]
     [InlineData(0)]
@@ -2126,7 +1974,7 @@ public sealed partial class SunderPackageArchiveInspectorTests
         Assert.DoesNotContain("\"role\"", indexJson, StringComparison.Ordinal);
         var index = JsonSerializer.Deserialize<SunderPackageContentIndex>(indexJson)!;
         Assert.Equal(
-            [SunderPackageFormat.ManifestPath, "payload/shared/host"],
+            [SunderPackageFormat.ManifestPath, SunderPackageFormat.RpcModelProjectionPath, "payload/shared/host"],
             index.Files!.Select(static entry => entry.Path).Order(StringComparer.Ordinal));
     }
 
@@ -2642,6 +2490,8 @@ public sealed partial class SunderPackageArchiveInspectorTests
         IReadOnlyDictionary<string, byte[]> files,
         Func<SunderPackageContentIndex, SunderPackageContentIndex>? indexTransform = null)
     {
+        if (!files.ContainsKey(SunderPackageFormat.RpcModelProjectionPath))
+            WriteFile(source, SunderPackageFormat.RpcModelProjectionPath, ModelProjectionFixture.EmptyDocument(manifest));
         foreach (var file in files)
         {
             WriteFile(source, file.Key, file.Value);

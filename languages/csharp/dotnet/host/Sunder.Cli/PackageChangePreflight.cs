@@ -4,10 +4,11 @@ using Sunder.Runtime.Contracts;
 namespace Sunder.Cli;
 
 internal sealed record CliExecutionRuntimeDownload(
-    RuntimeRegistryResolvedExecutionRuntimeArtifact Artifact,
-    bool AlreadyInstalled)
+    RuntimeExecutionRuntimeResolution Resolution)
 {
-    public long IncrementalBytes => AlreadyInstalled ? 0 : Artifact.ArtifactSize;
+    public long? FullBytes => Resolution.DownloadSize;
+    public long? IncrementalBytes => Resolution.AlreadyInstalled ? 0 : Resolution.DownloadSize;
+    public bool AlreadyInstalled => Resolution.AlreadyInstalled;
 }
 
 internal sealed class CliPackageChangePreflight
@@ -18,7 +19,6 @@ internal sealed class CliPackageChangePreflight
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors,
         IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> conflicts,
-        IReadOnlyList<RuntimeRegistryExecutionRuntimeResolutionConflict> runtimeConflicts,
         IReadOnlyList<PackageCapabilityConsent> requiredCapabilityConsents,
         IReadOnlyList<RuntimeRegistryPackagePlanExpectation> planExpectations,
         IReadOnlyList<CliExecutionRuntimeDownload> runtimeDownloads,
@@ -30,13 +30,12 @@ internal sealed class CliPackageChangePreflight
         Warnings = warnings;
         Errors = errors;
         Conflicts = conflicts;
-        RuntimeConflicts = runtimeConflicts;
         RequiredCapabilityConsents = requiredCapabilityConsents;
         PlanExpectations = planExpectations;
         RuntimeDownloads = runtimeDownloads;
         SkippedPackageIds = skippedPackageIds;
         PackageDownloadBytes = packageDownloadBytes;
-        FullRuntimeDownloadBytes = Sum(runtimeDownloads.Select(static item => item.Artifact.ArtifactSize));
+        FullRuntimeDownloadBytes = Sum(runtimeDownloads.Select(static item => item.FullBytes));
         IncrementalRuntimeDownloadBytes = Sum(runtimeDownloads.Select(static item => item.IncrementalBytes));
     }
 
@@ -45,7 +44,6 @@ internal sealed class CliPackageChangePreflight
     public IReadOnlyList<string> Warnings { get; }
     public IReadOnlyList<string> Errors { get; }
     public IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts { get; }
-    public IReadOnlyList<RuntimeRegistryExecutionRuntimeResolutionConflict> RuntimeConflicts { get; }
     public IReadOnlyList<PackageCapabilityConsent> RequiredCapabilityConsents { get; }
     public IReadOnlyList<RuntimeRegistryPackagePlanExpectation> PlanExpectations { get; }
     public IReadOnlyList<CliExecutionRuntimeDownload> RuntimeDownloads { get; }
@@ -56,7 +54,7 @@ internal sealed class CliPackageChangePreflight
     public long ReusedRuntimeBytes => FullRuntimeDownloadBytes - IncrementalRuntimeDownloadBytes;
     public long FullDownloadBytes => checked(PackageDownloadBytes + FullRuntimeDownloadBytes);
     public long IncrementalDownloadBytes => checked(PackageDownloadBytes + IncrementalRuntimeDownloadBytes);
-    public bool HasConflicts => Conflicts.Count > 0 || RuntimeConflicts.Count > 0;
+    public bool HasConflicts => Conflicts.Count > 0;
 
     public static CliPackageChangePreflight Create(
         RuntimeRegistryResolveInstallPlanResponse plan,
@@ -87,15 +85,16 @@ internal sealed class CliPackageChangePreflight
             .DistinctBy(PackageArtifactKey, StringComparer.Ordinal)
             .ToArray();
         var runtimeDownloads = plans
-            .SelectMany(static plan => plan.RuntimeArtifacts)
+            .SelectMany(static plan => plan.RuntimePrerequisites?.Requirements ?? [])
+            .Select(static prerequisite => prerequisite.Installation?.Resolution)
+            .Where(static resolution => resolution is not null)
+            .Cast<RuntimeExecutionRuntimeResolution>()
             .DistinctBy(RuntimeArtifactKey, StringComparer.Ordinal)
-            .Select(artifact => new CliExecutionRuntimeDownload(
-                artifact,
-                installedRuntimes.Any(installed => IsHealthyExactMatch(installed, artifact))))
-            .OrderBy(static item => item.Artifact.Identity.RuntimeId, StringComparer.Ordinal)
-            .ThenBy(static item => item.Artifact.Identity.Version, StringComparer.Ordinal)
-            .ThenBy(static item => item.Artifact.Identity.PackagingRevision)
-            .ThenBy(static item => item.Artifact.Identity.Rid, StringComparer.Ordinal)
+            .Select(static resolution => new CliExecutionRuntimeDownload(resolution))
+            .OrderBy(static item => item.Resolution.Artifact.Identity.RuntimeId, StringComparer.Ordinal)
+            .ThenBy(static item => item.Resolution.Artifact.Identity.VendorVersion, StringComparer.Ordinal)
+            .ThenBy(static item => item.Resolution.Artifact.Identity.Rid, StringComparer.Ordinal)
+            .ThenBy(static item => item.Resolution.Artifact.Identity.VendorChecksumDigest, StringComparer.Ordinal)
             .ToArray();
         var warnings = plans.SelectMany(static plan => plan.Warnings)
             .Concat(additionalWarnings ?? [])
@@ -105,7 +104,6 @@ internal sealed class CliPackageChangePreflight
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var conflicts = plans.SelectMany(static plan => plan.Conflicts).ToArray();
-        var runtimeConflicts = plans.SelectMany(static plan => plan.RuntimeConflicts).ToArray();
         var consents = plans.SelectMany(static plan => plan.RequiredCapabilityConsents)
             .DistinctBy(
                 static consent => $"{consent.PackageId}\n{consent.PackageVersion}\n{consent.ManifestSha256}",
@@ -114,8 +112,7 @@ internal sealed class CliPackageChangePreflight
         var success = plans.Count > 0
                       && plans.All(static plan => plan.Success)
                       && errors.Length == 0
-                      && conflicts.Length == 0
-                      && runtimeConflicts.Length == 0;
+                      && conflicts.Length == 0;
 
         return new CliPackageChangePreflight(
             success,
@@ -123,12 +120,11 @@ internal sealed class CliPackageChangePreflight
             Array.AsReadOnly(warnings),
             Array.AsReadOnly(errors),
             Array.AsReadOnly(conflicts),
-            Array.AsReadOnly(runtimeConflicts),
             Array.AsReadOnly(consents),
             Array.AsReadOnly((planExpectations ?? []).ToArray()),
             Array.AsReadOnly(runtimeDownloads),
             Array.AsReadOnly((skippedPackageIds ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()),
-            Sum(packageArtifacts.Select(static artifact => artifact.Size)));
+            Sum(packageArtifacts.Select(static artifact => (long?)artifact.Size)));
     }
 
     public static CliPackageChangePreflight FromPreview(
@@ -147,8 +143,11 @@ internal sealed class CliPackageChangePreflight
             preview.Conflicts,
             [],
             preview.RequiredCapabilityConsents,
-            RuntimeArtifacts: preview.RuntimeArtifacts,
-            RuntimeConflicts: preview.RuntimeConflicts);
+            ResolutionFingerprint: string.Empty,
+            ExpiresAtUtc: default)
+        {
+            RuntimePrerequisites = preview.RuntimePrerequisites,
+        };
         return Create(
             plan,
             installedRuntimes,
@@ -161,29 +160,19 @@ internal sealed class CliPackageChangePreflight
             ? $"{artifact.DownloadUrl}\n{artifact.Size}"
             : artifact.Sha256;
 
-    private static string RuntimeArtifactKey(RuntimeRegistryResolvedExecutionRuntimeArtifact artifact)
-        => $"{artifact.Identity.RuntimeId}\n{artifact.Identity.Version}\n{artifact.Identity.PackagingRevision}\n"
-           + $"{artifact.Identity.Rid}\n{artifact.Identity.ModuleAbi}\n{artifact.ArtifactSha256}";
+    private static string RuntimeArtifactKey(RuntimeExecutionRuntimeResolution resolution)
+    {
+        var identity = resolution.Artifact.Identity;
+        return $"{identity.SourceId}\n{identity.RuntimeId}\n{identity.VendorVersion}\n{identity.Rid}\n"
+               + $"{identity.ModuleAbi}\n{identity.VendorChecksumAlgorithm}\n{identity.VendorChecksumDigest}";
+    }
 
-    private static bool IsHealthyExactMatch(
-        InstalledExecutionRuntimeSummary installed,
-        RuntimeRegistryResolvedExecutionRuntimeArtifact artifact)
-        => string.Equals(installed.Status, RuntimeExecutionRuntimeStatuses.Ready, StringComparison.Ordinal)
-           && string.Equals(installed.Health.Status, RuntimeExecutionRuntimeStatuses.Ready, StringComparison.Ordinal)
-           && string.Equals(installed.Identity.RuntimeId, artifact.Identity.RuntimeId, StringComparison.Ordinal)
-           && string.Equals(installed.Identity.Version, artifact.Identity.Version, StringComparison.Ordinal)
-           && installed.Identity.PackagingRevision == artifact.Identity.PackagingRevision
-           && string.Equals(installed.Identity.Rid, artifact.Identity.Rid, StringComparison.Ordinal)
-           && string.Equals(installed.Identity.ModuleAbi, artifact.Identity.ModuleAbi, StringComparison.Ordinal)
-           && string.Equals(installed.Identity.ManifestSha256, artifact.ManifestSha256, StringComparison.Ordinal)
-           && string.Equals(installed.Identity.ArtifactSha256, artifact.ArtifactSha256, StringComparison.Ordinal);
-
-    private static long Sum(IEnumerable<long> values)
+    private static long Sum(IEnumerable<long?> values)
     {
         var total = 0L;
         foreach (var value in values)
         {
-            total = checked(total + value);
+            if (value is not null) total = checked(total + value.Value);
         }
         return total;
     }

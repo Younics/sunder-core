@@ -16,6 +16,11 @@
 !scripts/release/**
 !eng/release/
 !eng/release/**
+!scripts/test/release/
+!scripts/test/release/**
+# These exclusions follow the release-source exceptions above.
+__pycache__/
+*.py[cod]
 x64/
 [Bb]in/
 [Oo]bj/

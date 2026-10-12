@@ -15,17 +15,17 @@ namespace Sunder.Sdk.PublicApi.Tests;
 
 public sealed class PublicApiBaselineTests
 {
-    public static TheoryData<Assembly> SdkAssemblies => new()
+    public static TheoryData<Type> SdkAssemblies => new()
     {
-        typeof(IPackageContext).Assembly,
-        typeof(IAvaloniaPackageContributionRegistry).Assembly,
-        typeof(IPackageStackExporter).Assembly,
-        typeof(SunderWorker).Assembly,
-        typeof(HostHandshakeResponse).Assembly,
-        typeof(GenerateSunderPackageManifestTask).Assembly,
-        typeof(RuntimeHandshakeResponse).Assembly,
-        typeof(RegistryPackageCanonicalArtifact).Assembly,
-        typeof(SunderPackageManifest).Assembly,
+        typeof(IPackageContext),
+        typeof(IAvaloniaPackageContributionRegistry),
+        typeof(IPackageStackExporter),
+        typeof(SunderWorker),
+        typeof(HostHandshakeResponse),
+        typeof(GenerateSunderPackageManifestTask),
+        typeof(RuntimeHandshakeResponse),
+        typeof(RegistryPackageCanonicalArtifact),
+        typeof(SunderPackageManifest),
     };
 
     public static TheoryData<Assembly> SdkContractAssemblies => new()
@@ -54,8 +54,9 @@ public sealed class PublicApiBaselineTests
 
     [Theory]
     [MemberData(nameof(SdkAssemblies))]
-    public void ExportedApiMatchesShipped11Baseline(Assembly assembly)
+    public void ExportedApiMatchesShipped11Baseline(Type assemblyMarker)
     {
+        var assembly = assemblyMarker.Assembly;
         var fileName = assembly.GetName().Name + ".txt";
         var actual = PublicApiFormatter.Format(assembly);
         var updateRoot = Environment.GetEnvironmentVariable("SUNDER_UPDATE_PUBLIC_API_ROOT");

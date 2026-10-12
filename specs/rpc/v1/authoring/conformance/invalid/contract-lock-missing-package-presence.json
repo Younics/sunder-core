@@ -4,7 +4,10 @@
   "packageImports": {
     "example.dependency": {
       "localName": "dependency",
-      "requiredContracts": []
+      "requiredContracts": [],
+      "consumerRoles": [
+        "runtime"
+      ]
     }
   },
   "providerImports": {},

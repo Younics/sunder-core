@@ -160,12 +160,7 @@ internal static class PackageStorePolicy
     internal static bool CatalogBindingsEqual(IReadOnlyList<InstalledPackageRecord> left, IReadOnlyList<InstalledPackageRecord> right)
         => CatalogsEqual(left.Select(WithoutRenewablePolicy).ToArray(), right.Select(WithoutRenewablePolicy).ToArray());
 
-    private static InstalledPackageRecord WithoutRenewablePolicy(InstalledPackageRecord package) => package with
-    {
-        Policy = null,
-        ExecutionRuntimeBindings = package.ExecutionRuntimeBindings.Select(binding => binding with
-        { RuntimePolicyRevision = 0, RuntimeLifecycleState = "", PolicyObservedAtUtc = default }).ToArray(),
-    };
+    private static InstalledPackageRecord WithoutRenewablePolicy(InstalledPackageRecord package) => package with { Policy = null };
 
     private static string ComputeUninstallConfirmationToken(
         string packageId,

@@ -17,7 +17,8 @@ internal sealed class SunderRpcPublicationImport(HttpClient http, bool allowDeve
         SunderRpcAuthoringDocuments.RequireCanonicalRegistryOrigin(registryOrigin, "publication import", allowDevelopmentRegistryOrigin);
         projectDirectory = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(projectDirectory);
         var path = GenerateSunderRpcBindingsTask.ResolveOwnedBaselinePath(projectDirectory, ownedPath);
-        var baseline = SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(path);
+        var baseline = File.Exists(path) ? SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(path) : null;
+        if (baseline is null) GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(projectDirectory, Path.Combine(projectDirectory, "obj", GenerateSunderRpcBindingsTask.GeneratedDirectoryName));
         packagePath = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(Path.GetFullPath(packagePath, projectDirectory));
         var temporary = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(Directory.CreateTempSubdirectory("sunder-publication-").FullName);
         try
@@ -32,13 +33,19 @@ internal sealed class SunderRpcPublicationImport(HttpClient http, bool allowDeve
             var expectedHash = local.GetProperty("archiveSha256").GetString()!;
             var observed = HashArchive(packagePath, token);
             if (observed.Hash != expectedHash) throw Invalid("The retained archive changed during inspection.");
-            if (validation.Manifest!.Id != baseline.PackageId) throw Invalid("The archive does not belong to the owned baseline.");
+            if (baseline is not null && validation.Manifest!.Id != baseline.PackageId) throw Invalid("The archive does not belong to the owned baseline.");
             var verified = await new SunderRpcContractRestore(http, allowDevelopmentRegistryOrigin: allowDevelopmentRegistryOrigin)
                 .VerifyPackagePublicationAsync(registryOrigin, inventory, observed.Hash, observed.Bytes, token);
-            var owned = (validation.Manifest.ContractBundles ?? []).Where(bundle => bundle?.Source == "owned")
+            var owned = (validation.Manifest!.ContractBundles ?? []).Where(bundle => bundle?.Source == "owned")
                 .Select(bundle => new SunderRpcPublishedContract(bundle!.ContractId!, bundle.Version!, bundle.DescriptorSha256!, bundle.AbiSha256!, bundle.Exposure!))
                 .OrderBy(value => value.ContractId, StringComparer.Ordinal).ToArray();
             if (!owned.SequenceEqual(verified.OwnedContracts)) throw Invalid("Registry bundle ownership differs from the validated archive.");
+            if (baseline is null)
+            {
+                if (owned.Any(contract => contract.Exposure == "public")) throw Invalid("Public publication requires its retained owned baseline.");
+                if (HashArchive(packagePath, token) != observed) throw Invalid("The retained private archive changed during publication verification.");
+                return false; // Exact private bytes were verified; private publication has no independent baseline transition.
+            }
             var proposal = SunderRpcAuthoringDocuments.PlanPackagePublication(baseline, verified);
             return GenerateSunderRpcBindingsTask.CommitOwnedPublication(projectDirectory, path, baseline.ExactBytes, proposal, () =>
             {
@@ -74,9 +81,11 @@ internal static partial class SunderRpcAuthoringDocuments
     {
         if (baseline.PackageId != publication.PackageId) throw SunderRpcPublicationImport.Invalid("Publication names a different owner.");
         var bundles = publication.OwnedContracts.ToDictionary(value => (value.ContractId, value.Version));
+        var governed = baseline.Contracts.Where(pair => HasPublicEvidence(pair.Value)).Select(pair => pair.Value.ContractId).ToHashSet(StringComparer.Ordinal);
         var snapshots = baseline.Contracts.Values.SelectMany(value => value.History.Concat(value.Current is null ? [] : new[] { value.Current })).ToArray();
         foreach (var bundle in bundles.Values)
         {
+            if (bundle.Exposure == "package" && !governed.Contains(bundle.ContractId)) continue;
             var snapshot = snapshots.SingleOrDefault(value => value.Descriptor.ContractId == bundle.ContractId && value.Descriptor.Version == bundle.Version);
             if (snapshot is null || snapshot.State == "draft" || snapshot.Exposure != bundle.Exposure
                 || snapshot.Descriptor.Sha256 != bundle.DescriptorSha256 || snapshot.Descriptor.AbiSha256 != bundle.AbiSha256)
@@ -94,6 +103,7 @@ internal static partial class SunderRpcAuthoringDocuments
 
         SunderRpcOwnedContractSnapshot Confirm(SunderRpcOwnedContractSnapshot snapshot)
         {
+            if (!governed.Contains(snapshot.Descriptor.ContractId)) return snapshot;
             if (snapshot.State == "draft" || snapshot.SnapshotJson.GetProperty("packageRelease").GetProperty("packageVersion").GetString() != publication.PackageVersion) return snapshot;
             if (!bundles.TryGetValue((snapshot.Descriptor.ContractId, snapshot.Descriptor.Version), out var bundle) || snapshot.Exposure != bundle.Exposure
                 || snapshot.Descriptor.Sha256 != bundle.DescriptorSha256 || snapshot.Descriptor.AbiSha256 != bundle.AbiSha256)

@@ -2,6 +2,7 @@ using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Composition;
 
@@ -15,12 +16,21 @@ public sealed class SettingsWindowFactory(
     AppRuntimeResourcePolicySettingsService runtimeResourcePolicySettingsService,
     IRuntimeResourcePolicyStatusSource runtimeResourcePolicyStatusSource)
 {
-    public SettingsWindow Create(
+    internal SettingsWindow Create(
         PackageViewHostService packageViewHostService,
-        Action<double, double>? persistBackgroundProcessPopoverSize)
-        => new(shellStateService, shellState)
-        {
-            DataContext = new SettingsWindowViewModel(
+        Action<double, double>? persistBackgroundProcessPopoverSize,
+        Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>>? waitForPresentation = null,
+        IRuntimeExecutionRuntimeStatusSource? runtimeStatusSource = null)
+    {
+        var window = new SettingsWindow(shellStateService, shellState);
+        var runtimes = new SettingsPackageRuntimesViewModel(
+            runtimeApiClientFactory.CreateClient<IRuntimeExecutionRuntimeManagementClient>(),
+            (review, token) => RuntimeManagementDialogs.ShowAsync(window, review, token),
+            backgroundProcessQueue,
+            () => runtimeApiClientFactory.CreateClient<IRuntimeExecutionRuntimeManagementClient>(),
+            waitForPresentation: waitForPresentation,
+            changes: runtimeStatusSource);
+        window.DataContext = new SettingsWindowViewModel(
                 runtimeApiClientFactory.CreateClient<IRuntimePackageSettingsClient>(),
                 packageViewHostService,
                 cliInstallationService,
@@ -30,6 +40,8 @@ public sealed class SettingsWindowFactory(
                 shellState.BackgroundProcessPopoverHeight,
                 persistBackgroundProcessPopoverSize,
                 runtimeResourcePolicySettingsService,
-                runtimeResourcePolicyStatusSource),
-        };
+                runtimeResourcePolicyStatusSource,
+                runtimes);
+        return window;
+    }
 }

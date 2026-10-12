@@ -1,4 +1,7 @@
 type Sunder.Package.Build.Tasks.AggregateSunderPackageTask
+  property System.Boolean AllowDevelopmentRegistryOrigin { public get; public set; }
+  property System.String ContractCacheRoot { public get; public set; }
+  property System.String ContractLockPath { public get; public set; }
   property System.String ExpectedPackageVersion { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
   property System.String NormalizedOutputPath { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property System.String OutputDiscoveryRoot { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
@@ -25,14 +28,18 @@ type Sunder.Package.Build.Tasks.CollectSunderContractCacheTask
   property System.Int32 RetainedUnprovenArtifacts { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property Microsoft.Build.Framework.ITaskItem[] ReviewedLocks { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
 type Sunder.Package.Build.Tasks.EmitSunderDevOutputTask
+  property System.Boolean AllowDevelopmentRegistryOrigin { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] AssetFiles { public get; public set; }
   property System.String AssetsDirectory { public get; public set; }
+  property System.String ContractCacheRoot { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] ContractFiles { public get; public set; }
+  property System.String ContractLockPath { public get; public set; }
   property System.String DevPackagePath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
   property System.String DiscoveryRoot { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
   property Microsoft.Build.Framework.ITaskItem[] ManagedFiles { public get; public set; }
   property System.String ManifestPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
   property Microsoft.Build.Framework.ITaskItem[] NativeRuntimeFiles { public get; public set; }
+  property System.String ProjectDirectory { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] RoleContentFiles { public get; public set; }
   property System.String TargetDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
   property Microsoft.Build.Framework.ITaskItem[] WorkerFiles { public get; public set; }
@@ -86,6 +93,8 @@ type Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask
   property System.String ContractLockPath { public get; public set; }
   property System.String ContractNextVersion { public get; public set; }
   property System.String ContractOperation { public get; public set; }
+  property System.String ContractReviewOutputPath { public get; public set; }
+  property System.String ContractReviewPath { public get; public set; }
   property System.String DefineConstants { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] ExpectedPackageProjectExports { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] FileWrites { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
@@ -131,6 +140,7 @@ type Sunder.Package.Build.Tasks.ManageSunderPackageApiTask
   property System.String AssemblyName { public get; public set; }
   property System.String Candidate { public get; public set; }
   property System.String Configuration { public get; public set; }
+  property System.String ConsumerRoles { public get; public set; }
   property System.String ContractCacheRoot { public get; public set; }
   property System.String ContractId { public get; public set; }
   property System.String ContractLockPath { public get; public set; }
@@ -150,7 +160,9 @@ type Sunder.Package.Build.Tasks.ManageSunderPackageApiTask
   property System.String PlatformCatalogPath { public get; public set; }
   property System.String Presence { public get; public set; }
   property System.String ProjectDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String ProjectFile { public get; public set; }
   property System.String ProjectIdentity { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] ProjectImports { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { public get; public set; }
   property System.String RegistryOrigin { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] ResourceItems { public get; public set; }
@@ -174,6 +186,7 @@ type Sunder.Package.Build.Tasks.ManageSunderPackageRoleInputsTask
   property System.String ContractLockPath { public get; public set; }
   property System.String DevPackagePath { public get; public set; }
   property System.String[] ExpectedRuntimeIdentifiers { public get; public set; }
+  property System.String GeneratedGlobalUsingsFile { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] GeneratorAnalyzers { public get; public set; }
   property System.String OwnedContractsPath { public get; public set; }
   property System.String PackageOutputPath { public get; public set; }
@@ -223,7 +236,9 @@ type Sunder.Package.Build.Tasks.PackSunderPackageTask
   property System.String OwnedContractsPath { public get; public set; }
   property System.String PackageOutputPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
   property System.String ProjectDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String ProjectFile { public get; public set; }
   property System.String ProjectIdentity { public get; public set; }
+  property Microsoft.Build.Framework.ITaskItem[] ProjectImports { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] ResourceItems { public get; public set; }
   property System.String RootNamespace { public get; public set; }
@@ -232,6 +247,7 @@ type Sunder.Package.Build.Tasks.PackSunderPackageTask
   property System.String TargetFramework { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] UsesContracts { public get; public set; }
 type Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask
+  property System.String AnalysisGlobalUsingsFile { public get; public set; }
   property System.String AssemblyName { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property Microsoft.Build.Framework.ITaskItem[] AuthoringReceipts { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property Microsoft.Build.Framework.ITaskItem[] BindingSnapshots { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
@@ -245,6 +261,7 @@ type Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask
   property Microsoft.Build.Framework.ITaskItem[] ExcludedGenerators { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property Microsoft.Build.Framework.ITaskItem[] ExcludedProjectReferences { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property System.String ExpectedSha256 { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.String GeneratedGlobalUsingsFile { public get; public set; }
   property System.String OutputLockLeaseId { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
   property System.String PackageVersion { public get; public set; }
   property System.String PlanPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
@@ -263,6 +280,7 @@ type Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask
   property Microsoft.Build.Framework.ITaskItem[] SourceFiles { public get; public set; }
   property System.String TargetFramework { public get; public set; }
   property System.Boolean ValidateResourceEvaluation { public get; public set; }
+  property System.Boolean ValidateSourceEvaluation { public get; public set; }
 type Sunder.Package.Build.Tasks.RestoreSunderContractsTask
   property System.Boolean AllowDevelopmentRegistryOrigin { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] CandidateArchives { public get; public set; }

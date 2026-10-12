@@ -13,6 +13,7 @@ public sealed partial class SunderRpcImportedBuildTests
     [InlineData("http://localhost:43127/")]
     public async Task DevelopmentRegistry_ExactRestoreAndOfflineGenerationRequireExplicitOptIn(string origin)
     {
+        _ = await CreateLockedCandidateAsync();
         SetDevelopmentOrigin(origin);
         var locked = SunderRpcAuthoringDocuments.ReadContractLock(LockPath, true);
         var inventory = SunderRpcAuthoringDocuments.ValidatePackagePublicInventory(locked.PackageArtifacts[DependencyId]);
@@ -28,8 +29,8 @@ public sealed partial class SunderRpcImportedBuildTests
         Assert.Equal(1, await restore.RestoreAsync(LockPath, cache, []));
         var denied = CreateGeneration(); denied.ContractCacheRoot = cache; Assert.False(denied.Execute());
         var allowed = CreateGeneration(); allowed.ContractCacheRoot = cache; allowed.AllowDevelopmentRegistryOrigin = true; AssertSuccess(allowed);
-        var snapshot = Snapshot(cache); Assert.Equal(1, await restore.RestoreAsync(LockPath, cache, [])); Assert.Equal(snapshot, Snapshot(cache));
-        Assert.Equal(before, File.ReadAllBytes(LockPath)); Assert.Equal(6, handler.Requests);
+        var snapshot = Snapshot(cache); Assert.Equal(0, await restore.RestoreAsync(LockPath, cache, [])); Assert.Equal(snapshot, Snapshot(cache));
+        Assert.Equal(before, File.ReadAllBytes(LockPath)); Assert.Equal(1, handler.Requests);
     }
 
     [Theory]
@@ -82,6 +83,7 @@ public sealed partial class SunderRpcImportedBuildTests
     [InlineData(true)]
     public async Task DevelopmentRegistry_RejectsRedirectAndDifferentResponseOrigin(bool differentOrigin)
     {
+        _ = await CreateLockedCandidateAsync();
         SetDevelopmentOrigin("http://localhost:43127/");
         var locked = SunderRpcAuthoringDocuments.ReadContractLock(LockPath, true);
         var inventory = SunderRpcAuthoringDocuments.ValidatePackagePublicInventory(locked.PackageArtifacts[DependencyId]);

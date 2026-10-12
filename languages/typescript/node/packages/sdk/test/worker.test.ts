@@ -269,6 +269,13 @@ test("worker performs handshake, unary, stream, cancellation, and graceful shutd
   }
 });
 
+test("SDK request-participant cancellation uses the existing cancelled response before Host cancellation arrives",async()=>{
+  const worker=startWorker();try{await handshake(worker);send(worker,invocation("resource-cancel","unary","resource-cancel"));
+    const cancelled=await worker.messages.next();assert.equal(cancelled.type,"worker.error");assert.equal(object(cancelled.error).kind,"cancelled");assert.equal(object(cancelled.error).code,"rpc.call.cancelled");
+    send(worker,invocation("after-resource-cancel","unary","echo"));assert.equal((await worker.messages.next()).type,"worker.result");
+  }finally{worker.child.kill("SIGKILL");}
+});
+
 test("worker enforces exact package and caller SemVer length boundaries", async () => {
   assert.equal(maximumSemanticVersion.length, 256);
   assert.equal(overlongSemanticVersion.length, 257);
@@ -1315,6 +1322,7 @@ test("only declared domain errors cross the provider boundary", async (context) 
     ["undeclared-domain", "RpcDomainError"],
     ["infrastructure", "RpcError"],
     ["fault", "TypeError"],
+    ["resource-cancel-foreign", "Error"],
   ] as const) {
     await context.test(methodId, async () => {
       const worker = startWorker();
@@ -1558,6 +1566,198 @@ test("provider content client binds register, verified stream open, and discard 
   }
 });
 
+test("response retirement authenticates only safe same-attempt Host registration failures and preserves delivered revisions",async()=>{
+  const cases=[
+    ["unavailable","rpc.content.authority-revoked",true],
+    ["deadline-exceeded","rpc.call.deadline-exceeded",true],
+    ["stale-endpoint","rpc.endpoint.stale",true],
+    ["cancelled","rpc.call.cancelled",true],
+    ["unavailable","rpc.call.cancelled",false],
+    ["unavailable","rpc.other",false],
+    ["unavailable","rpc.content.authority-revoked",false,"unsafe"],
+    ["unavailable","rpc.content.authority-revoked",false,"possibly-dispatched"],
+    ["unavailable","rpc.content.authority-revoked",false,"default"],
+    ["unavailable","rpc.content.authority-revoked",false,"foreign"],
+    ["unavailable","rpc.content.authority-revoked",false,"body-authenticated"],
+    ["unavailable","rpc.content.authority-revoked",false,"open"],
+    ["unavailable","rpc.content.authority-revoked",false,"body"],
+    ["unavailable","rpc.content.authority-revoked",false,"read"],
+    ["unavailable","rpc.content.authority-revoked",false,"reused"],
+  ] as const;
+  const worker=startWorker("response-retirement");
+  try{
+    await handshake(worker);
+    for(const [index,[kind,code,complete,scenario="normal"]] of cases.entries()){
+      const id="retirement-"+index;
+      send(worker,{...object(invocation(id,"server-stream","watch")),request:{scenario,after:0}});
+      if(!["body","read","foreign"].includes(scenario)){
+        const registration=await worker.messages.next();assert.equal(registration.type,scenario==="open"?"worker.content-open":"worker.content-register",JSON.stringify(registration)+worker.stderr());
+        if(scenario!=="reused"&&scenario!=="body-authenticated"&&scenario!=="open"){
+          send(worker,{type:"host.result",id:registration.id!,value:{...object(contentReference("delivered-"+index,1)),expiresAtUtc:"2099-01-01T00:00:00.0000001Z"}});
+          const event=await worker.messages.next();assert.equal(event.type,"worker.event",worker.stderr());assert.equal(object(event.value).revision,1);
+          const second=await worker.messages.next();assert.equal(second.type,"worker.content-register");
+          send(worker,{type:"host.error",id:second.id!,error:{kind,code,message:"retired",dispatchState:scenario==="possibly-dispatched"?scenario:"not-dispatched",retrySafety:scenario==="unsafe"?scenario:"safe"}});
+        }else send(worker,{type:"host.error",id:registration.id!,error:{kind,code,message:"retired",dispatchState:"not-dispatched",retrySafety:"safe"}});
+      }
+      if(!complete){const diagnostic=await worker.messages.next();assert.equal(diagnostic.type,"worker.provider-fault-diagnostic");send(worker,{type:"host.result",id:diagnostic.id!,value:null});}
+      const terminal=await worker.messages.next();assert.equal(terminal.type,complete?"worker.complete":"worker.error",scenario+" "+code);
+      if(!complete)assert.equal(object(terminal.error).code,"rpc.provider.handler-fault");
+      if(complete){
+        send(worker,{...object(invocation(id+"-replay","server-stream","watch")),request:{scenario:"normal",after:1}});
+        const register=await worker.messages.next();assert.equal(register.type,"worker.content-register");
+        send(worker,{type:"host.result",id:register.id!,value:{...object(contentReference("replayed-"+index,1)),expiresAtUtc:"2099-01-01T00:00:00.0000001Z"}});
+        const event=await worker.messages.next();assert.equal(object(event.value).revision,2);
+        assert.equal((await worker.messages.next()).type,"worker.complete");
+      }
+    }
+    // An expired replay cursor is a caller decision: explicitly resnapshot from zero.
+    send(worker,{...object(invocation("retirement-resnapshot","server-stream","watch")),request:{scenario:"normal",after:0}});
+    for(const revision of [1,2]){
+      const register=await worker.messages.next();assert.equal(register.type,"worker.content-register");
+      send(worker,{type:"host.result",id:register.id!,value:{...object(contentReference("snapshot-"+revision,1)),expiresAtUtc:"2099-01-01T00:00:00.0000001Z"}});
+      const event=await worker.messages.next();assert.equal(event.type,"worker.event");assert.equal(object(event.value).revision,revision);
+    }
+    assert.equal((await worker.messages.next()).type,"worker.complete");
+    send(worker,{...object(invocation("retirement-unary","unary","get")),request:{scenario:"normal",after:0}});
+    const unary=await worker.messages.next();assert.equal(unary.type,"worker.content-register");
+    send(worker,{type:"host.error",id:unary.id!,error:{kind:"unavailable",code:"rpc.content.authority-revoked",message:"retired",dispatchState:"not-dispatched",retrySafety:"safe"}});
+    const diagnostic=await worker.messages.next();assert.equal(diagnostic.type,"worker.provider-fault-diagnostic");send(worker,{type:"host.result",id:diagnostic.id!,value:null});
+    const unaryError=await worker.messages.next();assert.equal(unaryError.type,"worker.error");assert.equal(object(unaryError.error).code,"rpc.provider.handler-fault");
+    send(worker,{...object(invocation("retirement-cancel","server-stream","watch")),request:{scenario:"normal",after:0}});
+    const pending=await worker.messages.next();assert.equal(pending.type,"worker.content-register");
+    send(worker,{type:"host.cancel",id:"retirement-cancel"});
+    const cancel=await worker.messages.next();assert.equal(cancel.type,"worker.cancel");assert.equal(cancel.id,pending.id);
+    send(worker,{type:"host.error",id:pending.id!,error:{kind:"cancelled",code:"rpc.call.cancelled",message:"cancelled",dispatchState:"not-dispatched",retrySafety:"safe"}});
+    const cancelled=await worker.messages.next();assert.equal(cancelled.type,"worker.error");assert.equal(object(cancelled.error).code,"rpc.call.cancelled");
+    send(worker,{type:"host.shutdown",shutdownId:"retirement-shutdown",reason:"test"});
+    assert.equal((await worker.messages.next()).type,"worker.shutdown-ack");assert.equal(await exitCode(worker.child),0);
+    assert.match(worker.stderr(),/RETIREMENT_DISPOSED/);
+  }finally{worker.child.kill("SIGKILL");}
+});
+
+test("natural content transport roundtrip uses default factories, exact expiry and profile date-time forms",async()=>{
+  const worker=startWorker("natural-content");
+  const payload="natural payload";
+  const sha256=createHash("sha256").update(payload).digest("hex");
+  const registrations=[
+    ["2099-01-01T00:00:00.0000000Z","2099-01-01T00:00:00Z","2030-01-02T03:04:05.0000000Z"],
+    ["2099-01-01T00:00:00.1234000Z","2099-01-01T00:00:00.1234Z","2030-01-02T03:04:05.123456789+14:00"],
+    ["2099-01-01T00:00:00.1234567Z","2099-01-01T00:00:00.1234567Z","2030-01-02T03:04:05.100000000-14:00"],
+    ["2099-01-01T00:00:00Z","2099-01-01T00:00:00Z","2030-01-02T03:04:05+00:00"],
+    ["2099-01-01T00:00:00.123456789Z","2099-01-01T00:00:00.123456789Z","2030-01-02T03:04:05Z"],
+  ];
+  try{
+    await handshake(worker);
+    for(const [index,[transportExpiry,logicalExpiry,observedAt]] of registrations.entries()){
+      send(worker,{...object(invocation("natural-"+index,"unary","download")),request:{observedAt:observedAt!}});
+      const register=await worker.messages.next();assert.equal(register.type,"worker.content-register",JSON.stringify(register));
+      assert.deepEqual(object(register.options),{mediaType:"application/octet-stream",fileName:"content.bin",length:Buffer.byteLength(payload),expiresAtUtc:null,repeatability:"single-use",maximumUses:1});
+      assert.equal(await readFile(String(register.filePath),"utf8"),payload);
+      const reference={id:"natural-content-"+index,length:Buffer.byteLength(payload),sha256,mediaType:"application/octet-stream",fileName:"content.bin",expiresAtUtc:transportExpiry!,repeatability:"single-use"};
+      send(worker,{type:"host.result",id:register.id!,value:reference});
+      const result=await worker.messages.next();assert.equal(result.type,"worker.result",JSON.stringify(result));
+      assert.deepEqual(result.value,{revision:1,observedAt:observedAt!,content:{...reference,expiresAtUtc:logicalExpiry!}});
+    }
+    // Logical references are immutable capabilities: reopen sends every field,
+    // including nanosecond text, exactly as received (not through Date).
+    const reference={id:"natural-input",length:Buffer.byteLength(payload),sha256,mediaType:"application/octet-stream",fileName:"display name.bin",expiresAtUtc:"2099-01-01T00:00:00.123456789Z",repeatability:"single-use"};
+    const observedAt="2030-01-02T03:04:05.123456789-05:30";
+    send(worker,{...object(invocation("natural-echo","unary","echo")),request:{revision:2,observedAt,content:reference}});
+    const open=await worker.messages.next();assert.equal(open.type,"worker.content-open");assert.deepEqual(open.reference,reference);
+    const path=join(worker.temporaryRoot,"natural-input.bin");await writeFile(path,payload);
+    send(worker,{type:"host.result",id:open.id!,value:{handleId:"natural-read",filePath:path}});
+    const release=await worker.messages.next();assert.equal(release.type,"worker.content-release");assert.equal(release.handleId,"natural-read");send(worker,{type:"host.result",id:release.id!,value:null});
+    const register=await worker.messages.next();assert.equal(register.type,"worker.content-register");assert.equal(object(register.options).fileName,"content.bin");assert.equal(await readFile(String(register.filePath),"utf8"),payload);
+    const forwarded={...reference,id:"natural-response",fileName:"content.bin",expiresAtUtc:"2099-01-01T00:00:00.1200000Z"};
+    send(worker,{type:"host.result",id:register.id!,value:forwarded});
+    const result=await worker.messages.next();assert.equal(result.type,"worker.result");assert.deepEqual(result.value,{revision:2,observedAt,content:{...forwarded,expiresAtUtc:"2099-01-01T00:00:00.12Z"}});
+    for(const observedAt of ["2030-02-30T00:00:00Z","2030-01-01T00:00:00+14:01","2030-01-01T00:00:00.1234567890Z","2030-01-01T00:00:00"]){
+      send(worker,{...object(invocation("natural-invalid-"+observedAt.length,"unary","download")),request:{observedAt}});
+      const diagnostic=await worker.messages.next();assert.equal(diagnostic.type,"worker.provider-fault-diagnostic");send(worker,{type:"host.result",id:diagnostic.id!,value:null});
+      const failed=await worker.messages.next();assert.equal(failed.type,"worker.error");
+    }
+    send(worker,{type:"host.shutdown",shutdownId:"natural-shutdown",reason:"test"});assert.equal((await worker.messages.next()).type,"worker.shutdown-ack");assert.equal(await exitCode(worker.child),0);
+  }finally{worker.child.kill("SIGKILL");}
+});
+
+test("natural content transport rejects malformed Host registration metadata without widening bounds",async()=>{
+  const invalid:Readonly<Record<string,JsonValue>>[]=[
+    ...["2099-01-01T00:00:00+00:00","2099-01-01T01:00:00+01:00","2099-02-29T00:00:00.0000000Z","0000-01-01T00:00:00.0000000Z","2099-01-01T00:00:60.0000000Z","2099-01-01T00:00:00.1234567890Z","2099-01-01T00:00:00.12340000Z"," 2099-01-01T00:00:00Z"].map(expiresAtUtc=>({expiresAtUtc})),
+    {fileName:"x".repeat(256)},{mediaType:"x".repeat(129)},{fileName:"\ud800"},{sha256:"A".repeat(64)},{length:9007199254740992},{extra:true},
+  ];
+  for(const value of invalid){
+    const worker=startWorker("natural-content");
+    try{
+      await handshake(worker);send(worker,{...object(invocation("natural-invalid","unary","download")),request:{observedAt:"2030-01-01T00:00:00Z"}});
+      const register=await worker.messages.next();assert.equal(register.type,"worker.content-register");
+      sendRaw(worker,JSON.stringify({type:"host.result",id:register.id!,value:{...object(contentReference("invalid-content","natural payload")),...value}}));
+      assert.equal(await exitCode(worker.child),70,JSON.stringify(value));
+    }finally{worker.child.kill("SIGKILL");}
+  }
+});
+
+test("source optional references obey occurrence policy over framed Worker lookup, dispatch, retirement and cleanup",{skip:!process.env.SUNDER_TEST_OPTIONAL_PROVIDER},async()=>{
+  const bundle=require(process.env.SUNDER_TEST_OPTIONAL_PROVIDER!) as {providers:Array<Record<string,JsonValue>>};
+  const registration=bundle.providers.find(value=>String(value.contractId).endsWith(".runner"))!;
+  const target={packageId:packageIdentity.packageId,packageVersion:packageIdentity.packageVersion,providerId:registration.providerId!,contractId:registration.contractId!,contractVersion:registration.contractVersion!,descriptorSha256:registration.descriptorSha256!,abiSha256:registration.abiSha256!,activationId:"c".repeat(32),activationEpoch:1,sessionGeneration:1,endpointReference:"optional-target",catalogRevision:1,state:"active",faultCode:null};
+  const locator={packageId:target.packageId,packageVersion:target.packageVersion,providerId:target.providerId,contractId:target.contractId,contractVersion:target.contractVersion,descriptorSha256:target.descriptorSha256,abiSha256:target.abiSha256,activationId:"cccccccc-cccc-cccc-cccc-cccccccccccc",activationEpoch:1,sessionGeneration:1,endpoint:target.endpointReference};
+  const cases:Array<{name:string;method:string;error?:string;result?:JsonValue}>=[
+    {name:"absent",method:"inspect",result:"absent"},
+    {name:"live",method:"inspect",result:"ready"},
+    {name:"mid",method:"inspect",result:"failure:stale-endpoint:possibly-dispatched:unsafe"},
+    {name:"mid",method:"required",error:"rpc.call.cancelled"},
+    {name:"mid",method:"mixed",error:"rpc.call.cancelled"},
+    {name:"caller",method:"inspect",error:"rpc.call.cancelled"},
+    {name:"absent",method:"required",error:"rpc.provider.handler-fault"},
+    {name:"send-absent",method:"output",result:{executionTarget:null}},
+    {name:"send-absent",method:"output-required",error:"rpc.provider.handler-fault"},
+    {name:"send-absent",method:"output-mixed",error:"rpc.provider.handler-fault"},
+    {name:"scoped",method:"inspect",result:"failure:unavailable:not-dispatched:safe"},
+    ...["permission-denied","validation","protocol","deadline-exceeded","provider-faulted"].map(kind=>({name:kind,method:"inspect",error:"rpc.provider.handler-fault"})),
+    {name:"unsafe",method:"inspect",error:"rpc.provider.handler-fault"},
+  ];
+  for(const scenario of cases){
+    const worker=startWorker("optional-reference");let watch:JsonValue|undefined;let nested=0,closed=0;
+    try{
+      await handshake(worker);
+      const request:JsonValue=scenario.method.startsWith("output")?{}:scenario.method==="mixed"?{aOptional:locator,zRequired:locator}:{executionTarget:locator};
+      send(worker,{...object(invocation("optional-main","unary",scenario.method)),request});
+      const respond=async(message:Readonly<Record<string,JsonValue>>):Promise<void>=>{
+        const id=message.id!;
+        switch(message.type){
+          case "worker.discover":send(worker,{type:"host.result",id,value:{revision:1,sequence:1,resetRequired:false,providers:scenario.name==="absent"?[]:[target]}});break;
+          case "worker.watch":watch=id;break;
+          case "worker.get-provider":{
+            if(scenario.name==="absent"){send(worker,{type:"host.result",id,value:null});break;}
+            const kind=["permission-denied","validation","protocol","deadline-exceeded","provider-faulted"].includes(scenario.name)?scenario.name:scenario.name==="unsafe"||scenario.name==="send-absent"||scenario.name==="scoped"&&message.scopeId?"unavailable":undefined;
+            if(kind)send(worker,{type:"host.error",id,error:{kind,code:"rpc.optional.lookup",message:kind,dispatchState:scenario.name==="unsafe"?"possibly-dispatched":"not-dispatched",retrySafety:scenario.name==="unsafe"?"unsafe":"safe"}});
+            else send(worker,{type:"host.result",id,value:target});break;
+          }
+          case "worker.scope-open":send(worker,{type:"host.result",id,value:{scopeId:"optional-scope",deadlineUtc:formatUtcTimestamp(new Date(Date.now()+30_000))}});break;
+          case "worker.invoke":nested++;assert.equal(message.endpointReference,target.endpointReference);
+            if(scenario.name==="caller")send(worker,{type:"host.cancel",id:"optional-main"});
+            else if(scenario.name==="mid"){assert.ok(watch);send(worker,{type:"host.event",id:watch,value:{revision:2,sequence:2,kind:"removed",provider:{...target,state:"inactive",catalogRevision:2}}});}
+            else send(worker,{type:"host.result",id,value:"ready"});break;
+          case "worker.cancel":if(id===watch)send(worker,{type:"host.complete",id});else send(worker,{type:"host.error",id,error:{kind:"cancelled",code:"rpc.call.cancelled",message:"cancelled",dispatchState:"possibly-dispatched",retrySafety:"unsafe"}});break;
+          case "worker.scope-close":closed++;send(worker,{type:"host.result",id,value:null});break;
+          case "worker.provider-fault-diagnostic":send(worker,{type:"host.result",id,value:null});break;
+          default:assert.fail(JSON.stringify(message));
+        }
+      };
+      let terminal:Readonly<Record<string,JsonValue>>|undefined;
+      for(let count=0;count<128;count++){const message=await worker.messages.next();if((message.type==="worker.result"||message.type==="worker.error")&&message.id==="optional-main"){terminal=message;break;}await respond(message);}
+      assert.ok(terminal,scenario.name);
+      if(scenario.error){assert.equal(terminal.type,"worker.error",JSON.stringify(terminal)+worker.stderr());assert.equal(object(terminal.error).code,scenario.error,scenario.name+"/"+scenario.method);}
+      else {assert.equal(terminal.type,"worker.result",JSON.stringify(terminal)+worker.stderr());assert.deepEqual(terminal.value,scenario.result,scenario.name+"/"+scenario.method);}
+      if(scenario.name==="mid"||scenario.name==="live"||scenario.name==="caller"){assert.equal(nested,1);assert.equal(closed,1);}
+      if(scenario.name==="scoped")assert.equal(nested,0,"Scoped pre-dispatch denial cannot become optional absence or dispatch the peer.");
+      send(worker,{type:"host.shutdown",shutdownId:"optional-shutdown",reason:"test"});
+      for(let count=0;count<32;count++){const message=await worker.messages.next();if(message.type==="worker.shutdown-ack")break;await respond(message);}
+      assert.equal(await exitCode(worker.child),0);
+    }finally{worker.child.kill("SIGKILL");}
+  }
+});
+
 function startWorker(
   mode?: string,
   rpcExtendedDeadlineV1 = false,
@@ -1582,6 +1782,8 @@ function startWorker(
       SUNDER_PACKAGE_CONTENT_ROOT: contentRoot,
       SUNDER_WORKER_TEMP_ROOT: temporaryRoot,
       SUNDER_TEST_MODE: mode,
+      ...(process.env.SUNDER_TEST_NATURAL_PROVIDER?{SUNDER_TEST_NATURAL_PROVIDER:process.env.SUNDER_TEST_NATURAL_PROVIDER}:{}),
+      ...(process.env.SUNDER_TEST_OPTIONAL_PROVIDER?{SUNDER_TEST_OPTIONAL_PROVIDER:process.env.SUNDER_TEST_OPTIONAL_PROVIDER}:{}),
       ...(rpcExtendedDeadlineV1 ? { SUNDER_RPC_EXTENDED_DEADLINE_V1: "1" } : {}),
     },
   });
@@ -1756,7 +1958,7 @@ function contentReference(id: string, valueOrLength: string | number): JsonValue
     sha256: hash,
     mediaType: "text/plain",
     fileName: `${id}.txt`,
-    expiresAtUtc: formatUtcTimestamp(new Date(Date.now() + 30_000)),
+    expiresAtUtc: "2099-01-01T00:00:00.1234567Z",
     repeatability: "single-use",
   };
 }

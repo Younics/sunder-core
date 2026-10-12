@@ -35,7 +35,8 @@ internal static class SunderPackageAuthoringCompiler
         var sourcePaths = input.Sources.Select(source => source.Path).ToHashSet(StringComparer.Ordinal);
         var compilation = verified.SourceCompilation!;
         var trees = compilation.SyntaxTrees.Where(tree => sourcePaths.Contains(tree.FilePath)).ToArray();
-        var plan = SunderPackageRolePlanner.Plan(compilation, trees, verified.Contracts.SelectMany(contract => contract.SourceTypes).Select(value => value.SourceType));
+        var plan = SunderPackageRolePlanner.Plan(compilation, trees, verified.Contracts.SelectMany(contract => contract.SourceTypes).Select(value => value.SourceType),
+            trustedImportedModelTypes: verified.TrustedImportedModelTypes);
         return Complete(new(verified, plan, generated) { OrdinarySourcePaths = sourcePaths });
     }
 

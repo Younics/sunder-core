@@ -21,13 +21,12 @@ internal static class ServiceApiSyntax
         miscellaneousOptions: SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers | SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier
             | SymbolDisplayMiscellaneousOptions.UseSpecialTypes);
 
-    internal static void AppendInterface(StringBuilder output, INamedTypeSymbol type, IEnumerable<IMethodSymbol> methods, bool mapSourceLocations = false)
+    internal static void AppendInterface(StringBuilder output, string packageId, INamedTypeSymbol type, IEnumerable<IMethodSymbol> methods, bool mapSourceLocations = false, string? serviceId = null)
     {
-        var ns = type.ContainingNamespace.IsGlobalNamespace ? null : type.ContainingNamespace.ToDisplayString();
-        if (ns != null) output.Append("namespace ").Append(string.Join(".", ns.Split('.').Select(Escape))).AppendLine(" {");
+        output.Append("namespace ").Append(GeneratedPackageNames.Services(packageId)).AppendLine(" {");
         if (mapSourceLocations) AppendLocation(output, type);
         output.Append(type.DeclaredAccessibility == Accessibility.Public ? "public" : "internal")
-            .Append(" interface ").Append(Escape("I" + type.Name)).AppendLine(" {");
+            .Append(" interface ").Append(Escape(serviceId == null ? GeneratedPackageNames.ServiceInterfaceName(type) : GeneratedPackageNames.NaturalInterfaceName(serviceId))).AppendLine(" {");
         foreach (var method in methods)
         {
             if (mapSourceLocations) AppendLocation(output, method);
@@ -35,7 +34,7 @@ internal static class ServiceApiSyntax
         }
         output.AppendLine("}");
         if (mapSourceLocations) output.AppendLine("#line default");
-        if (ns != null) output.AppendLine("}");
+        output.AppendLine("}");
     }
 
     private static void AppendLocation(StringBuilder output, ISymbol symbol)

@@ -48,7 +48,7 @@
     "Sunder.Sdk.Worker.Tests": ["dotnet-linux"],
     "create-sunder-package": ["node"],
     "package-tool": ["node"],
-    "scripts/release": ["node", "release-artifact"],
+    "scripts/test/release": ["node", "release-artifact"],
     "scripts/test-oracles": ["node"],
     "sdk": ["node"]
   },
@@ -92,20 +92,11 @@
       "id": "node-process-suspension",
       "framework": "node",
       "source": "languages/typescript/node/packages/package-tool/test/rpc-bindings.test.ts",
-      "name": "a stale generator cannot overwrite a newer plan after waiting for the publish lock",
+      "name": "a suspended CLI publisher reads the new source after acquiring the output lease",
       "skipOn": ["Windows"],
       "owner": "node",
       "reason": "Windows has no SIGSTOP/SIGCONT process suspension.",
-      "runnerReasonPattern": "^Windows has no SIGSTOP/SIGCONT process suspension\\.$"
-    },
-    {
-      "id": "node-package-tool-symlink-capability",
-      "framework": "node",
-      "source": "languages/typescript/node/packages/package-tool/test/rpc-bindings.test.ts",
-      "name": "generation refuses descriptor paths that pass through symbolic links or reparse points",
-      "owner": "node",
-      "reason": "The runner cannot create the symbolic-link fixture.",
-      "runnerReasonPattern": "^The test runner cannot create a symbolic link on this platform\\.$"
+      "runnerReasonPattern": "^SIGSTOP/SIGCONT unavailable on Windows$"
     },
     {
       "id": "node-sdk-output-symlink-capability",

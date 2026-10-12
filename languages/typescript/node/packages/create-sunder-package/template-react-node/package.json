@@ -2,6 +2,7 @@
   "name": "__SUNDER_NPM_PACKAGE_NAME_JSON__",
   "version": "1.0.0",
   "private": true,
+  "imports": { "#sunder/api": { "types": "./.sunder/generated/rpc/api.d.ts", "default": "./.sunder/generated/rpc/api.js" } },
   "engines": {
     "node": ">=24.18.1 <25.0.0"
   },

@@ -51,14 +51,27 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable
         _webView.NewWindowRequested -= OnNewWindowRequested;
         _webView.ResourceRequested -= OnResourceRequested;
         _webView.MessageReceived -= OnMessageReceived;
-        Content = null;
-        _webView.Dispose();
-        var cleanup = _bridge.DisposeAsync().AsTask();
+        var cleanup = DisposeBridgeAndViewAsync();
         if (!cleanup.IsCompletedSuccessfully)
         {
             AppCleanupQuarantine.Retain(cleanup, "disposing a package browser bridge");
         }
-        _lifetime.Dispose();
+    }
+
+    private async Task DisposeBridgeAndViewAsync()
+    {
+        try
+        {
+            // Notify the live document before destroying its WebView. Each bridge
+            // owns its requests; the non-disposing client preserves sibling views.
+            await _bridge.DisposeAsync();
+        }
+        finally
+        {
+            Content = null;
+            _webView.Dispose();
+            _lifetime.Dispose();
+        }
     }
 
     private void Navigate(Uri uri)
@@ -76,7 +89,7 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable
             args.Cancel = true;
             return;
         }
-        _bridge.NavigationStarting();
+        Observe(_bridge.NavigationStartingAsync(), "retiring the package browser document");
     }
 
     private void OnNavigationCompleted(object? sender, AppWebNavigationCompletedEventArgs args)

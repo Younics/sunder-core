@@ -56,7 +56,7 @@ public sealed partial class SunderPackageProjectionArchiveTests
         Assert.Equal(rid, result.Descriptor.Rid);
         var expected = kind switch
         {
-            "shared" => new[] { "payload/shared/global.txt" },
+            "shared" => new[] { SunderPackageFormat.RpcModelProjectionPath, "payload/shared/global.txt" },
             "app" => ["payload/app/shared/common.txt", "payload/app/win-x64/bin/app.dll"],
             _ => ["payload/runtime/linux-x64/bin/runtime.module", "payload/runtime/shared/common.txt"],
         };
@@ -167,7 +167,8 @@ public sealed partial class SunderPackageProjectionArchiveTests
 
         AssertSuccess(result);
         Assert.Empty(result.Manifest!.Targets!);
-        Assert.Equal("payload/shared/contracts/example.json", Assert.Single(result.ContentIndex!.Files!).Path);
+        Assert.Equal(new[] { "payload/shared/contracts/example.json", SunderPackageFormat.RpcModelProjectionPath },
+            result.ContentIndex!.Files!.Select(entry => entry.Path));
     }
 
     [Fact]
@@ -768,11 +769,11 @@ public sealed partial class SunderPackageProjectionArchiveTests
         var plan = SunderPackageTargetResolver.CreateProjectionPlan(target, physicalPaths);
 
         Assert.Equal(
-            ["global.txt", "common.txt", "bin/app.dll"],
+            [SunderPackageFormat.RpcModelProjectionLogicalPath, "global.txt", "common.txt", "bin/app.dll"],
             plan.Files.Select(static file => file.LogicalPath.ToString()));
         Assert.True(plan.TryResolveLogicalPath(ArchiveRelativePath.Parse("bin/app.dll"), out _));
         Assert.Equal(
-            [SunderPackagePayloadLayer.Shared, SunderPackagePayloadLayer.RoleShared, SunderPackagePayloadLayer.Target],
+            [SunderPackagePayloadLayer.Shared, SunderPackagePayloadLayer.Shared, SunderPackagePayloadLayer.RoleShared, SunderPackagePayloadLayer.Target],
             plan.Files.Select(static file => file.Layer));
 
         var logicalRoot = Path.Combine(fixture.Root, "roundtrip-logical-union");
@@ -786,7 +787,7 @@ public sealed partial class SunderPackageProjectionArchiveTests
             File.Copy(file.PhysicalPath.ToPlatformPath(sourceRoot), destination);
         }
         Assert.Equal(
-            ["bin/app.dll", "common.txt", "global.txt"],
+            ["bin/app.dll", "common.txt", SunderPackageFormat.RpcModelProjectionLogicalPath, "global.txt"],
             Directory.EnumerateFiles(logicalRoot, "*", SearchOption.AllDirectories)
                 .Select(path => Path.GetRelativePath(logicalRoot, path).Replace(Path.DirectorySeparatorChar, '/'))
                 .Order(StringComparer.Ordinal));
@@ -880,6 +881,8 @@ public sealed partial class SunderPackageProjectionArchiveTests
         var root = CreateTempDirectory();
         var source = Path.Combine(root, "universal-source");
         Directory.CreateDirectory(source);
+        if (!payloadFiles.ContainsKey(SunderPackageFormat.RpcModelProjectionPath))
+            WriteFile(source, SunderPackageFormat.RpcModelProjectionPath, ModelProjectionFixture.EmptyDocument(manifest));
         foreach (var file in payloadFiles)
         {
             WriteFile(source, file.Key, file.Value);

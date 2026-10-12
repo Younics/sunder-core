@@ -8,7 +8,6 @@ internal sealed class PackageStoreTransactionManager(
     RuntimePackagePaths paths,
     InstalledPackageStore store,
     IPackageStoreFaultInjector? faultInjector,
-    ExecutionRuntimeLifecyclePolicyCache? lifecyclePolicies,
     PackageLifecyclePolicyCache? packagePolicies = null)
 {
     internal const int JournalSchemaVersion = 4;
@@ -224,7 +223,7 @@ internal sealed class PackageStoreTransactionManager(
             Hit(PackageStoreFaultPoint.CatalogReplacing);
             await store.WriteAsync(stage.DesiredPackages, CancellationToken.None);
             Hit(PackageStoreFaultPoint.CatalogReplaced);
-            await ReconcileRuntimePolicyAsync(journal, hitFaultPoints: true).ConfigureAwait(false);
+            await ReconcilePolicyAsync(journal, hitFaultPoints: true).ConfigureAwait(false);
             runtimePolicyReconciled = true;
             var committedJournal = journal with
             {
@@ -272,7 +271,7 @@ internal sealed class PackageStoreTransactionManager(
                     {
                         try
                         {
-                            await ReconcileRuntimePolicyAsync(journal, hitFaultPoints: false)
+                            await ReconcilePolicyAsync(journal, hitFaultPoints: false)
                                 .ConfigureAwait(false);
                             runtimePolicyReconciled = true;
                         }
@@ -455,7 +454,7 @@ internal sealed class PackageStoreTransactionManager(
         await _fileSystem.CleanupCommittedAsync(journal, journalPath);
 
     internal Task ReconcileRuntimePolicyAsync(PackageStoreTransactionJournal journal)
-        => ReconcileRuntimePolicyAsync(journal, hitFaultPoints: false);
+        => ReconcilePolicyAsync(journal, hitFaultPoints: false);
 
     internal Task RestorePackagePolicyEvidenceAsync(PackageStoreTransactionJournal journal)
         => packagePolicies?.RestoreRetainedAsync(journal.PreviousPackages.Concat(journal.DesiredPackages)
@@ -528,8 +527,7 @@ internal sealed class PackageStoreTransactionManager(
             stage.PreviousPackages,
             stage.DesiredPackages,
             actions,
-            StorageSnapshots: [],
-            stage.RuntimePolicyUpdates);
+            StorageSnapshots: []);
     }
 
     private void ValidateCommitJournal(
@@ -543,8 +541,7 @@ internal sealed class PackageStoreTransactionManager(
             || journal.Phase != PackageStoreTransactionPhase.Prepared
             || !PackageStorePolicy.CatalogsEqual(journal.PreviousPackages, expected.PreviousPackages)
             || !PackageStorePolicy.CatalogsEqual(journal.DesiredPackages, expected.DesiredPackages)
-            || !journal.Actions.SequenceEqual(expected.Actions)
-            || !journal.RuntimePolicyUpdates.SequenceEqual(expected.RuntimePolicyUpdates))
+            || !journal.Actions.SequenceEqual(expected.Actions))
         {
             throw new InvalidDataException(
                 $"Package store transaction '{stage.StageId}' does not match its prepared durable evidence.");
@@ -610,7 +607,6 @@ internal sealed class PackageStoreTransactionManager(
             || journal.DesiredPackages is null
             || journal.Actions is null
             || journal.StorageSnapshots is null
-            || journal.RuntimePolicyUpdates is null
             || !string.Equals(
                 transactionDirectory,
                 Path.Combine(paths.TransactionRootPath, transactionId),
@@ -662,28 +658,14 @@ internal sealed class PackageStoreTransactionManager(
 
     private void Hit(PackageStoreFaultPoint point) => faultInjector?.Hit(point);
 
-    private async Task ReconcileRuntimePolicyAsync(
+    private async Task ReconcilePolicyAsync(
         PackageStoreTransactionJournal journal,
         bool hitFaultPoints)
     {
-        var hasPolicy = journal.RuntimePolicyUpdates.Count > 0 || packagePolicies is not null && journal.DesiredPackages.Any(package => package.Policy?.Snapshots.Count > 0);
+        var hasPolicy = packagePolicies is not null && journal.DesiredPackages.Any(package => package.Policy?.Snapshots.Count > 0);
         if (hitFaultPoints && hasPolicy) Hit(PackageStoreFaultPoint.PolicyReconciling);
         if (packagePolicies is not null)
             await packagePolicies.RestoreRetainedAsync(journal.DesiredPackages.SelectMany(package => package.Policy?.Snapshots ?? []), CancellationToken.None);
-        if (journal.RuntimePolicyUpdates.Count == 0)
-        {
-            if (hitFaultPoints && hasPolicy) Hit(PackageStoreFaultPoint.PolicyReconciled);
-            return;
-        }
-        if (lifecyclePolicies is null)
-        {
-            throw new InvalidOperationException(
-                "Execution-runtime lifecycle policy persistence is unavailable for this package transaction.");
-        }
-        await lifecyclePolicies.ApplyEntriesAsync(
-                journal.RuntimePolicyUpdates,
-                CancellationToken.None)
-            .ConfigureAwait(false);
         if (hitFaultPoints)
         {
             Hit(PackageStoreFaultPoint.PolicyReconciled);

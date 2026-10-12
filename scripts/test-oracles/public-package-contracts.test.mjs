@@ -42,6 +42,7 @@ test("every public npm package has its inventoried role and deterministic artifa
       assert.ok(first.size > 0 && first.size <= contract.maximumBytes, `${contract.name} exceeded ${contract.maximumBytes} bytes`);
       const entries = first.files.map((file) => file.path);
       verifyEntries(contract, entries);
+      verifyExportTargets(manifest, entries);
       assert.equal(entries.includes(`dist/${staleSentinelName}`), false, `${contract.name} packed stale ignored output`);
       assert.deepEqual(first.files, second.files, `${contract.name} packed file inventory changed between runs`);
       const firstBytes = await readFile(resolve(firstDirectory, first.filename));
@@ -171,8 +172,15 @@ function verifyRole(role, manifest) {
     case "contract-and-worker-library":
       assert.equal(manifest.main, "dist/index.js");
       assert.equal(manifest.types, "dist/index.d.ts");
-      assert.ok(manifest.exports["./browser"] !== undefined);
-      assert.ok(manifest.exports["./core"] !== undefined);
+      assert.deepEqual(manifest.exports, {
+        ".": { types: "./dist/index.d.ts", require: "./dist/index.js", default: "./dist/index.js" },
+        "./browser": { types: "./dist/browser.d.ts", require: "./dist/browser.js", default: "./dist/browser.js" },
+        "./core": { types: "./dist/core.d.ts", require: "./dist/core.js", default: "./dist/core.js" },
+        "./react": { types: "./dist/react.d.ts", require: "./dist/react.js", default: "./dist/react.js" },
+      });
+      assert.deepEqual(manifest.dependencies ?? {}, {}, "The main SDK remains runtime-dependency-free.");
+      assert.deepEqual(manifest.peerDependencies, { react: ">=19.2.0 <20.0.0" });
+      assert.deepEqual(manifest.peerDependenciesMeta, { react: { optional: true } });
       assert.equal(manifest.bin["sunder-rpc-gen"], "dist/generator-cli.js");
       break;
     case "node-package-tool":
@@ -189,6 +197,16 @@ function verifyRole(role, manifest) {
     default:
       assert.fail(`Unknown public npm package role '${role}'.`);
   }
+}
+
+function verifyExportTargets(manifest, entries) {
+  const published = new Set(entries);
+  const check = (path) => {
+    assert.equal(typeof path, "string", `${manifest.name} entry point must be a concrete path`);
+    assert.ok(published.has(path.replace(/^\.\//u, "")), `${manifest.name} entry point '${path}' is missing from the tarball`);
+  };
+  for (const path of [manifest.main, manifest.types, ...Object.values(manifest.bin ?? {})]) if (path !== undefined) check(path);
+  for (const conditions of Object.values(manifest.exports ?? {})) for (const path of Object.values(conditions)) check(path);
 }
 
 function verifyEntries(contract, entries) {

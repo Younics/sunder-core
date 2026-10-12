@@ -21,8 +21,9 @@ public sealed partial class SunderRpcImportedBuildTests
         using System.Threading;
         using System.Threading.Tasks;
         using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         using Sunder.Sdk.Stacks;
-        [SunderRpcProvider(typeof(IPackageStackContributor), ProviderId = "example.owner.stack")]
+        [SunderServiceProvider(typeof(IPackageStackContributor), ProviderId = "example.owner.stack")]
         public sealed partial class LocalStack : IPackageStackExporter, IPackageStackImporter, IPackageStackImportAppliedHandler
         {
             public string ContributorId => "local-stack";
@@ -170,8 +171,8 @@ public sealed partial class SunderRpcImportedBuildTests
         var fixture = await PrepareRealStackProvider();
         File.AppendAllText(Path.Combine(_root, "Provider.cs"), """
 
-            [SunderRpcService(SunderRpcExposure.Public)]
-            [SunderRpcPlatformImport("sunder.stack.contributor", typeof(StackContributorServiceAdapter))]
+            [SunderService(SunderServiceExposure.Public)]
+            [SunderPlatformImport("sunder.stack.contributor", typeof(StackContributorServiceAdapter))]
             public interface InvalidOwner : IPackageStackContributor { }
             """);
         var generation = CreateStackGeneration(); Assert.False(generation.Execute());
@@ -204,7 +205,7 @@ public sealed partial class SunderRpcImportedBuildTests
     }
 
     [Fact]
-    public async Task StackPlatform_TemplateUsesOwnedBootstrapThenTheRegistryImportAndGeneratedRegistration()
+    public async Task StackPlatform_TemplateUsesSelectedImportAndGeneratedRegistrationWithoutPrivateBootstrap()
     {
         var fixture = await PrepareRealStackProvider(); var selected = File.ReadAllBytes(LockPath);
         ClearCatalogGcLock(); File.Delete(Path.Combine(_root, "Provider.cs"));
@@ -217,14 +218,9 @@ public sealed partial class SunderRpcImportedBuildTests
         File.WriteAllText(Path.Combine(_root, "Globals.cs"), "global using System; global using System.Collections.Generic; global using System.Threading; global using System.Threading.Tasks;");
         // The lower-level compiler fixture already owns package metadata and its
         // test entry point; only the actual template service sources are imported.
-        var bootstrap = CreateStackGeneration(); bootstrap.ContractOperation = "Accept"; bootstrap.ContractKey = "sample"; bootstrap.ContractNextVersion = "2.0.0";
-        bootstrap.SourceFiles = bootstrap.SourceFiles.Where(item => Path.GetFileName(item.ItemSpec) != "StackSupport.cs").ToArray();
-        AssertSuccess(bootstrap);
         Assert.False(CreateStackGeneration().Execute()); // Ordinary generation cannot use an unselected domain adapter.
         File.WriteAllBytes(LockPath, selected);
         var generation = CreateStackGeneration(); AssertSuccess(generation);
-        var freeze = CreateStackGeneration(); freeze.ContractOperation = "Freeze"; AssertSuccess(freeze);
-        generation = CreateStackGeneration(); AssertSuccess(generation);
         var manifestTask = BuildManifest(generation); var manifest = ReadManifest(manifestTask.ManifestOutputPath);
         Assert.Equal(2, manifest.ContractBundles!.Count); Assert.Equal(2, manifest.Provides!.Count);
         Assert.Empty(manifest.DependsOn!); Assert.Empty(manifest.UsesContracts!);

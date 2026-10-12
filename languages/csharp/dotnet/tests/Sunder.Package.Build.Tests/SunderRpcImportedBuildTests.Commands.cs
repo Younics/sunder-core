@@ -19,8 +19,15 @@ public sealed partial class SunderRpcImportedBuildTests
         File.Copy(Fixture("authoring/conformance/valid/minimal-contract-lock.json"), LockPath, overwrite: true);
         var ownedPath = Path.Combine(_root, SunderRpcAuthoringDocuments.OwnedContractsFileName);
         File.Delete(ownedPath); File.Delete(Path.Combine(_root, "Consumer.cs"));
+        File.WriteAllText(Path.Combine(_root, "Reviewed.cs"), """
+            using System.Threading.Tasks;
+            using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
+            [SunderService(SunderServiceExposure.Public)]
+            public sealed partial class ReviewedService { public ValueTask<string> EchoAsync(string value) => ValueTask.FromResult(value); }
+            """);
         File.WriteAllText(Path.Combine(_root, "Provider.cs"), ProviderSource);
-        File.WriteAllText(Path.Combine(_root, "PlatformProvider.cs"), ProviderSource
+        File.WriteAllText(Path.Combine(_root, "PlatformProvider.cs"), PlatformProviderSource
             .Replace("IMinimalProviderService", "IStackContributorService", StringComparison.Ordinal)
             .Replace("CExample_Rpc_V1_Minimal", "CSunder_Stack_Contributor", StringComparison.Ordinal)
             .Replace("LocalProvider", "LocalStackProvider", StringComparison.Ordinal)
@@ -39,13 +46,13 @@ public sealed partial class SunderRpcImportedBuildTests
         Assert.False(File.Exists(ownedPath)); Assert.False(Directory.Exists(Path.Combine(CreateGeneration().IntermediateOutputPath, "sunder-rpc")));
         var completeLock = File.ReadAllBytes(LockPath);
         var sourcePath = Path.Combine(_root, "Provider.cs"); var source = File.ReadAllText(sourcePath);
-        File.WriteAllText(sourcePath, source.Replace("ValueTask.FromResult(request)", "ValueTask.FromResult(42)", StringComparison.Ordinal));
+        File.WriteAllText(sourcePath, source.Replace("ValueTask.CompletedTask", "ValueTask.FromResult(42)", StringComparison.Ordinal));
         var invalid = CreateGeneration(); invalid.ContractOperation = "Accept";
         Assert.False(invalid.Execute()); Assert.False(File.Exists(ownedPath)); Assert.Equal(completeLock, File.ReadAllBytes(LockPath));
         File.WriteAllText(sourcePath, source);
         var accept = CreateGeneration(); accept.ContractOperation = "Accept"; AssertSuccess(accept);
-        var generation = Generate(); Assert.Equal(2, generation.RpcProviders.Length);
-        File.WriteAllText(sourcePath, source.Replace("ValueTask.FromResult(request)", "ValueTask.FromResult(42)", StringComparison.Ordinal));
+        var generation = Generate(); Assert.Equal(3, generation.RpcProviders.Length);
+        File.WriteAllText(sourcePath, source.Replace("ValueTask.CompletedTask", "ValueTask.FromResult(42)", StringComparison.Ordinal));
         await Assert.ThrowsAsync<InvalidDataException>(() => Select(new("Update", DependencyId, Candidate: archive, PlatformCatalog: platform.Path)));
         Assert.Equal(completeLock, File.ReadAllBytes(LockPath));
         File.Delete(ownedPath);
@@ -240,6 +247,9 @@ public sealed partial class SunderRpcImportedBuildTests
         using var http = new HttpClient(CommandHandler());
         var before = File.ReadAllBytes(LockPath);
         var cache = Path.Combine(_root, "command-cache");
+        Directory.CreateDirectory(cache);
+        SunderRpcContractCacheStore.InitializeRoot(cache);
+        ModelProjectionTestEvidence.Seed(cache, SunderRpcAuthoringDocuments.ReadContractLock(LockPath).PackageArtifacts[DependencyId]);
         await Assert.ThrowsAsync<InvalidDataException>(() => new SunderRpcPackageApiCommands(new(http)).ExecuteAsync(LockPath, cache,
             new("Update", DependencyId), (_, _, _) => throw new InvalidDataException("staged source failed")));
         Assert.Equal(before, File.ReadAllBytes(LockPath));
@@ -322,13 +332,12 @@ public sealed partial class SunderRpcImportedBuildTests
         using var handler = new RestoreHandler(request =>
         {
             var response = ordinaryHttp.SendAsync(new HttpRequestMessage(request.Method, request.RequestUri)).GetAwaiter().GetResult();
-            if (request.RequestUri!.AbsolutePath.EndsWith("/public-api", StringComparison.Ordinal))
+            if (request.RequestUri!.AbsolutePath.EndsWith("/canonical", StringComparison.Ordinal))
             {
-                var envelope = JsonNode.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult())!;
-                envelope["inventory"]!["contracts"]![0]!["contractId"] = "example.other.contract";
-                var inventory = SunderPackagePublicApiInventory.Parse(JsonSerializer.SerializeToUtf8Bytes(envelope["inventory"], JsonOptions));
                 response.Dispose();
-                response = RestoreResponse(request, inventory);
+                response = new(HttpStatusCode.OK) { RequestMessage = request,
+                    Content = new ByteArrayContent(CanonicalCandidateBytes(Uri.UnescapeDataString(request.RequestUri.Segments[^2].TrimEnd('/')), "example.other.contract")) };
+                response.Content.Headers.ContentType = new("application/octet-stream");
             }
             return response;
         });
@@ -352,7 +361,7 @@ public sealed partial class SunderRpcImportedBuildTests
         reexport["publicInventorySha256"] = InventorySha256("example.zreexport", reexport);
         document["packageArtifacts"]!["example.zreexport"] = reexport;
         document["packageImports"]!["example.zreexport"] = new JsonObject
-        { ["localName"] = "reexport", ["presence"] = "optional", ["requiredContracts"] = new JsonArray() };
+        { ["localName"] = "reexport", ["presence"] = "optional", ["requiredContracts"] = new JsonArray(), ["consumerRoles"] = new JsonArray("runtime") };
         WriteJson(LockPath, document);
         var before = File.ReadAllBytes(LockPath);
         using var ordinary = new HttpClient(CommandHandler());
@@ -390,6 +399,7 @@ public sealed partial class SunderRpcImportedBuildTests
         var candidate = await CreateLockedCandidateAsync();
         var expected = ReadJson(LockPath);
         expected["packageImports"]![DependencyId]!["requiredContracts"] = new JsonArray();
+        expected["packageImports"]![DependencyId]!["consumerRoles"] = new JsonArray("app", "runtime");
         expected["packageArtifacts"]![DependencyId]!.AsObject().Remove("registryOrigin");
         var empty = new JsonObject
         {
@@ -442,6 +452,13 @@ public sealed partial class SunderRpcImportedBuildTests
             return response;
         }
         var original = SunderRpcAuthoringDocuments.ReadContractLock(Fixture("authoring/conformance/valid/package-api-contract-lock.json")).PackageArtifacts[DependencyId];
+        if (request.RequestUri.AbsolutePath.EndsWith("/canonical", StringComparison.Ordinal))
+        {
+            var version = Uri.UnescapeDataString(request.RequestUri.Segments[^2].TrimEnd('/'));
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { RequestMessage = request, Content = new ByteArrayContent(CanonicalCandidateBytes(version)) };
+            response.Content.Headers.ContentType = new("application/octet-stream");
+            return response;
+        }
         var inventory = JsonNode.Parse(SunderRpcAuthoringDocuments.ValidatePackagePublicInventory(original).ToCanonicalUtf8())!;
         if (request.RequestUri.AbsolutePath.EndsWith("/public-api", StringComparison.Ordinal))
         {
@@ -451,4 +468,50 @@ public sealed partial class SunderRpcImportedBuildTests
         }
         return RestoreResponse(request, SunderPackagePublicApiInventory.Parse(JsonSerializer.SerializeToUtf8Bytes(inventory, JsonOptions)));
     });
+
+    private byte[] CanonicalCandidateBytes(string version, string? contractId = null, int contractCount = 1, SunderRpcMethodPolicies? methodPolicies = null)
+    {
+        var directory = Directory.CreateTempSubdirectory("sunder-authoring-http-candidate-").FullName;
+        try
+        {
+            var root = Path.Combine(directory, "package");
+            Directory.CreateDirectory(Path.Combine(root, "manifest"));
+            Directory.CreateDirectory(Path.Combine(root, "payload/shared/contracts"));
+            var descriptors = Enumerable.Range(0, contractCount).Select(index =>
+            {
+                var json = JsonNode.Parse(_descriptor.GetCanonicalUtf8())!;
+                json["contractId"] = contractCount == 1 ? contractId ?? _descriptor.ContractId : $"example.rpc.v1.contract{index:D3}";
+                if (contractCount > 1)
+                {
+                    var services = json["services"]!.AsObject(); var service = services["example"]!;
+                    services.Remove("example"); services[$"service{index:D3}"] = service;
+                }
+                return Sunder.Sdk.Rpc.SunderRpcContractDescriptor.Parse(JsonSerializer.SerializeToUtf8Bytes(json));
+            }).ToArray();
+            string DescriptorPath(int index) => contractCount == 1 ? "contracts/api.json" : $"contracts/api{index:D3}.json";
+            var manifest = new SunderPackageManifest
+            {
+                ArchiveFormatVersion = 1, ManifestVersion = 1, Id = DependencyId, Name = "Dependency", Version = version, Targets = [], DependsOn = [],
+                ContractBundles = descriptors.Select((descriptor, index) => new SunderPackageContractBundleManifest
+                {
+                    Source = "owned", AuthorityKind = "package", AuthorityId = DependencyId, ContractId = descriptor.ContractId,
+                    Version = descriptor.Version, DescriptorPath = DescriptorPath(index), DescriptorSha256 = descriptor.Sha256,
+                    AbiSha256 = descriptor.AbiSha256, Exposure = "public",
+                }).ToArray(),
+                UsesContracts = [], Provides = [], PackageArtifactImports = [], PackageApiImports = [], ProviderImports = [], PlatformImports = [],
+            };
+            File.WriteAllBytes(Path.Combine(root, SunderPackageFormat.ManifestPath), JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions));
+            for (var index = 0; index < descriptors.Length; index++)
+                File.WriteAllBytes(Path.Combine(root, SunderPackageFormat.SharedPayloadRoot + DescriptorPath(index)), descriptors[index].GetCanonicalUtf8());
+            var projection = new SunderRpcModelProjectionDocument(1, DependencyId, version,
+                descriptors.Select(descriptor => new SunderRpcModelProjectionContract(descriptor.ContractId, descriptor.Version,
+                    descriptor.Sha256, descriptor.AbiSha256, SunderRpcModelProjection.Empty, methodPolicies)).ToArray());
+            File.WriteAllBytes(Path.Combine(root, SunderPackageFormat.RpcModelProjectionPath), projection.ToCanonicalUtf8());
+            PackageContentIndexer.Write(root);
+            var path = Path.Combine(directory, "candidate.sunderpkg");
+            SunderArchive.WriteDeterministicAsync(root, path).GetAwaiter().GetResult();
+            return File.ReadAllBytes(path);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
 }

@@ -1,6 +1,9 @@
 type sealed class Sunder.Package.Build.Tasks.AggregateSunderPackageTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method .ctor()
   field static System.String MarkerFileSuffix = ".sunder-aggregate-generated-output"
+  property System.Boolean AllowDevelopmentRegistryOrigin { get; set; }
+  property System.String ContractCacheRoot { get; set; }
+  property System.String? ContractLockPath { get; set; }
   property System.String ExpectedPackageVersion { get; set; }
   property System.String NormalizedOutputPath { get; set; }
   property System.String OutputDiscoveryRoot { get; set; }
@@ -36,14 +39,18 @@ type sealed class Sunder.Package.Build.Tasks.CollectSunderContractCacheTask : Mi
   method virtual System.Void Cancel()
 type sealed class Sunder.Package.Build.Tasks.EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method .ctor()
+  property System.Boolean AllowDevelopmentRegistryOrigin { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] AssetFiles { get; set; }
   property System.String? AssetsDirectory { get; set; }
+  property System.String ContractCacheRoot { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ContractFiles { get; set; }
+  property System.String? ContractLockPath { get; set; }
   property System.String DevPackagePath { get; set; }
   property System.String DiscoveryRoot { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ManagedFiles { get; set; }
   property System.String ManifestPath { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] NativeRuntimeFiles { get; set; }
+  property System.String? ProjectDirectory { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] RoleContentFiles { get; set; }
   property System.String TargetDirectory { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] WorkerFiles { get; set; }
@@ -101,6 +108,8 @@ type sealed class Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask : Mic
   property System.String ContractLockPath { get; set; }
   property System.String ContractNextVersion { get; set; }
   property System.String ContractOperation { get; set; }
+  property System.String ContractReviewOutputPath { get; set; }
+  property System.String ContractReviewPath { get; set; }
   property System.String DefineConstants { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ExpectedPackageProjectExports { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] FileWrites { get; set; }
@@ -151,6 +160,7 @@ type sealed class Sunder.Package.Build.Tasks.ManageSunderPackageApiTask : Micros
   property System.String AssemblyName { get; set; }
   property System.String Candidate { get; set; }
   property System.String Configuration { get; set; }
+  property System.String ConsumerRoles { get; set; }
   property System.String ContractCacheRoot { get; set; }
   property System.String ContractId { get; set; }
   property System.String ContractLockPath { get; set; }
@@ -170,7 +180,9 @@ type sealed class Sunder.Package.Build.Tasks.ManageSunderPackageApiTask : Micros
   property System.String PlatformCatalogPath { get; set; }
   property System.String Presence { get; set; }
   property System.String ProjectDirectory { get; set; }
+  property System.String ProjectFile { get; set; }
   property System.String ProjectIdentity { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ProjectImports { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { get; set; }
   property System.String RegistryOrigin { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ResourceItems { get; set; }
@@ -199,6 +211,7 @@ type sealed class Sunder.Package.Build.Tasks.ManageSunderPackageRoleInputsTask :
   property System.String ContractLockPath { get; set; }
   property System.String DevPackagePath { get; set; }
   property System.String[] ExpectedRuntimeIdentifiers { get; set; }
+  property System.String GeneratedGlobalUsingsFile { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] GeneratorAnalyzers { get; set; }
   property System.String OwnedContractsPath { get; set; }
   property System.String PackageOutputPath { get; set; }
@@ -253,7 +266,9 @@ type sealed class Sunder.Package.Build.Tasks.PackSunderPackageTask : Microsoft.B
   property System.String OwnedContractsPath { get; set; }
   property System.String PackageOutputPath { get; set; }
   property System.String ProjectDirectory { get; set; }
+  property System.String ProjectFile { get; set; }
   property System.String ProjectIdentity { get; set; }
+  property Microsoft.Build.Framework.ITaskItem[] ProjectImports { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ResourceItems { get; set; }
   property System.String RootNamespace { get; set; }
@@ -264,6 +279,7 @@ type sealed class Sunder.Package.Build.Tasks.PackSunderPackageTask : Microsoft.B
   method virtual System.Boolean Execute()
 type sealed class Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method .ctor()
+  property System.String AnalysisGlobalUsingsFile { get; set; }
   property System.String AssemblyName { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] AuthoringReceipts { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] BindingSnapshots { get; set; }
@@ -277,6 +293,7 @@ type sealed class Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask : M
   property Microsoft.Build.Framework.ITaskItem[] ExcludedGenerators { get; set; }
   property Microsoft.Build.Framework.ITaskItem[] ExcludedProjectReferences { get; set; }
   property System.String ExpectedSha256 { get; set; }
+  property System.String GeneratedGlobalUsingsFile { get; set; }
   property System.String OutputLockLeaseId { get; set; }
   property System.String PackageVersion { get; set; }
   property System.String PlanPath { get; set; }
@@ -295,6 +312,7 @@ type sealed class Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask : M
   property Microsoft.Build.Framework.ITaskItem[] SourceFiles { get; set; }
   property System.String TargetFramework { get; set; }
   property System.Boolean ValidateResourceEvaluation { get; set; }
+  property System.Boolean ValidateSourceEvaluation { get; set; }
   method virtual System.Boolean Execute()
 type sealed class Sunder.Package.Build.Tasks.RestoreSunderContractsTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method .ctor()

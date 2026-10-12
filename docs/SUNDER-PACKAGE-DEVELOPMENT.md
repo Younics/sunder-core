@@ -2,12 +2,13 @@
 
 > **Source channel:** This manual tracks unreleased Sunder V1 source, coordinated SDK `1.1.x` (`[1.1.0,1.2.0)`), .NET 10, and Runtime protocol revision 1. Read it from the matching `sdk/v*` tag for released SDK behavior.
 
-> **RPC authoring transition:** Descriptor files, Protocol projects, direct
-> MSBuild RPC items, and Node schema-version-2 RPC config in these guides describe
-> current pre-cutover source. The accepted final design is
-> [Implementation-First RPC Authoring](package-development/IMPLEMENTATION-FIRST-RPC.md),
-> which is not implemented yet. Do not introduce a new descriptor-first API or
-> helper project.
+> **Current RPC authoring:** Use
+> [ordinary C# services](package-development/ORDINARY-SERVICES.md) or
+> [TypeScript/checked-JavaScript services](SUNDER-NODE-PROCESS-PACKAGES.md#author-ordinary-services).
+> Tooling derives descriptors, codecs, provider registration and managed consumers.
+> [Implementation-First RPC Authoring](package-development/IMPLEMENTATION-FIRST-RPC.md)
+> documents the source, lock, generation and evolution rules. Captured descriptor-first
+> and Node DSL examples are historical evidence, not current package-author recipes.
 
 This is the canonical landing page for public Sunder package development. The focused guides describe the current universal-package implementation in this repository.
 
@@ -18,8 +19,8 @@ This is the canonical landing page for public Sunder package development. The fo
 3. [Activation, DI, And Disposal](package-development/ACTIVATION-AND-DI.md): lifecycle, host services, availability, threading, and unload behavior.
 4. [Data And Logging](package-development/DATA-AND-LOGGING.md): storage, settings, secrets, logging, exact limits, and errors.
 5. [Avalonia Views](package-development/AVALONIA.md): views, settings UI, navigation, warmup, caching, and theme resources.
-6. [Owner RPC](package-development/RUNTIME-OPERATIONS.md): typed requests, streams, provider discovery, deadlines, limits, and errors.
-7. [Implementation-First RPC](package-development/IMPLEMENTATION-FIRST-RPC.md): accepted post-cutover C#, TypeScript, JavaScript, lock, generation, and evolution design.
+6. [Ordinary Services](package-development/ORDINARY-SERVICES.md) and [Node Services](SUNDER-NODE-PROCESS-PACKAGES.md): source-derived APIs and framework-appropriate managed consumption.
+7. [Implementation-First RPC](package-development/IMPLEMENTATION-FIRST-RPC.md): current C#, TypeScript, JavaScript, lock, generation and public/private lifecycle rules. [Advanced owner RPC](package-development/RUNTIME-OPERATIONS.md) covers explicit requests, discovery, scopes, limits and errors.
 8. [Callbacks And Auth](package-development/CALLBACKS-AND-AUTH.md): host-routed browser callbacks and package authorization.
 9. [Stacks](package-development/STACKS.md): discovery, export, preview, import, requirements, and outcomes.
 10. [Package Trust And Security](package-development/SECURITY.md): execution trust, validation, secrets, callbacks, and supply chain.
@@ -48,17 +49,44 @@ The table is not a closed capability list. Future Python, Rust, Go, and other wo
 | Avalonia views/settings | Add `Sunder.Sdk.Avalonia` only to the App leaf that uses Avalonia |
 | Stack contribution | Add `Sunder.Sdk.Stacks` to the Worker leaf that implements the contributor |
 | New managed canonical package | Install `Sunder.Package.Templates`; it is a scaffold tool, not a runtime dependency |
-| Node worker Runtime RPC | `@sunder/sdk` plus `@sunder/package-tool` |
-| Browser code in a web App | Import only `@sunder/sdk/browser`; choose any web framework |
-| Node/React starter | `npm create sunder-package@latest`; React is one template, not a web requirement |
+| Node worker services | `defineService` from `@sunder/sdk`, `services.module` and `@sunder/package-tool`; consume through generated `#sunder/api` tokens |
+| Browser code in a web App | Generated `#sunder/api` plus `createBrowserContext` from `@sunder/sdk/browser`; choose any web framework |
+| React components | Optional `@sunder/sdk/react`: root `ApiProvider`, component `useApi`, effect/event-handler calls |
+| Node/React starter | `npm create sunder-package@latest` with `--language ts` or `js`; React is one preset, not a web requirement |
 | Shared descriptor-only package | Bundle at least one RPC descriptor and emit no executable target |
 | Custom Python/Rust/Go worker or UI toolchain | Emit the canonical format and a Host-supported target kind/protocol; no managed SDK dependency is inherently required |
 
 `Sunder.Runtime.Contracts`, `Sunder.Package.Format`, and `Sunder.Registry.Contracts` are not package-author NuGet dependencies. Package projects must not reference `Sunder.App` or `Sunder.Runtime.Host`.
 
-### .NET Worker Protocol
+### Source Lifecycle And Consumer Ownership
 
-Every Manifest V1 Runtime target uses the exact Worker V1 entry point:
+Ordinary Node services use TS signatures or genuine JS/JSDoc with source-derived
+constraints. Private versions equal the full owning package SemVer and need no
+independent baseline/Accept/Freeze. Public services retain explicit reviewed
+history, freeze and publication evidence; migration archives old private records
+without renumbering them. Build does not rewrite tracked locks/baselines.
+
+An ordinary owned concrete public service keeps its owning App usable by default,
+with optional readiness and all applicable actions. Private App readiness remains
+required. Explicit App policy overrides either default; public declaration-only
+services remain opt-in, and provider bindings add no consumer grants. Runtime
+broker use is independently explicit.
+
+Workers use `context.api(Self)` or a selected-package token. `Self` members follow
+source service keys; multi-contract selections add full-contract-ID camel-case
+scopes, preserving same-named services from different contracts. Imported method
+signatures come from descriptors, not inferred producer-language parameters.
+
+Browser roots own/dispose `createBrowserContext(Self)`. React components use
+`useApi(Self)` inside that root's `ApiProvider`; call in effects or event handlers.
+The adapter owns component calls, while the application owns root teardown.
+See [browser and React lifetimes](SUNDER-NODE-PROCESS-PACKAGES.md#browser-and-react-lifetimes).
+Neither token acquisition nor rendering grants permission or performs discovery.
+
+### Advanced .NET Worker Protocol
+
+Every Manifest V1 Runtime target uses Worker V1. Canonical service tooling generates
+its bootstrap; the following is the underlying explicit Worker composition API:
 
 ```csharp
 await SunderWorker.RunAsync(
@@ -70,7 +98,11 @@ capability; the Host then selects `sunder.worker.v1` before launch. Use only the
 [Sunder Worker Protocol V1](SUNDER-WORKER-PROTOCOL-V1.md). C# authoring must declare one exact-RID
 `worker` target per framework-dependent module leaf. `dotnet`, `process`, Worker V3, and generic Runtime RIDs are invalid.
 
-The TypeScript SDK uses Worker V1 and strict keyed RPC descriptor V1. `@sunder/package-tool` emits thin CommonJS modules whose exact-RID target records bind `sunder.runtime.node` 24.x and `sunder.node-worker-module.v1`; Node executable bytes remain in separately trusted execution-runtime artifacts. The TypeScript surface remains intentionally narrower than the coordinated .NET SDK family.
+The Node SDK uses Worker V1 and strict keyed RPC descriptor V1 beneath ordinary
+service authoring. `@sunder/package-tool` emits thin CommonJS modules whose exact-RID
+target records bind `sunder.runtime.node` 24.x and `sunder.node-worker-module.v1`;
+Node executable bytes remain in separately trusted execution-runtime artifacts.
+Its surface remains intentionally narrower than the coordinated .NET SDK family.
 
 ## Architecture In One Minute
 

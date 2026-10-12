@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { rpc } from "../src/authoring";
-import type { RpcHandlers, RpcImportedProvider, RpcSchemaValue } from "../src/authoring";
+import { rpc } from "./historical-authoring";
+import type { RpcHandlers, RpcImportedProvider, RpcSchemaValue } from "./historical-authoring";
 
 const s = rpc.schema;
 const contract = rpc.contract({ exposure: "public", errors: {}, definitions: {

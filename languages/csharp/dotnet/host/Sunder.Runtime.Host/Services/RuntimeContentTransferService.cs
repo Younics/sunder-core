@@ -6,6 +6,15 @@ internal sealed class RuntimeContentTransferService(
     RuntimeSessionOwner sessions,
     RuntimeContentTransferStore store)
 {
+    public RuntimePackageUploadRetentionResult RetainPackageUpload(RuntimePackageUploadRetentionRequest request)
+        => store.RetainPackageUpload(request, sessions.Generation);
+    public RuntimePackageUploadRetentionResult RenewPackageUploadRetention(RuntimePackageUploadRetentionHandle request)
+        => store.GetPackageUploadRetention(request, renew: true);
+    public RuntimePackageUploadRetentionResult GetPackageUploadRetention(RuntimePackageUploadRetentionHandle request)
+        => store.GetPackageUploadRetention(request);
+    public RuntimePackageUploadRetentionResult ReleasePackageUploadRetention(RuntimePackageUploadRetentionHandle request)
+        => store.ReleasePackageUploadRetention(request);
+
     public Task<ContentUploadDescriptor> CreateUploadAsync(
         RuntimeUploadKind kind,
         Stream source,
@@ -27,11 +36,6 @@ internal sealed class RuntimeContentTransferService(
     public RuntimeUploadLease AcquireDownload(string downloadId)
         => store.AcquireDownload(downloadId, sessions.Generation)
             ?? throw new RuntimeNotFoundException("The download was not found or belongs to a stale Runtime generation.");
-
-    public RuntimeUploadLease AcquireExecutionRuntimeUpload(string uploadId)
-        => store.AcquireUpload(uploadId, RuntimeUploadKind.ExecutionRuntime, sessions.Generation, consume: true)
-            ?? throw new RuntimeNotFoundException(
-                "The execution-runtime upload was not found or belongs to a stale Runtime generation.");
 
     public void Release(RuntimeUploadLease lease) => store.ReleaseUpload(lease);
 }

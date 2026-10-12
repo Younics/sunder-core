@@ -16,7 +16,7 @@ test("npm create entrypoint scaffolds a usable token-free Node Runtime package",
     assert.equal(config.id, "sample.node");
     assert.equal(config.name, "Sample Node");
     assert.deepEqual(config.workerCapabilities, []);
-    assert.deepEqual(config.rpc, { module: "src/rpc.ts", export: "packageRpc" });
+    assert.deepEqual(config.services, { module: "src/services.ts" });
     for (const key of ["contracts", "providers", "usesContracts", "rpcBindings"]) assert.equal(key in config, false);
     const packageManifest = JSON.parse(await readFile(resolve(output, "package.json"), "utf8")) as {
       readonly engines: { readonly node: string };
@@ -25,9 +25,7 @@ test("npm create entrypoint scaffolds a usable token-free Node Runtime package",
     assert.equal(packageManifest.engines.node, ">=24.18.1 <25.0.0");
     assert.deepEqual(packageManifest.allowScripts, { "esbuild@0.28.1": true, fsevents: false });
     await assertOwnedSource(output, "sample.node");
-    const worker = await readFile(resolve(output, "src", "worker.ts"), "utf8");
-    assert.match(worker, /providers: packageRpc\.providerRegistrations/u);
-    assert.doesNotMatch(worker, /sunder:contracts|JsonValue|contractIdentity/u);
+    assert.equal(await exists(resolve(output, "src", "worker.ts")), false);
     assert.equal(await exists(resolve(output, "src", "sunder-contracts.d.ts")), false);
     for (const file of await files(output)) {
       if (file.includes("node_modules")) continue;
@@ -64,7 +62,7 @@ test("react-node template scaffolds a namespaced web view with the browser-only 
     assert.equal(config.app.views[0]?.viewId, "sample.react.main");
     assert.equal(config.app.views[0]?.route, "/");
     assert.equal("icon" in config.app.views[0]!, false);
-    assert.deepEqual(config.rpc, { module: "src/rpc.ts", export: "packageRpc" });
+    assert.deepEqual(config.services, { module: "src/services.ts" });
     for (const key of ["contracts", "providers", "usesContracts", "rpcBindings"]) assert.equal(key in config, false);
     const packageManifest = JSON.parse(await readFile(resolve(output, "package.json"), "utf8")) as {
       readonly engines: { readonly node: string };
@@ -76,14 +74,12 @@ test("react-node template scaffolds a namespaced web view with the browser-only 
     const app = await readFile(resolve(output, "app", "src", "App.tsx"), "utf8");
     assert.match(
       app,
-      /from "@sunder\/sdk\/browser"/u,
+      /from "@sunder\/sdk\/react"/u,
     );
-    assert.match(app, /createPackageApi\(getSunder\(\)\.rpc\)/u);
-    assert.match(app, /api\.messages\.resolve/u);
+    assert.match(app, /useApi\(Self\)/u);
+    assert.match(app, /api\.messages\.send/u);
     assert.doesNotMatch(app, /rpc\.invoke<|providerHandle|contractId|\.discover\(|\.find\(/u);
-    const worker = await readFile(resolve(output, "src", "worker.ts"), "utf8");
-    assert.match(worker, /providers: packageRpc\.providerRegistrations/u);
-    assert.doesNotMatch(worker, /sunder:contracts|JsonValue|contractIdentity/u);
+    assert.equal(await exists(resolve(output, "src", "worker.ts")), false);
     assert.equal(await exists(resolve(output, "src", "sunder-contracts.d.ts")), false);
     assert.equal(await exists(resolve(output, "app", "vite.config.ts")), true);
     assert.equal(await exists(resolve(output, "app", "public", "icon.svg")), false);
@@ -122,7 +118,7 @@ test("scaffold substitutions preserve adversarial display names in JSON, TypeScr
     ], process.cwd());
     const config = JSON.parse(await readFile(resolve(output, "sunder.package.json"), "utf8")) as { readonly name: string };
     assert.equal(config.name, packageName);
-    const source = await readFile(resolve(output, "src", "rpc.ts"), "utf8");
+    const source = await readFile(resolve(output, "src", "services.ts"), "utf8");
     assert.ok(source.includes(JSON.stringify(packageName)));
     const html = await readFile(resolve(output, "app", "index.html"), "utf8");
     assert.doesNotMatch(html, /<script>/u);
@@ -161,7 +157,7 @@ test("all presets exclude locally generated .sunder directories from scaffold ou
 
 test("all presets accept the longest package id whose generated provider id fits package-tool limits", async () => {
   const cli = resolve(__dirname, "..", "..", "dist", "cli.js");
-  const packageId = "a".repeat(119);
+  const packageId = "a".repeat(110);
   const outputs: string[] = [];
   try {
     for (const preset of ["node", "react-node"] as const) {
@@ -173,8 +169,7 @@ test("all presets accept the longest package id whose generated provider id fits
         readonly app?: { readonly views: readonly { readonly viewId: string }[] };
       };
       assert.equal(config.id, packageId);
-      assert.ok((await readFile(resolve(output, "src/rpc.ts"), "utf8")).includes(`id: "${packageId}.provider"`));
-      assert.equal(`${packageId}.messages`.length, 128);
+       assert.equal(`${packageId}.messages.provider`.length, 128);
       if (preset === "react-node") assert.equal(config.app?.views[0]?.viewId, `${packageId}.main`);
     }
   } finally {
@@ -184,11 +179,11 @@ test("all presets accept the longest package id whose generated provider id fits
 
 test("package ids that overflow generated IDs fail clearly before scaffolding", async () => {
   const cli = resolve(__dirname, "..", "..", "dist", "cli.js");
-  for (const length of [120, 128]) {
+  for (const length of [111, 128]) {
     const output = resolve(tmpdir(), "create-sunder-package-tests", randomUUID());
     await assert.rejects(
       run(process.execPath, [cli, output, "--package-id", "a".repeat(length), "--yes"], process.cwd()),
-      /--package-id must be at most 119 characters because generated provider and view IDs must fit the package-tool 128-character limit\./u,
+      /--package-id must be at most 110 characters because generated provider and view IDs must fit the package-tool 128-character limit\./u,
     );
     assert.equal(await exists(output), false);
   }
@@ -199,7 +194,7 @@ test("an overlong package id derived from the output directory fails before scaf
   const output = resolve(tmpdir(), "create-sunder-package-tests", randomUUID(), "a".repeat(120));
   await assert.rejects(
     run(process.execPath, [cli, output, "--yes"], process.cwd()),
-    /--package-id must be at most 119 characters because generated provider and view IDs must fit the package-tool 128-character limit\./u,
+    /--package-id must be at most 110 characters because generated provider and view IDs must fit the package-tool 128-character limit\./u,
   );
   assert.equal(await exists(output), false);
 });
@@ -216,11 +211,10 @@ async function run(file: string, argumentsList: readonly string[], cwd: string):
 }
 
 async function assertOwnedSource(root: string, packageId: string): Promise<void> {
-  const source = await readFile(resolve(root, "src/rpc.ts"), "utf8");
-  assert.match(source, /export const packageRpc = rpc\.router\(/u);
-  assert.ok(source.includes(`id: "${packageId}.provider"`));
-  assert.match(source, /async send\(request, context\)/u);
-  assert.match(source, /async \*watch\(request, context\)/u);
+  const source = await readFile(resolve(root, "src/services.ts"), "utf8");
+  assert.match(source, /export const messages = defineService\(/u);
+  assert.match(source, /async send\(message: string, context: ServiceContext\)/u);
+  assert.match(source, /async \*watch\(message: string, context: ServiceContext\)/u);
   assert.doesNotMatch(source, /contractId|contractVersion|descriptorSha256|abiSha256|\.rpc\.json/u);
   assert.equal((await files(root)).some((path) => path.endsWith(".rpc.json")), false);
   assert.equal(await exists(resolve(root, "sunder-contracts.owned.json")), false);
@@ -262,7 +256,7 @@ interface ScaffoldPackageConfig {
   readonly id: string;
   readonly name: string;
   readonly workerCapabilities: readonly string[];
-  readonly rpc: { readonly module: string; readonly export: string };
+  readonly services: { readonly module: string };
 }
 
 interface ReactScaffoldPackageConfig extends ScaffoldPackageConfig {

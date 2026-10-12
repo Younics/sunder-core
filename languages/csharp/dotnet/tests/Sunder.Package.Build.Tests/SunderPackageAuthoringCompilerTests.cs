@@ -19,7 +19,7 @@ public sealed class SunderPackageAuthoringCompilerTests
         Assert.Equal(SunderPackageRoleMembership.App, Type(analysis, "NotesViewModel").Roles);
         Assert.Equal(SunderPackageRoleMembership.Shared, Type(analysis, "Note").Roles);
         Assert.True(Type(analysis, "Note").IsPortableValue);
-        var original = new SunderRpcCSharpSourceCompiler().Compile(Input(Service));
+        var original = new SunderRpcCSharpSourceCompiler().Compile(Input(Service.Replace("using Sunder.Generated.Packages.Example_Notes_Services;", "", StringComparison.Ordinal)));
         Assert.Equal(Assert.Single(original.Contracts).Descriptor.GetCanonicalUtf8(), Assert.Single(analysis.Compilation.Contracts).Descriptor.GetCanonicalUtf8());
         Assert.Null(Assert.Single(analysis.Compilation.Contracts).RuntimeUse);
     }
@@ -37,8 +37,55 @@ public sealed class SunderPackageAuthoringCompilerTests
     [Fact]
     public void Analyze_RejectsAuthoredGeneratedInterfaceCollision()
     {
-        var invalid = Analyze(Service + "public interface INotesService { }\n" + Ui);
+        var invalid = Analyze((Service + "public interface INotesService { }\n" + Ui)
+            .Replace("namespace Example;", "namespace Sunder.Generated.Packages.Example_Notes_Services;", StringComparison.Ordinal));
         Assert.False(invalid.Success); Assert.NotEmpty(invalid.Compilation.Diagnostics);
+    }
+
+    [Fact]
+    public void Analyze_RejectsSameGeneratedInterfaceNameAcrossSourceNamespaces()
+    {
+        const string source = """
+            using System.Threading.Tasks;
+            using Sunder.Sdk.Services;
+            namespace First {
+                [SunderService(Key = "first", ServiceId = "shared")] public sealed partial class NotesService { public ValueTask<string> ReadAsync() => ValueTask.FromResult("first"); }
+            }
+            namespace Second {
+                [SunderService(Key = "second", ServiceId = "shared")] public sealed partial class NotesService { public ValueTask<string> ReadAsync() => ValueTask.FromResult("second"); }
+            }
+            """;
+        var analysis = Analyze(source);
+        Assert.False(analysis.Success);
+        Assert.Contains(analysis.Compilation.Diagnostics, diagnostic => diagnostic.Id == "rpc-authoring.generated-name-collision"
+            && diagnostic.Message.Contains("Example_Notes_Services.ISharedService", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Analyze_DeclarationOnlyClientsUseExplicitBrokerPolicyAndNeverConstructAnInterface()
+    {
+        const string source = """
+            using System.Threading.Tasks;
+            using Sunder.Sdk.Services;
+            using Sunder.Sdk.Packaging;
+            using Api = Sunder.Generated.Packages.Example_Notes_Services;
+            namespace Example;
+            [SunderService(SunderServiceExposure.Public, Key = "extension"), SunderAppUse, SunderRuntimeUse]
+            public interface IExtensionService { ValueTask<string> ReadAsync(string text); }
+            [SunderServiceProvider(typeof(IExtensionService), ProviderId = "example.extension")]
+            public sealed partial class Implementation : IExtensionService { public ValueTask<string> ReadAsync(string text) => ValueTask.FromResult(text); }
+            [SunderPackageView("extension", "Extension", ViewModel = typeof(Model))]
+            public sealed class View : Avalonia.Controls.UserControl;
+            public sealed class Model(Api.IExtensionService service) { public ValueTask<string> ReadAsync() => service.ReadAsync("hello"); }
+            """;
+        var analysis = Analyze(source);
+        Assert.True(analysis.Success, Errors(analysis));
+        var worker = SunderPackageCompositionEmitter.EmitWorker(analysis).Text;
+        Assert.Contains("TryAddSingleton<global::Sunder.Generated.Packages.Example_Notes_Services.IExtensionService,", worker, StringComparison.Ordinal);
+        Assert.DoesNotContain("new global::Example.IExtensionService", worker, StringComparison.Ordinal);
+        var clients = SunderPackageCompositionEmitter.EmitWorkerClients(analysis, "example.notes", "1.0.0");
+        Assert.Contains(clients, file => file.Text.Contains(" : global::Sunder.Generated.Packages.Example_Notes_Services.IExtensionService", StringComparison.Ordinal));
+        Assert.Contains("Example_Notes_Services.IExtensionService", SunderPackageCompositionEmitter.EmitApp(analysis).Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -47,7 +94,7 @@ public sealed class SunderPackageAuthoringCompilerTests
         var source = Service.Replace("public Task<Note> GetAsync(NoteRequest request, CancellationToken token = default)",
             "public Task<Note> GetAsync(NoteRequest request, SunderRpcInvocationContext invocation, CancellationToken token = default)", StringComparison.Ordinal)
             .Replace("public sealed partial class NotesService\n{", "public sealed partial class NotesService\n{\n"
-                + "[SunderRpcMethod] public System.Collections.Generic.IAsyncEnumerable<Note> WatchAsync(CancellationToken token = default) => throw new System.NotSupportedException();", StringComparison.Ordinal);
+                + "public System.Collections.Generic.IAsyncEnumerable<Note> WatchAsync(CancellationToken token = default) => throw new System.NotSupportedException();", StringComparison.Ordinal);
         var analysis = Analyze(source + Ui);
         Assert.True(analysis.Success, Errors(analysis));
         var api = Assert.Single(analysis.GeneratedSources, value => value.Path == "service-apis.g.cs").Text;
@@ -74,12 +121,13 @@ public sealed class SunderPackageAuthoringCompilerTests
         using System.Threading;
         using System.Threading.Tasks;
         using Sunder.Sdk.Packaging;
+        using Sunder.Sdk.Services;
         using Sunder.Sdk.Rpc;
+        using Sunder.Generated.Packages.Example_Notes_Services;
         namespace Example;
-        [SunderRpcService]
+        [SunderService]
         public sealed partial class NotesService
         {
-            [SunderRpcMethod]
             public Task<Note> GetAsync(NoteRequest request, CancellationToken token = default)
                 => Task.FromResult(new Note { Number = request.Number });
         }

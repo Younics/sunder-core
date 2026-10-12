@@ -44,4 +44,7 @@ public sealed record PackageOperationResult(
     public bool StoreCommitted { get; init; }
 
     public bool RuntimeSessionReconciliationPending { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimePackageRuntimePrerequisitePlan? RuntimePrerequisites { get; init; }
 }

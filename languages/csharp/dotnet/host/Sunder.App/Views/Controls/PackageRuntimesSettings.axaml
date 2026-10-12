@@ -1,0 +1,78 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sunder.App.ViewModels" x:Class="Sunder.App.Views.Controls.PackageRuntimesSettings"
+             x:Name="RuntimePage" x:DataType="vm:SettingsPackageRuntimesViewModel">
+  <StackPanel Spacing="16">
+    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+      <StackPanel Spacing="4" VerticalAlignment="Center">
+        <CheckBox Content="Keep runtimes up to date" IsChecked="{Binding AutomaticUpdatesEnabled}"
+                  IsEnabled="{Binding CanChangePreference}" />
+        <TextBlock Classes="caption" Text="{Binding LastCheckedText}" Margin="0,2,0,0" TextWrapping="Wrap" />
+      </StackPanel>
+      <Button Grid.Column="1" Classes="secondary-action" Content="Check for updates"
+              Command="{Binding CheckUpdatesCommand}" IsEnabled="{Binding CanAct}" VerticalAlignment="Center" />
+    </Grid>
+    <TextBlock Classes="caption" Text="Sunder selects the latest supported LTS release. Downloaded updates apply when packages stop."
+               TextWrapping="Wrap" />
+
+    <ItemsControl ItemsSource="{Binding Families}">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:PackageRuntimeFamilyViewModel">
+          <Border Classes="card-surface" Margin="0,0,0,12">
+            <StackPanel Spacing="12">
+              <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+                <Border Width="48" Height="48" CornerRadius="8" Background="{DynamicResource Sunder.Brush.Surface.Raised}">
+                  <TextBlock Text="{Binding Glyph}" FontWeight="SemiBold" FontSize="14"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                  <TextBlock Text="{Binding Title}" FontSize="18" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
+                </StackPanel>
+                <Button Grid.Column="2" Classes="primary-action" Content="{Binding PrimaryActionText}"
+                        IsVisible="{Binding HasPrimaryAction}" VerticalAlignment="Center"
+                        IsEnabled="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).CanAct}"
+                        Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).PrimaryActionCommand}"
+                        CommandParameter="{Binding}" />
+              </Grid>
+              <TextBlock Classes="caption" Text="{Binding VersionText}" TextWrapping="Wrap" />
+              <TextBlock Classes="caption" Text="{Binding UsageText}" TextWrapping="Wrap" />
+              <ProgressBar IsVisible="{Binding IsWorking}" IsIndeterminate="{Binding IsProgressIndeterminate}"
+                           Value="{Binding ProgressValue}" />
+              <TextBlock IsVisible="{Binding HasIssue}" Text="{Binding IssueText}" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Sunder.Brush.Warning}" />
+              <WrapPanel IsVisible="{Binding HasPreparedUpdate}"
+                         IsEnabled="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).CanAct}">
+                <Button Classes="secondary-action" Content="Apply when stopped" Margin="0,0,8,0"
+                        Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).ApplyFamilyCommand}" CommandParameter="{Binding}" />
+                <Button Classes="primary-action" Content="Restart &amp; Apply"
+                        Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).RestartFamilyCommand}" CommandParameter="{Binding}" />
+              </WrapPanel>
+              <Expander Header="Details" HorizontalAlignment="Stretch">
+                <StackPanel Spacing="10" Margin="0,8,0,0">
+                  <TextBlock Classes="caption" Text="{Binding Details}" TextWrapping="Wrap" />
+                  <WrapPanel IsVisible="{Binding IsInstalled}"
+                             IsEnabled="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).CanAct}">
+                    <Button Classes="secondary-action" Content="Check integrity" Margin="0,0,8,8"
+                            Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).VerifyFamilyCommand}" CommandParameter="{Binding}" />
+                    <Button Classes="secondary-action" Content="Repair" Margin="0,0,8,8"
+                            Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).RepairFamilyCommand}" CommandParameter="{Binding}" />
+                    <Button Classes="secondary-action" Content="Remove this installation" Margin="0,0,0,8" IsEnabled="{Binding CanRemove}"
+                            Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).RemoveFamilyCommand}" CommandParameter="{Binding}" />
+                  </WrapPanel>
+                </StackPanel>
+              </Expander>
+            </StackPanel>
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+
+    <Border Classes="settings-note-card" IsVisible="{Binding HasError}">
+      <TextBlock Text="{Binding ErrorText}" Foreground="{DynamicResource Sunder.Brush.Warning}" TextWrapping="Wrap" />
+    </Border>
+    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" IsVisible="{Binding HasStatus}">
+      <TextBlock Classes="caption" Text="{Binding StatusText}" TextWrapping="Wrap" VerticalAlignment="Center" />
+      <Button Grid.Column="1" Classes="secondary-action" Content="Cancel" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}" />
+    </Grid>
+  </StackPanel>
+</UserControl>

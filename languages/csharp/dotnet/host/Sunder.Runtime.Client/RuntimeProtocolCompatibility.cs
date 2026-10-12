@@ -36,6 +36,11 @@ public static class RuntimeProtocolCompatibility
         {
             return $"Runtime does not support required feature '{RuntimeProtocolFeatures.VersionedApiV1}'.";
         }
+        // The unreleased V1 package, policy and runtime DTOs have one closed official-source shape.
+        if (!handshake.SupportedFeatures.Contains(RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1, StringComparer.Ordinal))
+        {
+            return $"Runtime does not support required feature '{RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1}'.";
+        }
         foreach (var feature in requiredFeatures)
         {
             if (string.IsNullOrWhiteSpace(feature))

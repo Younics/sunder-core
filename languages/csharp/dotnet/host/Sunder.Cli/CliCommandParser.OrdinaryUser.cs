@@ -79,6 +79,36 @@ internal sealed partial class CliCommandParser
 
     private void BuildExecutionRuntimeCommands(Command runtime)
     {
+        var settings = Leaf(runtime, "settings", "Read or change Host-owned automatic runtime updates (security refresh is always active).");
+        var automatic = ValueOption("--automatic-updates", "Set automatic binary updates to true or false.", "boolean");
+        settings.Options.Add(automatic);
+        Bind(settings, "runtime settings", result => new ExecutionRuntimeSettingsCommand(result.GetValue(automatic) is { } value
+            ? bool.TryParse(value, out var enabled) ? enabled : throw new CliUsageException("--automatic-updates requires true or false.") : null));
+
+        var update = Leaf(runtime, "update", "Preview compatible Supported runtime updates; prepare/apply without stopping work by default.");
+        var updateYes = Flag("--yes", "Confirm download and the displayed runtime transition.");
+        var restart = Flag("--restart", "Explicitly restart the displayed affected package graph; requires --yes.");
+        update.Options.Add(updateYes);
+        update.Options.Add(restart);
+        update.Validators.Add(result => { if (result.GetValue(restart) && !result.GetValue(updateYes)) result.AddError("--restart requires --yes."); });
+        Bind(update, "runtime update", result => new UpdateExecutionRuntimesCommand(result.GetValue(updateYes), result.GetValue(restart)));
+
+        var install = Leaf(runtime, "install", "Preview/install a runtime retained until explicit uninstall.");
+        var installId = RequiredTextArgument("runtime-id", "Runtime family.");
+        var installRange = RequiredTextArgument("version-range", "Bounded compatible version range.");
+        var installAbi = RequiredTextArgument("module-abi", "Runtime module ABI.");
+        var installYes = Flag("--yes", "Confirm the exact resolved runtime download and installation.");
+        install.Arguments.Add(installId); install.Arguments.Add(installRange); install.Arguments.Add(installAbi);
+        install.Options.Add(installYes);
+        Bind(install, "runtime install", result => new InstallExecutionRuntimeCommand(result.GetRequiredValue(installId), result.GetRequiredValue(installRange),
+            result.GetRequiredValue(installAbi), result.GetValue(installYes)));
+        var removeYes = Flag("--yes", "Confirm removal only if Host proves the runtime unreferenced and not running.");
+        AddExecutionRuntimeIdentityCommand(runtime, "remove", "Uninstall an exact runtime with authoritative usage checks.",
+            static identity => new RemoveExecutionRuntimeCommand(identity), command =>
+            {
+                command.Options.Add(removeYes);
+                command.Validators.Add(result => { if (!result.GetValue(removeYes)) result.AddError("runtime remove requires --yes; use runtime info to inspect references."); });
+            });
         Bind(
             Leaf(runtime, "list", "List installed execution runtimes and health/lifecycle state."),
             "runtime list",
@@ -96,24 +126,13 @@ internal sealed partial class CliCommandParser
             "Execution runtime id, such as sunder.runtime.dotnet or sunder.runtime.node.");
         var versionRange = RequiredTextArgument("version-range", "Strict bounded runtime version range.");
         var moduleAbi = RequiredTextArgument("module-abi", "Required module ABI.");
-        var registryOrigin = ValueOption(
-            "--registry-origin",
-            "Registry origin. Defaults to the configured Registry API URL.",
-            "url");
         ensure.Arguments.Add(ensureRuntimeId);
         ensure.Arguments.Add(versionRange);
         ensure.Arguments.Add(moduleAbi);
-        ensure.Options.Add(registryOrigin);
         Bind(ensure, "runtime ensure", result => new EnsureExecutionRuntimeCommand(
             result.GetRequiredValue(ensureRuntimeId),
             result.GetRequiredValue(versionRange),
-            result.GetRequiredValue(moduleAbi),
-            result.GetValue(registryOrigin)));
-
-        var import = Leaf(runtime, "import", "Import a trusted local .sunderruntime archive.");
-        var file = RequiredValueOption("--file", "Local .sunderruntime archive.", "path");
-        import.Options.Add(file);
-        Bind(import, "runtime import", result => new ImportExecutionRuntimeCommand(result.GetRequiredValue(file)!));
+            result.GetRequiredValue(moduleAbi)));
 
         AddExecutionRuntimeIdentityCommand(
             runtime,
@@ -151,36 +170,47 @@ internal sealed partial class CliCommandParser
         Action<Command>? configure = null)
     {
         var command = Leaf(parent, name, description);
+        var sourceId = RequiredTextArgument("source-id", "Official source id: dotnet or node.");
         var runtimeId = RequiredTextArgument("runtime-id", "Execution runtime id.");
-        var version = SemanticVersionArgument();
-        var packagingRevision = new Argument<int>("packaging-revision")
-        {
-            Description = "Positive execution runtime packaging revision.",
-        };
-        packagingRevision.Validators.Add(result =>
-        {
-            if (result.Tokens.Count == 1
-                && int.TryParse(result.Tokens[0].Value, out var value)
-                && value <= 0)
-            {
-                result.AddError("Argument '<packaging-revision>' must be a positive integer.");
-            }
-        });
+        var version = RequiredTextArgument("vendor-version", "Actual upstream SemVer runtime version.");
+        version.Validators.Add(result => ValidateSemanticVersion(result.Tokens, result.AddError));
         var rid = RequiredTextArgument("rid", "Exact runtime identifier (RID).");
         var moduleAbi = RequiredTextArgument("module-abi", "Exact module ABI.");
+        var checksumAlgorithm = RequiredTextArgument("checksum-algorithm", "Vendor checksum algorithm: sha512 or sha256.");
+        var checksumDigest = RequiredTextArgument("checksum-digest", "Vendor checksum digest.");
+        command.Arguments.Add(sourceId);
         command.Arguments.Add(runtimeId);
         command.Arguments.Add(version);
-        command.Arguments.Add(packagingRevision);
         command.Arguments.Add(rid);
         command.Arguments.Add(moduleAbi);
+        command.Arguments.Add(checksumAlgorithm);
+        command.Arguments.Add(checksumDigest);
         configure?.Invoke(command);
         Bind(command, $"runtime {name}", result => factory(new CliExecutionRuntimeIdentity(
+            ParseSourceId(result.GetRequiredValue(sourceId)),
             result.GetRequiredValue(runtimeId),
             result.GetRequiredValue(version),
-            result.GetRequiredValue(packagingRevision),
             result.GetRequiredValue(rid),
-            result.GetRequiredValue(moduleAbi))));
+            result.GetRequiredValue(moduleAbi),
+            ParseChecksumAlgorithm(result.GetRequiredValue(checksumAlgorithm)),
+            result.GetRequiredValue(checksumDigest))));
     }
+
+    private static Sunder.Runtime.Contracts.ConfiguredOfficialSourceId ParseSourceId(string value)
+        => value switch
+        {
+            "dotnet" => Sunder.Runtime.Contracts.ConfiguredOfficialSourceId.DotNet,
+            "node" => Sunder.Runtime.Contracts.ConfiguredOfficialSourceId.Node,
+            _ => throw new CliUsageException("Source id must be 'dotnet' or 'node'."),
+        };
+
+    private static Sunder.Runtime.Contracts.RuntimeExecutionRuntimeChecksumAlgorithm ParseChecksumAlgorithm(string value)
+        => value switch
+        {
+            "sha512" => Sunder.Runtime.Contracts.RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
+            "sha256" => Sunder.Runtime.Contracts.RuntimeExecutionRuntimeChecksumAlgorithm.Sha256,
+            _ => throw new CliUsageException("Checksum algorithm must be 'sha512' or 'sha256'."),
+        };
 
     private void AddRuntimeLifecycleCommand(Command runtime, string name, RuntimeLifecycleAction action)
         => Bind(

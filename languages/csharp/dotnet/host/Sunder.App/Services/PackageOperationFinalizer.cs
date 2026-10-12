@@ -10,6 +10,7 @@ internal sealed class PackageOperationFinalizer(
     NotificationCenterService notificationCenter,
     TimeSpan presentationWaitTimeout)
 {
+    public Task ReportFailureAsync(string message) => PublishFailureAsync(message);
     public async Task FinishRegistryOperationAsync(
         BackgroundProcessContext context,
         RegistryPackageInstallExecutionResult result,
@@ -112,7 +113,7 @@ internal sealed class PackageOperationFinalizer(
         {
             var warning = "Package store commit succeeded, but waiting for the running shell presentation was canceled.";
             await ReportPresentationFailureAsync(warning, exception: null).ConfigureAwait(false);
-            throw new InvalidOperationException(warning);
+            throw new PackageOperationAlreadyReportedException(warning);
         }
         catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
         {
@@ -198,3 +199,5 @@ internal sealed class PackageOperationFinalizer(
         return string.IsNullOrWhiteSpace(result.Message) ? fallback : result.Message.Trim();
     }
 }
+
+internal sealed class PackageOperationAlreadyReportedException(string message) : InvalidOperationException(message);

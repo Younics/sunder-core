@@ -40,6 +40,8 @@ public sealed partial class ManageSunderPackageRoleInputsTask : Microsoft.Build.
     public ITaskItem[] CapturedInputs { get; set; } = [];
     public string RolePlanPath { get; set; } = string.Empty;
     public string RolePlanSha256 { get; set; } = string.Empty;
+    /// <summary>Gets or sets the SDK-generated global-using source included in the native compilation plan.</summary>
+    public string GeneratedGlobalUsingsFile { get; set; } = string.Empty;
     public string DevPackagePath { get; set; } = string.Empty;
     public string SelectionFile { get; set; } = string.Empty;
     public string PackageOutputPath { get; set; } = string.Empty;
@@ -75,13 +77,19 @@ public sealed partial class ManageSunderPackageRoleInputsTask : Microsoft.Build.
         var sourceRoot = SourceRoot.Length == 0 ? DefaultSourceRoot(project) : Full(Path.GetFullPath(SourceRoot, project));
         var baselinePath = Full(Path.GetFullPath(OwnedContractsPath.Length == 0 ? SunderRpcAuthoringDocuments.OwnedContractsFileName : OwnedContractsPath, project));
         var lockPath = Full(Path.GetFullPath(ContractLockPath.Length == 0 ? SunderRpcAuthoringDocuments.ContractLockFileName : ContractLockPath, project));
-        var baseline = SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(baselinePath);
+        var baseline = GeneratedOutputPathSafety.PathExists(baselinePath) ? SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(baselinePath) : null;
+        if (baseline is null) GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(project, Path.Combine(project, "obj", GenerateSunderRpcBindingsTask.GeneratedDirectoryName));
         var contractLock = SunderRpcAuthoringDocuments.ReadContractLock(lockPath, AllowDevelopmentRegistryOrigin);
         if (!Rids.Contains(RuntimeIdentifier) || TargetFramework != "net10.0" || string.IsNullOrWhiteSpace(ProjectIdentity)
             || string.IsNullOrWhiteSpace(AssemblyName) || string.IsNullOrWhiteSpace(Configuration)) throw Invalid("An exact project/configuration/framework/RID is required.");
         var sourceTree = Tree(sourceRoot, source: true, _cancellation.Token);
         var external = new SortedDictionary<string, SunderPrebuiltFile>(StringComparer.Ordinal);
         var locations = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        if (baseline is null)
+        {
+            var key = "baseline-absent:" + Relative(sourceRoot, baselinePath);
+            external.Add(key, new(key, 0, Hash([]))); locations.Add(key, baselinePath);
+        }
         var assetsPath = Full(Path.GetFullPath(ProjectAssetsFile, project));
         var restore = SunderPrebuiltRestoreInputs.Capture(assetsPath, TargetFramework, RuntimeIdentifier, _cancellation.Token);
         external.Add(restore.Path, restore); locations.Add(restore.Path, assetsPath);
@@ -157,8 +165,8 @@ public sealed partial class ManageSunderPackageRoleInputsTask : Microsoft.Build.
             "Microsoft.CodeAnalysis.dll", "Microsoft.CodeAnalysis.CSharp.dll", "Microsoft.Extensions.DependencyInjection.Abstractions.dll", "Microsoft.Extensions.Logging.Abstractions.dll" }
             .Order(StringComparer.Ordinal).Select(name => File(Path.Combine(toolDirectory, name), name, 64 * 1024 * 1024, _cancellation.Token)).ToArray();
         if (items.Count > MaximumFiles || external.Count > MaximumFiles) throw Invalid("Evaluated inputs exceed their item budget.");
-        var frame = new SunderPrebuiltFrame(baseline.PackageId, PackageVersion, Relative(sourceRoot, ProjectFile), ProjectIdentity,
-            Configuration, TargetFramework, RuntimeIdentifier, AssemblyName, Relative(sourceRoot, baselinePath), baseline.Sha256,
+        var frame = new SunderPrebuiltFrame(baseline?.PackageId ?? string.Empty, PackageVersion, Relative(sourceRoot, ProjectFile), ProjectIdentity,
+            Configuration, TargetFramework, RuntimeIdentifier, AssemblyName, Relative(sourceRoot, baselinePath), baseline?.Sha256 ?? Hash([]),
             Relative(sourceRoot, lockPath), contractLock.Sha256, properties,
             items.OrderBy(item => item.Kind, StringComparer.Ordinal).ThenBy(item => item.Identity, StringComparer.Ordinal).ToArray(),
             sourceTree, tools, external.Values.ToArray());
@@ -180,7 +188,11 @@ public sealed partial class ManageSunderPackageRoleInputsTask : Microsoft.Build.
         foreach (var expected in frame.ExternalInputs)
         {
             var path = locations[expected.Path];
-            if (expected.Path == "restore:graph")
+            if (expected.Path.StartsWith("baseline-absent:", StringComparison.Ordinal))
+            {
+                if (GeneratedOutputPathSafety.PathExists(path)) throw Invalid("The absent private-only baseline appeared during qualification.");
+            }
+            else if (expected.Path == "restore:graph")
                 Equal(expected, SunderPrebuiltRestoreInputs.Capture(path, frame.TargetFramework, frame.RuntimeIdentifier, _cancellation.Token), "Restored dependency selection");
             else if (expected.Path.StartsWith("assets:", StringComparison.Ordinal))
                 Equal(expected, AssetTree(path, expected.Path), "Package asset bytes/membership");
@@ -198,6 +210,17 @@ public sealed partial class ManageSunderPackageRoleInputsTask : Microsoft.Build.
         var bytes = Convert.FromBase64String(input.GetMetadata("Frame"));
         if (Hash(bytes) != input.GetMetadata("Sha256")) throw Invalid("Captured input frame changed.");
         return Read<SunderPrebuiltFrame>(bytes);
+    }
+
+    private static ITaskItem BindPrivatePackageIdentity(ITaskItem input, string packageId)
+    {
+        var frame = Frame(input);
+        if (frame.PackageId.Length != 0) return input;
+        if (frame.OwnedBaselineSha256 != Hash([]) || !frame.ExternalInputs.Any(file => file.Path == "baseline-absent:" + frame.OwnedBaseline))
+            throw Invalid("Only an explicitly absent baseline can use the native source-derived package identity.");
+        var copy = new TaskItem(input); var bytes = Write(frame with { PackageId = packageId });
+        copy.SetMetadata("Frame", Convert.ToBase64String(bytes)); copy.SetMetadata("Sha256", Hash(bytes));
+        return copy;
     }
     private SunderPrebuiltFile AssetTree(string directory, string identity)
     {

@@ -17,6 +17,7 @@ public sealed partial class SunderRpcImportedBuildTests
     [Fact]
     public async Task OnlineRestoreReproducesTheLockAndPreservesCacheMtimesOnReplay()
     {
+        _ = await CreateLockedCandidateAsync();
         var contractLock = SunderRpcAuthoringDocuments.ReadContractLock(LockPath);
         var artifact = contractLock.PackageArtifacts[DependencyId];
         var inventory = SunderRpcAuthoringDocuments.ValidatePackagePublicInventory(artifact);
@@ -28,53 +29,39 @@ public sealed partial class SunderRpcImportedBuildTests
         Assert.Equal(1, await restore.RestoreAsync(LockPath, root, []));
         Assert.Equal(_descriptor.GetCanonicalUtf8(), File.ReadAllBytes(SunderRpcContractCache.GetDescriptorPath(root, _descriptor.Sha256)));
         var timestamps = Directory.GetFiles(root).Select(path => (path, File.GetLastWriteTimeUtc(path))).ToArray();
-        Assert.Equal(1, await restore.RestoreAsync(LockPath, root, []));
+        Assert.Equal(0, await restore.RestoreAsync(LockPath, root, []));
         Assert.All(timestamps, entry => Assert.Equal(entry.Item2, File.GetLastWriteTimeUtc(entry.path)));
         Assert.Equal(before, File.ReadAllBytes(LockPath));
         Assert.Single(SunderRpcContractCache.Resolve(contractLock, root).EntriesByDescriptorSha256);
         var generation = CreateGeneration();
         generation.ContractCacheRoot = root;
         AssertSuccess(generation);
-        Assert.Equal(6, handler.Requests);
+        Assert.Equal(1, handler.Requests);
         Assert.Equal(before, File.ReadAllBytes(LockPath));
     }
 
     [Theory]
-    [InlineData("inventory")]
-    [InlineData("authority")]
-    [InlineData("size-type")]
-    [InlineData("etag")]
-    [InlineData("weak-etag")]
+    [InlineData("invalid-archive")]
+    [InlineData("length")]
     [InlineData("media-type")]
     [InlineData("redirect")]
     [InlineData("changed-origin")]
     [InlineData("oversize")]
     public async Task RestoreRejectsUnverifiedResponsesWithoutPublishingCacheOrChangingTheLock(string failure)
     {
+        _ = await CreateLockedCandidateAsync();
         var artifact = SunderRpcAuthoringDocuments.ReadContractLock(LockPath).PackageArtifacts[DependencyId];
         var inventory = SunderRpcAuthoringDocuments.ValidatePackagePublicInventory(artifact);
         using var handler = new RestoreHandler(request =>
         {
             var response = RestoreResponse(request, inventory);
-            if (request.RequestUri!.AbsolutePath.EndsWith("/public-api", StringComparison.Ordinal) && failure == "inventory")
-                response.Content = new StringContent("{\"inventory\":{},\"publicInventorySha256\":\"" + artifact.PublicInventorySha256 + "\"}", System.Text.Encoding.UTF8, "application/json");
-            else if (failure == "authority" && request.RequestUri.AbsolutePath.EndsWith("/versions/" + Uri.EscapeDataString(_descriptor.Version), StringComparison.Ordinal))
-                response.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-            else if (failure == "size-type" && request.RequestUri.AbsolutePath.EndsWith("/versions/" + Uri.EscapeDataString(_descriptor.Version), StringComparison.Ordinal))
-            {
-                var metadata = JsonNode.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult())!;
-                metadata["size"] = "not-an-integer";
-                response.Content = new StringContent(metadata.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
-            }
-            else if (request.RequestUri.AbsolutePath.EndsWith("/descriptor", StringComparison.Ordinal))
-            {
-                if (failure == "etag") response.Headers.ETag = new EntityTagHeaderValue("\"wrong\"");
-                if (failure == "weak-etag") response.Headers.ETag = new EntityTagHeaderValue("\"" + _descriptor.Sha256 + "\"", isWeak: true);
-                if (failure == "media-type") response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-                if (failure == "redirect") response.StatusCode = HttpStatusCode.Redirect;
-                if (failure == "changed-origin") response.RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://other.example/descriptor");
-                if (failure == "oversize") response.Content = new StringContent(new string('x', _descriptor.GetCanonicalUtf8().Length + 1), System.Text.Encoding.UTF8, "application/schema+json");
-            }
+            Assert.EndsWith("/canonical", request.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+            if (failure == "invalid-archive") response.Content = new ByteArrayContent([1, 2, 3]);
+            if (failure == "media-type") response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            if (failure == "redirect") response.StatusCode = HttpStatusCode.Redirect;
+            if (failure == "changed-origin") response.RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://other.example/canonical");
+            if (failure == "oversize") response.Content.Headers.ContentLength = 536_870_913;
+            if (failure == "length") response.Content.Headers.ContentLength = 1;
             return response;
         });
         using var http = new HttpClient(handler);
@@ -99,6 +86,9 @@ public sealed partial class SunderRpcImportedBuildTests
             UsesContracts = [], Provides = [], PackageArtifactImports = [], PackageApiImports = [], ProviderImports = [], PlatformImports = [],
         };
         File.WriteAllBytes(Path.Combine(source, SunderPackageFormat.ManifestPath), JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions));
+        var projection = new SunderRpcModelProjectionDocument(1, manifest.Id!, manifest.Version!,
+            [new(ContractId, _descriptor.Version, _descriptor.Sha256, _descriptor.AbiSha256, SunderRpcModelProjection.Empty)]);
+        File.WriteAllBytes(Path.Combine(source, SunderPackageFormat.RpcModelProjectionPath), projection.ToCanonicalUtf8());
         var entries = Directory.GetFiles(source, "*", SearchOption.AllDirectories).Select(path => new SunderPackageContentIndexEntry(
             Path.GetRelativePath(source, path).Replace('\\', '/'), Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path))), new FileInfo(path).Length)).OrderBy(entry => entry.Path, StringComparer.Ordinal).ToArray();
         File.WriteAllBytes(Path.Combine(source, SunderPackageFormat.ContentIndexPath), JsonSerializer.SerializeToUtf8Bytes(new SunderPackageContentIndex(1, entries)));
@@ -116,6 +106,8 @@ public sealed partial class SunderRpcImportedBuildTests
         inventory["contracts"]![0]!["selectedAuthorityContentIdentity"] = content;
         artifact["publicInventorySha256"] = SunderPackagePublicApiInventory.Parse(JsonSerializer.SerializeToUtf8Bytes(inventory,
             new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping })).PublicInventorySha256;
+        artifact["modelProjectionBytes"] = projection.ModelProjectionBytes;
+        artifact["modelProjectionSha256"] = projection.ModelProjectionSha256;
         WriteJson(LockPath, locked);
         var archive = Path.Combine(_root, "candidate.sunderpkg");
         await SunderArchive.WriteDeterministicAsync(source, archive);
@@ -161,7 +153,14 @@ public sealed partial class SunderRpcImportedBuildTests
     {
         byte[] bytes;
         var response = new HttpResponseMessage(HttpStatusCode.OK) { RequestMessage = request };
-        if (request.RequestUri!.AbsolutePath.EndsWith("/public-api", StringComparison.Ordinal))
+        if (request.RequestUri!.AbsolutePath.EndsWith("/canonical", StringComparison.Ordinal))
+        {
+            bytes = File.ReadAllBytes(Path.Combine(_root, "candidate.sunderpkg"));
+            response.Content = new ByteArrayContent(bytes);
+            response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            return response;
+        }
+        if (request.RequestUri.AbsolutePath.EndsWith("/public-api", StringComparison.Ordinal))
             bytes = JsonSerializer.SerializeToUtf8Bytes(new { inventory = inventory.Payload, publicInventorySha256 = inventory.PublicInventorySha256 }, new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         else if (request.RequestUri.AbsolutePath.EndsWith("/descriptor", StringComparison.Ordinal))
         {

@@ -568,7 +568,7 @@ internal sealed class RuntimeSessionOwner
         }
     }
 
-    internal bool EnforceExecutionRuntimePolicy(
+    internal bool FaultPackageExecution(
         string packageId,
         string message,
         out Task cleanupCompletion)
@@ -597,7 +597,7 @@ internal sealed class RuntimeSessionOwner
             var applied = CommitPackageFault(
                 packageId,
                 message,
-                (expectedGeneration, committed) => State.HandleExecutionRuntimePolicyFault(
+                (expectedGeneration, committed) => State.HandlePackageExecutionFault(
                     packageId,
                     runtimeGeneration,
                     expectedGeneration,
@@ -827,7 +827,7 @@ internal sealed class RuntimeSessionOwner
                 var changed = false;
                 foreach (var packageId in missing)
                 {
-                    if (EnforceExecutionRuntimePolicy(packageId, Sunder.Registry.Contracts.RpcReadinessErrorCodes.RequiredProviderUnsatisfied, out var cleanup))
+                    if (FaultPackageExecution(packageId, Sunder.Registry.Contracts.RpcReadinessErrorCodes.RequiredProviderUnsatisfied, out var cleanup))
                     {
                         changed = true;
                         _ = ObserveRequiredCleanupAsync(cleanup);

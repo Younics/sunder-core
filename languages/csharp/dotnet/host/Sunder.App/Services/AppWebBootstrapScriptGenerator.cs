@@ -47,8 +47,10 @@ internal static class AppWebBootstrapScriptGenerator
               });
               if (location.origin !== expectedOrigin || typeof window.invokeCSharpAction !== 'function') return false;
               const marker = `__sunderBridge_${nonce}`;
-              if (window[marker] === true && window.sunder?.version === version && typeof window.__sunderReceive === 'function') return true;
+              if (window[marker] === true && window.sunder?.protocol === protocol && window.sunder?.version === version && typeof window.__sunderReceive === 'function') return window.sunder.signal.aborted === false;
               if (Object.prototype.hasOwnProperty.call(window, 'sunder')) return false;
+              const lifetime = new AbortController();
+              let retired = false;
               let sequence = 0;
               const pending = new Map();
               let queuedEventBytes = 0;
@@ -107,6 +109,9 @@ internal static class AppWebBootstrapScriptGenerator
                 if (!state.stream && error) state.reject(error);
               };
               const send = (method, payload, options, stream) => {
+                if (retired) return rejected(failure('unavailable', 'rpc.bridge.retired', 'The browser bridge document has retired.'), stream);
+                const signal = options?.signal;
+                if (signal?.aborted) return rejected(failure('cancelled', 'rpc.bridge.cancelled', 'The browser bridge request was cancelled.'), stream);
                 const requestId = `b_${++sequence}`;
                 let body;
                 let normalized;
@@ -131,12 +136,15 @@ internal static class AppWebBootstrapScriptGenerator
                 if (pending.size >= maxPendingRequests) {
                   return rejected(failure('resource-exhausted', 'rpc.bridge.pending-limit', 'The browser bridge request limit was reached.'), stream);
                 }
+                // Serialization can execute package-owned toJSON/getters. Recheck before retaining work.
+                if (retired) return rejected(failure('unavailable', 'rpc.bridge.retired', 'The browser bridge document has retired.'), stream);
+                if (signal?.aborted) return rejected(failure('cancelled', 'rpc.bridge.cancelled', 'The browser bridge request was cancelled.'), stream);
                 let resolve = () => {};
                 let reject = () => {};
                 const promise = stream ? null : new Promise((ok, fail) => { resolve = ok; reject = fail; });
-                const state = { requestId, resolve, reject, stream, queue: [], waiters: [], done: false, error: null, signal: options?.signal, cancelSent: false, timer: null };
+                const state = { requestId, resolve, reject, stream, queue: [], waiters: [], done: false, error: null, signal, dispatched: false, cancelSent: false, timer: null };
                 const notifyCancel = () => {
-                  if (state.done || state.cancelSent) return;
+                  if (state.done || state.cancelSent || !state.dispatched) return;
                   state.cancelSent = true;
                   try {
                     window.invokeCSharpAction(JSON.stringify({ protocol, version, nonce, origin: location.origin, requestId, method: 'bridge.cancel', deadlineUtc: null, payload: { targetRequestId: requestId } }));
@@ -147,7 +155,7 @@ internal static class AppWebBootstrapScriptGenerator
                 const cancel = () => {
                   if (state.done) return;
                   notifyCancel();
-                  finish(state, failure('cancelled', 'rpc.bridge.cancelled', 'The browser bridge request was cancelled.', 'possibly-dispatched', 'unsafe'));
+                  finish(state, failure('cancelled', 'rpc.bridge.cancelled', 'The browser bridge request was cancelled.', state.dispatched ? 'possibly-dispatched' : 'not-dispatched', state.dispatched ? 'unsafe' : 'safe'));
                 };
                 state.cancel = cancel;
                 state.notifyCancel = notifyCancel;
@@ -162,16 +170,15 @@ internal static class AppWebBootstrapScriptGenerator
                   notifyCancel();
                   finish(state, failure('deadline-exceeded', 'rpc.call.deadline-exceeded', 'The browser bridge request deadline elapsed.', 'possibly-dispatched', 'unsafe'));
                 }, timeout);
+                signal?.addEventListener('abort', cancel, { once: true });
+                if (signal?.aborted) cancel();
                 if (!state.done) {
                   try {
+                    state.dispatched = true;
                     window.invokeCSharpAction(body);
                   } catch {
                     finish(state, failure('unavailable', 'rpc.bridge.native-unavailable', 'The native browser bridge is unavailable.', 'possibly-dispatched', 'unsafe'));
                   }
-                }
-                if (!state.done) {
-                  options?.signal?.addEventListener('abort', cancel, { once: true });
-                  if (options?.signal?.aborted) cancel();
                 }
                 if (!stream) return promise;
                 return Object.freeze({
@@ -191,10 +198,26 @@ internal static class AppWebBootstrapScriptGenerator
                   }
                 });
               };
+              const retire = (notifyNative = false) => {
+                if (retired) return;
+                retired = true;
+                window.removeEventListener('pagehide', pageHidden);
+                for (const state of [...pending.values()]) {
+                  if (notifyNative) state.notifyCancel();
+                  finish(state, failure('unavailable', 'rpc.bridge.retired', 'The browser bridge document has retired.', state.dispatched ? 'possibly-dispatched' : 'not-dispatched', state.dispatched ? 'unsafe' : 'safe'));
+                }
+                lifetime.abort(failure('unavailable', 'rpc.bridge.retired', 'The browser bridge document has retired.'));
+              };
+              const pageHidden = () => retire(true);
               Object.defineProperty(window, '__sunderReceive', { configurable: true, value(raw) {
                 let message;
                 try { message = JSON.parse(raw); } catch { return; }
                 if (message?.protocol !== protocol || message?.version !== version || message?.nonce !== nonce) return;
+                if (retired) return;
+                if (message.type === 'retired' && message.requestId === null && message.value === null && message.error === null) {
+                  retire();
+                  return;
+                }
                 const state = pending.get(message.requestId);
                 if (!state || state.done) return;
                 const emittedBytes = encoder.encode(raw).byteLength;
@@ -270,7 +293,9 @@ internal static class AppWebBootstrapScriptGenerator
                 subscribe: (providerHandle, serviceId, methodId, request, options) => send('rpc.subscribe', { providerHandle, serviceId, methodId, request }, options, true)
               });
               const api = Object.freeze({
+                protocol,
                 version,
+                signal: lifetime.signal,
                 resourceProfile,
                 rpc,
                 openExternal: (url, options) => send('host.openExternal', { url }, options, false),
@@ -279,8 +304,25 @@ internal static class AppWebBootstrapScriptGenerator
               });
               Object.defineProperty(window, 'sunder', { configurable: false, enumerable: true, writable: false, value: api });
               Object.defineProperty(window, marker, { configurable: false, enumerable: false, writable: false, value: true });
+              window.addEventListener('pagehide', pageHidden, { once: true });
+              window.dispatchEvent(new CustomEvent('sunder:ready', { detail: api }));
               return true;
             })();
             """);
+    }
+
+    public static string GenerateRetirement(string protocolName, int protocolVersion, string sessionNonce)
+    {
+        var envelope = JsonSerializer.Serialize(new
+        {
+            protocol = protocolName,
+            version = protocolVersion,
+            nonce = sessionNonce,
+            requestId = (string?)null,
+            type = "retired",
+            value = (object?)null,
+            error = (object?)null,
+        });
+        return $"window.__sunderReceive?.({JsonSerializer.Serialize(envelope)});";
     }
 }

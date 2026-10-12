@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  discoverDotnetTests,
   loadCoreTestModel,
   validateCharacterization,
   validateProjectLaneOwnership,
@@ -12,8 +14,124 @@ import {
 import { missingPrerequisites } from "./test-lane-prerequisites.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const fixtureSource = "languages/csharp/dotnet/tests/Inventory.Tests/Declarations.cs";
+const policy = JSON.parse(await readFile(resolve(repositoryRoot, "eng/test-oracles/core-test-policy.json"), "utf8"));
 
-test("project-scoped test selection excludes process cases from the fast lane and keeps them in full validation", () => {
+test("C# declaration inventory ignores comment and literal fixtures without losing real tests after them", () => {
+  const content = String.raw`
+    // namespace Wrong.Line; public class Comment { [Fact] public void Fake() {} }
+    /* namespace Wrong.Block; public class Comment { [Theory] public void Fake() {} } */
+    namespace Example.Tests;
+    public sealed partial class RealTests
+    {
+      const string Normal = "namespace Wrong.Normal; public class Normal { [Fact] public void Fake() {} } \\\"";
+      const char Quote = '\'';
+      const char Brace = '}';
+      const string Verbatim = @"quoted ""value""
+        namespace Wrong.Verbatim;
+        public sealed class Fixture { [Fact] public void Fake() {} }
+        // not a real comment
+      ";
+      const string Raw = """
+        namespace Wrong.Raw;
+        public sealed class Fixture { [Theory] public void Fake() {} }
+        /* not a real comment
+        #if DEBUG
+      """;
+      const string LongerRaw = """""
+        """" namespace Wrong.Delimiter;
+        public class Fixture { [Fact] public void Fake() {} }
+      """"";
+      string Interpolated = $"{Format("class Fixture { }", new { Value = "namespace Wrong.Interpolation;" })} {{escaped}}";
+      string InterpolatedVerbatim = @$"{Format(@"""quoted""")} public class Fixture {}";
+      string InterpolatedRaw = $$""""
+        {{Format("value")}} { """ quotes and braces } namespace Wrong.RawInterpolation;
+        public class Fixture { [Fact] public void Fake() {} }
+      """";
+      string NestedRawInterpolation = $$"""
+        {{{Format("""nested raw literal""")}}}
+        public class Fixture { [Fact] public void Fake() {} }
+      """;
+      // [Fact] public void CommentedOut() {}
+      /* [Fact] public void AlsoCommentedOut() {} */
+      [InlineData("Fact")]
+      public void NotATest() {}
+      [Fact(Skip = "UnixFact ExternalArtifactFact")]
+      public void AfterFixtures() { }
+      [Theory, InlineData("macos", "[WindowsFact]", new[] { "[Trait(\"Category\",\"Release\")]" })]
+      public async Task AfterDataFixture() { }
+    }
+    public class Fixture { [Fact] public void RealFixtureClass() { } }
+  `;
+  const declarations = discoverDotnetTests(fixtureSource, content, policy);
+  assert.deepEqual(declarations.map((item) => item.id), [
+    "Example.Tests.RealTests.AfterFixtures",
+    "Example.Tests.RealTests.AfterDataFixture",
+    "Example.Tests.Fixture.RealFixtureClass",
+  ]);
+  assert.ok(declarations.every((item) => item.primaryLane === "dotnet-linux"));
+  assert.ok(declarations.every((item) => item.operatingSystems.length === 3 && item.externalEnvironment === undefined));
+});
+
+test("C# inventory follows namespace and nested partial type scopes while retaining conditional and release metadata", () => {
+  const content = `
+    namespace Example.Outer {
+      namespace Inner {
+        public partial class Cases {
+          [global::Xunit.FactAttribute] public void BeforeNested() { if (true) { } }
+          public class Nested {
+            [UnixTheory, InlineData(1)] public Task Conditional() => Task.CompletedTask;
+          }
+          [Fact, Trait /* gap */ ("Capability", "Process")]
+          public void AfterNested() { }
+        }
+        public partial class Cases {
+          [ExternalArtifactTheory("SUNDER_REQUIRE_NODE_MODULE_INTEROP", "SUNDER_NODE_MODULE_PACKAGE_PATH", "SUNDER_NODE_MODULE_LEAF_PATH")]
+          [InlineData("case")]
+          public Task CrossLanguageRelease() => Task.CompletedTask;
+          [Fact, Xunit.TraitAttribute("Category", "Release")]
+          public void ReleaseTrait() { }
+          #if WINDOWS
+          [WindowsFact] public void ConditionalWindows() { }
+          #else
+          [LinuxFact] public void ConditionalLinux() { }
+          #endif
+        }
+      }
+    }
+    namespace Other { public class Cases { [Fact] public void SiblingNamespace() { } } }
+    public class GlobalTests { [Fact] public ValueTask GlobalNamespace() => default; }
+  `;
+  const declarations = discoverDotnetTests(fixtureSource, content, policy);
+  assert.deepEqual(declarations.map((item) => [item.id, item.primaryLane]), [
+    ["Example.Outer.Inner.Cases.BeforeNested", "dotnet-linux"],
+    ["Example.Outer.Inner.Cases+Nested.Conditional", "host-platform"],
+    ["Example.Outer.Inner.Cases.AfterNested", "host-platform"],
+    ["Example.Outer.Inner.Cases.CrossLanguageRelease", "release-artifact"],
+    ["Example.Outer.Inner.Cases.ReleaseTrait", "release-artifact"],
+    ["Example.Outer.Inner.Cases.ConditionalWindows", "host-platform"],
+    ["Example.Outer.Inner.Cases.ConditionalLinux", "host-platform"],
+    ["Other.Cases.SiblingNamespace", "dotnet-linux"],
+    ["GlobalTests.GlobalNamespace", "dotnet-linux"],
+  ]);
+  assert.deepEqual(declarations[1].operatingSystems, ["Linux", "MacOS"]);
+  assert.deepEqual(declarations[5].operatingSystems, ["Windows"]);
+  assert.deepEqual(declarations[6].operatingSystems, ["Linux"]);
+  assert.deepEqual(declarations[3].externalPrerequisites, [
+    { kind: "executable", name: "dotnet", requiredWhenSelected: true },
+    { kind: "executable", name: "node", minimumMajorVersion: 24, requiredWhenSelected: true },
+    { kind: "environment", name: "SUNDER_REQUIRE_NODE_MODULE_INTEROP", expectedValue: "1", requiredWhenSelected: true },
+    { kind: "environmentPath", name: "SUNDER_NODE_MODULE_PACKAGE_PATH", pathKind: "file", requiredWhenSelected: true },
+    { kind: "environmentPath", name: "SUNDER_NODE_MODULE_LEAF_PATH", pathKind: "directory", requiredWhenSelected: true },
+  ]);
+  const secondPart = discoverDotnetTests(fixtureSource.replace(".cs", ".Part.cs"), `
+    namespace Example.Outer.Inner;
+    public partial class Cases { [Fact] public void InAnotherFile() { } }
+  `, policy);
+  assert.equal(secondPart[0].id, "Example.Outer.Inner.Cases.InAnotherFile");
+});
+
+test("project-scoped test selection excludes process cases from the fast lane and keeps them in full validation", async () => {
   const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
   const select = (...args) => spawnSync(process.execPath, [runner, "--list", ...args], { cwd: repositoryRoot, encoding: "utf8" });
   const fast = select("--project", "Sunder.Package.Build.Tests", "--primary-lane", "dotnet-linux");
@@ -29,12 +147,61 @@ test("project-scoped test selection excludes process cases from the fast lane an
   const full = select("--project", "Sunder.Package.Build.Tests");
   assert.equal(full.status, 0, full.stderr);
   const fullIds = JSON.parse(full.stdout).declarations;
+  assert.deepEqual(new Set(fullIds), projectIds);
+  assert.ok(fullIds.includes("Sunder.Package.Build.Tests.SunderRpcCSharpImportedProviderTests.Compile_MultipleImportedServices_ReusesDescriptorAndVerifiesGeneratedRegistration"));
   assert.ok(fullIds.includes(workspace));
   assert.ok(fullIds.includes(packageBuild));
   assert.ok(fastIds.every((id) => fullIds.includes(id)));
   const unknown = select("--project", "does-not-exist");
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr, /Unknown .NET test project/u);
+  const empty = select("--project", "Sunder.Package.Build.Tests", "--primary-lane", "node");
+  assert.notEqual(empty.status, 0);
+  assert.match(empty.stderr, /has no runnable .NET tests/u);
+
+  const directory = await mkdtemp(resolve(tmpdir(), "sunder-reporter-list-"));
+  try {
+    const sentinel = resolve(directory, "existing.trx");
+    await writeFile(sentinel, "existing report");
+    const preview = select("--project", "Sunder.Package.Build.Tests", "--results-directory", directory);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.equal(await readFile(sentinel, "utf8"), "existing report");
+    assert.deepEqual(JSON.parse(preview.stdout).declarations, fullIds);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("lane entry retains the renamed process suspension regression and fails closed on missing release inputs", () => {
+  const model = loadCoreTestModel();
+  const suspension = model.policy.expectedSkips.find((item) => item.id === "node-process-suspension");
+  assert.ok(suspension);
+  assert.equal(suspension.name, "a suspended CLI publisher reads the new source after acquiring the output lease");
+  const declaration = model.declarations.find((item) => item.framework === "node"
+    && item.source === suspension.source && item.name === suspension.name);
+  assert.equal(declaration?.primaryLane, "node");
+  assert.deepEqual(suspension.skipOn, ["Windows"]);
+  const stale = structuredClone(model.policy);
+  stale.expectedSkips.find((item) => item.id === suspension.id).name = "missing suspension regression";
+  assert.throws(() => loadCoreTestModel(repositoryRoot, stale), /node-process-suspension.*missing Node declaration/u);
+
+  const runner = resolve(repositoryRoot, "scripts/test-oracles/run-core-test-lane.mjs");
+  const env = { ...process.env, PATH: `${dirname(process.execPath)}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}` };
+  const node = spawnSync(process.execPath, [runner, "--primary-lane", "node", "--list"], { cwd: repositoryRoot, env, encoding: "utf8" });
+  assert.equal(node.status, 0, node.stderr);
+  assert.match(node.stdout, /^READY primary-lane=node;/u);
+  const selected = JSON.parse(node.stdout.slice(node.stdout.indexOf("\n") + 1));
+  assert.ok(selected.runnable.some((item) => item.id === declaration.id));
+  assert.ok(selected.runnable.every((item) => item.framework === "node"));
+
+  const release = model.declarations.find((item) => item.externalEnvironment === "SUNDER_REQUIRE_NODE_MODULE_INTEROP");
+  assert.ok(release);
+  for (const input of release.externalPrerequisites.filter((item) => item.kind.startsWith("environment"))) delete env[input.name];
+  const gate = spawnSync(process.execPath, [runner, "--test", release.id, "--list"], { cwd: repositoryRoot, env, encoding: "utf8" });
+  assert.equal(gate.status, 2, gate.stderr);
+  assert.match(gate.stderr, /SUNDER_REQUIRE_NODE_MODULE_INTEROP must equal '1' exactly/u);
+  assert.match(gate.stderr, /SUNDER_NODE_MODULE_PACKAGE_PATH/u);
+  assert.doesNotMatch(gate.stdout, /^READY/mu);
 });
 
 test("compact Core policy deterministically partitions every test project into owned lanes", async () => {
@@ -195,10 +362,10 @@ test("candidate-safe workflows retain lane gates, runtime reports, and compact e
   assert.match(node, /run contracts:accept[\s\S]*run contracts:check[\s\S]*run typecheck[\s\S]*run contracts:freeze[\s\S]*run package/u);
   assert.match(node, /SUNDER_REQUIRE_NODE_MODULE_INTEROP: "1"/u);
   assert.match(node, /SUNDER_REQUIRE_NODE_TEMPLATE_HOST_SMOKE: "1"/u);
-  assert.match(node, /GeneratedNodeTemplate_ActivatesThroughSignedRuntimeHost/u);
+  assert.match(node, /GeneratedNodeTemplate_ActivatesThroughOfficialRuntimeHost/u);
   assert.match(node, /sunder-node-package-ownership-evidence/u);
   assert.match(sdk, /SUNDER_REQUIRE_DOTNET_TEMPLATE_HOST_SMOKE: "1"/u);
-  assert.match(sdk, /GeneratedDotNetTemplate_ActivatesThroughSignedRuntimeHost/u);
+  assert.match(sdk, /GeneratedDotNetTemplate_ActivatesThroughOfficialRuntimeHost/u);
   assert.match(app, /--test Sunder\.App\.Tests\.BundledBuildOutputTests\.AppBuildContainsSupervisorRuntimeAndCliExecutables/u);
   for (const ciWorkflow of [sdk, host, node, app, workflow]) {
     assert.match(ciWorkflow, /--results-directory/u);

@@ -67,7 +67,7 @@ public sealed partial class SunderPackageRoleProjectionTests
                 var deferred = composition.Services.GetRequiredService(worker.GetType("Example.DeferredStore", true)!);
                 var lifecycle = composition.Services.GetRequiredService(worker.GetType("Example.ZLifecycle", true)!);
                 Assert.Same(deferred, lifecycle.GetType().GetProperty("Deferred")!.GetValue(lifecycle));
-                var api = composition.Services.GetRequiredService(worker.GetType("Example.ICounterService", true)!);
+                var api = composition.Services.GetRequiredService(worker.GetType("Sunder.Generated.Packages.Example_Notes_Services.ICounterService", true)!);
                 var service = composition.Services.GetRequiredService(worker.GetType("Example.CounterService", true)!);
                 var first = (Task)api.GetType().GetMethod("NextAsync")!.Invoke(api, [CancellationToken.None])!;
                 Assert.Same(first, service.GetType().GetProperty("LastTask")!.GetValue(service));
@@ -123,9 +123,10 @@ public sealed partial class SunderPackageRoleProjectionTests
         const string source = """
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
             namespace Example;
-            [SunderRpcService]
-            [SunderRpcRuntimeUse]
+            [SunderService]
+            [SunderRuntimeUse]
             public sealed partial class MixedService : System.IAsyncDisposable
             {
                 public static TaskCompletionSource DisposalStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -133,8 +134,8 @@ public sealed partial class SunderPackageRoleProjectionTests
                 public static System.Exception? DisposalFailure { get; set; }
                 public static int DisposalCount { get; private set; }
                 public int RemoteExecutions { get; private set; }
-                [SunderRpcMethod] public Task<Reply> LocalAsync() => Task.FromResult<Reply>(new NumberReply { Number = 5 });
-                [SunderRpcMethod] public Task<Reply> RemoteAsync(SunderRpcInvocationContext context)
+                public Task<Reply> LocalAsync() => Task.FromResult<Reply>(new NumberReply { Number = 5 });
+                public Task<Reply> RemoteAsync(SunderRpcInvocationContext context)
                 { RemoteExecutions++; throw new System.InvalidOperationException("Only the Host may supply this context."); }
                 public async ValueTask DisposeAsync()
                 {
@@ -144,10 +145,10 @@ public sealed partial class SunderPackageRoleProjectionTests
                     if (DisposalFailure is not null) throw DisposalFailure;
                 }
             }
-            [SunderRpcUnion(typeof(NumberReply), typeof(TextReply)), SunderRpcDiscriminator("kind")]
+            [SunderUnion(typeof(NumberReply), typeof(TextReply)), SunderDiscriminator("kind")]
             public abstract record Reply;
-            [SunderRpcVariant("number")] public sealed record NumberReply : Reply { public required long Number { get; init; } }
-            [SunderRpcVariant("text")] public sealed record TextReply : Reply { public required string Text { get; init; } }
+            [SunderVariant("number")] public sealed record NumberReply : Reply { public required long Number { get; init; } }
+            [SunderVariant("text")] public sealed record TextReply : Reply { public required string Text { get; init; } }
             """;
         var analysis = SunderPackageCompositionPlannerTests.Analyze(source);
         Assert.True(analysis.Success, Errors(analysis));
@@ -169,7 +170,7 @@ public sealed partial class SunderPackageRoleProjectionTests
             service.GetProperty("DisposalFailure")!.SetValue(null, failure);
             try
             {
-                var api = services.GetRequiredService(worker.GetType("Example.IMixedService", true)!);
+                var api = services.GetRequiredService(worker.GetType("Sunder.Generated.Packages.Example_Notes_Services.IMixedService", true)!);
                 Assert.Equal(5L, await Number((Task)api.GetType().GetMethod("LocalAsync")!.Invoke(api, null)!));
                 Assert.Equal(0, rpc.Created);
                 Assert.Equal(42L, await Number((Task)api.GetType().GetMethod("RemoteAsync")!.Invoke(api, null)!));
@@ -258,6 +259,7 @@ public sealed partial class SunderPackageRoleProjectionTests
             collection.AddSingleton(background);
             collection.AddSingleton(navigation);
             collection.AddSingleton(shell);
+            collection.AddSingleton(DispatchProxy.Create<ISunderRpcClient, MetadataOnlyContext>());
             await using var services = collection.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
             var model = app.GetType("Example.ViewModel", true)!;
             var first = services.GetRequiredService(model); var second = services.GetRequiredService(model);
@@ -333,7 +335,9 @@ public sealed partial class SunderPackageRoleProjectionTests
         using System.Threading;
         using System.Threading.Tasks;
         using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         using Sunder.Sdk.Worker;
+        using Sunder.Generated.Packages.Example_Notes_Services;
         namespace Example;
         public sealed class Journal
         {
@@ -383,7 +387,7 @@ public sealed partial class SunderPackageRoleProjectionTests
             public DeferredStore(Journal journal) { _journal = journal; journal.Events.Add("ctor:deferred"); }
             public void Dispose() => _journal.Events.Add("dispose:deferred");
         }
-        [SunderRpcService]
+        [SunderService]
         public sealed partial class CounterService : ISunderWorkerLifecycleService, ISunderWorkerActivationService, IDisposable
         {
             private readonly IStore _store; private readonly Journal _journal;
@@ -391,9 +395,9 @@ public sealed partial class SunderPackageRoleProjectionTests
             public IAsyncEnumerable<Reply>? LastStream { get; private set; }
             public CounterService(ZLifecycle dependency, IStore store, Journal journal)
             { if (!ReferenceEquals(dependency.Store, store)) throw new Exception("Duplicate helper instance."); _store = store; _journal = journal; journal.Events.Add("ctor:counter"); }
-            [SunderRpcMethod] public Task<Reply> NextAsync(CancellationToken token = default)
+            public Task<Reply> NextAsync(CancellationToken token = default)
             { token.ThrowIfCancellationRequested(); return LastTask = Task.FromResult(new Reply { Number = _store.Next() }); }
-            [SunderRpcMethod] public IAsyncEnumerable<Reply> WatchAsync(CancellationToken token = default) => LastStream = Values(token);
+            public IAsyncEnumerable<Reply> WatchAsync(CancellationToken token = default) => LastStream = Values(token);
             private async IAsyncEnumerable<Reply> Values([EnumeratorCancellation] CancellationToken token)
             {
                 try { yield return new Reply { Number = _store.Next() }; await Task.Delay(Timeout.Infinite, token); }
@@ -407,9 +411,9 @@ public sealed partial class SunderPackageRoleProjectionTests
             public ValueTask ShutdownAsync(SunderWorkerShutdownContext context, CancellationToken token = default) { _journal.Events.Add("shutdown:counter"); return ValueTask.CompletedTask; }
             public void Dispose() => _journal.Events.Add("dispose:counter");
         }
-        [SunderRpcService]
+        [SunderService]
         public sealed partial class ReaderService(ICounterService counter)
-        { [SunderRpcMethod] public Task<Reply> ReadAsync() => counter.NextAsync(); }
+        { public Task<Reply> ReadAsync() => counter.NextAsync(); }
         public sealed record Reply { public required long Number { get; init; } }
         """;
 }

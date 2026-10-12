@@ -21,14 +21,9 @@ internal sealed class RuntimePackagePaths
         CacheRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.CacheDirectory);
         ExecutionRuntimeStoreRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimesDirectory);
         ExecutionRuntimeArtifactRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeArtifactSha256Directory);
-        ExecutionRuntimeManifestRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeManifestSha256Directory);
         ExecutionRuntimeRootsPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeRootSha256Directory);
         ExecutionRuntimeReceiptRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeReceiptsDirectory);
         ExecutionRuntimeHealthRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeHealthDirectory);
-        ExecutionRuntimePolicyRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimePolicyDirectory);
-        ExecutionRuntimeLifecyclePolicyFilePath = Path.Combine(
-            RootPath,
-            RuntimeV1StateDescriptor.ExecutionRuntimeLifecyclePolicyFile);
         ExecutionRuntimeStagingRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeStagingDirectory);
         ExecutionRuntimeTransactionRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeTransactionsDirectory);
         ExecutionRuntimeQuarantineRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.ExecutionRuntimeQuarantineDirectory);
@@ -64,17 +59,11 @@ internal sealed class RuntimePackagePaths
 
     public string ExecutionRuntimeArtifactRootPath { get; }
 
-    public string ExecutionRuntimeManifestRootPath { get; }
-
     public string ExecutionRuntimeRootsPath { get; }
 
     public string ExecutionRuntimeReceiptRootPath { get; }
 
     public string ExecutionRuntimeHealthRootPath { get; }
-
-    public string ExecutionRuntimePolicyRootPath { get; }
-
-    public string ExecutionRuntimeLifecyclePolicyFilePath { get; }
 
     public string ExecutionRuntimeStagingRootPath { get; }
 

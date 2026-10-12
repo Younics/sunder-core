@@ -28,8 +28,9 @@ internal sealed partial class InstalledPackageLifecycleService
     private readonly TimeProvider _timeProvider;
     private readonly RuntimeRpcCatalog? _rpcCatalog;
     private readonly LocalExecutionRuntimeBindingResolver? _localRuntimeBindings;
-    private readonly ExecutionRuntimeLifecyclePolicyCache? _runtimeLifecyclePolicies;
     private readonly InstalledPackagePolicyCoordinator? _packagePolicies;
+    private readonly PackageRuntimePrerequisiteService? _runtimePrerequisites;
+    private readonly ExecutionRuntimeActivationUpdates? _runtimeActivationUpdates;
     private readonly Dictionary<string, PendingStoreStage> _stages = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _reconciliationPendingStages = new(StringComparer.OrdinalIgnoreCase);
 
@@ -47,8 +48,9 @@ internal sealed partial class InstalledPackageLifecycleService
         TimeProvider? timeProvider = null,
         RuntimeRpcCatalog? rpcCatalog = null,
         LocalExecutionRuntimeBindingResolver? localRuntimeBindings = null,
-        ExecutionRuntimeLifecyclePolicyCache? runtimeLifecyclePolicies = null,
-        InstalledPackagePolicyCoordinator? packagePolicies = null)
+        InstalledPackagePolicyCoordinator? packagePolicies = null,
+        PackageRuntimePrerequisiteService? runtimePrerequisites = null,
+        ExecutionRuntimeActivationUpdates? runtimeActivationUpdates = null)
     {
         _sessions = sessions;
         _gate = gate;
@@ -63,8 +65,9 @@ internal sealed partial class InstalledPackageLifecycleService
         _timeProvider = timeProvider ?? TimeProvider.System;
         _rpcCatalog = rpcCatalog;
         _localRuntimeBindings = localRuntimeBindings;
-        _runtimeLifecyclePolicies = runtimeLifecyclePolicies;
         _packagePolicies = packagePolicies;
+        _runtimePrerequisites = runtimePrerequisites;
+        _runtimeActivationUpdates = runtimeActivationUpdates;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -92,23 +95,7 @@ internal sealed partial class InstalledPackageLifecycleService
             .ConfigureAwait(false);
     }
 
-    internal async Task<int> EnforceExecutionRuntimePolicyAsync(
-        IReadOnlyList<ExecutionRuntimeIdentity> blockedIdentities,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(blockedIdentities);
-        if (blockedIdentities.Count == 0)
-        {
-            return 0;
-        }
-        await using var operation = await _gate.EnterAsync(cancellationToken);
-        return await EnforceExecutionRuntimePolicyCoreAsync(
-                blockedIdentities,
-                operation.CancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private async Task<int> EnforceExecutionRuntimePolicyCoreAsync(
+    private async Task<int> StopRuntimeDependentsForRepairAsync(
         IReadOnlyList<ExecutionRuntimeIdentity> blockedIdentities,
         CancellationToken cancellationToken)
     {
@@ -120,9 +107,9 @@ internal sealed partial class InstalledPackageLifecycleService
         var cleanups = new List<Task>(packageIds.Count);
         foreach (var packageId in packageIds)
         {
-            if (_sessions.EnforceExecutionRuntimePolicy(
+            if (_sessions.FaultPackageExecution(
                     packageId,
-                    "The package is blocked by exact execution-runtime lifecycle policy.",
+                    "The package is stopped while its exact execution-runtime content is repaired.",
                     out var cleanupCompletion))
             {
                 faulted++;
@@ -178,7 +165,7 @@ internal sealed partial class InstalledPackageLifecycleService
             return (impact, verification, null, null);
         }
 
-        _ = await EnforceExecutionRuntimePolicyCoreAsync([identity], operationToken)
+        _ = await StopRuntimeDependentsForRepairAsync([identity], operationToken)
             .ConfigureAwait(false);
         var repaired = await repair(operationToken).ConfigureAwait(false);
         if (repaired is null)
@@ -212,7 +199,7 @@ internal sealed partial class InstalledPackageLifecycleService
         var impact = await CaptureExecutionRuntimeImpactAsync(identity, operationToken)
             .ConfigureAwait(false);
         ValidateExecutionRuntimeImpact(impact, expectedImpactFingerprint);
-        _ = await EnforceExecutionRuntimePolicyCoreAsync([identity], operationToken)
+        _ = await StopRuntimeDependentsForRepairAsync([identity], operationToken)
             .ConfigureAwait(false);
         var recovered = await recover(operationToken).ConfigureAwait(false);
         var reload = await LoadPackagesCoreAsync(
@@ -255,16 +242,15 @@ internal sealed partial class InstalledPackageLifecycleService
                 .Append('\n').Append(reference.ContentIdentity)
                 .Append('\n').Append(binding.Role)
                 .Append('\n').Append(binding.Rid)
-                .Append('\n').Append(binding.RuntimeManifestSha256)
-                .Append('\n').Append(binding.RuntimeArtifactSha256)
-                .Append('\n').Append(binding.RuntimeArtifactSize.ToString(CultureInfo.InvariantCulture))
-                .Append('\n').Append(binding.RegistryOrigin)
-                .Append('\n').Append(binding.AcquisitionSource)
-                .Append('\n').Append(binding.SigningKeyId)
-                .Append('\n').Append(binding.TrustStoreGeneration.ToString(CultureInfo.InvariantCulture))
-                .Append('\n').Append(binding.RuntimePolicyRevision.ToString(CultureInfo.InvariantCulture))
-                .Append('\n').Append(binding.RuntimeLifecycleState)
-                .Append('\n').Append(binding.PolicyObservedAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture))
+                .Append('\n').Append(binding.Runtime.SourceId)
+                .Append('\n').Append(binding.Runtime.RuntimeId)
+                .Append('\n').Append(binding.Runtime.VendorVersion)
+                .Append('\n').Append(binding.Runtime.ModuleAbi)
+                .Append('\n').Append(binding.Runtime.VendorChecksumAlgorithm)
+                .Append('\n').Append(binding.Runtime.VendorChecksumDigest)
+                .Append('\n').Append(binding.InstalledArtifact.ArchiveSha256)
+                .Append('\n').Append(binding.InstalledArtifact.ArchiveSize.ToString(CultureInfo.InvariantCulture))
+                .Append('\n').Append(binding.InstalledArtifact.ContentIdentity)
                 .Append('\n').Append(binding.ResolvedAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         }
         var fingerprint = Convert.ToHexString(
@@ -291,11 +277,13 @@ internal sealed partial class InstalledPackageLifecycleService
     private static bool ExecutionRuntimeIdentityMatches(
         InstalledPackageExecutionRuntimeBindingRecord binding,
         ExecutionRuntimeIdentity identity)
-        => string.Equals(binding.RuntimeId, identity.RuntimeId, StringComparison.Ordinal)
-           && string.Equals(binding.RuntimeVersion, identity.Version, StringComparison.Ordinal)
-           && binding.RuntimePackagingRevision == identity.PackagingRevision
+        => string.Equals(binding.Runtime.RuntimeId, identity.RuntimeId, StringComparison.Ordinal)
+           && string.Equals(binding.Runtime.VendorVersion, identity.VendorVersion, StringComparison.Ordinal)
            && string.Equals(binding.Rid, identity.Rid, StringComparison.Ordinal)
-           && string.Equals(binding.ModuleAbi, identity.ModuleAbi, StringComparison.Ordinal);
+           && string.Equals(binding.Runtime.ModuleAbi, identity.ModuleAbi, StringComparison.Ordinal)
+           && binding.Runtime.SourceId == identity.SourceId
+           && binding.Runtime.VendorChecksumAlgorithm == identity.VendorChecksumAlgorithm
+           && string.Equals(binding.Runtime.VendorChecksumDigest, identity.VendorChecksumDigest, StringComparison.Ordinal);
 
     internal async Task<PackageOperationResult> InstallFromRuntimePathAsync(string path, CancellationToken cancellationToken = default)
         => await ExecutePreparedMutationsAsync(
@@ -319,6 +307,7 @@ internal sealed partial class InstalledPackageLifecycleService
         bool preserveDevelopmentOverlays,
         CancellationToken cancellationToken)
     {
+        if (_runtimeActivationUpdates is not null) await _runtimeActivationUpdates.BeforeActivationAsync(cancellationToken);
         await using var operation = await _gate.EnterAsync(cancellationToken);
         return await LoadPackagesCoreAsync(
                 preserveDevelopmentOverlays,
@@ -476,10 +465,13 @@ internal sealed partial class InstalledPackageLifecycleService
         throw new InvalidOperationException("Installed package publication did not complete.");
     }
 
-    public Task<PackageOperationResult> SetEnabledAsync(string packageId, bool enabled, CancellationToken cancellationToken = default)
-        => ExecutePreparedMutationsAsync(
+    public async Task<PackageOperationResult> SetEnabledAsync(string packageId, bool enabled, CancellationToken cancellationToken = default)
+    {
+        if (enabled && _runtimeActivationUpdates is not null) await _runtimeActivationUpdates.BeforeActivationAsync(cancellationToken);
+        return await ExecutePreparedMutationsAsync(
             [new PackageStoreMutation(enabled ? PackageStoreMutationKind.Enable : PackageStoreMutationKind.Disable, packageId)],
             cancellationToken);
+    }
 
     public Task<PackageOperationResult> UninstallAsync(
         string packageId,
@@ -510,60 +502,35 @@ internal sealed partial class InstalledPackageLifecycleService
             request,
             registryUploadMetadataById: null,
             registryExpectedCatalog: null,
-            registryRuntimeRebinds: null,
-            registryRuntimePolicyUpdates: null,
-            registryRuntimePolicyEntries: null,
-            registryRuntimePolicyAuthority: null,
             cancellationToken);
 
     internal Task<PackageStoreStageResult> StageRegistryAsync(
         PackageStoreStageRequest request,
         IReadOnlyDictionary<string, RegistryPackageUploadMetadata> registryUploadMetadataById,
         IReadOnlyList<InstalledPackageRecord> registryExpectedCatalog,
-        IReadOnlyList<PackageExecutionRuntimeRebindMutation> registryRuntimeRebinds,
-        CancellationToken cancellationToken = default)
-        => StageRegistryAsync(
-            request,
-            registryUploadMetadataById,
-            registryExpectedCatalog,
-            registryRuntimeRebinds,
-            registryRuntimePolicyUpdates: [],
-            registryRuntimePolicyEntries: [],
-            registryRuntimePolicyAuthority: null,
-            cancellationToken);
-
-    internal Task<PackageStoreStageResult> StageRegistryAsync(
-        PackageStoreStageRequest request,
-        IReadOnlyDictionary<string, RegistryPackageUploadMetadata> registryUploadMetadataById,
-        IReadOnlyList<InstalledPackageRecord> registryExpectedCatalog,
-        IReadOnlyList<PackageExecutionRuntimeRebindMutation> registryRuntimeRebinds,
-        IReadOnlyList<PackageExecutionRuntimePolicyUpdateMutation> registryRuntimePolicyUpdates,
-        IReadOnlyList<ExecutionRuntimeLifecyclePolicyEntryV1> registryRuntimePolicyEntries,
-        ExecutionRuntimeLifecyclePolicySnapshot? registryRuntimePolicyAuthority,
         CancellationToken cancellationToken = default)
         => StageCoreAsync(
             request,
             registryUploadMetadataById,
             registryExpectedCatalog,
-            registryRuntimeRebinds,
-            registryRuntimePolicyUpdates,
-            registryRuntimePolicyEntries,
-            registryRuntimePolicyAuthority,
             cancellationToken);
 
     private async Task<PackageStoreStageResult> StageCoreAsync(
         PackageStoreStageRequest request,
         IReadOnlyDictionary<string, RegistryPackageUploadMetadata>? registryUploadMetadataById,
         IReadOnlyList<InstalledPackageRecord>? registryExpectedCatalog,
-        IReadOnlyList<PackageExecutionRuntimeRebindMutation>? registryRuntimeRebinds,
-        IReadOnlyList<PackageExecutionRuntimePolicyUpdateMutation>? registryRuntimePolicyUpdates,
-        IReadOnlyList<ExecutionRuntimeLifecyclePolicyEntryV1>? registryRuntimePolicyEntries,
-        ExecutionRuntimeLifecyclePolicySnapshot? registryRuntimePolicyAuthority,
         CancellationToken cancellationToken)
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
         await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
+        if (registryUploadMetadataById is null && _runtimePrerequisites is not null
+            && request.Mutations.Any(value => value.Kind is PackageStoreMutationKind.Install or PackageStoreMutationKind.Upgrade))
+        {
+            var prerequisites = await _runtimePrerequisites.InspectUploadsAsync(request, operationToken);
+            if (!prerequisites.Satisfied)
+                return new PackageStoreStageResult(null, PackageRuntimePrerequisiteService.Blocked(prerequisites), _sessions.State.GetActivePackages());
+        }
         if (_stages.Count >= MaxPendingStages)
         {
             return PackageStoreStageResult.Failed(
@@ -588,14 +555,6 @@ internal sealed partial class InstalledPackageLifecycleService
                 leases,
                 registryUploadMetadataById,
                 operationToken);
-            if (registryRuntimeRebinds is { Count: > 0 })
-            {
-                changes.AddRange(registryRuntimeRebinds);
-            }
-            if (registryRuntimePolicyUpdates is { Count: > 0 })
-            {
-                changes.AddRange(registryRuntimePolicyUpdates);
-            }
             var localBindingAuthority = await CaptureLocalBindingAuthorityAsync(
                     changes,
                     operationToken)
@@ -603,8 +562,6 @@ internal sealed partial class InstalledPackageLifecycleService
             preparation = await _storeCoordinator.PrepareStageAsync(
                 changes,
                 localBindingAuthority,
-                registryRuntimePolicyEntries ?? [],
-                registryRuntimePolicyAuthority,
                 operationToken);
         }
         catch (InvalidDataException exception)
@@ -662,8 +619,7 @@ internal sealed partial class InstalledPackageLifecycleService
                 preparation.Stage.BaseCatalogGeneration,
                 baseSessionGeneration,
                 createdAtUtc,
-                expiresAtUtc,
-                preparation.Stage.LocalRuntimePolicyAuthority);
+                expiresAtUtc);
             _sessions.RegisterStage(
                 preparation.Stage.StageId,
                 baseSessionGeneration,
@@ -685,7 +641,6 @@ internal sealed partial class InstalledPackageLifecycleService
                 sources.ActiveDevOverlays,
                 baseSessionGeneration,
                 preparation.Stage.PreparationSourcePaths,
-                preparation.Stage.RegistryRuntimePolicyAuthority,
                 cancellationToken);
         }
         catch
@@ -771,8 +726,7 @@ internal sealed partial class InstalledPackageLifecycleService
             preparation.Stage.BaseCatalogGeneration,
             baseSessionGeneration,
             candidateCreatedAtUtc,
-            candidateExpiresAtUtc,
-            preparation.Stage.LocalRuntimePolicyAuthority);
+            candidateExpiresAtUtc);
         _sessions.RegisterStage(
             preparation.Stage.StageId,
             baseSessionGeneration + 1,
@@ -1060,38 +1014,11 @@ internal sealed partial class InstalledPackageLifecycleService
                         throw;
                     }
                 }
-                if (stage.LocalRuntimePolicyAuthority is not { } localAuthority)
-                {
-                    try { return await _storeCoordinator.ExecuteUnderPackagePolicyFenceAsync(stageId, operation, operationToken).ConfigureAwait(false); }
-                    catch (PackagePolicyDeniedException) { authorityConfirmationFailed = true; throw; }
-                }
-                if (_runtimeLifecyclePolicies is null)
-                {
-                    authorityConfirmationFailed = true;
-                    throw new InvalidOperationException(
-                        "Local execution-runtime policy authority is unavailable during package store commit.");
-                }
-
-                var operationStarted = false;
                 try
                 {
-                    return await _storeCoordinator.ExecuteUnderPackagePolicyFenceAsync(stageId, policyToken => _runtimeLifecyclePolicies.ExecuteUnderGenerationFenceAsync(
-                            localAuthority.Generation,
-                            localAuthority.InstallationIdentities,
-                            localAuthority.ActivationIdentities,
-                            token =>
-                            {
-                                operationStarted = true;
-                                return operation(token);
-                            },
-                            policyToken), operationToken)
-                        .ConfigureAwait(false);
+                    return await _storeCoordinator.ExecuteUnderPackagePolicyFenceAsync(stageId, operation, operationToken).ConfigureAwait(false);
                 }
-                catch when (!operationStarted)
-                {
-                    authorityConfirmationFailed = true;
-                    throw;
-                }
+                catch (PackagePolicyDeniedException) { authorityConfirmationFailed = true; throw; }
             }
         }
         catch (OperationCanceledException) when (
@@ -1329,6 +1256,11 @@ internal sealed partial class InstalledPackageLifecycleService
             var baseSessionGeneration = _sessions.Generation;
             var currentPackages = _sessions.State.GetActivePackages();
             var sources = _sessions.Sources.Snapshot();
+            if (_runtimePrerequisites is not null && mutations.Any(value => value.Kind is PackageStoreMutationKind.Install or PackageStoreMutationKind.Upgrade))
+            {
+                var prerequisites = await _runtimePrerequisites.InspectLocalAsync(mutations, operationToken);
+                if (!prerequisites.Satisfied) return PackageRuntimePrerequisiteService.Blocked(prerequisites);
+            }
             var localBindingAuthority = await CaptureLocalBindingAuthorityAsync(
                     mutations,
                     operationToken)
@@ -1366,7 +1298,7 @@ internal sealed partial class InstalledPackageLifecycleService
             if (request.Kind is PackageStoreMutationKind.Install or PackageStoreMutationKind.Upgrade)
             {
                 if (string.IsNullOrWhiteSpace(request.UploadId)) throw new InvalidDataException("An upload id is required for package install and upgrade mutations.");
-                var lease = _transfers.AcquireUpload(request.UploadId, RuntimeUploadKind.Package, _sessions.Generation, consume: true)
+                var lease = _transfers.AcquireUpload(request.UploadId, RuntimeUploadKind.Package, _sessions.Generation, consume: true, request.UploadRetention)
                     ?? throw new InvalidDataException("The package upload was not found or belongs to a stale Runtime generation.");
                 leases.Add(lease);
                 archivePath = lease.FilePath;
@@ -1446,8 +1378,7 @@ internal sealed partial class InstalledPackageLifecycleService
         long BaseCatalogGeneration,
         long BaseSessionGeneration,
         DateTimeOffset CreatedAtUtc,
-        DateTimeOffset ExpiresAtUtc,
-        LocalExecutionRuntimePolicyAuthority? LocalRuntimePolicyAuthority);
+        DateTimeOffset ExpiresAtUtc);
 }
 
 internal enum InstalledPackageLifecycleFaultPoint

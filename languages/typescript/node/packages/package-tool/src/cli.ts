@@ -11,6 +11,7 @@ import { collectContractCache } from "./rpc-contract-cache-gc";
 import { DEFAULT_CONTRACT_CACHE } from "./rpc-contract-cache";
 import { packageApiCommand, type PackageApiRequest } from "./rpc-package-commands";
 import { importContractPublication } from "./rpc-publication";
+import { consumerRoles } from "./rpc-contract-lock";
 
 async function main(): Promise<void> {
   const [command, ...rawArguments] = process.argv.slice(2);
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
     const { project, request } = command === "platform" ? parsePlatformApi(argumentsList) : parsePackageApi(argumentsList);
     const result = await packageApiCommand(project, { ...request, ...registryOptions });
     process.stdout.write(result.changed ? "Committed package API lock changes. Run generate/build to refresh outputs.\n" : "Package API lock is unchanged.\n");
+    for (const change of result.roleChanges ?? []) process.stdout.write(`${change.packageId}: consumer roles ${change.before?.join(",") ?? "missing (legacy runtime)"} -> ${change.after.join(",")}\n`);
     for (const artifact of result.lock.packageArtifacts.values()) {
       const consumer = result.lock.packageImports.get(artifact.packageId);
       process.stdout.write(`${artifact.packageId} ${artifact.selectedPackageVersion}; range=${artifact.requestedVersionRange}; prerelease=${artifact.includePrerelease}; presence=${consumer?.presence ?? "provider-only"}; contracts=${artifact.publicContractCount}\n`);
@@ -135,7 +137,7 @@ function parsePlatformApi(args: readonly string[]): { project: string; request: 
 
 function parsePackageApi(args: readonly string[]): { project: string; request: PackageApiRequest } {
   const operation = args[0];
-  if (operation !== "add" && operation !== "update" && operation !== "remove" && operation !== "list" && operation !== "require" && operation !== "unrequire" && operation !== "implement" && operation !== "unimplement") throw new Error("api requires add, update, remove, list, require, unrequire, implement, or unimplement.");
+  if (operation !== "add" && operation !== "update" && operation !== "remove" && operation !== "list" && operation !== "require" && operation !== "unrequire" && operation !== "implement" && operation !== "unimplement" && operation !== "migrate-consumer-roles") throw new Error("api requires add, update, remove, list, require, unrequire, implement, unimplement, or migrate-consumer-roles.");
   const positional: string[] = []; const values = new Map<string, string>(); const seen = new Set<string>(); let prerelease: boolean | undefined;
   for (let index = 1; index < args.length; index++) {
     const argument = args[index]!;
@@ -144,16 +146,17 @@ function parsePackageApi(args: readonly string[]): { project: string; request: P
     if (argument === "--include-prerelease" || argument === "--exclude-prerelease") {
       if (prerelease !== undefined) throw new Error("Prerelease include/exclude flags are mutually exclusive."); prerelease = argument === "--include-prerelease"; continue;
     }
-    if (!["--project", "--cache-root", "--version", "--registry", "--presence", "--local-name", "--candidate", "--platform-catalog"].includes(argument)) throw new Error("Unknown package API option.");
+    if (!["--project", "--cache-root", "--version", "--registry", "--presence", "--local-name", "--candidate", "--platform-catalog", "--consumer-roles"].includes(argument)) throw new Error("Unknown package API option.");
     const value = requiredValue(args, ++index, argument); if (!value.trim()) throw new Error("Package API values must be nonempty."); values.set(argument, value);
   }
   const count = operation === "list" ? 0 : ["require", "unrequire", "implement", "unimplement"].includes(operation) ? 2 : 1;
-  if (operation === "update" ? positional.length > 1 : positional.length !== count) throw new Error("Package API command has missing or extra target arguments.");
+  if (operation === "update" || operation === "migrate-consumer-roles" ? positional.length > 1 : positional.length !== count) throw new Error("Package API command has missing or extra target arguments.");
   const presence = values.get("--presence"); if (presence !== undefined && presence !== "required" && presence !== "optional") throw new Error("Package presence must be exactly required or optional.");
   return { project: resolve(values.get("--project") ?? process.cwd()), request: { operation,
     ...(positional[0] === undefined ? {} : { packageId: positional[0] }), ...(positional[1] === undefined ? {} : { contractId: positional[1] }),
     ...(values.has("--version") ? { versionRange: values.get("--version")! } : {}), ...(values.has("--registry") ? { registryOrigin: values.get("--registry")! } : {}),
     ...(presence === undefined ? {} : { presence }), ...(prerelease === undefined ? {} : { includePrerelease: prerelease }),
+    ...(values.has("--consumer-roles") ? { consumerRoles: consumerRoles(values.get("--consumer-roles")!.split(",")) } : {}),
     ...(values.has("--local-name") ? { localName: values.get("--local-name")! } : {}),
     ...(values.has("--candidate") ? { candidate: resolve(values.get("--candidate")!) } : {}),
     ...(values.has("--platform-catalog") ? { platformCatalog: resolve(values.get("--platform-catalog")!) } : {}),
@@ -196,9 +199,9 @@ function parseRestore(args: readonly string[]): { projectPath: string; options: 
   } };
 }
 
-function parseContracts(args: readonly string[]): { operation: "check" | "accept" | "freeze"; projectPath: string; options: AcceptOptions } {
+function parseContracts(args: readonly string[]): { operation: "check" | "accept" | "freeze" | "migrate-private"; projectPath: string; options: AcceptOptions } {
   const operation = args[0];
-  if (operation !== "check" && operation !== "accept" && operation !== "freeze") throw new Error("contracts requires check, accept, or freeze.");
+  if (operation !== "check" && operation !== "accept" && operation !== "freeze" && operation !== "migrate-private") throw new Error("contracts requires check, accept, freeze, or migrate-private.");
   let key: string | undefined; let project = process.cwd(); let currentVersion: string | undefined; let nextVersion: string | undefined; let acknowledgeBreakingChange = false;
   const seen = new Set<string>();
   for (let index = 1; index < args.length; index++) {
@@ -260,6 +263,7 @@ function requiredValue(argumentsList: readonly string[], index: number, option: 
 }
 
 function help(): void {
+  process.stdout.write("Services: schemaVersion 3 uses services: { module: 'src/services.ts' } (or checked .js). Export defineService definitions; Worker bootstrap and #sunder/api are generated. Private versions follow the full package SemVer and need no Accept/Freeze. Public services retain explicit review.\n\nMigrations: contracts migrate-private [key] --project <root> archives complete eligible legacy private records. api migrate-consumer-roles [package] --project <root> preserves omitted legacy Runtime-only intent; targeted --consumer-roles app|runtime|app,runtime explicitly reviews widening. Add defaults to both; targeted Update preserves intent unless that option is supplied.\n\n");
   process.stdout.write("Development Registry: --development-registry explicitly permits canonical http://localhost[:nondefault-port]/ origins for this invocation, including offline generation/build/pack. Other HTTP hosts and locked-origin overrides remain rejected. HTTPS is the default.\n\n");
   process.stdout.write("Platform providers: platform implement <contract> [--platform-catalog <catalog.json>] [--registry <origin>] [--local-name <key>] | platform update [contract] | platform unimplement <contract> | platform list\nSelect an explicit local catalog for Registry-independent development, or a Registry for published catalogs. Versions follow the coordinated SDK line. Local updates require --platform-catalog; targeted --registry updates can bind a local selection, but cannot override an existing Registry origin.\n\n");
   process.stdout.write("Package APIs: api add <package> --version <range> [--candidate <archive>] [--registry <origin>] [--presence required|optional] | api update [package] | api remove <package> | api list | api require|unrequire|implement|unimplement <package> <contract>\nLocal candidate selection requires no Registry. Use --platform-catalog with candidates that import Core APIs. Use --project, --cache-root, and explicit --include-prerelease/--exclude-prerelease as applicable. Add/implement support --local-name for the generated facade/provider key. Ordinary generation/build is offline; SUNDER_CONTRACT_CACHE selects a nondefault build cache.\n\n");

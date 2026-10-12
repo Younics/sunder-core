@@ -8,8 +8,8 @@ namespace Sunder.Runtime.Host.Tests;
 
 [Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class CrossLanguageWorkerRuntimeHostTests(
-    SignedCurrentRidExecutionRuntimeFixture executionRuntimes)
-    : IClassFixture<SignedCurrentRidExecutionRuntimeFixture>
+    OfficialRuntimeFixture executionRuntimes)
+    : IClassFixture<OfficialRuntimeFixture>
 {
     [ExternalArtifactFact(
         "SUNDER_REQUIRE_NODE_MODULE_INTEROP",
@@ -23,15 +23,8 @@ public sealed class CrossLanguageWorkerRuntimeHostTests(
         var (archivePath, _) = configured.Value;
         var node = Node24Availability.Current;
         Assert.True(node.IsAvailable, node.UnavailableReason);
-        var nodeReceipt = await executionRuntimes.EnsureNodeAsync(
-            node.Version!,
-            packagingRevision: 1,
-            node.ExecutablePath!);
-        await executionRuntimes.ObserveSupportedAsync(nodeReceipt);
-        var dotnetReceipt = await executionRuntimes.EnsureDotNetAsync(
-            CurrentRidRuntimeHostTestSupport.GetCurrentDotNetVersion(),
-            packagingRevision: 1);
-        await executionRuntimes.ObserveSupportedAsync(dotnetReceipt);
+        var nodeReceipt = await executionRuntimes.EnsureNodeAsync("24.21.0");
+        var dotnetReceipt = await executionRuntimes.EnsureDotNetAsync("10.0.12");
         using var corpus = ReadCorpus();
         var interop = corpus.RootElement.GetProperty("interop");
         var nodePackageId = interop.GetProperty("nodeProviderPackageId").GetString()!;
@@ -128,15 +121,8 @@ public sealed class CrossLanguageWorkerRuntimeHostTests(
         var (_, leafPath) = configured.Value;
         var node = Node24Availability.Current;
         Assert.True(node.IsAvailable, node.UnavailableReason);
-        var nodeReceipt = await executionRuntimes.EnsureNodeAsync(
-            node.Version!,
-            packagingRevision: 1,
-            node.ExecutablePath!);
-        await executionRuntimes.ObserveSupportedAsync(nodeReceipt);
-        var dotnetReceipt = await executionRuntimes.EnsureDotNetAsync(
-            CurrentRidRuntimeHostTestSupport.GetCurrentDotNetVersion(),
-            packagingRevision: 1);
-        await executionRuntimes.ObserveSupportedAsync(dotnetReceipt);
+        var nodeReceipt = await executionRuntimes.EnsureNodeAsync("24.21.0");
+        var dotnetReceipt = await executionRuntimes.EnsureDotNetAsync("10.0.12");
         using var corpus = ReadCorpus();
         var interop = corpus.RootElement.GetProperty("interop");
         var nodeCallerPackageId = interop.GetProperty("nodeCallerPackageId").GetString()!;

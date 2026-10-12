@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -39,8 +38,7 @@ internal sealed partial class RegistryActivePolicyClient(RegistryHttpClient http
         var origin = Origin(registryOrigin);
         var request = subjects with { Nonce = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(RegistryPolicyLimits.NonceBytes)),
             Packages = subjects.Packages.OrderBy(PackageKey, StringComparer.Ordinal).ToArray(),
-            PlatformCatalogs = subjects.PlatformCatalogs.OrderBy(PlatformKey, StringComparer.Ordinal).ToArray(),
-            Runtimes = subjects.Runtimes.OrderBy(RuntimeKey, StringComparer.Ordinal).ToArray() };
+            PlatformCatalogs = subjects.PlatformCatalogs.OrderBy(PlatformKey, StringComparer.Ordinal).ToArray() };
         ValidateRequest(request);
         var started = clock.Read(); ValidateClock(started);
         var generation = policies.BeginRefresh(origin, started);
@@ -82,13 +80,11 @@ internal sealed partial class RegistryActivePolicyClient(RegistryHttpClient http
         ValidateRequest(request);
         Require(response.RegistryOrigin == origin && response.Nonce == request.Nonce && response.ObservedAtUtc.Offset == TimeSpan.Zero
             && response.ValidUntilUtc.Offset == TimeSpan.Zero && response.ValidUntilUtc - response.ObservedAtUtc == TimeSpan.FromSeconds(RuntimePolicyTiming.LeaseSeconds), "Policy origin, nonce or fixed lease interval differs.");
-        Require(response.PackagePolicy.Revision > 0 && Hash(response.PackagePolicy.Fingerprint) && response.RuntimePolicyRevision > 0
+        Require(response.PackagePolicy.Revision > 0 && Hash(response.PackagePolicy.Fingerprint)
             && response.Checkpoint.Sequence > 0 && Hash(response.Checkpoint.Digest) && response.Checkpoint.TopologyGeneration > 0 && Hash(response.Checkpoint.TopologyFingerprint), "Policy watermarks are incomplete.");
-        Require(request.Packages.SequenceEqual(response.Packages.Select(value => value.Package)) && request.PlatformCatalogs.SequenceEqual(response.PlatformCatalogs.Select(value => value.Catalog))
-            && request.Runtimes.SequenceEqual(response.Runtimes.Select(value => value.Subject)), "Policy response does not cover exactly the requested subjects.");
+        Require(request.Packages.SequenceEqual(response.Packages.Select(value => value.Package)) && request.PlatformCatalogs.SequenceEqual(response.PlatformCatalogs.Select(value => value.Catalog)), "Policy response does not cover exactly the requested subjects.");
         Require(request.MinimumPackagePolicy is null || response.PackagePolicy.Revision >= request.MinimumPackagePolicy.Revision
             && (response.PackagePolicy.Revision != request.MinimumPackagePolicy.Revision || response.PackagePolicy.Fingerprint == request.MinimumPackagePolicy.Fingerprint), "Package policy rolled back or conflicted.");
-        Require(response.RuntimePolicyRevision >= request.MinimumRuntimePolicyRevision, "Runtime policy rolled back.");
         if (request.MinimumCheckpoint is { } minimum)
             Require(response.Checkpoint.Sequence >= minimum.Sequence && response.Checkpoint.TopologyGeneration >= minimum.TopologyGeneration
                 && (response.Checkpoint.Sequence != minimum.Sequence || response.Checkpoint == minimum)
@@ -106,7 +102,6 @@ internal sealed partial class RegistryActivePolicyClient(RegistryHttpClient http
                 Require(package.Disposition == (denied ? "Denied" : missing ? "PolicyRequired" : "Allowed"), "Package permission contradicts its platform dependencies.");
             }
         }
-        foreach (var runtime in response.Runtimes) ValidateRuntime(runtime, response.ObservedAtUtc);
     }
 
     internal static string Origin(string value)
@@ -117,8 +112,6 @@ internal sealed partial class RegistryActivePolicyClient(RegistryHttpClient http
     }
     internal static string PackageKey(RegistryPackageVersionIdentity value) => value.PackageId + "\0" + value.Version + "\0" + value.PackageContentIdentity;
     internal static string PlatformKey(RegistryPlatformCatalogIdentity value) => value.AuthorityId + "\0" + value.ReleaseVersion + "\0" + value.CatalogSha256;
-    internal static string RuntimeKey(RegistryRuntimePolicySubject value) => value.Runtime.RuntimeId + "\0" + value.Runtime.Version + "\0" + value.Runtime.PackagingRevision.ToString(CultureInfo.InvariantCulture)
-        + "\0" + value.Runtime.Rid + "\0" + value.Runtime.ModuleAbi + "\0" + value.ManifestSha256 + "\0" + value.ArtifactSha256;
     internal static bool Hash(string? value) => Hex(value, 64);
     internal static bool Hex(string? value, int length) => value?.Length == length && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
     internal static void ValidateClock(PolicyClockReading value) => Require(value.BootSessionId is { Length: > 0 and <= 128 }

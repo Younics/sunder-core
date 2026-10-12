@@ -45,7 +45,6 @@ concurrency:
 
 env:
   DOTNET_VERSION: "10.0.100"
-  PRODUCTION_LOCK: eng/execution-runtimes/production.lock.json
 
 jobs:
   verify-publication:
@@ -75,42 +74,6 @@ jobs:
       SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_LINUX_ARM64: ${{ vars.SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_LINUX_ARM64 }}
       SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_OSX_X64: ${{ vars.SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_OSX_X64 }}
       SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_OSX_ARM64: ${{ vars.SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_OSX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_SOURCES_APPROVED: ${{ vars.SUNDER_EXECUTION_RUNTIME_SOURCES_APPROVED }}
-      SUNDER_EXECUTION_RUNTIME_SOURCES_APPROVAL_REFERENCE: ${{ vars.SUNDER_EXECUTION_RUNTIME_SOURCES_APPROVAL_REFERENCE }}
-      SUNDER_EXECUTION_RUNTIME_SIGNERS_APPROVED: ${{ vars.SUNDER_EXECUTION_RUNTIME_SIGNERS_APPROVED }}
-      SUNDER_EXECUTION_RUNTIME_SIGNERS_APPROVAL_REFERENCE: ${{ vars.SUNDER_EXECUTION_RUNTIME_SIGNERS_APPROVAL_REFERENCE }}
-      SUNDER_EXECUTION_RUNTIME_RUNNERS_APPROVED: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNERS_APPROVED }}
-      SUNDER_EXECUTION_RUNTIME_RUNNERS_APPROVAL_REFERENCE: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNERS_APPROVAL_REFERENCE }}
-      SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVED: ${{ vars.SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVED }}
-      SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVAL_REFERENCE: ${{ vars.SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVAL_REFERENCE }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_SIGNER_ADAPTER: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_SIGNER_ADAPTER }}
-      SUNDER_EXECUTION_RUNTIME_ATTESTATION_SIGNER_ADAPTER: ${{ vars.SUNDER_EXECUTION_RUNTIME_ATTESTATION_SIGNER_ADAPTER }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_PUBLIC_KEYS: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_PUBLIC_KEYS }}
-      SUNDER_EXECUTION_RUNTIME_ATTESTATION_PUBLIC_KEYS: ${{ vars.SUNDER_EXECUTION_RUNTIME_ATTESTATION_PUBLIC_KEYS }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_WIN_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_WIN_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_WIN_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_WIN_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_LINUX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_LINUX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_LINUX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_LINUX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_OSX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_OSX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_OSX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_OSX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_WIN_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_WIN_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_WIN_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_WIN_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_LINUX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_LINUX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_LINUX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_LINUX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_OSX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_OSX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_OSX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_OSX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_WIN_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_WIN_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_WIN_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_WIN_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_LINUX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_LINUX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_LINUX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_LINUX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_OSX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_OSX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_OSX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_OSX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_WIN_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_WIN_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_WIN_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_WIN_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_LINUX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_LINUX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_LINUX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_LINUX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_OSX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_OSX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_OSX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_OSX_ARM64 }}
     steps:
       - name: Require protected main, exact coordinates, and external approval
         shell: bash
@@ -170,19 +133,10 @@ jobs:
           path: release-source
           persist-credentials: false
 
-      - name: Setup .NET for production lock validation
+      - name: Setup .NET for component acceptance
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Restore the credential-free runtime validator
-        working-directory: acceptance-policy
-        run: dotnet restore languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/Sunder.ExecutionRuntime.Build.csproj --locked-mode
-
-      - name: Require approved production lock, signers, and exact native runners
-        working-directory: acceptance-policy
-        shell: bash
-        run: bash scripts/execution-runtimes/native-release-preflight.sh --lock "$PRODUCTION_LOCK"
 
       - name: Download exact immutable publication evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -229,45 +183,33 @@ jobs:
       matrix:
         include:
           - rid: win-x64
-            runner_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_WIN_X64
-            profile_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_WIN_X64
-            release_driver_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_WIN_X64
-            release_driver_sha_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_WIN_X64
+            runner_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_RUNNER_WIN_X64
+            profile_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_PROFILE_WIN_X64
             acceptance_driver_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_WIN_X64
             acceptance_driver_sha_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_WIN_X64
           - rid: win-arm64
-            runner_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_WIN_ARM64
-            profile_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_WIN_ARM64
-            release_driver_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_WIN_ARM64
-            release_driver_sha_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_WIN_ARM64
+            runner_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_RUNNER_WIN_ARM64
+            profile_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_PROFILE_WIN_ARM64
             acceptance_driver_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_WIN_ARM64
             acceptance_driver_sha_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_WIN_ARM64
           - rid: linux-x64
-            runner_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_LINUX_X64
-            profile_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_LINUX_X64
-            release_driver_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_LINUX_X64
-            release_driver_sha_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_LINUX_X64
+            runner_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_RUNNER_LINUX_X64
+            profile_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_PROFILE_LINUX_X64
             acceptance_driver_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_LINUX_X64
             acceptance_driver_sha_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_LINUX_X64
           - rid: linux-arm64
-            runner_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_LINUX_ARM64
-            profile_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_LINUX_ARM64
-            release_driver_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_LINUX_ARM64
-            release_driver_sha_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_LINUX_ARM64
+            runner_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_RUNNER_LINUX_ARM64
+            profile_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_PROFILE_LINUX_ARM64
             acceptance_driver_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_LINUX_ARM64
             acceptance_driver_sha_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_LINUX_ARM64
           - rid: osx-x64
-            runner_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_OSX_X64
-            profile_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_OSX_X64
-            release_driver_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_OSX_X64
-            release_driver_sha_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_OSX_X64
+            runner_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_RUNNER_OSX_X64
+            profile_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_PROFILE_OSX_X64
             acceptance_driver_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_OSX_X64
             acceptance_driver_sha_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_OSX_X64
           - rid: osx-arm64
-            runner_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_OSX_ARM64
-            profile_variable: SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_OSX_ARM64
-            release_driver_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_OSX_ARM64
-            release_driver_sha_variable: SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_OSX_ARM64
+            runner_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_RUNNER_OSX_ARM64
+            profile_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_PROFILE_OSX_ARM64
             acceptance_driver_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_OSX_ARM64
             acceptance_driver_sha_variable: SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256_OSX_ARM64
     env:
@@ -275,44 +217,6 @@ jobs:
       RUNNER_PROFILE: ${{ vars[matrix.profile_variable] }}
       SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER: ${{ vars[matrix.acceptance_driver_variable] }}
       SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256: ${{ vars[matrix.acceptance_driver_sha_variable] }}
-      SUNDER_EXECUTION_RUNTIME_SOURCES_APPROVED: ${{ vars.SUNDER_EXECUTION_RUNTIME_SOURCES_APPROVED }}
-      SUNDER_EXECUTION_RUNTIME_SOURCES_APPROVAL_REFERENCE: ${{ vars.SUNDER_EXECUTION_RUNTIME_SOURCES_APPROVAL_REFERENCE }}
-      SUNDER_EXECUTION_RUNTIME_SIGNERS_APPROVED: ${{ vars.SUNDER_EXECUTION_RUNTIME_SIGNERS_APPROVED }}
-      SUNDER_EXECUTION_RUNTIME_SIGNERS_APPROVAL_REFERENCE: ${{ vars.SUNDER_EXECUTION_RUNTIME_SIGNERS_APPROVAL_REFERENCE }}
-      SUNDER_EXECUTION_RUNTIME_RUNNERS_APPROVED: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNERS_APPROVED }}
-      SUNDER_EXECUTION_RUNTIME_RUNNERS_APPROVAL_REFERENCE: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNERS_APPROVAL_REFERENCE }}
-      SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVED: ${{ vars.SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVED }}
-      SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVAL_REFERENCE: ${{ vars.SUNDER_EXECUTION_RUNTIME_PUBLICATION_APPROVAL_REFERENCE }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_SIGNER_ADAPTER: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_SIGNER_ADAPTER }}
-      SUNDER_EXECUTION_RUNTIME_ATTESTATION_SIGNER_ADAPTER: ${{ vars.SUNDER_EXECUTION_RUNTIME_ATTESTATION_SIGNER_ADAPTER }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER: ${{ vars[matrix.release_driver_variable] }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256: ${{ vars[matrix.release_driver_sha_variable] }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_PUBLIC_KEYS: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_PUBLIC_KEYS }}
-      SUNDER_EXECUTION_RUNTIME_ATTESTATION_PUBLIC_KEYS: ${{ vars.SUNDER_EXECUTION_RUNTIME_ATTESTATION_PUBLIC_KEYS }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_WIN_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_WIN_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_WIN_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_WIN_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_LINUX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_LINUX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_LINUX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_LINUX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_OSX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_OSX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_OSX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_OSX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_WIN_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_WIN_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_WIN_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_WIN_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_LINUX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_LINUX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_LINUX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_LINUX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_OSX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_OSX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_OSX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RUNNER_PROFILE_OSX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_WIN_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_WIN_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_WIN_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_WIN_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_LINUX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_LINUX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_LINUX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_LINUX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_OSX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_OSX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_OSX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_OSX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_WIN_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_WIN_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_WIN_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_WIN_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_LINUX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_LINUX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_LINUX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_LINUX_ARM64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_OSX_X64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_OSX_X64 }}
-      SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_OSX_ARM64: ${{ vars.SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256_OSX_ARM64 }}
     steps:
       - name: Checkout trusted acceptance policy
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -321,91 +225,16 @@ jobs:
           path: acceptance-policy
           persist-credentials: false
 
-      - name: Setup .NET for locked runtime production
+      - name: Setup .NET for production scenarios
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Restore the credential-free runtime validator
-        working-directory: acceptance-policy
-        run: dotnet restore languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/Sunder.ExecutionRuntime.Build.csproj --locked-mode
 
       - name: Download the credential-free publication handoff verified by the gate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: sunder-core-production-publication-${{ github.run_attempt }}
           path: publication-evidence
-
-      - name: Build, sign, attest, smoke, and reproduce both locked runtimes
-        working-directory: acceptance-policy
-        shell: bash
-        env:
-          RID: ${{ matrix.rid }}
-        run: |
-          set -euo pipefail
-          first="$RUNNER_TEMP/sunder-runtime-first-$RID"
-          second="$RUNNER_TEMP/sunder-runtime-second-$RID"
-          first_receipt="$RUNNER_TEMP/sunder-runtime-first-$RID.json"
-          second_receipt="$RUNNER_TEMP/sunder-runtime-second-$RID.json"
-          bash scripts/execution-runtimes/native-release.sh \
-            --lock "$PRODUCTION_LOCK" --rid "$RID" --runner-profile "$RUNNER_PROFILE" \
-            --output "$first" --receipt "$first_receipt"
-          bash scripts/execution-runtimes/native-release.sh \
-            --lock "$PRODUCTION_LOCK" --rid "$RID" --runner-profile "$RUNNER_PROFILE" \
-            --output "$second" --receipt "$second_receipt"
-
-          hash_file() {
-            if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1
-            else shasum -a 256 "$1" | cut -d ' ' -f 1; fi
-          }
-          archive_manifest() {
-            local directory="$1"
-            local files=()
-            local result='[]'
-            shopt -s nullglob
-            files=("$directory"/*.sunderruntime)
-            [[ ${#files[@]} -eq 2 ]]
-            for path in "${files[@]}"; do
-              result="$(jq -cn --argjson files "$result" --arg path "$(basename "$path")" \
-                --arg sha256 "$(hash_file "$path")" --argjson size "$(wc -c < "$path" | tr -d '[:space:]')" \
-                '$files + [{path:$path,sha256:$sha256,size:$size}] | sort_by(.path)')"
-            done
-            printf '%s' "$result"
-          }
-
-          first_manifest="$(archive_manifest "$first")"
-          second_manifest="$(archive_manifest "$second")"
-          [[ "$first_manifest" == "$second_manifest" ]] \
-            || { echo "Locked runtime archives were not reproducible on $RID." >&2; exit 1; }
-          cmp "$first_receipt" "$second_receipt"
-          while IFS= read -r name; do cmp "$first/$name" "$second/$name"; done \
-            < <(jq -r '.[].path' <<< "$first_manifest")
-
-          mkdir -p "$GITHUB_WORKSPACE/native-output"
-          final_native_receipt="$GITHUB_WORKSPACE/native-output/runtime-native-output-$RID.json"
-          cp "$first_receipt" "$final_native_receipt"
-          lock_sha="$(hash_file "$PRODUCTION_LOCK")"
-          jq -n \
-            --arg repository "$GITHUB_REPOSITORY" --arg rid "$RID" --arg runner_profile "$RUNNER_PROFILE" \
-            --arg workflow_sha "$GITHUB_SHA" --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
-            --arg lock_sha "$lock_sha" \
-            --arg release_driver_sha "$SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256" \
-            --arg native_receipt_sha "$(hash_file "$final_native_receipt")" \
-            --argjson first "$first_manifest" --argjson second "$second_manifest" '
-              {
-                schemaVersion: 1,
-                kind: "https://sunderapp.io/acceptance/runtime-reproducibility/v1",
-                repository: $repository,
-                invocation: {workflowSha:$workflow_sha,runId:$run_id,runAttempt:$run_attempt},
-                rid: $rid,
-                runnerProfile: $runner_profile,
-                releaseDriverSha256: $release_driver_sha,
-                nativeOutputReceiptSha256: $native_receipt_sha,
-                runtimeLockSha256: $lock_sha,
-                firstBuild: $first,
-                secondBuild: $second
-              }
-            ' > "$GITHUB_WORKSPACE/native-output/runtime-reproducibility-$RID.json"
 
       - name: Run approved external production scenarios
         working-directory: acceptance-policy
@@ -415,6 +244,8 @@ jobs:
         run: |
           set -euo pipefail
           driver="$SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER"
+          [[ -n "$RUNNER_PROFILE" ]] || { echo "A matching native acceptance runner profile is required." >&2; exit 1; }
+          mkdir -p "$GITHUB_WORKSPACE/native-output"
           [[ -f "$driver" && -x "$driver" && ! -L "$driver" ]] \
             || { echo "Approved Core production acceptance driver is unavailable: $driver" >&2; exit 1; }
           [[ "$SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256" =~ ^[0-9a-f]{64}$ ]] \
@@ -452,11 +283,6 @@ jobs:
             --driver-sha256 "$SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256" \
             --rid "$RID" \
             --runner-profile "$RUNNER_PROFILE" \
-            --runtime-lock "$PRODUCTION_LOCK" \
-            --runtime-first "$RUNNER_TEMP/sunder-runtime-first-$RID" \
-            --runtime-second "$RUNNER_TEMP/sunder-runtime-second-$RID" \
-            --runtime-native-receipt "$GITHUB_WORKSPACE/native-output/runtime-native-output-$RID.json" \
-            --runtime-reproducibility "$GITHUB_WORKSPACE/native-output/runtime-reproducibility-$RID.json" \
             --publication-evidence "$GITHUB_WORKSPACE/publication-evidence" \
             --registry-api "$REGISTRY_API_URL" \
             --output "$receipt"
@@ -465,7 +291,7 @@ jobs:
             || { echo "Approved Core production acceptance driver changed during execution." >&2; exit 1; }
           [[ -f "$receipt" && ! -L "$receipt" && -s "$receipt" ]]
 
-      - name: Validate native receipt against the exact lock and invocation
+      - name: Validate native Host installation evidence and exact invocation
         shell: bash
         env:
           COMPONENT: ${{ inputs.component }}
@@ -482,19 +308,15 @@ jobs:
             else shasum -a 256 "$1" | cut -d ' ' -f 1; fi
           }
           receipt="native-output/core-production-$RID.json"
-          native_receipt="native-output/runtime-native-output-$RID.json"
-          reproduction="native-output/runtime-reproducibility-$RID.json"
-          lock="acceptance-policy/$PRODUCTION_LOCK"
           required_checks="$(jq -cn --arg component "$COMPONENT" '[
             "released-byte-provenance", "production-install", "production-update",
-            "production-recovery", "production-migration", ($component + "-production-path"),
-            "runtime-lock", "runtime-release-signature", "native-attestation",
-            "ambient-runtime-isolation", "runtime-reproducibility",
-            "registry-storage-and-baseline", "runtime-release-set-promotion",
+            "production-recovery", ($component + "-production-path"),
+            "official-runtime-install-launch", "official-runtime-source-checksum",
+            "official-runtime-platform-prerequisites", "ambient-runtime-isolation",
+            "registry-storage-and-baseline",
             "dotnet-worker-production-path", "node-worker-production-path", "offline-runtime-path",
             "runtime-corruption-recovery", "shared-runtime-deduplication", "side-by-side-runtime-selection",
-            "runtime-rebind-rollback", "runtime-lifecycle-policy", "transaction-recovery-and-gc",
-            "offline-import-policy", "runtime-key-rotation", "archive-admission-security",
+            "runtime-rebind-rollback", "transaction-recovery-and-gc", "archive-admission-security",
             "registry-network-security", "host-process-security", "performance-acceptance"
           ]')"
           jq -e \
@@ -504,25 +326,11 @@ jobs:
             --arg workflow_sha "$GITHUB_SHA" --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg rid "$RID" --arg runner_profile "$RUNNER_PROFILE" \
             --arg driver_sha "$SUNDER_CORE_PRODUCTION_ACCEPTANCE_DRIVER_SHA256" \
-            --arg release_driver_sha "$SUNDER_EXECUTION_RUNTIME_RELEASE_DRIVER_SHA256" \
-            --arg lock_sha "$(hash_file "$lock")" --arg reproduction_sha "$(hash_file "$reproduction")" \
-            --arg native_receipt_sha "$(hash_file "$native_receipt")" \
-            --argjson required_checks "$required_checks" --slurpfile lock "$lock" \
-            --slurpfile native_receipt "$native_receipt" --slurpfile reproduction "$reproduction" '
-              ($lock[0].entries | map(select(.rid == $rid)) | map({
-                runtimeId:.id, version, packagingRevision, rid,
-                moduleAbi:.profile.moduleAbi, workerProtocol:.profile.workerProtocol,
-                minimumHostTrustGeneration, releaseSigningKeyId:.trust.releaseSigningKeyId,
-                nativeAttestationKeyId:.trust.attestationSigningKeyId
-              }) | sort_by(.runtimeId)) as $locked
-              | ([.runtimeArtifacts[] | {
-                  runtimeId, version, packagingRevision, rid, moduleAbi, workerProtocol,
-                  minimumHostTrustGeneration, releaseSigningKeyId, nativeAttestationKeyId
-                }] | sort_by(.runtimeId)) as $reported
-              | ([.runtimeArtifacts[] | {path:.archiveFile,sha256:.archiveSha256,size:.archiveSize}] | sort_by(.path)) as $archives
-              | ([.checks[].id] | sort) as $check_ids
+            --argjson required_checks "$required_checks" '
+              ([.checks[].id] | sort) as $check_ids
               | ([.evidence[].id] | sort) as $evidence_ids
               | .schemaVersion == 1
+              and keys == ["checks","decision","evidence","invocation","kind","release","rid","runnerProfile","runtimeInstallations","schemaVersion"]
               and .kind == "https://sunderapp.io/acceptance/core-native/v1"
               and .decision == "accepted"
               and .release == {
@@ -534,26 +342,6 @@ jobs:
                 workflowSha:$workflow_sha,runId:$run_id,runAttempt:$run_attempt,driverSha256:$driver_sha
               }
               and .rid == $rid and .runnerProfile == $runner_profile
-              and .runtimeLockSha256 == $lock_sha and .reproducibilitySha256 == $reproduction_sha
-              and $reproduction[0].releaseDriverSha256 == $release_driver_sha
-              and $reproduction[0].nativeOutputReceiptSha256 == $native_receipt_sha
-              and $native_receipt[0].schemaVersion == 1
-              and $native_receipt[0].kind == "https://sunderapp.io/acceptance/runtime-native-output/v1"
-              and $native_receipt[0].runtimeLockSha256 == $lock_sha
-              and $native_receipt[0].rid == $rid
-              and $native_receipt[0].releaseDriverSha256 == $release_driver_sha
-              and ([ $native_receipt[0].artifacts[] | {
-                runtimeId,version,packagingRevision,rid,moduleAbi,workerProtocol,
-                minimumHostTrustGeneration,releaseSigningKeyId,nativeAttestationKeyId
-              }] | sort_by(.runtimeId)) == $reported
-              and ([ $native_receipt[0].artifacts[] | {path:.archiveFile,sha256:.archiveSha256,size:.archiveSize}] | sort_by(.path)) == $archives
-              and $reported == $locked
-              and $archives == $reproduction[0].firstBuild
-              and $reproduction[0].firstBuild == $reproduction[0].secondBuild
-              and all(.runtimeArtifacts[];
-                .releaseSignatureVerified == true and .nativeAttestationVerified == true
-                and .platformAuthenticityVerified == true and .launcherSmokePassed == true
-                and .workerSmokePassed == true and .ambientRuntimeCleared == true)
               and (.checks | type == "array" and length >= ($required_checks | length))
               and ([.checks[].id] | length) == ($check_ids | unique | length)
               and ($required_checks | all(. as $id | $check_ids | index($id) != null))
@@ -565,8 +353,9 @@ jobs:
                 and (.sha256 | test("^[0-9a-f]{64}$")) and (.size | type == "number" and floor == . and . > 0))
               and ([.checks[].evidenceIds[]] | unique | sort) == $evidence_ids
             ' "$receipt" >/dev/null
+          python3 -B acceptance-policy/scripts/release/official_runtime_evidence.py "$receipt" --rid "$RID"
 
-      - name: Upload exact native acceptance and reproducibility receipts
+      - name: Upload exact native acceptance with Host source evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sunder-core-production-native-${{ matrix.rid }}-${{ github.run_attempt }}
@@ -640,10 +429,8 @@ jobs:
           rids=(win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64)
           for rid in "${rids[@]}"; do
             test -f "native-input/core-production-$rid.json"
-            test -f "native-input/runtime-native-output-$rid.json"
-            test -f "native-input/runtime-reproducibility-$rid.json"
           done
-          test "$(find native-input -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" = 18
+          test "$(find native-input -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" = 6
           test -z "$(find native-input -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
           jq -s -e \
             --arg component "${{ inputs.component }}" --argjson release_id "${{ inputs.release_id }}" \
@@ -666,31 +453,8 @@ jobs:
                 })
               and all(.[]; (.invocation.driverSha256 | test("^[0-9a-f]{64}$")))
             ' native-input/core-production-*.json >/dev/null
-          jq -s -e \
-            --arg workflow_sha "$GITHUB_SHA" --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" '
-              length == 6
-              and ([.[].rid] | sort) == ["linux-arm64","linux-x64","osx-arm64","osx-x64","win-arm64","win-x64"]
-              and all(.[]; .repository == "Younics/sunder-core"
-                and .invocation == {workflowSha:$workflow_sha,runId:$run_id,runAttempt:$run_attempt}
-                and (.releaseDriverSha256 | test("^[0-9a-f]{64}$"))
-                and (.nativeOutputReceiptSha256 | test("^[0-9a-f]{64}$")))
-            ' native-input/runtime-reproducibility-*.json >/dev/null
           for rid in "${rids[@]}"; do
-            native_receipt="native-input/runtime-native-output-$rid.json"
-            reproduction="native-input/runtime-reproducibility-$rid.json"
-            jq -e \
-              --arg rid "$rid" \
-              --arg receipt_sha "$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$native_receipt" | cut -d ' ' -f 1; else shasum -a 256 "$native_receipt" | cut -d ' ' -f 1; fi)" \
-              --slurpfile native_receipt "$native_receipt" '
-                .rid == $rid
-                and .nativeOutputReceiptSha256 == $receipt_sha
-                and .releaseDriverSha256 == $native_receipt[0].releaseDriverSha256
-                and .runtimeLockSha256 == $native_receipt[0].runtimeLockSha256
-                and $native_receipt[0].schemaVersion == 1
-                and $native_receipt[0].kind == "https://sunderapp.io/acceptance/runtime-native-output/v1"
-                and $native_receipt[0].rid == $rid
-                and ($native_receipt[0].artifacts | length) == 2
-              ' "$reproduction" >/dev/null
+            python3 -B acceptance-policy/scripts/release/official_runtime_evidence.py "native-input/core-production-$rid.json" --rid "$rid"
           done
 
       - name: Assemble only externally proven acceptance evidence
@@ -734,7 +498,6 @@ jobs:
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --coordinator-sha256 "$SUNDER_CORE_PRODUCTION_ACCEPTANCE_COORDINATOR_SHA256" \
-            --runtime-lock "$GITHUB_WORKSPACE/acceptance-policy/$PRODUCTION_LOCK" \
             --native-evidence "$GITHUB_WORKSPACE/native-input" \
             --publication-evidence "$GITHUB_WORKSPACE/publication-evidence" \
             --output "$GITHUB_WORKSPACE/production-acceptance"

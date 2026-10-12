@@ -129,7 +129,7 @@ public interface IRuntimeRegistryAuthClient : IRuntimeClient
     Task<RuntimeRegistryAuthStatus> LogoutRegistryAsync(string registryOrigin, CancellationToken cancellationToken = default);
 }
 
-public interface IRuntimeRegistryPackageClient : IRuntimeClient
+public interface IRuntimeRegistryPackageClient : IRuntimePackageRuntimePrerequisiteClient
 {
     Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default);
     Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default);
@@ -153,6 +153,7 @@ public interface IRuntimeShellClient :
     IRuntimePackageUiClient;
 
 public interface IRuntimePackageChangeClient :
+    IRuntimePackageUploadRetentionClient,
     IRuntimeContentTransferClient,
     IRuntimePackageStoreClient,
     IRuntimeRegistryPackageClient;
@@ -179,6 +180,7 @@ public interface IRuntimeStacksClient :
     IRuntimeRegistryStackClient;
 
 public interface IRuntimeApiClient :
+    IRuntimeExecutionRuntimeManagementClient,
     IRuntimeStartupClient,
     IRuntimeConnectionClient,
     IRuntimeSnapshotClient,

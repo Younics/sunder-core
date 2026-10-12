@@ -8,22 +8,18 @@ namespace Sunder.Runtime.Host.Tests;
 
 [Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class GeneratedTemplateRuntimeHostSmokeTests(
-    SignedCurrentRidExecutionRuntimeFixture executionRuntimes)
-    : IClassFixture<SignedCurrentRidExecutionRuntimeFixture>
+    OfficialRuntimeFixture executionRuntimes)
+    : IClassFixture<OfficialRuntimeFixture>
 {
     [ExternalArtifactFact(
         "SUNDER_REQUIRE_NODE_TEMPLATE_HOST_SMOKE",
         "SUNDER_NODE_TEMPLATE_DEV_PATH")]
     [Trait("Category", "ExternalArtifact")]
-    public async Task GeneratedNodeTemplate_ActivatesThroughSignedRuntimeHost()
+    public async Task GeneratedNodeTemplate_ActivatesThroughOfficialRuntimeHost()
     {
         var node = Node24Availability.Current;
         Assert.True(node.IsAvailable, node.UnavailableReason);
-        var receipt = await executionRuntimes.EnsureNodeAsync(
-            node.Version!,
-            packagingRevision: 1,
-            node.ExecutablePath!);
-        await executionRuntimes.ObserveSupportedAsync(receipt);
+        var receipt = await executionRuntimes.EnsureNodeAsync("24.21.0");
 
         await RunSmokeAsync(
             RequiredDirectory("SUNDER_NODE_TEMPLATE_DEV_PATH"),
@@ -35,12 +31,9 @@ public sealed class GeneratedTemplateRuntimeHostSmokeTests(
         "SUNDER_REQUIRE_DOTNET_TEMPLATE_HOST_SMOKE",
         "SUNDER_DOTNET_TEMPLATE_DEV_PATH")]
     [Trait("Category", "ExternalArtifact")]
-    public async Task GeneratedDotNetTemplate_ActivatesThroughSignedRuntimeHost()
+    public async Task GeneratedDotNetTemplate_ActivatesThroughOfficialRuntimeHost()
     {
-        var receipt = await executionRuntimes.EnsureDotNetAsync(
-            CurrentRidRuntimeHostTestSupport.GetCurrentDotNetVersion(),
-            packagingRevision: 1);
-        await executionRuntimes.ObserveSupportedAsync(receipt);
+        var receipt = await executionRuntimes.EnsureDotNetAsync("10.0.12");
 
         await RunSmokeAsync(
             RequiredDirectory("SUNDER_DOTNET_TEMPLATE_DEV_PATH"),
@@ -88,14 +81,14 @@ public sealed class GeneratedTemplateRuntimeHostSmokeTests(
                 Assert.DoesNotContain(Directory.EnumerateFiles(packagePath, "*.dll", SearchOption.AllDirectories),
                     path => Path.GetFileName(path).Contains(".Protocol", StringComparison.Ordinal));
                 Assert.Equal(package.Source.PackageId + ".sample", provider.ContractId);
-                Assert.Equal("2.0.0", provider.ContractVersion);
+                Assert.Equal(package.Source.Manifest!.Version, provider.ContractVersion);
                 var response = await registration.Handler.InvokeUnaryAsync(context, "sample", "greet",
-                    JsonSerializer.SerializeToElement(new { name = "source template" }), deadline.Token);
-                Assert.Equal("Hello, source template!", response.GetProperty("message").GetString());
+                    JsonSerializer.SerializeToElement("source template"), deadline.Token);
+                Assert.Equal("Hello, source template!", response.GetString());
                 // This probes the process registration directly; the public broker
                 // normally rejects invalid input before dispatching to the Worker.
                 await Assert.ThrowsAsync<ProcessRpcProviderFaultException>(async () => await registration.Handler.InvokeUnaryAsync(
-                    context, "sample", "greet", JsonSerializer.SerializeToElement(new { name = 42 }), deadline.Token));
+                    context, "sample", "greet", JsonSerializer.SerializeToElement(42), deadline.Token));
             }
             else
             {

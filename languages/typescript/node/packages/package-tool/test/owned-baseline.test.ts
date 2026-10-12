@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@sunder/sdk";
-import { atVersion, emptyBaseline, parseBaseline, planAcceptance, planFreeze, sha256, validateBaselineSource, writeBaseline } from "../src/rpc-baseline";
+import { atVersion, emptyBaseline, parseBaseline, planAcceptance, planFreeze, planPrivateRetirement, sha256, validateBaselineSource, writeBaseline } from "../src/rpc-baseline";
 import { fields, MAX_BASELINE_BYTES, ordered, outerBytes, parseOuter } from "../src/rpc-baseline-json";
 import { captureBaseline, commitBaseline } from "../src/rpc-baseline-store";
 import { withOutputLeases } from "../src/output";
 import { startOutputLockContender } from "./observable-barriers";
 import type { LoadedContract } from "../src/model";
+import { emptyModelProjection } from "../src/rpc-model-projection";
 
 const corpus = resolve(__dirname, "../../../../../../../specs/rpc/v1/authoring");
 const bytes = (value: unknown): Buffer => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
@@ -22,7 +23,7 @@ async function contract(version = "1.0.0", change: "none" | "annotation" | "mino
   if (change === "minor") json.services.example.methods.added = structuredClone(json.services.example.methods.ping);
   if (change === "major") json.services.example.methods.ping.idempotency = "none";
   const descriptor = parseRpcContractDescriptor(JSON.stringify(json)); const canonicalBytes = Buffer.from(canonicalRpcDescriptorBytes(descriptor));
-  return { contractKey: "minimal", configuredPath: "src/rpc.ts", sourcePath: "src/rpc.ts", descriptorPath: "contracts/minimal.rpc.json", descriptor,
+  return { modelProjection: emptyModelProjection(), contractKey: "minimal", configuredPath: "src/rpc.ts", sourcePath: "src/rpc.ts", descriptorPath: "contracts/minimal.rpc.json", descriptor,
     canonicalBytes, canonical: canonicalBytes.toString(), descriptorSha256: sha256(canonicalBytes), abiSha256: await computeRpcAbiSha256(descriptor), exposure: "public" };
 }
 test("new selected baseline keys accept a stable next-only version without changing source identity", async () => {
@@ -60,7 +61,9 @@ for (const name of ["minimal-package-owned-baseline.json", "package-owned-baseli
   assert.deepEqual(writeBaseline(baseline.packageId, baseline.contracts), original); assert.equal(baseline.sha256, sha256(original));
 });
 test("C# source-built writer fixture roundtrips without interpreting package/platform authority", () => {
-  const original = readFileSync(resolve(corpus, "../../../../languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ImplementationFirstRpc/sunder-contracts.owned.json"));
+  // Original C# writer blob aa4b9986c9477bc6e14dcade4543dbfe812d63dd retained when the live private fixture became
+  // baseline-free. Test evidence only; never a build input or published asset.
+  const original = readFileSync(resolve(__dirname, "../../test/historical-csharp-owned.json"));
   const baseline = parseBaseline(original); assert.deepEqual(writeBaseline(baseline.packageId, baseline.contracts), original);
 });
 async function publishedFixture() {
@@ -85,6 +88,47 @@ test("lossless immutable publication and release fields survive acceptance, hist
   assert.equal(minor.contracts.get("minimal")!.current!.descriptor.version, "1.1.0");
   assert.deepEqual(outerBytes(minor.contracts.get("minimal")!.history[0]!.json), bytes(fixture.contracts.minimal.current));
   assert.deepEqual(writeBaseline(minor.packageId, minor.contracts), minor.bytes);
+});
+test("private retirement preserves complete draft/frozen/published/history records and no-op bytes", async () => {
+  for (const state of ["draft", "release-frozen", "published", "history-only"]) {
+    const input = await publishedFixture(); const snapshot = input.contracts.minimal.current;
+    snapshot.exposure = "package";
+    if (state === "draft") { snapshot.state = state; delete snapshot.packageRelease; delete snapshot.publication; }
+    if (state === "release-frozen") { snapshot.state = state; delete snapshot.publication; }
+    if (state === "history-only") { input.contracts.minimal.history = [snapshot]; delete input.contracts.minimal.current; }
+    const before = parseBaseline(bytes(input));
+    const proposal = planPrivateRetirement(before, []); const after = parseBaseline(proposal);
+    assert.equal(after.contracts.size, 0);
+    assert.deepEqual(JSON.parse(proposal.toString()).retiredPrivateContracts.minimal, input.contracts.minimal);
+    assert.deepEqual(writeBaseline(after.packageId, after.contracts, after.retiredPrivateContracts), proposal);
+    assert.deepEqual(planPrivateRetirement(after, []), proposal);
+    validateBaselineSource(after, [{ ...await contract("9.0.0+Private"), exposure: "package" }], true);
+  }
+});
+test("private retirement cannot hide public history, demotion, removal, or current public source", async () => {
+  const source = await contract(); const published = await publishedFixture(); const publicBaseline = parseBaseline(bytes(published));
+  assert.throws(() => planPrivateRetirement(publicBaseline, [source], "minimal"), /private-retirement-public-evidence/);
+  assert.throws(() => planPrivateRetirement(publicBaseline, []), /baseline/);
+  assert.throws(() => validateBaselineSource(publicBaseline, [{ ...source, exposure: "package" }]), /baseline/);
+  const demoted = parseBaseline(planAcceptance(publicBaseline, [{ ...source, exposure: "package" }], { key: "minimal", currentVersion: "1.0.0", nextVersion: "2.0.0", acknowledgeBreakingChange: true }));
+  assert.throws(() => planPrivateRetirement(demoted, [], "minimal"), /private-retirement-public-evidence/);
+  published.contracts.minimal.current.exposure = "package";
+  const privateBaseline = parseBaseline(bytes(published));
+  assert.throws(() => planPrivateRetirement(privateBaseline, [source]), /private-retirement-public-evidence/);
+  assert.throws(() => validateBaselineSource(privateBaseline, []), /private-baseline-migration-required/);
+});
+test("archived private evidence cannot be enriched/removed by another baseline writer", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-retired-private-"));
+  try {
+    const fixture = await publishedFixture(); fixture.contracts.minimal.current.exposure = "package";
+    const retired = planPrivateRetirement(parseBaseline(bytes(fixture)), []);
+    await writeFile(resolve(root, "sunder-contracts.owned.json"), retired);
+    const input = await captureBaseline(root); const originalTime = (await stat(input.path)).mtimeMs;
+    assert.equal(await commitBaseline(input, retired, async () => {}), false);
+    assert.equal((await stat(input.path)).mtimeMs, originalTime);
+    await assert.rejects(commitBaseline(input, writeBaseline("example.owner", new Map()), async () => {}), /private-retirement-mutated/);
+    assert.deepEqual(await readFile(input.path), retired);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 test("portable baseline keys preserve ordinal numeric keys, broader than the lower-kebab frontend", async () => {
   const first = parseBaseline(planAcceptance(emptyBaseline("example.owner"), [await contract()]));
@@ -169,7 +213,7 @@ test("inclusive 256 immutable-history limit and 128 contract entries never silen
   function awaitCandidate(): LoadedContract {
     const value = JSON.parse(fixture.contracts.minimal.current.canonicalDescriptor); value.$defs.Empty.title = "Changed";
     const descriptor = parseRpcContractDescriptor(JSON.stringify(value)); const canonicalBytes = Buffer.from(canonicalRpcDescriptorBytes(descriptor));
-    return { contractKey: "minimal", configuredPath: "rpc.ts", sourcePath: "rpc.ts", descriptorPath: "contracts/minimal.rpc.json", descriptor, canonicalBytes,
+    return { modelProjection: emptyModelProjection(), contractKey: "minimal", configuredPath: "rpc.ts", sourcePath: "rpc.ts", descriptorPath: "contracts/minimal.rpc.json", descriptor, canonicalBytes,
       canonical: canonicalBytes.toString(), descriptorSha256: sha256(canonicalBytes), abiSha256: json.abiSha256, exposure: "public" };
   }
   const overflow = structuredClone(sample); overflow.contracts = Object.fromEntries(Array.from({ length: 129 }, (_, i) => [`c${String(i).padStart(3, "0")}`, sample.contracts.minimal]));

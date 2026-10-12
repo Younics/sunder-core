@@ -12,7 +12,6 @@ internal enum RuntimeUploadKind
     Package,
     Stack,
     StackMedia,
-    ExecutionRuntime,
 }
 
 internal sealed record RuntimeUploadLease(
@@ -48,17 +47,18 @@ internal sealed record RuntimeRpcContentLease(
     string FilePath,
     bool DeleteOnRelease);
 
-internal sealed class RuntimeContentTransferStore : IDisposable
+internal sealed partial class RuntimeContentTransferStore : IDisposable
 {
     internal const long MaxPackageUploadBytes = RuntimeRequestSizeLimits.PackageUploadMaxRequestBodyBytes;
     internal const long MaxStackUploadBytes = RuntimeRequestSizeLimits.StackUploadMaxRequestBodyBytes;
     internal const long MaxMediaUploadBytes = RuntimeRequestSizeLimits.StackMediaUploadMaxRequestBodyBytes;
-    internal const long MaxExecutionRuntimeUploadBytes = RuntimeRequestSizeLimits.ExecutionRuntimeUploadMaxRequestBodyBytes;
 
     private readonly RuntimePackagePaths _paths;
     private readonly RuntimeTransportPolicyOptions _policy;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, UploadEntry> _uploads = new(StringComparer.Ordinal);
+    private readonly object _uploadsGate = new();
+    private readonly IPolicyContinuousClock _uploadClock;
     private readonly ConcurrentDictionary<string, DownloadEntry> _downloads = new(StringComparer.Ordinal);
     private readonly object _pendingTransfersGate = new();
     private long _pendingTransferBytes;
@@ -73,11 +73,13 @@ internal sealed class RuntimeContentTransferStore : IDisposable
     public RuntimeContentTransferStore(
         RuntimePackagePaths paths,
         RuntimeTransportPolicyOptions? policy = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IPolicyContinuousClock? uploadClock = null)
     {
         _paths = paths;
         _policy = policy ?? new RuntimeTransportPolicyOptions();
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _uploadClock = uploadClock ?? new PolicyContinuousClock();
     }
 
     internal static void CleanupCrashLeftTransfers(RuntimePackagePaths paths)
@@ -107,7 +109,6 @@ internal sealed class RuntimeContentTransferStore : IDisposable
             RuntimeUploadKind.Package => MaxPackageUploadBytes,
             RuntimeUploadKind.Stack => MaxStackUploadBytes,
             RuntimeUploadKind.StackMedia => MaxMediaUploadBytes,
-            RuntimeUploadKind.ExecutionRuntime => MaxExecutionRuntimeUploadBytes,
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
         if (contentLength is < 0 || contentLength > limit)
@@ -122,7 +123,6 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         {
             RuntimeUploadKind.Package => ".sunderpkg",
             RuntimeUploadKind.Stack => ".sunderstack",
-            RuntimeUploadKind.ExecutionRuntime => ".sunderruntime",
             _ => ".media",
         };
         var finalPath = Path.Combine(_paths.TransferRootPath, uploadId + extension);
@@ -130,7 +130,6 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         {
             RuntimeUploadKind.Package => "package.sunderpkg",
             RuntimeUploadKind.Stack => "stack.sunderstack",
-            RuntimeUploadKind.ExecutionRuntime => "runtime.sunderruntime",
             _ => "content.bin",
         };
         var normalizedFileName = NormalizeFileName(fileName, fallbackFileName);
@@ -181,6 +180,8 @@ internal sealed class RuntimeContentTransferStore : IDisposable
 
             ResizePendingTransferReservation(reservation, length);
             File.Move(partialPath, finalPath);
+            var createdClock = _uploadClock.Read();
+            RegistryActivePolicyClient.ValidateClock(createdClock);
             var entry = new UploadEntry(
                 kind,
                 finalPath,
@@ -190,10 +191,11 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                 normalizedContentType,
                 generation,
                 _timeProvider.GetUtcNow(),
-                reservation);
-            if (!_uploads.TryAdd(uploadId, entry))
+                reservation,
+                createdClock);
+            lock (_uploadsGate)
             {
-                throw new IOException("Failed to allocate an upload handle.");
+                if (!_uploads.TryAdd(uploadId, entry)) throw new IOException("Failed to allocate an upload handle.");
             }
 
             reservation = null;
@@ -212,35 +214,31 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         }
     }
 
-    public RuntimeUploadLease? AcquireUpload(string uploadId, RuntimeUploadKind kind, long generation, bool consume)
+    public RuntimeUploadLease? AcquireUpload(string uploadId, RuntimeUploadKind kind, long generation, bool consume,
+        RuntimePackageUploadRetentionHandle? retention = null)
     {
         SweepExpired(_timeProvider.GetUtcNow());
-        UploadEntry? entry;
-        var acquired = consume
-            ? _uploads.TryRemove(uploadId, out entry)
-            : _uploads.TryGetValue(uploadId, out entry);
-        if (!acquired || entry is null)
+        lock (_uploadsGate)
         {
-            return null;
-        }
-        if (consume) ReleasePendingTransferReservation(entry.Reservation);
-        if (entry.Kind != kind
-            || entry.Generation != generation
-            || !File.Exists(entry.FilePath))
-        {
+            if (!_uploads.TryGetValue(uploadId, out var entry)) return null;
+            if (entry.Retention is not null)
+            {
+                if (retention is null || !MatchesRetention(uploadId, entry, retention) || kind != RuntimeUploadKind.Package) return null;
+                if (!RetentionIsLive(entry, ReadUploadClock())) { RemoveUpload(uploadId); return null; }
+            }
+            else if (retention is not null) return null;
+            if (entry.Kind != kind || entry.Retention is null && entry.Generation != generation || !File.Exists(entry.FilePath))
+            {
+                RemoveUpload(uploadId);
+                return null;
+            }
             if (consume)
             {
-                TryDeleteFile(entry.FilePath);
-            }
-            else if (_uploads.TryRemove(new KeyValuePair<string, UploadEntry>(uploadId, entry)))
-            {
+                _uploads.TryRemove(uploadId, out _);
                 ReleasePendingTransferReservation(entry.Reservation);
-                TryDeleteFile(entry.FilePath);
             }
-            return null;
+            return new RuntimeUploadLease(uploadId, entry.FilePath, entry.ContentHash, entry.Length, entry.FileName, entry.ContentType);
         }
-
-        return new RuntimeUploadLease(uploadId, entry.FilePath, entry.ContentHash, entry.Length, entry.FileName, entry.ContentType);
     }
 
     public void ReleaseUpload(RuntimeUploadLease lease)
@@ -734,11 +732,13 @@ internal sealed class RuntimeContentTransferStore : IDisposable
     internal void SweepExpired(DateTimeOffset now)
     {
         var cutoff = now - _policy.ContentTransferLifetime;
-        foreach (var (id, entry) in _uploads)
+        lock (_uploadsGate)
         {
-            if (entry.CreatedAtUtc < cutoff)
+            var clock = _uploads.Values.Any(entry => entry.Retention is not null) ? ReadUploadClock() : null;
+            foreach (var (id, entry) in _uploads)
             {
-                RemoveUpload(id);
+                if (entry.Retention is not null ? !RetentionIsLive(entry, clock) : entry.CreatedAtUtc < cutoff)
+                    RemoveUpload(id);
             }
         }
         foreach (var (id, entry) in _downloads)
@@ -1094,10 +1094,13 @@ internal sealed class RuntimeContentTransferStore : IDisposable
 
     private void RemoveUpload(string id)
     {
-        if (_uploads.TryRemove(id, out var entry))
+        lock (_uploadsGate)
         {
-            ReleasePendingTransferReservation(entry.Reservation);
-            TryDeleteFile(entry.FilePath);
+            if (_uploads.TryRemove(id, out var entry))
+            {
+                ReleasePendingTransferReservation(entry.Reservation);
+                TryDeleteFile(entry.FilePath);
+            }
         }
     }
 
@@ -1144,7 +1147,11 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         string ContentType,
         long Generation,
         DateTimeOffset CreatedAtUtc,
-        PendingTransferReservation Reservation);
+        PendingTransferReservation Reservation,
+        PolicyClockReading CreatedClock)
+    {
+        public UploadRetention? Retention { get; set; }
+    }
 
     private sealed record DownloadEntry(
         string FilePath,

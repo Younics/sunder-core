@@ -57,7 +57,7 @@ public sealed class LivePlatformRegistryRuntimeTests
                 var result = await preparation.PrepareAsync(new(packageFolder, origin), default);
                 Assert.Equal(0, result.PackageArtifacts); Assert.Equal(1, result.PlatformCatalogs);
             }
-            if (phase == "revoked") await synchronize.RefreshAsync([new(origin, [], subjects, [])], default);
+            if (phase == "revoked") await synchronize.RefreshAsync([new(origin, [], subjects)], default);
             if (phase is "revoked" or "offline-denied")
             {
                 var receipt = File.ReadAllBytes(store.PathFor(RuntimeRpcPackageMetadata.GetManifestSha256(validation.ContentIndex!)));
@@ -76,8 +76,8 @@ public sealed class LivePlatformRegistryRuntimeTests
                 source = source with { DevelopmentImports = await store.ResolveAsync(source, default) };
                 var retained = Assert.Single(source.DevelopmentImports.Catalogs);
                 Assert.Equal(File.ReadAllBytes(Path.Combine(input.RootElement.GetProperty("csharpOutput").GetString()!, "catalog.json")), Convert.FromBase64String(retained));
-                var admission = new PackagePolicyAdmission(policies); admission.Require(source, null);
-                var group = Assert.Single(admission.Subjects(source, null)); Assert.Empty(group.Packages); Assert.Single(group.Platforms);
+                var admission = new PackagePolicyAdmission(policies); admission.Require(source);
+                var group = Assert.Single(admission.Subjects(source)); Assert.Empty(group.Packages); Assert.Single(group.Platforms);
                 Assert.Equal("valid", policies.PlatformLease(origin, subjects).State);
             }
         }
@@ -85,24 +85,22 @@ public sealed class LivePlatformRegistryRuntimeTests
 
     private static async Task RunNativeStack(RuntimePackagePaths paths, DevelopmentImportAuthorityStore store, IReadOnlyList<string> folders)
     {
-        var runtimes = new SignedCurrentRidExecutionRuntimeFixture(); await runtimes.InitializeAsync();
+        var runtimes = new OfficialRuntimeFixture(); await runtimes.InitializeAsync();
         RuntimePackageSessionTestHost? host = null; int[] processIds = [];
         try
         {
-            var receipt = await runtimes.EnsureDotNetAsync(CurrentRidRuntimeHostTestSupport.GetCurrentDotNetVersion(), 1);
-            await runtimes.ObserveSupportedAsync(receipt);
+            var receipt = await runtimes.EnsureDotNetAsync("10.0.12");
             var node = Node24Availability.Current; Assert.True(node.IsAvailable, node.UnavailableReason);
-            var nodeReceipt = await runtimes.EnsureNodeAsync(node.Version!, 1, node.ExecutablePath!);
-            await runtimes.ObserveSupportedAsync(nodeReceipt); var logs = new RecordingLogSink();
+            var nodeReceipt = await runtimes.EnsureNodeAsync("24.21.0"); var logs = new RecordingLogSink();
             host = new(logs.CreateLogger<RuntimePackageSessionTestHost>(), new(paths), new(paths), executionRuntimeLaunchResolver: runtimes.LaunchResolver,
-                localExecutionRuntimeBindingResolver: runtimes.LocalBindingResolver, executionRuntimeLifecyclePolicies: runtimes.LifecyclePolicies, developmentImports: store);
+                localExecutionRuntimeBindingResolver: runtimes.LocalBindingResolver, developmentImports: store);
             await host.InitializeAsync();
             foreach (var packageFolder in folders)
             {
                 var result = await host.LoadStartupDevPackagesAsync([packageFolder]);
                 Assert.True(result.Success, string.Join(" | ", result.Errors) + "\n" + string.Join("\n", logs.Entries.Select(value => value.Message + value.Exception)));
                 var package = Assert.Single(host.ActiveSession.LoadedPackageMap.Values);
-                CurrentRidRuntimeHostTestSupport.AssertRuntimeLaunch(package, package.ExecutionRuntimeBinding!.RuntimeId == SunderPackageFormat.NodeExecutionRuntimeId ? nodeReceipt : receipt, runtimes);
+                CurrentRidRuntimeHostTestSupport.AssertRuntimeLaunch(package, package.ExecutionRuntimeBinding!.Runtime.RuntimeId == SunderPackageFormat.NodeExecutionRuntimeId ? nodeReceipt : receipt, runtimes);
                 processIds = CurrentRidRuntimeHostTestSupport.GetActiveProcessIds(host); Assert.Single(processIds);
                 Assert.Empty(package.RpcContractUses);
                 var discovery = await host.ListStackExportItemsAsync(); Assert.Empty(discovery.Errors);
@@ -124,6 +122,8 @@ public sealed class LivePlatformRegistryRuntimeTests
         internal int Requests { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
+            Assert.Equal("localhost", request.RequestUri!.Host);
+            Assert.DoesNotContain("execution-runtimes", request.RequestUri.AbsolutePath, StringComparison.Ordinal);
             Assert.False(offline, "Platform evidence and activation replay must remain offline."); Requests++;
             return base.SendAsync(request, token);
         }

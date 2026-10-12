@@ -19,10 +19,6 @@ internal static class RuntimeRegistryContractMapper
         SunderSdkCapabilities.Baseline11V1,
         PackageTargetSelection.GetCurrentRuntimeIdentifier());
 
-    public static RegistryHostRuntimeTrustProfile RuntimeTrustProfile { get; } = new(
-        "sunder.runtime-trust.v1",
-        1);
-
     public static IReadOnlyList<RegistryPackageChangeRequest> ToRegistry(
         IReadOnlyList<RuntimeRegistryPackageChangeRequest> requests)
         => requests.Select(request => new RegistryPackageChangeRequest(
@@ -62,10 +58,8 @@ internal static class RuntimeRegistryContractMapper
                 conflict.ErrorCode,
                 conflict.Message)).ToArray(),
             response.TrustedArtifactOrigins,
-            RuntimeArtifacts: response.RuntimeArtifacts.Select(ToRuntime).ToArray(),
-            RuntimeConflicts: response.RuntimeConflicts.Select(ToRuntime).ToArray(),
+            RequiredCapabilityConsents: null,
             ResolutionFingerprint: response.ResolutionFingerprint,
-            RuntimePolicyRevision: response.RuntimePolicyRevision,
             ExpiresAtUtc: response.ExpiresAtUtc)
         {
             CompatibilityConflicts = response.CompatibilityConflicts.Select(conflict => new RuntimeRegistryPackageCompatibilityConflict(
@@ -112,70 +106,11 @@ internal static class RuntimeRegistryContractMapper
                 artifact.SourceArchiveSha256,
                 artifact.ManifestSha256,
                 artifact.ProjectionContentIdentity,
-                artifact.ProjectionFormatVersion)).ToArray(),
-            item.RuntimeBindings.Select(ToRuntime).ToArray(),
-            item.RuntimeOnlyRebind is null
-                ? null
-                : new RuntimeRegistryRuntimeOnlyRebindDetails(
-                    item.RuntimeOnlyRebind.PackageVersion,
-                    item.RuntimeOnlyRebind.PackageContentIdentity,
-                    item.RuntimeOnlyRebind.PreviousBindings.Select(ToRuntime).ToArray(),
-                    item.RuntimeOnlyRebind.NewBindings.Select(ToRuntime).ToArray()))).ToArray();
+                artifact.ProjectionFormatVersion)).ToArray())).ToArray();
 
     private static RuntimeRegistryExecutionRuntimeRequirement ToRuntime(
         RegistryExecutionRuntimeRequirement requirement)
         => new(requirement.RuntimeId, requirement.VersionRange, requirement.ModuleAbi);
-
-    private static RuntimeRegistryExecutionRuntimeIdentity ToRuntime(
-        RegistryExecutionRuntimeIdentity identity)
-        => new(identity.RuntimeId, identity.Version, identity.PackagingRevision, identity.Rid, identity.ModuleAbi);
-
-    private static RuntimeRegistryExecutionRuntimeLifecycle ToRuntime(
-        RegistryExecutionRuntimeLifecycle lifecycle)
-        => new(
-            lifecycle.State,
-            lifecycle.StagedAtUtc,
-            lifecycle.SupportedFromUtc,
-            lifecycle.DeprecatedAtUtc,
-            lifecycle.InstallBlockedAtUtc,
-            lifecycle.ActivationBlockedAtUtc,
-            lifecycle.RevokedAtUtc,
-            lifecycle.Message);
-
-    private static RuntimeRegistryResolvedExecutionRuntimeArtifact ToRuntime(
-        RegistryResolvedExecutionRuntimeArtifact artifact)
-        => new(
-            ToRuntime(artifact.Identity),
-            artifact.ManifestSha256,
-            artifact.ArtifactSha256,
-            artifact.ArtifactSize,
-            artifact.SigningKeyId,
-            artifact.MinimumHostTrustGeneration,
-            artifact.NativeAttestationSha256,
-            artifact.NativeAttestationKeyId,
-            ToRuntime(artifact.Lifecycle),
-            artifact.ObservedRuntimePolicyRevision,
-            artifact.DownloadUrl);
-
-    private static RuntimeRegistryPackageTargetRuntimeBinding ToRuntime(
-        RegistryPackageTargetRuntimeBinding binding)
-        => new(
-            binding.Role,
-            binding.Rid,
-            ToRuntime(binding.Requirement),
-            ToRuntime(binding.Runtime));
-
-    public static RuntimeRegistryExecutionRuntimeResolutionConflict ToRuntime(
-        RegistryExecutionRuntimeResolutionConflict conflict)
-        => new(
-            conflict.Code,
-            conflict.Message,
-            ToRuntime(conflict.Requirement),
-            conflict.Rid,
-            conflict.PackageId,
-            conflict.TargetRole,
-            conflict.CurrentRuntime is null ? null : ToRuntime(conflict.CurrentRuntime),
-            conflict.RequiredHostTrustGeneration);
 
     private static IReadOnlyList<RuntimeRegistryPackageTargetRequest> DefaultTargets()
     {

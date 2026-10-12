@@ -243,7 +243,6 @@ public sealed class StackPackageInstallPlanItemViewModel(RuntimeRegistryPackageI
         RegistryPackageActionKinds.PackageInstall => $"Install {item.Version}",
         RegistryPackageActionKinds.PackageUpdate => $"Update {item.CurrentVersion} -> {item.Version}",
         RegistryPackageActionKinds.PackageRemove => $"Remove {item.CurrentVersion}",
-        RegistryPackageActionKinds.RuntimeOnlyRebind => $"Update runtime for {item.Version}",
         _ => $"Keep {item.Version}",
     };
 

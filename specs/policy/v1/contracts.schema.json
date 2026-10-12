@@ -4,7 +4,6 @@
   "title": "Sunder V1 Registry and Runtime policy wire contracts",
   "$defs": {
     "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9]+(?:\\.[a-z0-9]+)*$" },
-    "moduleAbi": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$" },
     "version": { "type": "string", "minLength": 5, "maxLength": 256, "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "nonce": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
@@ -51,30 +50,19 @@
       "type": "object", "additionalProperties": false, "required": ["authorityId", "releaseVersion", "catalogSha256"],
       "properties": { "authorityId": { "const": "sunder.core" }, "releaseVersion": { "$ref": "#/$defs/version" }, "catalogSha256": { "$ref": "#/$defs/sha256" } }
     },
-    "runtimeIdentity": {
-      "type": "object", "additionalProperties": false, "required": ["runtimeId", "version", "packagingRevision", "rid", "moduleAbi"],
-      "properties": { "runtimeId": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/version" }, "packagingRevision": { "type": "integer", "minimum": 1, "maximum": 2147483647 }, "rid": { "enum": ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"] }, "moduleAbi": { "$ref": "#/$defs/moduleAbi" } }
-    },
-    "runtimeSubject": {
-      "type": "object", "additionalProperties": false, "required": ["runtime", "manifestSha256", "artifactSha256"],
-      "properties": { "runtime": { "$ref": "#/$defs/runtimeIdentity" }, "manifestSha256": { "$ref": "#/$defs/sha256" }, "artifactSha256": { "$ref": "#/$defs/sha256" } }
-    },
     "synchronizationRequest": {
       "type": "object", "additionalProperties": false,
-      "required": ["nonce", "packages", "platformCatalogs", "runtimes", "minimumPackagePolicy", "minimumRuntimePolicyRevision", "minimumCheckpoint"],
+      "required": ["nonce", "packages", "platformCatalogs", "minimumPackagePolicy", "minimumCheckpoint"],
       "properties": {
         "nonce": { "$ref": "#/$defs/nonce" },
         "packages": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/package" } },
         "platformCatalogs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/platform" } },
-        "runtimes": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/runtimeSubject" } },
         "minimumPackagePolicy": { "anyOf": [{ "$ref": "#/$defs/policyIdentity" }, { "type": "null" }] },
-        "minimumRuntimePolicyRevision": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
         "minimumCheckpoint": { "anyOf": [{ "$ref": "#/$defs/checkpoint" }, { "type": "null" }] }
       },
       "anyOf": [
         { "properties": { "packages": { "minItems": 1 } } },
-        { "properties": { "platformCatalogs": { "minItems": 1 } } },
-        { "properties": { "runtimes": { "minItems": 1 } } }
+        { "properties": { "platformCatalogs": { "minItems": 1 } } }
       ]
     },
     "packageDecision": {
@@ -101,25 +89,14 @@
         { "properties": { "lifecycleState": { "const": "Unknown" }, "disposition": { "const": "PolicyRequired" }, "errorCode": { "$ref": "#/$defs/errorCode" }, "revokedAtUtc": { "type": "null" } } }
       ]
     },
-    "runtimeDecision": {
-      "type": "object", "additionalProperties": false, "required": ["subject", "lifecycleState", "disposition", "errorCode", "activationBlockedAtUtc", "revokedAtUtc"],
-      "properties": { "subject": { "$ref": "#/$defs/runtimeSubject" }, "lifecycleState": { "enum": ["supported", "deprecated", "retired", "revoked", "policy-required"] }, "disposition": { "$ref": "#/$defs/disposition" }, "errorCode": { "$ref": "#/$defs/error" }, "activationBlockedAtUtc": { "$ref": "#/$defs/optionalUtc" }, "revokedAtUtc": { "$ref": "#/$defs/optionalUtc" } },
-      "allOf": [
-        { "if": { "properties": { "lifecycleState": { "const": "revoked" } } }, "then": { "properties": { "disposition": { "const": "Denied" }, "errorCode": { "const": "execution-runtime.revoked" }, "revokedAtUtc": { "$ref": "#/$defs/utc" } } } },
-        { "if": { "properties": { "lifecycleState": { "const": "policy-required" } } }, "then": { "properties": { "disposition": { "const": "PolicyRequired" }, "errorCode": { "$ref": "#/$defs/errorCode" } } } },
-        { "if": { "properties": { "disposition": { "const": "Allowed" } } }, "then": { "properties": { "lifecycleState": { "enum": ["supported", "deprecated", "retired"] }, "errorCode": { "type": "null" }, "revokedAtUtc": { "type": "null" } } } }
-      ]
-    },
     "synchronizationResponse": {
       "type": "object", "additionalProperties": false,
-      "required": ["nonce", "registryOrigin", "packagePolicy", "runtimePolicyRevision", "checkpoint", "observedAtUtc", "validUntilUtc", "packages", "platformCatalogs", "runtimes"],
+      "required": ["nonce", "registryOrigin", "packagePolicy", "checkpoint", "observedAtUtc", "validUntilUtc", "packages", "platformCatalogs"],
       "properties": {
         "nonce": { "$ref": "#/$defs/nonce" }, "registryOrigin": { "$ref": "#/$defs/origin" }, "packagePolicy": { "$ref": "#/$defs/policyIdentity" },
-        "runtimePolicyRevision": { "$ref": "#/$defs/revision" },
         "checkpoint": { "$ref": "#/$defs/checkpoint" }, "observedAtUtc": { "$ref": "#/$defs/utc" }, "validUntilUtc": { "$ref": "#/$defs/utc" },
         "packages": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/packageDecision" } },
-        "platformCatalogs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/platformDecision" } },
-        "runtimes": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/runtimeDecision" } }
+        "platformCatalogs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/platformDecision" } }
       }
     },
     "availabilityChange": {
@@ -222,15 +199,14 @@
     },
     "registryStatus": {
       "type": "object", "additionalProperties": false,
-      "required": ["code", "publicReady", "externalAligned", "appliedCheckpoint", "primaryCheckpoint", "mirrorCheckpoint", "packagePolicy", "publicationAuthorityPolicy", "authorizationPolicy", "authorizationGeneration", "runtimePolicyRevision"],
+      "required": ["code", "publicReady", "externalAligned", "appliedCheckpoint", "primaryCheckpoint", "mirrorCheckpoint", "packagePolicy", "publicationAuthorityPolicy", "authorizationPolicy", "authorizationGeneration"],
       "properties": {
         "code": { "$ref": "#/$defs/errorCode" }, "publicReady": { "type": "boolean" }, "externalAligned": { "type": "boolean" },
         "appliedCheckpoint": { "$ref": "#/$defs/optionalCheckpoint" }, "primaryCheckpoint": { "$ref": "#/$defs/optionalCheckpoint" }, "mirrorCheckpoint": { "$ref": "#/$defs/optionalCheckpoint" },
-        "packagePolicy": { "$ref": "#/$defs/optionalPolicyIdentity" }, "publicationAuthorityPolicy": { "$ref": "#/$defs/optionalPolicyIdentity" }, "authorizationPolicy": { "$ref": "#/$defs/optionalPolicyIdentity" }, "authorizationGeneration": { "$ref": "#/$defs/optionalRevision" },
-        "runtimePolicyRevision": { "$ref": "#/$defs/optionalRevision" }
+        "packagePolicy": { "$ref": "#/$defs/optionalPolicyIdentity" }, "publicationAuthorityPolicy": { "$ref": "#/$defs/optionalPolicyIdentity" }, "authorizationPolicy": { "$ref": "#/$defs/optionalPolicyIdentity" }, "authorizationGeneration": { "$ref": "#/$defs/optionalRevision" }
       },
       "if": { "properties": { "publicReady": { "const": true } } },
-      "then": { "properties": { "externalAligned": { "const": true }, "appliedCheckpoint": { "$ref": "#/$defs/checkpoint" }, "primaryCheckpoint": { "$ref": "#/$defs/checkpoint" }, "mirrorCheckpoint": { "$ref": "#/$defs/checkpoint" }, "packagePolicy": { "$ref": "#/$defs/policyIdentity" }, "publicationAuthorityPolicy": { "$ref": "#/$defs/policyIdentity" }, "authorizationPolicy": { "$ref": "#/$defs/policyIdentity" }, "authorizationGeneration": { "$ref": "#/$defs/revision" }, "runtimePolicyRevision": { "$ref": "#/$defs/revision" } } }
+      "then": { "properties": { "externalAligned": { "const": true }, "appliedCheckpoint": { "$ref": "#/$defs/checkpoint" }, "primaryCheckpoint": { "$ref": "#/$defs/checkpoint" }, "mirrorCheckpoint": { "$ref": "#/$defs/checkpoint" }, "packagePolicy": { "$ref": "#/$defs/policyIdentity" }, "publicationAuthorityPolicy": { "$ref": "#/$defs/policyIdentity" }, "authorizationPolicy": { "$ref": "#/$defs/policyIdentity" }, "authorizationGeneration": { "$ref": "#/$defs/revision" } } }
     },
     "stackIdentity": {
       "type": "object", "additionalProperties": false, "required": ["stackId", "revision", "artifactSha256"],
@@ -283,8 +259,8 @@
       "properties": { "idempotencyKey": { "$ref": "#/$defs/idempotencyKey" }, "expectedPublicationAuthorityRevision": { "$ref": "#/$defs/revision" }, "publicReason": { "$ref": "#/$defs/publicReason" } }
     },
     "watermark": {
-      "type": "object", "additionalProperties": false, "required": ["registryOrigin", "packagePolicyRevision", "packagePolicyFingerprint", "runtimePolicyRevision", "checkpointSequence", "checkpointDigest", "topologyGeneration", "topologyFingerprint"],
-      "properties": { "registryOrigin": { "$ref": "#/$defs/origin" }, "packagePolicyRevision": { "$ref": "#/$defs/revision" }, "packagePolicyFingerprint": { "$ref": "#/$defs/sha256" }, "runtimePolicyRevision": { "$ref": "#/$defs/revision" }, "checkpointSequence": { "$ref": "#/$defs/revision" }, "checkpointDigest": { "$ref": "#/$defs/sha256" }, "topologyGeneration": { "$ref": "#/$defs/revision" }, "topologyFingerprint": { "$ref": "#/$defs/sha256" } }
+      "type": "object", "additionalProperties": false, "required": ["registryOrigin", "packagePolicyRevision", "packagePolicyFingerprint", "checkpointSequence", "checkpointDigest", "topologyGeneration", "topologyFingerprint"],
+      "properties": { "registryOrigin": { "$ref": "#/$defs/origin" }, "packagePolicyRevision": { "$ref": "#/$defs/revision" }, "packagePolicyFingerprint": { "$ref": "#/$defs/sha256" }, "checkpointSequence": { "$ref": "#/$defs/revision" }, "checkpointDigest": { "$ref": "#/$defs/sha256" }, "topologyGeneration": { "$ref": "#/$defs/revision" }, "topologyFingerprint": { "$ref": "#/$defs/sha256" } }
     },
     "clock": {
       "type": "object", "additionalProperties": false, "required": ["bootSessionId", "clockSource", "ticksPerSecond", "requestStartedTicks", "deadlineTicks", "highWaterTicks", "virtualMachineGeneration"],

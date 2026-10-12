@@ -387,11 +387,11 @@ internal sealed class PackageCommandHandler(
             plan.Conflicts,
             plan.TrustedArtifactOrigins,
             plan.RequiredCapabilityConsents,
-            plan.RuntimeArtifacts,
-            plan.RuntimeConflicts,
             plan.ResolutionFingerprint,
-            plan.RuntimePolicyRevision,
-            plan.ExpiresAtUtc);
+            plan.ExpiresAtUtc)
+        {
+            RuntimePrerequisites = plan.RuntimePrerequisites,
+        };
 
     private static bool IsResolutionFingerprint(string? value)
         => value is { Length: 64 }

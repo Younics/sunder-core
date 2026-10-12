@@ -21,8 +21,6 @@ internal sealed record PreparedRuntimePackage(
 {
     public RuntimePackageExecutionRuntimeBinding? ExecutionRuntimeBinding { get; init; }
 
-    internal ExecutionRuntimeLifecyclePolicyEntryV1? ExecutionRuntimePolicyAuthority { get; init; }
-
     public string SessionId { get; init; } = Guid.NewGuid().ToString("N");
 
     public IReadOnlyList<string> ApprovedSensitiveCapabilities { get; init; } = [];

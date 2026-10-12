@@ -14,6 +14,13 @@ internal static class SunderAppComposition
         Application application,
         AppStartupOptions startupOptions,
         AppPackageResourceAssemblyRegistry packageResourceAssemblyRegistry)
+        => CreateServices(application, startupOptions, packageResourceAssemblyRegistry)
+            .BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+
+    internal static ServiceCollection CreateServices(
+        Application application,
+        AppStartupOptions startupOptions,
+        AppPackageResourceAssemblyRegistry packageResourceAssemblyRegistry)
     {
         var services = new ServiceCollection();
 
@@ -90,6 +97,6 @@ internal static class SunderAppComposition
         services.AddSingleton<StackWizardWindowFactory>();
         services.AddSingleton<ShellStartupCoordinator>();
 
-        return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+        return services;
     }
 }

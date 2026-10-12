@@ -8,6 +8,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Core.TestSupport;
 using Sunder.Package.Build.Tasks;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Xunit;
 using TaskItem = Microsoft.Build.Utilities.TaskItem;
 
@@ -65,14 +66,14 @@ public sealed partial class CoreStackTransportGenerationTests
             Directory.CreateDirectory(Path.GetDirectoryName(reference)!);
             if (mutation is "sdk-foreign-shape" or "sdk-foreign-version")
             {
-                var version = mutation == "sdk-foreign-version" ? "9.0.0.0" : typeof(SunderRpcServiceAttribute).Assembly.GetName().Version!.ToString();
+                var version = mutation == "sdk-foreign-version" ? "9.0.0.0" : typeof(SunderServiceAttribute).Assembly.GetName().Version!.ToString();
                 var compilation = CSharpCompilation.Create("Sunder.Sdk",
                     [CSharpSyntaxTree.ParseText($"[assembly: System.Reflection.AssemblyVersion(\"{version}\")] public sealed class ForeignSdk {{ }}")],
                     PlatformContractSourceOperations.ReferencePaths().Where(path => Path.GetFileName(path) != "Sunder.Sdk.dll")
                         .Select(path => MetadataReference.CreateFromFile(path)), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
                 Assert.True(compilation.Emit(reference).Success);
             }
-            else File.Copy(typeof(SunderRpcServiceAttribute).Assembly.Location, reference);
+            else File.Copy(typeof(SunderServiceAttribute).Assembly.Location, reference);
             lines = lines.Where(line => !line.StartsWith("reference=", StringComparison.Ordinal) || Path.GetFileName(DecodeLine(line)) != "Sunder.Sdk.dll").ToList();
             lines.Add(Line("reference", reference));
             if (mutation != "sdk-no-provenance")

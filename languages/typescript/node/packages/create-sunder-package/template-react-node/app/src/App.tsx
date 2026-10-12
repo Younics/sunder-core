@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { getSunder, isSunderRpcFailure } from "@sunder/sdk/browser";
-import { createPackageApi } from "../../.sunder/generated/rpc/browser.js";
+import { useApi } from "@sunder/sdk/react";
+import { Self } from "#sunder/api";
 
 type Status =
   | { readonly kind: "loading" }
@@ -11,22 +11,21 @@ const packageId = "__SUNDER_PACKAGE_ID_JSON__";
 const packageName = "__SUNDER_PACKAGE_NAME_JSON__";
 
 export function App() {
+  const api = useApi(Self);
   const [status, setStatus] = useState<Status>({ kind: "loading" });
 
   useEffect(() => {
     const cancellation = new AbortController();
-    void greet(cancellation.signal).then(
+    void api.messages.send("Sunder App", { signal: cancellation.signal }).then(
       (message) => setStatus({ kind: "ready", message }),
       (error: unknown) => {
         if (cancellation.signal.aborted) return;
-        const message = isSunderRpcFailure(error)
-          ? `${error.error.code}: ${error.error.message}`
-          : error instanceof Error ? error.message : "The package Runtime is unavailable.";
+        const message = error instanceof Error ? error.message : "The package service is unavailable.";
         setStatus({ kind: "error", message });
       },
     );
     return () => cancellation.abort();
-  }, []);
+  }, [api]);
 
   return (
     <main className="shell">
@@ -40,23 +39,13 @@ export function App() {
         <div>
           <p className="status__label">Runtime bridge</p>
           <p className="status__message">
-            {status.kind === "loading" ? "Discovering the package provider..." : status.message}
+            {status.kind === "loading" ? "Loading the greeting..." : status.message}
           </p>
         </div>
       </section>
       {status.kind === "error" && (
-        <p className="hint">Grant this package the requested RPC permissions in Sunder Settings, then reload the view.</p>
+        <p className="hint">Check this package's permissions in Sunder Settings, then reload the view.</p>
       )}
     </main>
   );
-}
-
-async function greet(signal: AbortSignal): Promise<string> {
-  const api = createPackageApi(getSunder().rpc);
-  const client = await api.messages.resolve({ signal });
-  const response = await client.Messages.Send(
-    { message: "Sunder App bridge" },
-    { signal },
-  );
-  return response.message;
 }

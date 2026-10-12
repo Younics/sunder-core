@@ -211,11 +211,19 @@ internal interface ICliRuntimeManagementClient : ICliRuntimeClientRole
 
 internal interface ICliRuntimeExecutionRuntimeClient : ICliRuntimeClientRole
 {
+    Task<RuntimeExecutionRuntimeSettings> GetExecutionRuntimeSettingsAsync(CancellationToken token);
+    Task<RuntimeExecutionRuntimeSettings> UpdateExecutionRuntimeSettingsAsync(RuntimeExecutionRuntimeSettingsUpdateRequest request, CancellationToken token);
+    Task<RuntimeExecutionRuntimeInstallPlan> PreviewExecutionRuntimeInstallAsync(RuntimeExecutionRuntimeInstallPreviewRequest request, CancellationToken token);
+    Task<RuntimeExecutionRuntimeOperationResult> ApplyExecutionRuntimeInstallAsync(RuntimeExecutionRuntimePlanConfirmation request, CancellationToken token);
+    Task<RuntimeExecutionRuntimeUpdatePlan> PreviewExecutionRuntimeUpdateAsync(RuntimeExecutionRuntimeUpdatePreviewRequest request, CancellationToken token);
+    Task<RuntimeExecutionRuntimeUpdateResult> PrepareExecutionRuntimeUpdateAsync(RuntimeExecutionRuntimePlanConfirmation request, CancellationToken token);
+    Task<RuntimeExecutionRuntimeUpdateResult> ApplyExecutionRuntimeUpdateAsync(RuntimeExecutionRuntimeUpdateApplyRequest request, CancellationToken token);
+    Task<RuntimeExecutionRuntimeUninstallPlan> PreviewExecutionRuntimeUninstallAsync(RuntimeExecutionRuntimeUninstallPreviewRequest request, CancellationToken token);
+    Task<RuntimeExecutionRuntimeUninstallResult> ApplyExecutionRuntimeUninstallAsync(RuntimeExecutionRuntimePlanConfirmation request, CancellationToken token);
     Task<IReadOnlyList<InstalledExecutionRuntimeSummary>> GetExecutionRuntimesAsync(CancellationToken token);
     Task<InstalledExecutionRuntimeSummary> GetExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token);
     Task<IReadOnlyList<RuntimeExecutionRuntimePackageReference>> GetExecutionRuntimeReferencesAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token);
     Task<RuntimeExecutionRuntimeOperationResult> EnsureExecutionRuntimeAsync(RuntimeExecutionRuntimeEnsureRequest request, CancellationToken token);
-    Task<RuntimeExecutionRuntimeOperationResult> ImportExecutionRuntimeAsync(string filePath, CancellationToken token);
     Task<RuntimeExecutionRuntimeOperationResult> VerifyExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token);
     Task<RuntimeExecutionRuntimeOperationResult> RepairExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token);
     Task<RuntimeExecutionRuntimeOperationResult> CollectExecutionRuntimeGarbageAsync(CancellationToken token);
@@ -242,6 +250,15 @@ internal interface ICliRuntimeClient :
 
 internal sealed class CliRuntimeClient : ICliRuntimeClient
 {
+    public Task<RuntimeExecutionRuntimeSettings> GetExecutionRuntimeSettingsAsync(CancellationToken token) => _client.GetExecutionRuntimeSettingsAsync(token);
+    public Task<RuntimeExecutionRuntimeSettings> UpdateExecutionRuntimeSettingsAsync(RuntimeExecutionRuntimeSettingsUpdateRequest request, CancellationToken token) => _client.UpdateExecutionRuntimeSettingsAsync(request, token);
+    public Task<RuntimeExecutionRuntimeInstallPlan> PreviewExecutionRuntimeInstallAsync(RuntimeExecutionRuntimeInstallPreviewRequest request, CancellationToken token) => _client.PreviewExecutionRuntimeInstallAsync(request, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> ApplyExecutionRuntimeInstallAsync(RuntimeExecutionRuntimePlanConfirmation request, CancellationToken token) => _client.ApplyExecutionRuntimeInstallAsync(request, token);
+    public Task<RuntimeExecutionRuntimeUpdatePlan> PreviewExecutionRuntimeUpdateAsync(RuntimeExecutionRuntimeUpdatePreviewRequest request, CancellationToken token) => _client.PreviewExecutionRuntimeUpdateAsync(request, token);
+    public Task<RuntimeExecutionRuntimeUpdateResult> PrepareExecutionRuntimeUpdateAsync(RuntimeExecutionRuntimePlanConfirmation request, CancellationToken token) => _client.PrepareExecutionRuntimeUpdateAsync(request, token);
+    public Task<RuntimeExecutionRuntimeUpdateResult> ApplyExecutionRuntimeUpdateAsync(RuntimeExecutionRuntimeUpdateApplyRequest request, CancellationToken token) => _client.ApplyExecutionRuntimeUpdateAsync(request, token);
+    public Task<RuntimeExecutionRuntimeUninstallPlan> PreviewExecutionRuntimeUninstallAsync(RuntimeExecutionRuntimeUninstallPreviewRequest request, CancellationToken token) => _client.PreviewExecutionRuntimeUninstallAsync(request, token);
+    public Task<RuntimeExecutionRuntimeUninstallResult> ApplyExecutionRuntimeUninstallAsync(RuntimeExecutionRuntimePlanConfirmation request, CancellationToken token) => _client.ApplyExecutionRuntimeUninstallAsync(request, token);
     private readonly RuntimeManagementClient _client;
     private readonly TimeSpan _resetLeaseWait;
 
@@ -314,7 +331,6 @@ internal sealed class CliRuntimeClient : ICliRuntimeClient
     public Task<InstalledExecutionRuntimeSummary> GetExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => _client.GetExecutionRuntimeAsync(identity, token);
     public Task<IReadOnlyList<RuntimeExecutionRuntimePackageReference>> GetExecutionRuntimeReferencesAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => _client.GetExecutionRuntimeReferencesAsync(identity, token);
     public Task<RuntimeExecutionRuntimeOperationResult> EnsureExecutionRuntimeAsync(RuntimeExecutionRuntimeEnsureRequest request, CancellationToken token) => _client.EnsureExecutionRuntimeAsync(request, token);
-    public Task<RuntimeExecutionRuntimeOperationResult> ImportExecutionRuntimeAsync(string filePath, CancellationToken token) => _client.ImportExecutionRuntimeAsync(filePath, token);
     public Task<RuntimeExecutionRuntimeOperationResult> VerifyExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => _client.VerifyExecutionRuntimeAsync(identity, token);
     public Task<RuntimeExecutionRuntimeOperationResult> RepairExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => _client.RepairExecutionRuntimeAsync(identity, token);
     public Task<RuntimeExecutionRuntimeOperationResult> CollectExecutionRuntimeGarbageAsync(CancellationToken token) => _client.CollectExecutionRuntimeGarbageAsync(token);

@@ -3,11 +3,16 @@
   "message": "Execution runtime integrity verification failed.",
   "retryable": false,
   "operation": "verify",
-  "runtimeId": "sunder.runtime.dotnet",
-  "version": "10.0.1",
-  "packagingRevision": 2,
-  "rid": "win-x64",
+  "runtime": {
+    "sourceId": "dotnet",
+    "runtimeId": "sunder.runtime.dotnet",
+    "vendorVersion": "10.0.1",
+    "rid": "win-x64",
+    "moduleAbi": "sunder.dotnet-worker-module.v1",
+    "vendorChecksumAlgorithm": "sha512",
+    "vendorChecksumDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
   "packageId": "sunder.package.sample",
   "targetRole": "runtime",
-  "occurredAtUtc": "2026-07-11T10:10:00+00:00"
+  "occurredAtUtc": "2026-10-08T10:00:00+00:00"
 }

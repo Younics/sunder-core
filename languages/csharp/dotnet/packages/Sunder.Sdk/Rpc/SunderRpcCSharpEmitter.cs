@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Sunder.Sdk.Rpc;
 
-internal static class SunderRpcCSharpEmitter
+internal static partial class SunderRpcCSharpEmitter
 {
     public static string Emit(SunderRpcCSharpGeneratorModel model, string namespaceName)
     {
@@ -52,7 +52,10 @@ internal static class SunderRpcCSharpEmitter
     private static void EmitDefinition(
         StringBuilder output,
         SunderRpcCSharpDefinitionModel definition,
-        SunderRpcCSharpGeneratorModel model)
+        SunderRpcCSharpGeneratorModel model,
+        StringBuilder? codecs = null,
+        string? modelsNamespace = null,
+        string? codecNamespace = null)
     {
         switch (definition)
         {
@@ -60,10 +63,16 @@ internal static class SunderRpcCSharpEmitter
                 EmitRecord(output, record.Record, model);
                 break;
             case SunderRpcCSharpStringEnumDefinitionModel stringEnum:
-                EmitStringEnumDefinition(output, stringEnum, model);
+                EmitStringEnumDefinition(output, stringEnum, model, codecs, modelsNamespace, codecNamespace);
                 break;
             case SunderRpcCSharpTaggedUnionDefinitionModel taggedUnion:
-                EmitTaggedUnionDefinition(output, taggedUnion, model);
+                EmitTaggedUnionDefinition(output, taggedUnion, model, codecs, modelsNamespace, codecNamespace);
+                break;
+            case SunderRpcCSharpNumericEnumDefinitionModel numericEnum:
+                EmitNumericEnumDefinition(output, numericEnum, model, codecs, modelsNamespace, codecNamespace);
+                break;
+            case SunderRpcCSharpTransparentDefinitionModel transparent:
+                EmitTransparentDefinition(output, transparent, model, codecs, modelsNamespace, codecNamespace);
                 break;
             default:
                 throw new InvalidOperationException(
@@ -141,7 +150,7 @@ internal static class SunderRpcCSharpEmitter
         SunderRpcCSharpGeneratorModel model)
     {
         output.Append(model.Accessibility)
-            .Append(record.BaseTypeName is null ? " sealed class " : " sealed record ")
+            .Append(model.ProjectedRecords || record.BaseTypeName is not null ? " sealed record " : " sealed class ")
             .Append(record.TypeName);
         if (record.BaseTypeName is not null) output.Append(" : ").Append(record.BaseTypeName);
         output.AppendLine().AppendLine("{");
@@ -155,6 +164,11 @@ internal static class SunderRpcCSharpEmitter
                     .Append(SunderRpcCSharpSyntax.EscapeStringLiteral(property.ConstantValue)).AppendLine("\";")
                     .AppendLine();
                 continue;
+            }
+
+            if (model.ProjectedRecords && property.IsRequired && property.HasNullDefault)
+            {
+                output.AppendLine("    [global::System.Text.Json.Serialization.JsonRequired]");
             }
 
             switch (property.Serialization)
@@ -175,7 +189,7 @@ internal static class SunderRpcCSharpEmitter
                         $"Unsupported generated property serialization '{property.Serialization}'.");
             }
             output.Append("    public ");
-            if (property.IsRequired) output.Append("required ");
+            if (property.IsRequired && !(model.ProjectedRecords && property.HasNullDefault)) output.Append("required ");
             output.Append(property.TypeName).Append(' ')
                 .Append(property.Name)
                 .AppendLine(" { get; init; }")
@@ -187,10 +201,11 @@ internal static class SunderRpcCSharpEmitter
     private static void EmitStringEnumDefinition(
         StringBuilder output,
         SunderRpcCSharpStringEnumDefinitionModel definition,
-        SunderRpcCSharpGeneratorModel model)
+        SunderRpcCSharpGeneratorModel model, StringBuilder? codecs = null, string? modelsNamespace = null, string? codecNamespace = null)
     {
+        var type = Qualified(modelsNamespace, definition.TypeName);
         output.Append("[global::System.Text.Json.Serialization.JsonConverter(typeof(")
-            .Append(definition.ConverterTypeName).AppendLine("))]")
+            .Append(Qualified(codecNamespace, definition.ConverterTypeName)).AppendLine("))]")
             .Append(model.Accessibility).Append(" enum ").Append(definition.TypeName).AppendLine().AppendLine("{");
         foreach (var member in definition.Members)
         {
@@ -201,11 +216,12 @@ internal static class SunderRpcCSharpEmitter
         }
         output.AppendLine("}").AppendLine();
 
+        output = codecs ?? output;
         output.Append("internal sealed class ").Append(definition.ConverterTypeName)
             .Append(" : global::System.Text.Json.Serialization.JsonConverter<")
-            .Append(definition.TypeName).AppendLine(">")
+            .Append(type).AppendLine(">")
             .AppendLine("{")
-            .Append("    public override ").Append(definition.TypeName)
+            .Append("    public override ").Append(type)
             .AppendLine(" Read(ref global::System.Text.Json.Utf8JsonReader reader, global::System.Type typeToConvert, global::System.Text.Json.JsonSerializerOptions options)")
             .AppendLine("    {")
             .AppendLine("        if (reader.TokenType != global::System.Text.Json.JsonTokenType.String)")
@@ -217,21 +233,21 @@ internal static class SunderRpcCSharpEmitter
         foreach (var member in definition.Members)
         {
             output.Append("            \"").Append(SunderRpcCSharpSyntax.EscapeStringLiteral(member.WireValue)).Append("\" => ")
-                .Append(definition.TypeName).Append('.').Append(member.Name).AppendLine(",");
+                .Append(type).Append('.').Append(member.Name).AppendLine(",");
         }
         output.AppendLine("            _ => throw new global::System.Text.Json.JsonException(\"The RPC string enum value is not declared.\"),")
             .AppendLine("        };")
             .AppendLine("    }")
             .AppendLine()
             .Append("    public override void Write(global::System.Text.Json.Utf8JsonWriter writer, ")
-            .Append(definition.TypeName)
+            .Append(type)
             .AppendLine(" value, global::System.Text.Json.JsonSerializerOptions options)")
             .AppendLine("    {")
             .AppendLine("        writer.WriteStringValue(value switch")
             .AppendLine("        {");
         foreach (var member in definition.Members)
         {
-            output.Append("            ").Append(definition.TypeName).Append('.').Append(member.Name)
+            output.Append("            ").Append(type).Append('.').Append(member.Name)
                 .Append(" => \"").Append(SunderRpcCSharpSyntax.EscapeStringLiteral(member.WireValue)).AppendLine("\",");
         }
         output.AppendLine("            _ => throw new global::System.Text.Json.JsonException(\"The RPC string enum value is not declared.\"),")
@@ -244,10 +260,11 @@ internal static class SunderRpcCSharpEmitter
     private static void EmitTaggedUnionDefinition(
         StringBuilder output,
         SunderRpcCSharpTaggedUnionDefinitionModel definition,
-        SunderRpcCSharpGeneratorModel model)
+        SunderRpcCSharpGeneratorModel model, StringBuilder? codecs = null, string? modelsNamespace = null, string? codecNamespace = null)
     {
+        var type = Qualified(modelsNamespace, definition.TypeName);
         output.Append("[global::System.Text.Json.Serialization.JsonConverter(typeof(")
-            .Append(definition.ConverterTypeName).AppendLine("))]")
+            .Append(Qualified(codecNamespace, definition.ConverterTypeName)).AppendLine("))]")
             .Append(model.Accessibility).Append(" abstract record ").Append(definition.TypeName).AppendLine()
             .AppendLine("{")
             .Append("    private protected ").Append(definition.TypeName).AppendLine("() { }")
@@ -262,11 +279,12 @@ internal static class SunderRpcCSharpEmitter
             }
         }
 
+        output = codecs ?? output;
         output.Append("internal sealed class ").Append(definition.ConverterTypeName)
             .Append(" : global::System.Text.Json.Serialization.JsonConverter<")
-            .Append(definition.TypeName).AppendLine(">")
+            .Append(type).AppendLine(">")
             .AppendLine("{")
-            .Append("    public override ").Append(definition.TypeName)
+            .Append("    public override ").Append(type)
             .AppendLine(" Read(ref global::System.Text.Json.Utf8JsonReader reader, global::System.Type typeToConvert, global::System.Text.Json.JsonSerializerOptions options)")
             .AppendLine("    {")
             .AppendLine("        using var document = global::System.Text.Json.JsonDocument.ParseValue(ref reader);")
@@ -283,7 +301,7 @@ internal static class SunderRpcCSharpEmitter
         foreach (var variant in definition.Variants)
         {
             output.Append("            \"").Append(SunderRpcCSharpSyntax.EscapeStringLiteral(variant.Tag)).Append("\" => ")
-                .Append("global::System.Text.Json.JsonSerializer.Deserialize<").Append(variant.TypeName)
+                .Append("global::System.Text.Json.JsonSerializer.Deserialize<").Append(Qualified(modelsNamespace, variant.TypeName))
                 .AppendLine(">(value.GetRawText(), options)")
                 .AppendLine("                ?? throw new global::System.Text.Json.JsonException(\"The RPC tagged-union variant deserialized to null.\"),");
         }
@@ -292,14 +310,14 @@ internal static class SunderRpcCSharpEmitter
             .AppendLine("    }")
             .AppendLine()
             .Append("    public override void Write(global::System.Text.Json.Utf8JsonWriter writer, ")
-            .Append(definition.TypeName)
+            .Append(type)
             .AppendLine(" value, global::System.Text.Json.JsonSerializerOptions options)")
             .AppendLine("    {")
             .AppendLine("        switch (value)")
             .AppendLine("        {");
         foreach (var variant in definition.Variants)
         {
-            output.Append("            case ").Append(variant.TypeName).AppendLine(" variant:")
+            output.Append("            case ").Append(Qualified(modelsNamespace, variant.TypeName)).AppendLine(" variant:")
                 .AppendLine("                global::System.Text.Json.JsonSerializer.Serialize(writer, variant, options);")
                 .AppendLine("                return;");
         }

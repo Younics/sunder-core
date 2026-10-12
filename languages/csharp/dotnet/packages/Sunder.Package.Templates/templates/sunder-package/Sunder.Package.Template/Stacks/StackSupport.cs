@@ -1,8 +1,8 @@
 using Sunder.Sdk.Stacks;
-using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 namespace Sunder.Package.Template;
 
-[SunderRpcProvider(typeof(IPackageStackContributor), ProviderId = "SUNDER_PACKAGE_ID_TEXT.stack")]
+[SunderServiceProvider(typeof(IPackageStackContributor), ProviderId = "SUNDER_PACKAGE_ID_CSHARP.stack")]
 public sealed partial class PackageStackContributor : IPackageStackExporter, IPackageStackImporter
 {
     public string ContributorId => "SUNDER_PACKAGE_ID_CSHARP.stack";

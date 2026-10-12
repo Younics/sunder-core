@@ -10,32 +10,37 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed partial class RegistryRuntimeArchitectureTests
 {
-    // These tests focus on package transaction/runtime evidence. Their previously
-    // installed fixtures now carry a real durable, exact-subject execution lease.
     private static async Task SeedExistingActivePolicyAsync(RuntimePackagePaths paths, InstalledPackageRecord package)
     {
+        if (package.Provenance.RegistryOrigin is not { } origin)
+        {
+            return;
+        }
+
         var clock = new PolicyContinuousClock();
         var cache = new PackageLifecyclePolicyCache(paths, clock);
-        var origin = package.Provenance.RegistryOrigin ?? package.ExecutionRuntimeBindings.First().RegistryOrigin;
-        var subjects = new List<PackagePolicySubjects>
+        var sourceIdentity = package.Provenance.SourceKind == InstalledPackageSourceKind.Registry
+            ? package.Provenance.SourceIdentity!
+            : package.ContentIdentity;
+        var packageSubject = new RegistryPackageVersionIdentity(package.PackageId, package.Version, sourceIdentity);
+        var normalizedOrigin = RegistryActivePolicyClient.Origin(origin);
+        var request = await cache.CreateRequestAsync(normalizedOrigin, [packageSubject], [], default);
+        request = request with { Nonce = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)) };
+        var observedAt = package.InstalledAtUtc;
+        var response = ActivePolicyTestContext.Allowed(request) with
         {
-            new(RegistryActivePolicyClient.Origin(origin), [new(package.PackageId, package.Version,
-                package.Provenance.SourceKind == InstalledPackageSourceKind.Registry ? package.Provenance.SourceIdentity! : package.ContentIdentity)], [], []),
+            RegistryOrigin = normalizedOrigin,
+            ObservedAtUtc = observedAt,
+            ValidUntilUtc = observedAt.AddHours(24),
         };
-        foreach (var binding in package.ExecutionRuntimeBindings)
-            subjects.Add(new(RegistryActivePolicyClient.Origin(binding.RegistryOrigin), [], [], [PackagePolicyAdmission.RuntimeSubject(RuntimePackageExecutionRuntimeBinding.FromInstalled(binding))]));
-        foreach (var group in subjects.GroupBy(value => value.Origin, StringComparer.Ordinal))
-        {
-            var request = await cache.CreateRequestAsync(group.Key, group.SelectMany(value => value.Packages).Distinct().OrderBy(RegistryActivePolicyClient.PackageKey, StringComparer.Ordinal).ToArray(), [],
-                group.SelectMany(value => value.Runtimes).Distinct().OrderBy(RegistryActivePolicyClient.RuntimeKey, StringComparer.Ordinal).ToArray(), default);
-            request = request with { Nonce = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)) };
-            var observedAt = package.ExecutionRuntimeBindings.Min(value => value.PolicyObservedAtUtc);
-            var response = ActivePolicyTestContext.Allowed(request) with
-            { RegistryOrigin = group.Key, ObservedAtUtc = observedAt, ValidUntilUtc = observedAt.AddHours(24) };
-            var now = clock.Read();
-            await cache.ObserveAsync(new(request, response, now, now,
-                Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(response, RegistryActivePolicyClient.Json))), cache.ClockGeneration(group.Key)));
-        }
+        var now = clock.Read();
+        await cache.ObserveAsync(new RegistryPolicyObservation(
+            request,
+            response,
+            now,
+            now,
+            Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(response, RegistryActivePolicyClient.Json))),
+            cache.ClockGeneration(normalizedOrigin)));
     }
 
     private sealed class ActivePolicyRegistryFixture
@@ -49,35 +54,31 @@ public sealed partial class RegistryRuntimeArchitectureTests
             {
                 var subjects = (await request.Content!.ReadFromJsonAsync<RegistryPolicySynchronizationRequest>(RegistryActivePolicyClient.Json, token))!;
                 _plans.TryGetValue(origin, out var plan);
-                var response = ActivePolicyTestContext.Allowed(subjects, plan?.RuntimePolicyRevision ?? 1);
-                var observedAt = plan?.ExpiresAtUtc > DateTimeOffset.MinValue.AddMinutes(5) ? plan.ExpiresAtUtc.AddMinutes(-5) : DateTimeOffset.UtcNow;
+                var response = ActivePolicyTestContext.Allowed(subjects, plan?.PackagePolicy?.Revision ?? 1);
+                var observedAt = plan?.ExpiresAtUtc > DateTimeOffset.MinValue.AddMinutes(5)
+                    ? plan.ExpiresAtUtc.AddMinutes(-5)
+                    : DateTimeOffset.UtcNow;
                 response = response with
                 {
                     RegistryOrigin = origin,
                     ObservedAtUtc = observedAt,
                     ValidUntilUtc = observedAt.AddHours(24),
                     PackagePolicy = plan?.PackagePolicy ?? new(1, ActivePolicyTestContext.Hash("package-policy-1")),
-                    Runtimes = response.Runtimes.Select(value =>
-                    {
-                        var artifact = plan?.RuntimeArtifacts.SingleOrDefault(artifact => artifact.Identity == value.Subject.Runtime);
-                        return artifact is null ? value : value with
-                        { LifecycleState = artifact.Lifecycle.State, ActivationBlockedAtUtc = artifact.Lifecycle.ActivationBlockedAtUtc, RevokedAtUtc = artifact.Lifecycle.RevokedAtUtc };
-                    }).ToArray(),
+                    Checkpoint = plan?.PolicyCheckpoint ?? new(1, ActivePolicyTestContext.Hash("checkpoint-1"), 1, ActivePolicyTestContext.Hash("topology")),
                 };
                 return new(HttpStatusCode.OK) { Content = JsonContent.Create(response, options: RegistryActivePolicyClient.Json) };
             }
+
             var result = await send();
             if (result.Content is JsonContent { Value: RegistryResolveInstallPlanResponse { Success: true } planResult })
             {
-                var runtimeRevision = Math.Max(1, planResult.RuntimePolicyRevision);
-                var policy = new RegistryPolicyIdentity(1, ActivePolicyTestContext.Hash("package-policy-1"));
-                var checkpoint = new RegistryPolicyCheckpointIdentity(runtimeRevision, ActivePolicyTestContext.Hash("checkpoint-" + runtimeRevision), 1, ActivePolicyTestContext.Hash("topology"));
+                var policy = planResult.PackagePolicy ?? new RegistryPolicyIdentity(1, ActivePolicyTestContext.Hash("package-policy-1"));
+                var checkpoint = planResult.PolicyCheckpoint ?? new RegistryPolicyCheckpointIdentity(1, ActivePolicyTestContext.Hash("checkpoint-1"), 1, ActivePolicyTestContext.Hash("topology"));
                 var updated = planResult with
                 {
-                    RuntimePolicyRevision = runtimeRevision,
                     PackagePolicy = policy,
                     PolicyCheckpoint = checkpoint,
-                    ResolutionPolicy = new(policy, checkpoint, [], [], [], []),
+                    ResolutionPolicy = planResult.ResolutionPolicy ?? new(policy, checkpoint, [], [], [], []),
                 };
                 _plans[origin] = updated;
                 result.Content.Dispose();

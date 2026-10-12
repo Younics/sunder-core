@@ -20,6 +20,7 @@ internal sealed record PackageOperationMetadata(
     PackageOperationKind Kind,
     string DisplayName)
 {
+    public IReadOnlyList<string> PackageIds { get; init; } = PackageId is null ? [] : [PackageId];
     private const string OperationMetadataKey = "sunder.packageOperation";
     private const string PackageIdMetadataKey = "packageId";
     private const string KindMetadataKey = "kind";
@@ -37,7 +38,12 @@ internal sealed record PackageOperationMetadata(
             operationMetadata = new PackageOperationMetadata(
                 metadata.TryGetValue(PackageIdMetadataKey, out var packageId) && !string.IsNullOrWhiteSpace(packageId) ? packageId : null,
                 kind,
-                displayName);
+                displayName)
+            {
+                PackageIds = metadata.TryGetValue("sunder.installationMembers", out var members)
+                    ? members.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    : metadata.TryGetValue(PackageIdMetadataKey, out var member) ? [member] : [],
+            };
             return true;
         }
 
@@ -58,6 +64,7 @@ internal sealed record PackageOperationMetadata(
         {
             metadata[PackageIdMetadataKey] = PackageId;
         }
+        if (PackageIds.Count > 0) metadata["sunder.installationMembers"] = string.Join('\n', PackageIds);
 
         return metadata;
     }
@@ -72,7 +79,7 @@ internal sealed class PackageOperationChangedEventArgs(BackgroundProcessSnapshot
         : throw new InvalidOperationException("Background process is not a package operation.");
 }
 
-internal sealed class PackageOperationService : IPackageOperationExecutor, IDisposable
+internal sealed partial class PackageOperationService : IPackageOperationExecutor, IDisposable
 {
     public const string PackageStoreGroupKey = "package-store";
     private static readonly TimeSpan DefaultPresentationWaitTimeout = TimeSpan.FromSeconds(30);
@@ -82,8 +89,12 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
     private readonly Func<Uri, IRegistryClient> _createRegistryClient;
     private readonly RegistryPackageInstallService _registryInstallService;
     private readonly PackageOperationFinalizer _operationFinalizer;
+    private readonly Func<Sunder.App.ViewModels.LocalPackageInstallConsentViewModel, CancellationToken, Task<bool>>? _confirmLocalPackage;
     private readonly object _operationGate = new();
     private readonly Dictionary<Guid, string> _temporaryLocalArchives = [];
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly CancellationToken _lifetimeToken;
+    private readonly TimeProvider _uploadRetentionClock;
     private volatile bool _disposed;
 
     public PackageOperationService(
@@ -94,9 +105,14 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
         RegistryPackageInstallService? registryInstallService = null,
         Func<Uri, IRegistryClient>? registryClientFactory = null,
         Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>>? waitForPresentationAsync = null,
-        TimeSpan? presentationWaitTimeout = null)
+        TimeSpan? presentationWaitTimeout = null,
+        Func<Sunder.App.ViewModels.LocalPackageInstallConsentViewModel, CancellationToken, Task<bool>>? confirmLocalPackage = null,
+        TimeProvider? uploadRetentionClock = null)
     {
         _backgroundProcesses = backgroundProcesses;
+        _lifetimeToken = _lifetime.Token;
+        _uploadRetentionClock = uploadRetentionClock ?? TimeProvider.System;
+        _confirmLocalPackage = confirmLocalPackage;
         _runtimeApiClientFactory = runtimeApiClientFactory;
         _operationFinalizer = new PackageOperationFinalizer(
             waitForPresentationAsync ?? (async (stamp, cancellationToken) =>
@@ -117,7 +133,7 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
             }),
             notificationCenter,
             presentationWaitTimeout ?? DefaultPresentationWaitTimeout);
-        _registryInstallService = registryInstallService ?? new RegistryPackageInstallService();
+        _registryInstallService = registryInstallService ?? new RegistryPackageInstallService(backgroundProcesses: backgroundProcesses);
         _createRegistryClient = registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl));
         _backgroundProcesses.ProcessChanged += BackgroundProcesses_OnProcessChanged;
     }
@@ -136,6 +152,8 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
             _disposed = true;
         }
 
+        _lifetime.Cancel();
+        _lifetime.Dispose();
         _backgroundProcesses.ProcessChanged -= BackgroundProcesses_OnProcessChanged;
         GC.SuppressFinalize(this);
     }
@@ -174,156 +192,81 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
         return operation is not null && _backgroundProcesses.Cancel(operation.ProcessId);
     }
 
-    public BackgroundProcessSnapshot EnqueueMarketplaceInstall(
+    public Task<BackgroundProcessSnapshot?> EnqueueMarketplaceInstallAsync(
         string packageId,
         string displayName,
         Uri registryUrl,
         string? version = null,
-        string? tag = "latest")
+        string? tag = "latest",
+        CancellationToken cancellationToken = default)
     {
-        return EnqueuePackageStoreOperation(
-            packageId,
-            displayName,
-            PackageOperationKind.InstallMarketplace,
-            $"Install {displayName}",
-            canCancel: true,
-            async context =>
+        return QueueRegistryInstallationAsync(packageId, displayName, PackageOperationKind.InstallMarketplace,
+            $"Install {displayName}", async (client, token) =>
             {
-                context.ReportProgress(0, $"Installing {displayName}...");
                 using var registryClient = _createRegistryClient(registryUrl);
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
-                var result = await _registryInstallService.InstallPackageAsync(
-                    packageId,
-                    version,
-                    tag,
-                    allowDowngrade: false,
-                    reinstall: false,
-                    registryClient,
-                    runtimeApiClient,
-                    progress => ReportRegistryProgress(context, progress),
-                    context.CancellationToken).ConfigureAwait(false);
-
-                await _operationFinalizer.FinishRegistryOperationAsync(context, result, "Package installed", $"{packageId} was installed from the marketplace.").ConfigureAwait(false);
-            });
+                return await _registryInstallService.PreparePackageAsync(packageId, version, tag, false, false, registryClient, client, token).ConfigureAwait(false);
+            }, cancellationToken);
     }
 
-    public BackgroundProcessSnapshot EnqueueLocalInstall(
+    public Task<BackgroundProcessSnapshot?> EnqueueLocalInstallAsync(
         string packagePath,
         string expectedSha256,
         bool deleteAfterUse)
-        => EnqueueLocalInstall(
+        => EnqueueLocalInstallAsync(
             packagePath,
             expectedSha256,
             deleteAfterUse,
             capabilityConsent: null);
 
-    public BackgroundProcessSnapshot EnqueueLocalInstall(
+    public Task<BackgroundProcessSnapshot?> EnqueueLocalInstallAsync(
         string packagePath,
         string expectedSha256,
         bool deleteAfterUse,
         PackageCapabilityConsent? capabilityConsent)
+        => EnqueueLocalInstallAsync(new PackageArchiveSelection(packagePath, expectedSha256, deleteAfterUse, capabilityConsent));
+
+    public Task<BackgroundProcessSnapshot?> EnqueueMarketplaceUpdateAsync(
+        string packageId,
+        string displayName,
+        string version,
+        CancellationToken cancellationToken = default)
     {
-        var displayName = Path.GetFileName(packagePath);
-        BackgroundProcessSnapshot operation;
+        return QueueRegistryInstallationAsync(packageId, displayName, PackageOperationKind.UpdateMarketplace,
+            $"Update {displayName}", (client, token) => _registryInstallService.PrepareUpdateAsync(packageId, client, token), cancellationToken);
+    }
+
+    public Task<BackgroundProcessSnapshot?> EnqueueRegistrySourceAdoptionAsync(
+        string packageId,
+        string displayName,
+        Uri registryUrl,
+        CancellationToken cancellationToken = default)
+    {
+        return QueueRegistryInstallationAsync(packageId, displayName, PackageOperationKind.AdoptRegistrySource,
+            $"Adopt Registry source for {displayName}", (client, token) => _registryInstallService.PrepareAdoptionAsync(packageId, registryUrl, client, token), cancellationToken);
+    }
+
+    private async Task<BackgroundProcessSnapshot?> QueueRegistryInstallationAsync(string? packageId, string displayName,
+        PackageOperationKind kind, string title,
+        Func<IRuntimePackageChangeClient, CancellationToken, Task<PreparedRegistryPackageInstallation?>> prepare,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        if (packageId is not null && GetActiveOperationForPackageCore(packageId) is { } existing) return existing;
+        using var preparation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeToken);
+        var client = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
+        var enqueued = false;
         try
         {
-            operation = EnqueuePackageStoreOperation(
-                packageId: null,
-                displayName,
-                PackageOperationKind.InstallLocal,
-                $"Install {displayName}",
-                canCancel: true,
-                async context =>
-                {
-                    context.ReportIndeterminate($"Installing {displayName}...");
-                    using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
-                    var upload = await runtimeApiClient.UploadPackageAsync(
-                        packagePath,
-                        context.CancellationToken).ConfigureAwait(false);
-                    if (!string.Equals(upload.ContentHash, expectedSha256, StringComparison.Ordinal))
-                    {
-                        throw new InvalidDataException(
-                            "The package archive changed after review. Select it again before installing.");
-                    }
-                    var result = await StageCommitPackageStoreAsync(
-                        runtimeApiClient,
-                        new PackageStoreStageRequest([new PackageStoreMutationRequest(
-                            PackageStoreMutationKind.Install,
-                            UploadId: upload.UploadId,
-                            CapabilityConsent: capabilityConsent)]),
-                        context.CancellationToken).ConfigureAwait(false);
-                    await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package installed", "Package installed from disk.").ConfigureAwait(false);
-                });
+            var approved = await prepare(client, preparation.Token).ConfigureAwait(false);
+            if (approved is null) return null;
+            preparation.Token.ThrowIfCancellationRequested();
+            var installation = _registryInstallService.EnqueuePrepared(approved, title, new(packageId, kind, displayName),
+                _lifetimeToken, () => { client.Dispose(); return ValueTask.CompletedTask; },
+                (context, result) => _operationFinalizer.FinishRegistryOperationAsync(context, result, "Package changes applied", result.Message));
+            enqueued = true;
+            return installation.PackageJob;
         }
-        catch
-        {
-            if (deleteAfterUse)
-            {
-                PackageArchivePicker.DeleteReviewSnapshot(packagePath);
-            }
-            throw;
-        }
-
-        if (deleteAfterUse)
-        {
-            TrackTemporaryLocalArchive(operation.ProcessId, packagePath);
-        }
-        return operation;
-    }
-
-    public BackgroundProcessSnapshot EnqueueMarketplaceUpdate(
-        string packageId,
-        string displayName,
-        string version)
-    {
-        return EnqueuePackageStoreOperation(
-            packageId,
-            displayName,
-            PackageOperationKind.UpdateMarketplace,
-            $"Update {displayName}",
-            canCancel: true,
-            async context =>
-            {
-                context.ReportProgress(0, $"Updating {displayName}...");
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
-                var result = await _registryInstallService.UpdatePackageAsync(
-                    packageId,
-                    runtimeApiClient,
-                    progress => ReportRegistryProgress(context, progress),
-                    context.CancellationToken).ConfigureAwait(false);
-
-                await _operationFinalizer.FinishRegistryOperationAsync(context, result, "Package updated", $"{packageId} was updated to {version}.").ConfigureAwait(false);
-            });
-    }
-
-    public BackgroundProcessSnapshot EnqueueRegistrySourceAdoption(
-        string packageId,
-        string displayName,
-        Uri registryUrl)
-    {
-        return EnqueuePackageStoreOperation(
-            packageId,
-            displayName,
-            PackageOperationKind.AdoptRegistrySource,
-            $"Adopt Registry source for {displayName}",
-            canCancel: true,
-            async context =>
-            {
-                context.ReportProgress(0, $"Adopting Registry source for {displayName}...");
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
-                var result = await _registryInstallService.AdoptPackageSourceAsync(
-                    packageId,
-                    registryUrl,
-                    runtimeApiClient,
-                    progress => ReportRegistryProgress(context, progress),
-                    context.CancellationToken).ConfigureAwait(false);
-
-                await _operationFinalizer.FinishRegistryOperationAsync(
-                    context,
-                    result,
-                    "Package source adopted",
-                    $"{packageId} was adopted from the Registry and updated.").ConfigureAwait(false);
-            });
+        finally { if (!enqueued) client.Dispose(); }
     }
 
     public BackgroundProcessSnapshot EnqueueEnable(string packageId, string displayName)
@@ -396,26 +339,9 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
             });
     }
 
-    public BackgroundProcessSnapshot EnqueueUpdateAll()
-    {
-        return EnqueuePackageStoreOperation(
-            packageId: null,
-            displayName: "All packages",
-            PackageOperationKind.UpdateAll,
-            "Update all packages",
-            canCancel: true,
-            async context =>
-            {
-                context.ReportProgress(0, "Updating installed packages...");
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
-                var result = await _registryInstallService.UpdateAllAsync(
-                    runtimeApiClient,
-                    progress => ReportRegistryProgress(context, progress),
-                    context.CancellationToken).ConfigureAwait(false);
-
-                await _operationFinalizer.FinishRegistryOperationAsync(context, result, "Packages updated", "Installed packages were updated.").ConfigureAwait(false);
-            });
-    }
+    public Task<BackgroundProcessSnapshot?> EnqueueUpdateAllAsync(CancellationToken cancellationToken = default)
+        => QueueRegistryInstallationAsync(null, "All packages", PackageOperationKind.UpdateAll, "Update all packages",
+            (client, token) => _registryInstallService.PrepareUpdateAsync(null, client, token), cancellationToken);
 
     public async Task CancelAllAsync(CancellationToken cancellationToken = default)
     {
@@ -585,8 +511,9 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
     private BackgroundProcessSnapshot? GetActiveOperationForPackageCore(string packageId)
         => ListOperationsCore()
             .Where(snapshot => snapshot.IsActive)
+            .OrderBy(snapshot => snapshot.Metadata.GetValueOrDefault("sunder.installationPhase") == "runtime" ? 1 : 0)
             .FirstOrDefault(snapshot => PackageOperationMetadata.TryCreate(snapshot.Metadata, out var metadata)
-                                        && string.Equals(metadata.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
+                                        && metadata.PackageIds.Contains(packageId, StringComparer.OrdinalIgnoreCase));
 
     private BackgroundProcessSnapshot? GetActiveUpdateAllOperationCore()
         => ListOperationsCore().FirstOrDefault(snapshot => snapshot.IsActive

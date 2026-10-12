@@ -1334,7 +1334,7 @@ public sealed class ActivePackageSessionTests
     }
 
     [Fact]
-    public async Task ExecutionRuntimePolicyFault_ExposesWorkerCleanupProof()
+    public async Task PackageExecutionFault_ExposesWorkerCleanupProof()
     {
         const string packageId = "test.package";
         var owner = new RuntimeSessionOwner(
@@ -1347,24 +1347,9 @@ public sealed class ActivePackageSessionTests
         var loaded = CreateLoadedPackage(packageId, worker);
         loaded = loaded with
         {
-            ExecutionRuntimeBinding = new RuntimePackageExecutionRuntimeBinding(
+            ExecutionRuntimeBinding = TestExecutionRuntimeLaunchResolver.CreateBinding(
                 SunderPackageFormat.RuntimeHostRole,
-                "test-rid",
-                "test-runtime",
-                "1.0.0",
-                1,
-                "test-abi",
-                new string('a', 64),
-                new string('b', 64),
-                1,
-                "https://registry.example.test",
-                RuntimeExecutionRuntimeAcquisitionSources.Registry,
-                "test-key",
-                1,
-                1,
-                Sunder.Registry.Contracts.ExecutionRuntimeLifecycleStates.Supported,
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow),
+                PackageTargetSelection.GetCurrentRuntimeIdentifier()),
         };
         var session = new ActivePackageSession(
             sessionFolder: null,
@@ -1395,7 +1380,7 @@ public sealed class ActivePackageSessionTests
                     {
                         loaded.ExecutionRuntimeBinding!.Identity.SingleFlightKey,
                     }));
-            Assert.True(owner.EnforceExecutionRuntimePolicy(
+            Assert.True(owner.FaultPackageExecution(
                 packageId,
                 "Execution runtime repair is pending.",
                 out var cleanupCompletion));
@@ -1430,11 +1415,13 @@ public sealed class ActivePackageSessionTests
         var repairEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseRepair = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var identity = new ExecutionRuntimeIdentity(
-            "test-runtime",
-            "1.0.0",
-            1,
-            "test-rid",
-            "test-abi");
+            ConfiguredOfficialSourceId.DotNet,
+            "sunder.runtime.dotnet",
+            "10.0.1",
+            PackageTargetSelection.GetCurrentRuntimeIdentifier(),
+            "sunder.dotnet-worker-module.v1",
+            RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
+            new string('a', 128));
 
         try
         {

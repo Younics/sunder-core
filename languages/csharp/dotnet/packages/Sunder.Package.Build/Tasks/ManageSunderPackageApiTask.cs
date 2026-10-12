@@ -22,6 +22,7 @@ public sealed class ManageSunderPackageApiTask : Microsoft.Build.Utilities.Task,
     public string RegistryOrigin { get; set; } = string.Empty;
     public bool AllowDevelopmentRegistryOrigin { get; set; }
     public string Presence { get; set; } = string.Empty;
+    public string ConsumerRoles { get; set; } = string.Empty;
     public string LocalName { get; set; } = string.Empty;
     public string Candidate { get; set; } = string.Empty;
     public string PlatformCatalogPath { get; set; } = string.Empty;
@@ -31,6 +32,8 @@ public sealed class ManageSunderPackageApiTask : Microsoft.Build.Utilities.Task,
     public string OwnedContractsPath { get; set; } = string.Empty;
     public string IntermediateOutputPath { get; set; } = string.Empty;
     public string ProjectIdentity { get; set; } = string.Empty;
+    public string ProjectFile { get; set; } = string.Empty;
+    public ITaskItem[] ProjectImports { get; set; } = [];
     public string AssemblyName { get; set; } = "Sunder.Rpc.Authoring";
     public string Configuration { get; set; } = string.Empty;
     public string TargetFramework { get; set; } = string.Empty;
@@ -60,12 +63,13 @@ public sealed class ManageSunderPackageApiTask : Microsoft.Build.Utilities.Task,
                 prerelease is null ? null : prerelease == "true", Option("SunderRegistryOrigin", RegistryOrigin),
                 Option("SunderPackageApiPresence", Presence), Operation == "Implement" ? null : localName,
                 Operation == "Implement" ? localName : null, candidate is null or "" ? candidate : Path.GetFullPath(candidate, ProjectDirectory),
-                platformCatalog is null or "" ? platformCatalog : Path.GetFullPath(platformCatalog, ProjectDirectory));
+                 platformCatalog is null or "" ? platformCatalog : Path.GetFullPath(platformCatalog, ProjectDirectory), Option("SunderPackageApiConsumerRoles", ConsumerRoles));
             var lockPath = Path.GetFullPath(string.IsNullOrEmpty(ContractLockPath) ? SunderRpcAuthoringDocuments.ContractLockFileName : ContractLockPath, ProjectDirectory);
             var cacheRoot = string.IsNullOrEmpty(ContractCacheRoot) ? SunderRpcContractCache.DefaultRoot : Path.GetFullPath(ContractCacheRoot, ProjectDirectory);
             using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
             var result = new SunderRpcPackageApiCommands(new(http, AllowDevelopmentRegistryOrigin)).ExecuteAsync(lockPath, cacheRoot, request,
-                (before, _, stage) => ValidateSource(before, stage, cacheRoot, request), _cancellation.Token).GetAwaiter().GetResult();
+                (before, _, stage) => ValidateSource(before, stage, cacheRoot, request), _cancellation.Token,
+                message => Log.LogMessage(MessageImportance.High, message)).GetAwaiter().GetResult();
             Log.LogMessage(MessageImportance.High, result.Changed ? "Committed package API lock changes. Run Build to regenerate bindings." : "Package API lock is unchanged.");
             foreach (var artifact in result.ContractLock.PackageArtifacts.Values)
             {
@@ -92,7 +96,7 @@ public sealed class ManageSunderPackageApiTask : Microsoft.Build.Utilities.Task,
     }
 
     private string? Option(string property, string value)
-        => value.Length > 0 || BuildEngine is IBuildEngine6 engine && engine.GetGlobalProperties().ContainsKey(property) ? value : null;
+        => value.Length > 0 ? value : BuildEngine is IBuildEngine6 engine && engine.GetGlobalProperties().TryGetValue(property, out var supplied) ? supplied : null;
 
     internal void ValidateSource(SunderRpcContractLock before, string stage, string cacheRoot, SunderRpcPackageApiRequest request)
     {
@@ -103,7 +107,7 @@ public sealed class ManageSunderPackageApiTask : Microsoft.Build.Utilities.Task,
             providerKey = request.Operation == "PlatformImplement" ? selected.PlatformImports.Values.Single(value => value.ContractId == request.ContractId).Key
                 : selected.ProviderImports.Values.Single(value => value.PackageId == request.PackageId && value.ContractId == request.ContractId).Key;
         }
-        if (request.Operation is not ("Add" or "Update" or "Implement" or "Unimplement" or "PlatformImplement" or "PlatformUpdate" or "PlatformUnimplement")) return;
+        if (request.Operation is not ("Add" or "Update" or "Implement" or "Unimplement" or "PlatformImplement" or "PlatformUpdate" or "PlatformUnimplement" or "MigrateConsumerRoles")) return;
         var check = new GenerateSunderRpcBindingsTask
         {
             BuildEngine = BuildEngine, SourceFiles = SourceFiles, ReferencePaths = ReferencePaths,
@@ -112,6 +116,7 @@ public sealed class ManageSunderPackageApiTask : Microsoft.Build.Utilities.Task,
                 ? Path.GetFullPath(string.IsNullOrEmpty(ContractLockPath) ? SunderRpcAuthoringDocuments.ContractLockFileName : ContractLockPath, ProjectDirectory) : stage,
             ContractCacheRoot = cacheRoot,
             OwnedContractsPath = OwnedContractsPath, IntermediateOutputPath = IntermediateOutputPath, ProjectIdentity = ProjectIdentity,
+            ProjectFile = ProjectFile, ProjectImports = ProjectImports,
             Configuration = Configuration, TargetFramework = TargetFramework, OutputType = OutputType, DefineConstants = DefineConstants, AssemblyName = AssemblyName,
             NullableEnabled = NullableEnabled, GeneratePackageRoles = GeneratePackageRoles, ResourceItems = ResourceItems,
             GeneratorAnalyzers = GeneratorAnalyzers, GeneratorProperties = GeneratorProperties, RootNamespace = RootNamespace,

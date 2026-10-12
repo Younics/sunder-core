@@ -1,122 +1,76 @@
 using System.Text.Json.Serialization;
-using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal enum ExecutionRuntimeTrustEnvironment
-{
-    Production,
-    Development,
-}
-
 internal sealed record ExecutionRuntimeIdentity(
+    ConfiguredOfficialSourceId SourceId,
     string RuntimeId,
-    string Version,
-    int PackagingRevision,
+    string VendorVersion,
     string Rid,
-    string ModuleAbi)
+    string ModuleAbi,
+    RuntimeExecutionRuntimeChecksumAlgorithm VendorChecksumAlgorithm,
+    string VendorChecksumDigest)
 {
+    [JsonIgnore]
     public string SingleFlightKey
-        => $"{RuntimeId}\n{Version}\n{PackagingRevision}\n{Rid}\n{ModuleAbi}";
+        => $"{SourceId}\n{RuntimeId}\n{VendorVersion}\n{Rid}\n{ModuleAbi}\n{VendorChecksumAlgorithm}\n{VendorChecksumDigest}";
+
+    [JsonIgnore]
+    public string VersionKey
+        => $"{SourceId}\n{RuntimeId}\n{VendorVersion}\n{Rid}\n{ModuleAbi}\n{VendorChecksumAlgorithm}";
+
+    public static ExecutionRuntimeIdentity FromContract(RuntimeExecutionRuntimeIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        return new(
+            identity.SourceId,
+            identity.RuntimeId,
+            identity.VendorVersion,
+            identity.Rid,
+            identity.ModuleAbi,
+            identity.VendorChecksumAlgorithm,
+            identity.VendorChecksumDigest);
+    }
+
+    public RuntimeExecutionRuntimeIdentity ToContract()
+        => new(SourceId, RuntimeId, VendorVersion, Rid, ModuleAbi, VendorChecksumAlgorithm, VendorChecksumDigest);
 }
 
 internal sealed record ExecutionRuntimeAcquisitionPlan(
-    ExecutionRuntimeIdentity Identity,
-    string ArtifactSha256,
-    long ArtifactSize,
-    string ManifestSha256,
-    string? ContentIdentity,
-    string SigningKeyId,
-    long MinimumHostTrustGeneration,
-    ExecutionRuntimeTrustEnvironment TrustEnvironment,
-    string AcquisitionSource,
-    string? RegistryOrigin = null,
-    string? NativeAttestationSha256 = null,
-    string? NativeAttestationKeyId = null)
+    RuntimeExecutionRuntimeVendorArtifact Artifact,
+    string? ExpectedArchiveSha256 = null,
+    long? ExpectedArchiveSize = null,
+    string? ExpectedContentIdentity = null,
+    RuntimeExecutionRuntimeProvenance? RetainedProvenance = null)
 {
-    public void Validate(bool developmentAllowInsecureLoopbackRegistry = false)
+    public ExecutionRuntimeIdentity Identity => ExecutionRuntimeIdentity.FromContract(Artifact.Identity);
+
+    public void Validate()
     {
-        ArgumentNullException.ThrowIfNull(Identity);
-        ExecutionRuntimeStoreLayout.ValidateSegment(Identity.RuntimeId, nameof(Identity.RuntimeId));
-        ExecutionRuntimeStoreLayout.ValidateSegment(Identity.Version, nameof(Identity.Version));
-        ExecutionRuntimeStoreLayout.ValidateSegment(Identity.Rid, nameof(Identity.Rid));
-        ExecutionRuntimeStoreLayout.ValidateSegment(Identity.ModuleAbi, nameof(Identity.ModuleAbi));
-        ExecutionRuntimeStoreLayout.ValidateSegment(SigningKeyId, nameof(SigningKeyId));
-        ExecutionRuntimeStoreLayout.ValidateSha256(ArtifactSha256, nameof(ArtifactSha256));
-        ExecutionRuntimeStoreLayout.ValidateSha256(ManifestSha256, nameof(ManifestSha256));
-        if (ContentIdentity is not null)
+        OfficialRuntimeSourcePolicy.ValidateArtifact(Artifact);
+        if (ExpectedArchiveSha256 is not null)
         {
-            ExecutionRuntimeStoreLayout.ValidateSha256(ContentIdentity, nameof(ContentIdentity));
+            ExecutionRuntimeStoreLayout.ValidateSha256(ExpectedArchiveSha256, nameof(ExpectedArchiveSha256));
         }
-        if (NativeAttestationSha256 is not null)
-        {
-            ExecutionRuntimeStoreLayout.ValidateSha256(
-                NativeAttestationSha256,
-                nameof(NativeAttestationSha256));
-        }
-        if (NativeAttestationKeyId is not null)
-        {
-            ExecutionRuntimeStoreLayout.ValidateSegment(
-                NativeAttestationKeyId,
-                nameof(NativeAttestationKeyId));
-        }
-        if (Identity.PackagingRevision is <= 0 or > SunderExecutionRuntimeFormat.MaxPackagingRevision)
+        if (ExpectedArchiveSize is <= 0 or > OfficialRuntimeSourcePolicy.MaxArchiveBytes)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(Identity.PackagingRevision),
-                "The execution runtime packaging revision is invalid.");
+                nameof(ExpectedArchiveSize),
+                "The expected execution runtime archive size is invalid.");
         }
-        if (ArtifactSize is <= 0 or > SunderExecutionRuntimeFormat.MaxArchiveBytes)
+        if (ExpectedContentIdentity is not null)
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(ArtifactSize),
-                "The execution runtime artifact size is invalid.");
+            ExecutionRuntimeStoreLayout.ValidateSha256(ExpectedContentIdentity, nameof(ExpectedContentIdentity));
         }
-        if (MinimumHostTrustGeneration <= 0)
+        if (RetainedProvenance is not null)
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(MinimumHostTrustGeneration),
-                "The minimum Host trust generation must be positive.");
-        }
-        if (!Enum.IsDefined(TrustEnvironment))
-        {
-            throw new ArgumentOutOfRangeException(nameof(TrustEnvironment));
-        }
-        if (AcquisitionSource is not (
-                RuntimeExecutionRuntimeAcquisitionSources.Registry
-                or RuntimeExecutionRuntimeAcquisitionSources.LocalImport
-                or RuntimeExecutionRuntimeAcquisitionSources.Development))
-        {
-            throw new ArgumentException("The execution runtime acquisition source is invalid.", nameof(AcquisitionSource));
-        }
-        if ((TrustEnvironment == ExecutionRuntimeTrustEnvironment.Development)
-            != (AcquisitionSource == RuntimeExecutionRuntimeAcquisitionSources.Development))
-        {
-            throw new ArgumentException(
-                "Development trust and the development acquisition source must be paired.",
-                nameof(AcquisitionSource));
-        }
-        if (AcquisitionSource == RuntimeExecutionRuntimeAcquisitionSources.Registry
-            && (!Uri.TryCreate(RegistryOrigin, UriKind.Absolute, out var origin)
-                || !string.Equals(origin.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)))
-        {
-            throw new ArgumentException(
-                "Registry acquisition requires an absolute HTTPS Registry origin.",
-                nameof(RegistryOrigin));
-        }
-        if (AcquisitionSource == RuntimeExecutionRuntimeAcquisitionSources.Development
-            && RegistryOrigin is not null
-            && (!Uri.TryCreate(RegistryOrigin, UriKind.Absolute, out var developmentOrigin)
-                || !string.Equals(developmentOrigin.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)
-                   && (!developmentAllowInsecureLoopbackRegistry
-                       || !string.Equals(developmentOrigin.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal)
-                       || !developmentOrigin.IsLoopback
-                       || !string.IsNullOrEmpty(developmentOrigin.UserInfo))))
-        {
-            throw new ArgumentException(
-                "Registry-associated development acquisition requires HTTPS or an explicitly allowed loopback HTTP Registry origin.",
-                nameof(RegistryOrigin));
+            if (ExpectedArchiveSha256 is null || ExpectedArchiveSize is null || ExpectedContentIdentity is null)
+                throw new InvalidDataException("Retained runtime provenance requires complete exact installed evidence.");
+            OfficialRuntimeSourcePolicy.ValidateInstalledArtifact(Artifact.Identity,
+                new(ExpectedArchiveSha256, ExpectedArchiveSize.Value, ExpectedContentIdentity, RetainedProvenance));
+            if (RetainedProvenance.Distribution.MaterializationProfile != Artifact.Distribution.MaterializationProfile)
+                throw new InvalidDataException("Exact recovery cannot change the materialization profile.");
         }
     }
 }
@@ -124,7 +78,8 @@ internal sealed record ExecutionRuntimeAcquisitionPlan(
 internal sealed record ExecutionRuntimeReceiptContentV1(
     string Path,
     string Sha256,
-    long Size);
+    long Size,
+    int UnixMode);
 
 internal sealed class ExecutionRuntimeReceiptV1
 {
@@ -134,74 +89,60 @@ internal sealed class ExecutionRuntimeReceiptV1
     public ExecutionRuntimeReceiptV1(
         int schemaVersion,
         ExecutionRuntimeIdentity identity,
-        string workerProtocol,
-        string artifactSha256,
-        long artifactSize,
-        string manifestSha256,
+        string archiveSha256,
+        long archiveSize,
         string contentIdentity,
         string launcherPath,
         string launcherSha256,
         long launcherSize,
         IReadOnlyList<string> launcherArguments,
         IReadOnlyList<ExecutionRuntimeReceiptContentV1> content,
-        string nativeAttestationSha256,
-        string nativeAttestationKeyId,
-        string signingKeyId,
-        long trustGeneration,
-        ExecutionRuntimeTrustEnvironment trustEnvironment,
-        string acquisitionSource,
-        string? registryOrigin,
+        RuntimeExecutionRuntimeProvenance provenance,
+        RuntimeExecutionRuntimeSupportStatus support,
         DateTimeOffset installedAtUtc)
     {
         SchemaVersion = schemaVersion;
         Identity = identity;
-        WorkerProtocol = workerProtocol;
-        ArtifactSha256 = artifactSha256;
-        ArtifactSize = artifactSize;
-        ManifestSha256 = manifestSha256;
+        ArchiveSha256 = archiveSha256;
+        ArchiveSize = archiveSize;
         ContentIdentity = contentIdentity;
         LauncherPath = launcherPath;
         LauncherSha256 = launcherSha256;
         LauncherSize = launcherSize;
         LauncherArguments = launcherArguments is null ? [] : Array.AsReadOnly(launcherArguments.ToArray());
         Content = content is null ? [] : Array.AsReadOnly(content.ToArray());
-        NativeAttestationSha256 = nativeAttestationSha256;
-        NativeAttestationKeyId = nativeAttestationKeyId;
-        SigningKeyId = signingKeyId;
-        TrustGeneration = trustGeneration;
-        TrustEnvironment = trustEnvironment;
-        AcquisitionSource = acquisitionSource;
-        RegistryOrigin = registryOrigin;
+        Provenance = provenance;
+        Support = support;
         InstalledAtUtc = installedAtUtc;
     }
 
     public int SchemaVersion { get; }
     public ExecutionRuntimeIdentity Identity { get; }
-    public string WorkerProtocol { get; }
-    public string ArtifactSha256 { get; }
-    public long ArtifactSize { get; }
-    public string ManifestSha256 { get; }
+    public string ArchiveSha256 { get; }
+    public long ArchiveSize { get; }
     public string ContentIdentity { get; }
     public string LauncherPath { get; }
     public string LauncherSha256 { get; }
     public long LauncherSize { get; }
     public IReadOnlyList<string> LauncherArguments { get; }
     public IReadOnlyList<ExecutionRuntimeReceiptContentV1> Content { get; }
-    public string NativeAttestationSha256 { get; }
-    public string NativeAttestationKeyId { get; }
-    public string SigningKeyId { get; }
-    public long TrustGeneration { get; }
-    public ExecutionRuntimeTrustEnvironment TrustEnvironment { get; }
-    public string AcquisitionSource { get; }
-    public string? RegistryOrigin { get; }
+    public RuntimeExecutionRuntimeProvenance Provenance { get; }
+    public RuntimeExecutionRuntimeSupportStatus Support { get; }
     public DateTimeOffset InstalledAtUtc { get; }
+
+    [JsonIgnore]
+    public RuntimeExecutionRuntimeInstalledArtifact InstalledArtifact => new(
+        ArchiveSha256,
+        ArchiveSize,
+        ContentIdentity,
+        Provenance);
 }
 
 internal sealed record ExecutionRuntimeEnsureResult(
     ExecutionRuntimeReceiptV1 Receipt,
     bool AlreadyPresent);
 
-internal sealed class ExecutionRuntimeOwnedArchive(string path, Action release) : IDisposable
+internal sealed class ExecutionRuntimeOwnedArchive(string path, Action release, string? finalDownloadUrl = null) : IDisposable
 {
     private Action? _release = release ?? throw new ArgumentNullException(nameof(release));
 
@@ -209,6 +150,8 @@ internal sealed class ExecutionRuntimeOwnedArchive(string path, Action release) 
         string.IsNullOrWhiteSpace(path)
             ? throw new ArgumentException("An owned execution-runtime archive path is required.", nameof(path))
             : path);
+
+    public string? FinalDownloadUrl { get; } = finalDownloadUrl;
 
     public void Dispose()
     {
@@ -240,15 +183,10 @@ internal sealed record ExecutionRuntimeHealthMarkerV1(
     bool DeepVerified,
     DateTimeOffset CheckedAtUtc,
     string? Message,
-    string TrustProfileId,
-    long TrustGeneration,
-    ExecutionRuntimeTrustEnvironment TrustEnvironment,
-    string SigningKeyId,
-    string? SigningKeySha256,
     string ReceiptSha256,
     IReadOnlyList<ExecutionRuntimeFileObservationV1> Files)
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 }
 
 internal sealed record ExecutionRuntimeVerificationResult(
@@ -266,11 +204,9 @@ internal enum ExecutionRuntimeStoreTransactionPhase
 {
     Prepared = 0,
     ArchivePublished = 1,
-    ManifestPublished = 2,
     RootPublished = 3,
     ReceiptPublished = 4,
     Completed = 5,
-    // Journals persist enum values numerically, so new phases must be appended.
     RootSealed = 6,
 }
 
@@ -289,7 +225,6 @@ internal enum ExecutionRuntimeStoreFaultPoint
     Validated,
     JournalPrepared,
     ArchivePublished,
-    ManifestPublished,
     RootSealed,
     RootMoved,
     RootPublished,
@@ -313,8 +248,6 @@ internal sealed class ExecutionRuntimeStoreSimulatedCrashException(ExecutionRunt
     public ExecutionRuntimeStoreFaultPoint Point { get; } = point;
 }
 
-internal sealed class ExecutionRuntimeTrustException(string message) : Exception(message);
-
 internal sealed class ExecutionRuntimePlanMismatchException(string message) : Exception(message);
 
 internal sealed class ExecutionRuntimeStoreConflictException(string message) : Exception(message);
@@ -323,8 +256,7 @@ internal sealed class ExecutionRuntimeRootInUseException(string message) : IOExc
 
 internal sealed record ExecutionRuntimeGarbageCollectionResult(
     int RootsRemoved,
-    int ArchivesRemoved,
-    int ManifestsRemoved);
+    int ArchivesRemoved);
 
 internal sealed record ExecutionRuntimeGarbageCollectionMarkV1(
     int SchemaVersion,

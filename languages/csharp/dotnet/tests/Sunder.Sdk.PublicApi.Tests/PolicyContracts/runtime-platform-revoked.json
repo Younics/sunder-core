@@ -15,7 +15,6 @@
       "registryOrigin": "https://registry.example",
       "packagePolicyRevision": 42,
       "packagePolicyFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      "runtimePolicyRevision": 3,
       "checkpointSequence": 99,
       "checkpointDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "topologyGeneration": 1,

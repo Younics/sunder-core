@@ -31,19 +31,17 @@ public static class RuntimeV1StateDescriptor
     public const string ExecutionRuntimesDirectory = "execution-runtimes";
     public const string ExecutionRuntimeArtifactsDirectory = "execution-runtimes/artifacts";
     public const string ExecutionRuntimeArtifactSha256Directory = "execution-runtimes/artifacts/sha256";
-    public const string ExecutionRuntimeManifestsDirectory = "execution-runtimes/manifests";
-    public const string ExecutionRuntimeManifestSha256Directory = "execution-runtimes/manifests/sha256";
     public const string ExecutionRuntimeRootsDirectory = "execution-runtimes/roots";
     public const string ExecutionRuntimeRootSha256Directory = "execution-runtimes/roots/sha256";
     public const string ExecutionRuntimeReceiptsDirectory = "execution-runtimes/receipts";
     public const string ExecutionRuntimeHealthDirectory = "execution-runtimes/health";
-    public const string ExecutionRuntimePolicyDirectory = "execution-runtimes/policy";
-    public const string ExecutionRuntimeLifecyclePolicyFile = "execution-runtimes/policy/lifecycle.json";
     public const string ExecutionRuntimeStagingDirectory = "execution-runtimes/staging";
     public const string ExecutionRuntimeTransactionsDirectory = "execution-runtimes/transactions";
     public const string ExecutionRuntimeQuarantineDirectory = "execution-runtimes/quarantine";
     public const string ExecutionRuntimeLeasesDirectory = "execution-runtimes/leases";
     public const string ExecutionRuntimeTombstonesDirectory = "execution-runtimes/tombstones";
+    public const string ExecutionRuntimeManagementDirectory = "execution-runtimes/management";
+    public const string ExecutionRuntimeManagementFile = "execution-runtimes/management/state.json";
     public const string CredentialsDirectory = "credentials";
     public const string RegistryCredentialNamespace = "registry";
     public const string RegistryCredentialsDirectory = "credentials/registry";
@@ -62,16 +60,15 @@ public static class RuntimeV1StateDescriptor
         new("package-transactions-and-derived-state", [StagingDirectory, TransactionsDirectory, TombstonesDirectory]),
         new("execution-runtime-derived-state", [
             ExecutionRuntimeArtifactsDirectory,
-            ExecutionRuntimeManifestsDirectory,
             ExecutionRuntimeRootsDirectory,
             ExecutionRuntimeReceiptsDirectory,
             ExecutionRuntimeHealthDirectory,
-            ExecutionRuntimePolicyDirectory,
             ExecutionRuntimeStagingDirectory,
             ExecutionRuntimeTransactionsDirectory,
             ExecutionRuntimeQuarantineDirectory,
             ExecutionRuntimeLeasesDirectory,
             ExecutionRuntimeTombstonesDirectory,
+            ExecutionRuntimeManagementDirectory,
         ]),
         new("uploads-and-snapshots", [TransfersDirectory, CacheDirectory]),
         new("runtime-connection", [ConnectionFile, ConnectionLockFile]),

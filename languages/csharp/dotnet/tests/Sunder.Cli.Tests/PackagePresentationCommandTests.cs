@@ -7,20 +7,18 @@ namespace Sunder.Cli.Tests;
 public sealed class PackagePresentationCommandTests
 {
     [Theory]
-    [InlineData(false, 50L * 1024L * 1024L)]
-    [InlineData(true, 0L)]
+    [InlineData(false, 50L * 1024L * 1024L, 50L * 1024L * 1024L)]
+    [InlineData(true, 0L, 0L)]
     public async Task Registry_install_dry_run_separates_package_full_runtime_and_local_incremental_bytes(
         bool runtimeAlreadyInstalled,
+        long expectedFullRuntimeBytes,
         long expectedIncrementalRuntimeBytes)
     {
-        var plan = Plan();
-        var runtimeArtifact = Assert.Single(plan.RuntimeArtifacts);
+        var plan = Plan(runtimeAlreadyInstalled: runtimeAlreadyInstalled);
         var applyCalls = 0;
         var runtime = new FakeRuntimeClient
         {
             ResolveRegistry = (_, _) => Task.FromResult(plan),
-            ExecutionRuntimes = _ => Task.FromResult<IReadOnlyList<InstalledExecutionRuntimeSummary>>(
-                runtimeAlreadyInstalled ? [InstalledRuntime(runtimeArtifact)] : []),
             InstallRegistry = (_, _) =>
             {
                 applyCalls++;
@@ -40,20 +38,19 @@ public sealed class PackagePresentationCommandTests
         Assert.Equal("dry-run", data.GetProperty("mode").GetString());
         Assert.False(data.GetProperty("applied").GetBoolean());
         Assert.Equal(12L * 1024L * 1024L, preflight.GetProperty("packageDownloadBytes").GetInt64());
-        Assert.Equal(50L * 1024L * 1024L, preflight.GetProperty("fullRuntimeDownloadBytes").GetInt64());
+        Assert.Equal(expectedFullRuntimeBytes, preflight.GetProperty("fullRuntimeDownloadBytes").GetInt64());
         Assert.Equal(expectedIncrementalRuntimeBytes, preflight.GetProperty("incrementalRuntimeDownloadBytes").GetInt64());
         Assert.Equal(
             12L * 1024L * 1024L + expectedIncrementalRuntimeBytes,
             preflight.GetProperty("incrementalDownloadBytes").GetInt64());
         var runtimeDownload = Assert.Single(preflight.GetProperty("runtimeDownloads").EnumerateArray());
         Assert.Equal(runtimeAlreadyInstalled, runtimeDownload.GetProperty("alreadyInstalledAndHealthy").GetBoolean());
-        Assert.Equal("supported", runtimeDownload.GetProperty("lifecycle").GetProperty("state").GetString());
+        Assert.Equal("Supported", runtimeDownload.GetProperty("support").GetProperty("state").GetString());
     }
 
     [Fact]
     public async Task Registry_install_conflicts_are_structured_and_block_apply()
     {
-        var requirement = Requirement();
         var plan = new RuntimeRegistryResolveInstallPlanResponse(
             false,
             [],
@@ -66,14 +63,7 @@ public sealed class PackagePresentationCommandTests
                 "dependent",
                 "registry.v1.resource.conflict",
                 "Installed demo conflicts with dependent.")],
-            [],
-            RuntimeConflicts: [new RuntimeRegistryExecutionRuntimeResolutionConflict(
-                ExecutionRuntimeResolutionConflictCodes.RidUnavailable,
-                "No runtime artifact is available for win-x64.",
-                requirement,
-                "win-x64",
-                "demo",
-                "runtime")]);
+            []);
         var applyCalls = 0;
         var runtime = new FakeRuntimeClient
         {
@@ -96,9 +86,7 @@ public sealed class PackagePresentationCommandTests
         Assert.Equal(
             "registry.v1.resource.conflict",
             Assert.Single(preflight.GetProperty("conflicts").EnumerateArray()).GetProperty("code").GetString());
-        Assert.Equal(
-            ExecutionRuntimeResolutionConflictCodes.RidUnavailable,
-            Assert.Single(preflight.GetProperty("runtimeConflicts").EnumerateArray()).GetProperty("code").GetString());
+        Assert.DoesNotContain("runtimeConflicts", preflight.EnumerateObject().Select(property => property.Name));
     }
 
     [Fact]
@@ -210,7 +198,7 @@ public sealed class PackagePresentationCommandTests
                                 false,
                                 plan.ResolutionFingerprint),
                         ],
-                        RuntimeArtifacts = plan.RuntimeArtifacts,
+                        RuntimePrerequisites = plan.RuntimePrerequisites,
                     }
                     : Success("Updated."));
             },
@@ -287,7 +275,7 @@ public sealed class PackagePresentationCommandTests
                                 true,
                                 plan.ResolutionFingerprint),
                         ],
-                        RuntimeArtifacts = plan.RuntimeArtifacts,
+                        RuntimePrerequisites = plan.RuntimePrerequisites,
                     });
                 }
 
@@ -358,13 +346,6 @@ public sealed class PackagePresentationCommandTests
             ">=2.0.0",
             "dependent",
             Message: "Installed demo conflicts with dependent.");
-        var runtimeConflict = new RuntimeRegistryExecutionRuntimeResolutionConflict(
-            ExecutionRuntimeResolutionConflictCodes.RidUnavailable,
-            "No runtime artifact is available for win-x64.",
-            Requirement(),
-            "win-x64",
-            "demo",
-            "runtime");
         var requests = new List<RuntimeRegistrySourceAdoptionRequest>();
         var runtime = new FakeRuntimeClient
         {
@@ -382,7 +363,7 @@ public sealed class PackagePresentationCommandTests
                     false,
                     false,
                     [],
-                    [packageConflict.Message, runtimeConflict.Message],
+                    [packageConflict.Message, "No runtime artifact is available for win-x64."],
                     [],
                     plan.Items,
                     [consent])
@@ -395,8 +376,7 @@ public sealed class PackagePresentationCommandTests
                             true,
                             plan.ResolutionFingerprint),
                     ],
-                    RuntimeArtifacts = plan.RuntimeArtifacts,
-                    RuntimeConflicts = [runtimeConflict],
+                    RuntimePrerequisites = plan.RuntimePrerequisites,
                 });
             },
         };
@@ -420,9 +400,10 @@ public sealed class PackagePresentationCommandTests
         Assert.Equal(
             packageConflict.ErrorCode,
             Assert.Single(preflight.GetProperty("conflicts").EnumerateArray()).GetProperty("code").GetString());
-        Assert.Equal(
-            runtimeConflict.Code,
-            Assert.Single(preflight.GetProperty("runtimeConflicts").EnumerateArray()).GetProperty("code").GetString());
+        Assert.Contains(
+            "No runtime artifact is available",
+            string.Join("\n", preflight.GetProperty("errors").EnumerateArray().Select(item => item.GetString())),
+            StringComparison.Ordinal);
         Assert.Equal(
             consent.ManifestSha256,
             Assert.Single(preflight.GetProperty("requiredCapabilityConsents").EnumerateArray())
@@ -485,7 +466,8 @@ public sealed class PackagePresentationCommandTests
 
     private static RuntimeRegistryResolveInstallPlanResponse Plan(
         string? currentVersion = null,
-        string actionKind = RegistryPackageActionKinds.PackageInstall)
+        string actionKind = RegistryPackageActionKinds.PackageInstall,
+        bool runtimeAlreadyInstalled = false)
     {
         var artifact = RuntimeArtifact();
         return new RuntimeRegistryResolveInstallPlanResponse(
@@ -513,76 +495,70 @@ public sealed class PackagePresentationCommandTests
             [],
             [],
             [],
-            RuntimeArtifacts: [artifact],
-            ResolutionFingerprint: new string('a', 64));
+            ResolutionFingerprint: new string('a', 64))
+        {
+            RuntimePrerequisites = new RuntimePackageRuntimePrerequisitePlan(
+                true,
+                runtimeAlreadyInstalled,
+                runtimeAlreadyInstalled ? null : "execution-runtime.missing",
+                runtimeAlreadyInstalled ? "Runtime already installed." : "Runtime installation required.",
+                new string('9', 64),
+                "win-x64",
+                [new RuntimePackageRuntimePrerequisite(
+                    new RuntimeExecutionRuntimePackageReference("demo", "2.0.0", new string('f', 64), "runtime", "win-x64"),
+                    new string('f', 64),
+                    new RuntimeExecutionRuntimeRequirement("sunder.runtime.dotnet", ">=10.0.0 <11.0.0", "sunder.dotnet-worker-module.v1"),
+                    runtimeAlreadyInstalled,
+                    runtimeAlreadyInstalled ? null : "execution-runtime.missing",
+                    runtimeAlreadyInstalled ? artifact.Identity : null,
+                    new RuntimeExecutionRuntimeInstallPlan(
+                        true,
+                        null,
+                        runtimeAlreadyInstalled ? "Runtime already installed." : "Runtime installation required.",
+                        null,
+                        new RuntimeExecutionRuntimeResolution(
+                            new RuntimeExecutionRuntimeRequirement("sunder.runtime.dotnet", ">=10.0.0 <11.0.0", "sunder.dotnet-worker-module.v1"),
+                            artifact,
+                            new string('8', 64),
+                            DateTimeOffset.UnixEpoch.AddHours(1),
+                            runtimeAlreadyInstalled,
+                            runtimeAlreadyInstalled ? 0 : 50L * 1024L * 1024L),
+                        true))],
+                [])
+        };
     }
 
-    private static RuntimeRegistryResolvedExecutionRuntimeArtifact RuntimeArtifact()
+    private static RuntimeExecutionRuntimeVendorArtifact RuntimeArtifact()
         => new(
-            new RuntimeRegistryExecutionRuntimeIdentity(
+            new RuntimeExecutionRuntimeIdentity(
+                ConfiguredOfficialSourceId.DotNet,
                 "sunder.runtime.dotnet",
                 "10.0.1",
-                2,
                 "win-x64",
-                "sunder.dotnet-worker-module.v1"),
-            new string('1', 64),
-            new string('2', 64),
-            50L * 1024L * 1024L,
-            "release-key",
-            1,
-            new string('3', 64),
-            "native-key",
-            new RuntimeRegistryExecutionRuntimeLifecycle(
-                ExecutionRuntimeLifecycleStates.Supported,
+                "sunder.dotnet-worker-module.v1",
+                RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
+                new string('1', 128)),
+            new RuntimeExecutionRuntimeDistribution(
+                "https://download.example/dotnet.tar.gz",
+                "https://metadata.example/dotnet.json",
+                new string('2', 64),
+                "https://metadata.example/checksums.txt",
+                new string('3', 64),
+                RuntimeExecutionRuntimeArchiveFormat.TarGzip,
+                "dotnet-runtime-v1",
+                50L * 1024L * 1024L),
+            new RuntimeExecutionRuntimeSupportStatus(
+                RuntimeExecutionRuntimeSupportState.Supported,
+                "10.0",
                 DateTimeOffset.UnixEpoch,
-                DateTimeOffset.UnixEpoch,
                 null,
-                null,
-                null,
-                null,
-                null),
-            1,
-            "/runtime");
+                null));
 
     private static RuntimeRegistryExecutionRuntimeRequirement Requirement()
         => new(
             "sunder.runtime.dotnet",
             ">=10.0.0 <11.0.0",
             "sunder.dotnet-worker-module.v1");
-
-    private static InstalledExecutionRuntimeSummary InstalledRuntime(
-        RuntimeRegistryResolvedExecutionRuntimeArtifact artifact)
-        => new(
-            new RuntimeExecutionRuntimeIdentity(
-                artifact.Identity.RuntimeId,
-                artifact.Identity.Version,
-                artifact.Identity.PackagingRevision,
-                artifact.Identity.Rid,
-                artifact.Identity.ModuleAbi,
-                artifact.ManifestSha256,
-                artifact.ArtifactSha256),
-            RuntimeExecutionRuntimeStatuses.Ready,
-            artifact.ArtifactSize,
-            1,
-            RuntimeExecutionRuntimeAcquisitionSources.Registry,
-            artifact.SigningKeyId,
-            1,
-            new RuntimeExecutionRuntimeHealth(
-                RuntimeExecutionRuntimeStatuses.Ready,
-                DateTimeOffset.UnixEpoch,
-                false,
-                null),
-            new RuntimeExecutionRuntimeLifecycle(
-                ExecutionRuntimeLifecycleStates.Supported,
-                DateTimeOffset.UnixEpoch,
-                null,
-                null,
-                null,
-                null,
-                null,
-                1,
-                DateTimeOffset.UnixEpoch),
-            DateTimeOffset.UnixEpoch);
 
     private static InstalledPackageDescriptor ManagedPackage()
         => new(

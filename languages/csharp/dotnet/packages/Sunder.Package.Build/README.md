@@ -4,6 +4,13 @@
 
 `Sunder.Package.Build` contains the MSBuild targets and tasks that turn a Sunder package project into local development output and distributable `.sunderpkg` archives.
 
+The ordinary C# entry point is `[SunderService]` in `Sunder.Sdk.Services`: declared public async
+methods, generated interface injection, package-version private contracts and
+role-reviewed imported APIs. See the [ordinary-service authoring and migration
+contract](https://github.com/Younics/sunder-core/blob/main/docs/package-development/ORDINARY-SERVICES.md).
+RPC-prefixed declaration aliases are retired. Advanced descriptor/runtime APIs and
+the historical readers below do not provide a second source-authoring mode.
+
 Reference this tooling from the canonical package project with `Sunder.Sdk.Worker`
 and, for UI, `Sunder.Sdk.Avalonia`. A single source-authored `SunderPackageProject=true`
 library generates isolated Worker/App outputs, composition and one development tree.
@@ -67,15 +74,71 @@ source. Ordinary Build generates separate implementation assemblies below
 `bin/<configuration>/<tfm>/sunder-roles/worker/<rid>` and `sunder-roles/app/<rid>`.
 The App receives role-local generated clients. No combined implementation DLL is emitted.
 
+Ordinary generated APIs live in package-specific namespaces: package ID
+`sunder.package.agent` produces `Sunder.Generated.Packages.Sunder_Package_Agent_Services`.
+Canonical ID segments are initial-capitalized and joined with underscores; an ID
+starting with a digit receives a leading underscore. Own and imported interface names
+derive from the service ID: `embedding-provider` exposes `IEmbeddingProviderService`.
+Import the generated namespace explicitly. SDK authoring attributes remain in `Sunder.Sdk.Services`.
+Selected packages expose `IPackageApi` in their own generated Services namespace,
+independent of the lock's local alias. Internal clients use the corresponding
+`_Internal` namespace. Owned roles use authored model types. Imports expose one
+model per verified authority/source identity in the authority's flat `_Models`
+namespace, shared across contracts and reexports. Equal schemas alone do not merge
+distinct source models. Necessary generated request envelopes use a contract-prefixed
+name in the same Models namespace.
+
+Inject `Sunder.Sdk.Services.IServiceProviders<TService>` for explicit provider
+selection. `ListAsync` returns entries with a ready-to-call `Service`; `WatchAsync`
+retains both catalog revision and sequence cursors. DI owns the catalog and its
+proxies. Construction performs no discovery or calls, and selected entries stay
+bound to their exact provider activation without replacement or replay. Catalog
+injection requires the same reviewed role-specific consumer use as the service;
+implementing an imported provider does not grant consumption.
+
+Declaration-only services receive the same source-shaped generated interfaces as
+concrete services. For example, `EmbeddingProviderService` generates
+`IEmbeddingProviderService`. Imported natural interfaces belong to the contract's
+authority package namespace and are shared by selected-package clients, dynamic
+catalogs and provider implementations. Colliding service names from distinct
+contracts within the same authority fail with a generated-name diagnostic.
+They omit transport context and empty
+request/completion values. Nonempty requests keep their descriptor-derived type;
+the generator does not guess a producer's original multiargument signature.
+Provider registration and the adaptation to the wire handler are generated.
+
+Use `SunderContent` for content values, including nested model members and streamed
+results. Generated visitors register and decode them through the existing invocation
+or call scope. Dispose received content when finished; retained caller content stays
+bounded by cancellation, the Host deadline and the receiver's DI lifetime.
+`ServiceProvider<T>.Reference` supplies a `ServiceReference<T>` for an existing
+manifest-declared provider. Its decoded `Service` uses the receiver's reviewed grants
+and exact activation, including session generation. A reference adds no access grant
+and does not export arbitrary local objects or callbacks.
+
+An imported provider binds with `[SunderServiceProvider(typeof(ISelectedService))]`.
+Its public async methods use the exact generated method names and value types;
+each may independently accept the real `SunderRpcInvocationContext` before or
+after the request, and an optional final `CancellationToken`. Context-free methods
+need neither parameter. The class need not implement the C# interface when these
+out-of-band parameters differ from the consumer signature. Normal context-free
+interface implementations, including explicit implementations, remain supported.
+Sunder generates a provider-local adapter that passes the original Host context;
+it never constructs a replacement context or maps to a different wire operation.
+Ambiguous overloads, mismatched values/nullability, duplicate contexts and authored
+method-ID overrides fail against the locked descriptor. Source implementations may
+use `Task` or `ValueTask` for the same unary result; streams remain `IAsyncEnumerable<T>`.
+
 Existing explicitly composed families use a canonical executable Worker project with
 `SunderPackagePrimaryProject=true` and an optional `SunderPackageAppProject`. That App
 is a build-only input; the outer-only project-reference example below restores it
 without making it a Worker compile input.
 
-Associated Apps receive required uses of package-private services by default. Public
-services require explicit `[SunderRpcAppUse]` on their owning service declaration;
-the attribute defaults to optional use and all method-applicable actions. For
-example, `[SunderRpcAppUse(Actions = ["discover", "invoke"])]` opts in with a
+Associated Apps receive required uses of package-private services by default.
+Concrete public services default to optional owning-App use; declaration-only public
+interfaces require explicit `[SunderAppUse]`. The attribute defaults to optional
+use and all method-applicable actions. For example,
+`[SunderAppUse(Actions = ["discover", "invoke"])]` overrides the default with a
 narrowed optional use, while `Required = true` adds provider readiness. Explicit
 actions must be nonempty, distinct and descriptor-applicable. The export and
 role-isolated App receipt preserve this policy without changing wire/ABI identity
@@ -83,12 +146,37 @@ or granting Worker uses. Pack checks the exact policy against fresh source,
 including when every App use was removed from a prebuilt leaf.
 
 Owned Runtime consumption is explicit: annotate the owning service with
-`[SunderRpcRuntimeUse]`, optionally setting `Required = true` and a nonempty subset
+`[SunderRuntimeUse]`, optionally setting `Required = true` and a nonempty subset
 of applicable `Actions`. Without it, even a service with a local provider grants
 no Runtime use. Runtime policy participates in neutral/exact-RID export checks
 and Worker receipt/manifest generation; App receipts omit it. Pack rechecks owned
 Runtime uses alongside lock-derived uses against current source. Policy changes
 preserve descriptor/ABI identity and do not require a new frozen wire snapshot.
+
+An imported provider can declare a narrower Runtime use of a canonical service
+already present in its pinned materialization closure:
+
+```csharp
+using AgentServices = Sunder.Generated.Packages.Sunder_Package_Agent_Services;
+
+[SunderServiceProvider(typeof(AgentServices.IToolSourceService))]
+[SunderRuntimeUse(typeof(AgentServices.IExecutionTargetService), Actions = ["discover"])]
+public sealed partial class ToolSourceProvider : AgentServices.IToolSourceService
+{
+    // Implement the selected provider's ordinary service methods.
+}
+```
+
+The typed attribute binds only the validated generated imported service symbol;
+authored namespace lookalikes, foreign metadata and unselected/private targets fail.
+Repeat it for distinct targets. Conflicting policies for the same contract fail.
+`Required` still defaults to `false`, and explicit actions are a nonempty applicable
+subset. `discover` enables catalog/reference binding, not invocation or subscription.
+The compiler retains exact source intent in export/receipt `roleUses`, includes it
+in the input fingerprint, and emits the normal target bundle, `usesContracts` and
+catalog composition. This does not add a package API selection, change provider
+identity or dependency presence, or grant App use. Legacy provider-only Update
+checks the typed intent against the proposed pinned closure before committing.
 
 Generated concrete providers expose both the ordinary instance registration factory
 and static `DeclareSunderRpcProvider(ISunderRpcServiceHandler)`. The latter advertises

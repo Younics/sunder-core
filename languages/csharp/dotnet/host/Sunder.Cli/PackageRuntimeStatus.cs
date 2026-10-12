@@ -6,8 +6,6 @@ namespace Sunder.Cli;
 internal sealed record CliPackageRuntimeStatus(
     PackageTargetExecutionRuntimeBinding Binding,
     InstalledExecutionRuntimeSummary? InstalledRuntime,
-    RuntimeExecutionRuntimeLifecycle Lifecycle,
-    string LifecycleSource,
     bool EnsureRequired,
     bool RepairRequired,
     bool RebindRequired,
@@ -38,18 +36,13 @@ internal sealed record CliPackageRuntimeStatus(
         var installedRuntime = installedRuntimes.FirstOrDefault(runtime => SameIdentity(
             runtime.Identity,
             binding.Runtime));
-        var lifecycle = installedRuntime?.Lifecycle ?? binding.Lifecycle;
         var ensureRequired = installedRuntime is null;
         var repairRequired = installedRuntime is not null
-                             && (installedRuntime.Health.RepairRecommended
-                                 || installedRuntime.Status is RuntimeExecutionRuntimeStatuses.Unhealthy
-                                     or RuntimeExecutionRuntimeStatuses.Quarantined);
-        var rebindRequired = ensureRequired
-                             || lifecycle.State is ExecutionRuntimeLifecycleStates.Retired
-                                 or ExecutionRuntimeLifecycleStates.Revoked
-                                 or RuntimeExecutionRuntimeLifecycleStates.PolicyRequired;
-        var updateRecommended = rebindRequired
-                                || lifecycle.State == ExecutionRuntimeLifecycleStates.Deprecated;
+                              && (installedRuntime.Health.RepairRecommended
+                                  || installedRuntime.Status is RuntimeExecutionRuntimeStatuses.Unhealthy
+                                      or RuntimeExecutionRuntimeStatuses.Quarantined);
+        var rebindRequired = ensureRequired || installedRuntime?.Support.State == RuntimeExecutionRuntimeSupportState.EndOfLife;
+        var updateRecommended = rebindRequired;
         var impactedPackageIds = installedPackages
             .Where(candidate => candidate.ExecutionRuntimeBindings.Any(candidateBinding => SameIdentity(
                 candidateBinding.Runtime,
@@ -63,8 +56,6 @@ internal sealed record CliPackageRuntimeStatus(
         return new CliPackageRuntimeStatus(
             binding,
             installedRuntime,
-            lifecycle,
-            installedRuntime is null ? "package-binding" : "installed-runtime",
             ensureRequired,
             repairRequired,
             rebindRequired,
@@ -73,8 +64,8 @@ internal sealed record CliPackageRuntimeStatus(
                 ? $"sunder runtime ensure {binding.Requirement.RuntimeId} \"{binding.Requirement.VersionRange}\" {binding.Requirement.ModuleAbi}"
                 : null,
             repairRequired
-                ? $"sunder runtime repair {binding.Runtime.RuntimeId} {binding.Runtime.Version} "
-                  + $"{binding.Runtime.PackagingRevision} {binding.Runtime.Rid} {binding.Runtime.ModuleAbi} --yes"
+                ? $"sunder runtime repair {SourceId(binding.Runtime.SourceId)} {binding.Runtime.RuntimeId} {binding.Runtime.VendorVersion} "
+                  + $"{binding.Runtime.Rid} {binding.Runtime.ModuleAbi} {ChecksumAlgorithm(binding.Runtime.VendorChecksumAlgorithm)} {binding.Runtime.VendorChecksumDigest} --yes"
                 : null,
             updateRecommended ? preflightCommand : null,
             updateRecommended ? applyCommand : null,
@@ -83,7 +74,7 @@ internal sealed record CliPackageRuntimeStatus(
                 ensureRequired,
                 repairRequired,
                 rebindRequired,
-                lifecycle.State,
+                installedRuntime?.Support.State,
                 impactedPackageIds,
                 preflightCommand is not null));
     }
@@ -110,15 +101,15 @@ internal sealed record CliPackageRuntimeStatus(
         bool ensureRequired,
         bool repairRequired,
         bool rebindRequired,
-        string lifecycle,
+        RuntimeExecutionRuntimeSupportState? support,
         IReadOnlyList<string> impactedPackageIds,
         bool canRebindFromRegistry)
     {
         if (ensureRequired)
         {
             return canRebindFromRegistry
-                ? "The exact bound runtime is missing. Ensure or import runtime bytes, then use package preflight to select and rebind a compatible exact runtime."
-                : "The exact bound runtime is missing. Ensure a compatible runtime or import the exact artifact, then reinstall this package from its source to rebind it.";
+                ? "The exact bound runtime is missing. Ensure runtime bytes, then use package preflight to select and rebind a compatible exact runtime."
+                : "The exact bound runtime is missing. Ensure a compatible runtime, then reinstall this package from its source to rebind it.";
         }
         if (repairRequired)
         {
@@ -130,11 +121,11 @@ internal sealed record CliPackageRuntimeStatus(
                 ? "This lifecycle state requires a new exact binding. Run package preflight to see the complete transaction impact before applying it."
                 : "This lifecycle state requires a new exact binding. Reinstall this package from an authoritative source after ensuring a supported runtime.";
         }
-        if (lifecycle == ExecutionRuntimeLifecycleStates.Deprecated)
+        if (support == RuntimeExecutionRuntimeSupportState.EndOfLife)
         {
             return canRebindFromRegistry
-                ? "The runtime remains usable, but package update preflight should be used to select a supported binding."
-                : "The runtime remains usable, but the package should be rebuilt or reinstalled against a supported binding.";
+                ? "The runtime support line has ended; package update preflight should be used to select a supported binding."
+                : "The runtime support line has ended; the package should be rebuilt or reinstalled against a supported binding.";
         }
         return "No execution-runtime action is required.";
     }
@@ -143,10 +134,24 @@ internal sealed record CliPackageRuntimeStatus(
         RuntimeExecutionRuntimeIdentity first,
         RuntimeExecutionRuntimeIdentity second)
         => string.Equals(first.RuntimeId, second.RuntimeId, StringComparison.Ordinal)
-           && string.Equals(first.Version, second.Version, StringComparison.Ordinal)
-           && first.PackagingRevision == second.PackagingRevision
+           && first.SourceId == second.SourceId
+           && string.Equals(first.VendorVersion, second.VendorVersion, StringComparison.Ordinal)
            && string.Equals(first.Rid, second.Rid, StringComparison.Ordinal)
            && string.Equals(first.ModuleAbi, second.ModuleAbi, StringComparison.Ordinal)
-           && string.Equals(first.ManifestSha256, second.ManifestSha256, StringComparison.Ordinal)
-           && string.Equals(first.ArtifactSha256, second.ArtifactSha256, StringComparison.Ordinal);
+           && first.VendorChecksumAlgorithm == second.VendorChecksumAlgorithm
+           && string.Equals(first.VendorChecksumDigest, second.VendorChecksumDigest, StringComparison.Ordinal);
+
+    private static string SourceId(ConfiguredOfficialSourceId source) => source switch
+    {
+        ConfiguredOfficialSourceId.DotNet => "dotnet",
+        ConfiguredOfficialSourceId.Node => "node",
+        _ => source.ToString(),
+    };
+
+    private static string ChecksumAlgorithm(RuntimeExecutionRuntimeChecksumAlgorithm algorithm) => algorithm switch
+    {
+        RuntimeExecutionRuntimeChecksumAlgorithm.Sha512 => "sha512",
+        RuntimeExecutionRuntimeChecksumAlgorithm.Sha256 => "sha256",
+        _ => algorithm.ToString(),
+    };
 }

@@ -80,7 +80,7 @@ public sealed class PackageStoreCoordinatorTests
         var fixture = await CreateFixtureAsync();
         var validArchive = CreatePackageArchive(fixture.Root, "test.valid", "1.0.0");
         var mismatchedArchive = CreatePackageArchive(fixture.Root, "test.mismatch", "1.0.0");
-        var mismatchedBinding = CreateRuntimeBinding() with { RuntimeVersion = "11.0.0" };
+        var mismatchedBinding = CreateRuntimeBinding(runtimeVersion: "11.0.0");
 
         var preparation = await fixture.Coordinator.PrepareStageAsync([
             new PackageStoreMutation(
@@ -111,7 +111,7 @@ public sealed class PackageStoreCoordinatorTests
         var filesBefore = SnapshotPackageFiles(before.InstallPath);
         var desiredBinding = CreateRuntimeBinding(
             runtimeVersion: "10.0.2",
-            packagingRevision: 2,
+            artifactOrdinal: 2,
             manifestHash: 'c',
             artifactHash: 'd',
             runtimePolicyRevision: 2);
@@ -150,7 +150,7 @@ public sealed class PackageStoreCoordinatorTests
         var staleExpected = current with { InstalledAtUtc = current.InstalledAtUtc.AddTicks(1) };
         var desiredBinding = CreateRuntimeBinding(
             runtimeVersion: "10.0.2",
-            packagingRevision: 2,
+            artifactOrdinal: 2,
             manifestHash: 'c',
             artifactHash: 'd',
             runtimePolicyRevision: 2);
@@ -168,88 +168,6 @@ public sealed class PackageStoreCoordinatorTests
         var persisted = Assert.Single(await fixture.Store.ListAsync());
         AssertPackageFieldsExceptBindingsEqual(current, persisted);
         Assert.Equal(Assert.Single(current.ExecutionRuntimeBindings), Assert.Single(persisted.ExecutionRuntimeBindings));
-    }
-
-    [Theory]
-    [InlineData((int)PackageStoreFaultPoint.CatalogReplacing, false)]
-    [InlineData((int)PackageStoreFaultPoint.CatalogReplaced, true)]
-    [InlineData((int)PackageStoreFaultPoint.PolicyReconciling, true)]
-    [InlineData((int)PackageStoreFaultPoint.PolicyReconciled, true)]
-    [InlineData((int)PackageStoreFaultPoint.CatalogCommitRecording, true)]
-    [InlineData((int)PackageStoreFaultPoint.CatalogCommitted, true)]
-    [InlineData((int)PackageStoreFaultPoint.Cleanup, true)]
-    public async Task RuntimePolicyUpdate_FaultRecoveryCouplesCatalogAndPolicyEvidence(
-        int faultPointValue,
-        bool expectedUpdated)
-    {
-        var faultPoint = (PackageStoreFaultPoint)faultPointValue;
-        var initialBinding = CreateRuntimeBinding();
-        var fixture = await CreateInstalledFixtureAsync(initialBinding);
-        var initialPolicy = CreateRuntimePolicyEntry(
-            initialBinding,
-            RuntimeLifecycle(ExecutionRuntimeLifecycleStates.Supported));
-        var policyCache = new ExecutionRuntimeLifecyclePolicyCache(
-            new ExecutionRuntimeStoreLayout(fixture.Paths));
-        await policyCache.ApplyEntriesAsync([initialPolicy]);
-        var crashing = CreateCoordinator(
-            fixture.Paths,
-            fixture.Store,
-            new OneShotFaultInjector(
-                (PackageStoreFaultPoint)faultPointValue,
-                simulatedCrash: true),
-            policyCache);
-        await crashing.InitializeAsync();
-        var installed = Assert.Single(await fixture.Store.ListAsync());
-        var desiredBinding = initialBinding with
-        {
-            RuntimePolicyRevision = 2,
-            RuntimeLifecycleState = ExecutionRuntimeLifecycleStates.Supported,
-            PolicyObservedAtUtc = initialBinding.PolicyObservedAtUtc.AddMinutes(2),
-            ResolvedAtUtc = initialBinding.ResolvedAtUtc.AddMinutes(2),
-        };
-        var desiredPolicy = CreateRuntimePolicyEntry(
-            desiredBinding,
-            RuntimeLifecycle(ExecutionRuntimeLifecycleStates.Supported),
-            ExecutionRuntimeTrustDispositions.Denied);
-        var preparation = await crashing.PrepareStageAsync(
-            [new PackageExecutionRuntimePolicyUpdateMutation(
-                installed.PackageId,
-                installed,
-                [desiredBinding])],
-            localBindingAuthority: null,
-            registryRuntimePolicyUpdates: [desiredPolicy],
-            registryRuntimePolicyAuthority: new ExecutionRuntimeLifecyclePolicySnapshot(
-                policyCache.CaptureSnapshot().Generation + 1,
-                [desiredPolicy]),
-            CancellationToken.None);
-        Assert.True(preparation.Success, preparation.Failure?.Message);
-
-        if (faultPoint == PackageStoreFaultPoint.Cleanup)
-        {
-            var result = await crashing.CommitStageAsync(preparation.Stage!.StageId);
-            Assert.True(result.Success, result.Message);
-        }
-        else
-        {
-            await Assert.ThrowsAsync<PackageStoreSimulatedCrashException>(
-                () => crashing.CommitStageAsync(preparation.Stage!.StageId));
-        }
-
-        var recoveredPolicies = new ExecutionRuntimeLifecyclePolicyCache(
-            new ExecutionRuntimeStoreLayout(fixture.Paths));
-        var recovery = CreateCoordinator(
-            fixture.Paths,
-            fixture.Store,
-            lifecyclePolicies: recoveredPolicies);
-        await recovery.InitializeAsync();
-        await recoveredPolicies.InitializeAsync();
-
-        var recoveredBinding = Assert.Single(
-            Assert.Single(await fixture.Store.ListAsync()).ExecutionRuntimeBindings);
-        var recoveredPolicy = Assert.Single(recoveredPolicies.CaptureSnapshot().Entries);
-        Assert.Equal(expectedUpdated ? desiredBinding : initialBinding, recoveredBinding);
-        Assert.Equal(expectedUpdated ? desiredPolicy : initialPolicy, recoveredPolicy);
-        Assert.Empty(Directory.EnumerateDirectories(fixture.Paths.TransactionRootPath));
     }
 
     [Fact]
@@ -686,7 +604,7 @@ public sealed class PackageStoreCoordinatorTests
         var previousBinding = CreateRuntimeBinding();
         var desiredBinding = CreateRuntimeBinding(
             runtimeVersion: "10.0.2",
-            packagingRevision: 2,
+            artifactOrdinal: 2,
             manifestHash: 'c',
             artifactHash: 'd',
             runtimePolicyRevision: 2);
@@ -718,9 +636,7 @@ public sealed class PackageStoreCoordinatorTests
         await using var operationGate = new RuntimeOperationGate();
         var authority = new PackageExecutionRuntimeGarbageCollectionAuthority(
             operationGate,
-            fixture.Coordinator,
-            new ExecutionRuntimeLifecyclePolicyCache(
-                new ExecutionRuntimeStoreLayout(fixture.Paths)));
+            fixture.Coordinator);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var collection = authority.ExecuteAsync(
@@ -775,7 +691,7 @@ public sealed class PackageStoreCoordinatorTests
         var initialBinding = CreateRuntimeBinding();
         var desiredBinding = CreateRuntimeBinding(
             runtimeVersion: "10.0.2",
-            packagingRevision: 2,
+            artifactOrdinal: 2,
             manifestHash: 'c',
             artifactHash: 'd',
             runtimePolicyRevision: 2);
@@ -1190,8 +1106,7 @@ public sealed class PackageStoreCoordinatorTests
                 outsidePath,
                 null,
                 Path.Combine(paths.TombstoneRootPath, "unsafe"))],
-            StorageSnapshots: [],
-            RuntimePolicyUpdates: []);
+            StorageSnapshots: []);
         await DurableJsonDocument.WriteAsync(
             Path.Combine(transactionDirectory, "journal.json"),
             journal,
@@ -1566,11 +1481,10 @@ public sealed class PackageStoreCoordinatorTests
     private static PackageStoreCoordinator CreateCoordinator(
         RuntimePackagePaths paths,
         InstalledPackageStore store,
-        IPackageStoreFaultInjector? faultInjector = null,
-        ExecutionRuntimeLifecyclePolicyCache? lifecyclePolicies = null)
+        IPackageStoreFaultInjector? faultInjector = null)
     {
         var installer = new SunderPackageArchiveInstaller(paths);
-        return new PackageStoreCoordinator(paths, store, installer, faultInjector, lifecyclePolicies);
+        return new PackageStoreCoordinator(paths, store, installer, faultInjector);
     }
 
     private static PackageStoreTransactionJournal ReadJournal(RuntimePackagePaths paths, string transactionId)
@@ -1614,68 +1528,44 @@ public sealed class PackageStoreCoordinatorTests
 
     private static InstalledPackageExecutionRuntimeBindingRecord CreateRuntimeBinding(
         string runtimeVersion = "10.0.1",
-        int packagingRevision = 1,
+        int artifactOrdinal = 1,
         char manifestHash = 'a',
         char artifactHash = 'b',
         long runtimePolicyRevision = 1)
-        => new(
-            SunderPackageFormat.RuntimeHostRole,
-            PackageTargetSelection.GetCurrentRuntimeIdentifier(),
-            SunderExecutionRuntimeFormat.DotNetRuntimeId,
-            runtimeVersion,
-            packagingRevision,
-            SunderExecutionRuntimeFormat.DotNetModuleAbi,
-            new string(manifestHash, 64),
-            new string(artifactHash, 64),
-            4096 + packagingRevision,
-            "https://registry.example/",
-            RuntimeExecutionRuntimeAcquisitionSources.Registry,
-            "sunder-runtime-release-2026-01",
-            packagingRevision,
-            runtimePolicyRevision,
-            "supported",
-            DateTimeOffset.Parse("2026-07-11T10:00:00Z").AddMinutes(runtimePolicyRevision),
-            DateTimeOffset.Parse("2026-07-11T10:01:00Z").AddMinutes(runtimePolicyRevision));
-
-    private static ExecutionRuntimeLifecyclePolicyEntryV1 CreateRuntimePolicyEntry(
-        InstalledPackageExecutionRuntimeBindingRecord binding,
-        RegistryExecutionRuntimeLifecycle lifecycle,
-        string trustDisposition = ExecutionRuntimeTrustDispositions.Trusted)
-        => new(
-            new ExecutionRuntimeIdentity(
-                binding.RuntimeId,
-                binding.RuntimeVersion,
-                binding.RuntimePackagingRevision,
-                binding.Rid,
-                binding.ModuleAbi),
-            binding.RegistryOrigin,
-            SunderExecutionRuntimeFormat.WorkerProtocol,
-            binding.RuntimeManifestSha256,
-            binding.RuntimeArtifactSha256,
-            binding.RuntimeArtifactSize,
-            new string('e', 64),
-            binding.SigningKeyId,
-            binding.TrustStoreGeneration,
-            new string('f', 64),
-            "sunder-native-test-2026-01",
-            lifecycle,
-            binding.RuntimePolicyRevision,
-            binding.PolicyObservedAtUtc,
-            trustDisposition);
-
-    private static RegistryExecutionRuntimeLifecycle RuntimeLifecycle(string state)
     {
-        var staged = DateTimeOffset.Parse("2026-07-10T10:00:00Z");
-        var supported = staged.AddHours(1);
-        return new RegistryExecutionRuntimeLifecycle(
-            state,
-            staged,
-            supported,
-            state == ExecutionRuntimeLifecycleStates.Supported ? null : supported.AddHours(1),
-            InstallBlockedAtUtc: null,
-            ActivationBlockedAtUtc: null,
-            RevokedAtUtc: null,
-            Message: null);
+        _ = manifestHash;
+        _ = runtimePolicyRevision;
+        var artifactSha256 = new string(artifactHash, 64);
+        var retrievedAtUtc = DateTimeOffset.Parse("2026-07-11T10:00:00Z").AddMinutes(artifactOrdinal);
+        var identity = new RuntimeExecutionRuntimeIdentity(
+            ConfiguredOfficialSourceId.DotNet,
+            SunderPackageFormat.DotNetExecutionRuntimeId,
+            runtimeVersion,
+            PackageTargetSelection.GetCurrentRuntimeIdentifier(),
+            SunderPackageFormat.DotNetWorkerModuleAbi,
+            RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
+            new string((char)('a' + Math.Clamp(artifactOrdinal, 0, 25)), 128));
+        var distribution = new RuntimeExecutionRuntimeDistribution(
+            $"https://builds.dotnet.microsoft.com/dotnet/Runtime/{runtimeVersion}/dotnet-runtime-{runtimeVersion}-{identity.Rid}{(identity.Rid.StartsWith("win-", StringComparison.Ordinal) ? ".zip" : ".tar.gz")}",
+            OfficialRuntimeSourcePolicy.DotNetMetadata,
+            new string('c', 64),
+            null,
+            null,
+            identity.Rid.StartsWith("win-", StringComparison.Ordinal) ? RuntimeExecutionRuntimeArchiveFormat.Zip : RuntimeExecutionRuntimeArchiveFormat.TarGzip,
+            OfficialRuntimeSourcePolicy.Profile(ConfiguredOfficialSourceId.DotNet),
+            4096 + artifactOrdinal);
+        var installed = new RuntimeExecutionRuntimeInstalledArtifact(
+            artifactSha256,
+            4096 + artifactOrdinal,
+            new string('e', 64),
+            new RuntimeExecutionRuntimeProvenance(distribution, distribution.DownloadUrl, retrievedAtUtc));
+        return new(
+            SunderPackageFormat.RuntimeHostRole,
+            identity.Rid,
+            new RuntimeExecutionRuntimeRequirement(identity.RuntimeId, ">=10.0.0 <11.0.0", identity.ModuleAbi),
+            identity,
+            installed,
+            retrievedAtUtc.AddMinutes(1));
     }
 
     private static IReadOnlyDictionary<string, string> SnapshotPackageFiles(string packagePath)

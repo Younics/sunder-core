@@ -9,6 +9,8 @@
       "registryOrigin": "https://registry.example/",
       "publicContractCount": 1,
       "publicInventorySha256": "aad59a4a18b4d2e4052698580bc863fc2de8c2aabe2a8343216fae3ba82b64a7",
+      "modelProjectionBytes": 477,
+      "modelProjectionSha256": "def31402252acf51eac497db26791d21bf02cbb5c7bf3c0467f13f514b7a1a16",
       "contracts": {
         "sunder.stack.contributor": {
           "artifactSource": "imported",
@@ -29,7 +31,10 @@
     "example.dependency": {
       "localName": "dependency",
       "presence": "optional",
-      "requiredContracts": []
+      "requiredContracts": [],
+      "consumerRoles": [
+        "runtime"
+      ]
     }
   },
   "providerImports": {},

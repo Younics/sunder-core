@@ -28,7 +28,7 @@ internal sealed record DevelopmentImportAuthority(int SchemaVersion, [property: 
 
 internal sealed class DevelopmentImportAuthorityStore(RuntimePackagePaths paths, PackageLifecyclePolicyCache policies)
 {
-    internal const int MaximumReceiptBytes = 96 * 1024 * 1024;
+    internal const int MaximumReceiptBytes = SunderPackageFormat.MaxDevelopmentImportsBytes;
     internal static readonly JsonSerializerOptions Json = new(RegistryActivePolicyClient.Json) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     internal async Task<DevelopmentImportAuthority> ResolveAsync(RuntimePackageSource source, CancellationToken token)
@@ -36,9 +36,24 @@ internal sealed class DevelopmentImportAuthorityStore(RuntimePackagePaths paths,
         var hash = source.ContentIndex is null ? null : RuntimeRpcPackageMetadata.GetManifestSha256(source.ContentIndex);
         if (source.Kind != PackageSourceKind.Dev || source.Manifest is null || hash is null) throw Required();
         var path = PathFor(hash); using var lease = await RuntimeFileLock.AcquireExclusiveAsync(path + ".lock", token);
-        if (!File.Exists(path)) throw Required();
+        if (!File.Exists(path))
+        {
+            var folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source.SourceFolder));
+            var handoffPath = folder + SunderPackageFormat.DevelopmentImportsSuffix;
+            PackageStorePathGuard.EnsureSafe(handoffPath, Path.GetDirectoryName(folder)!);
+            if (!File.Exists(handoffPath)) throw Required();
+            var localBytes = await ReadAsync(handoffPath, MaximumReceiptBytes, token);
+            var local = StrictJsonSerializer.Deserialize<DevelopmentImportAuthority>(localBytes, Json) ?? throw Required();
+            if (!local.IsLocal) throw Required();
+            Validate(local, source.Manifest, hash);
+            // Only an explicit --dev-package source can use this local handoff.
+            // Reuse the same validation/storage as manual preparation, with no
+            // Registry inference and no installed/publication identity or grants.
+            PackageStorePathGuard.EnsureSafe(path, paths.RootPath);
+            await DurableJsonDocument.WriteAsync(path, local, Json, token);
+        }
         var bytes = await ReadAsync(path, MaximumReceiptBytes, token);
-        var evidence = JsonSerializer.Deserialize<DevelopmentImportAuthority>(bytes, Json) ?? throw Required();
+        var evidence = StrictJsonSerializer.Deserialize<DevelopmentImportAuthority>(bytes, Json) ?? throw Required();
         Validate(evidence, source.Manifest, hash);
         var platforms = Platforms(source.Manifest);
         if (platforms.Length > 0 && !evidence.IsLocal)

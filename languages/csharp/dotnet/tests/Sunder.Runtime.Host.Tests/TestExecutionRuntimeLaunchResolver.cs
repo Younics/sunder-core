@@ -4,7 +4,6 @@ using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using Sunder.Package.Projections;
 using Sunder.Package.Format;
-using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Packaging;
 
@@ -36,6 +35,43 @@ internal sealed class TestExecutionRuntimeLaunchResolver :
 
     internal string RuntimeRootPath => _runtimeRoot;
 
+    internal static RuntimePackageExecutionRuntimeBinding CreateBinding(string role, string rid)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var requirement = new RuntimeExecutionRuntimeRequirement(
+            SunderPackageFormat.DotNetExecutionRuntimeId,
+            SunderPackageFormat.DotNetExecutionRuntimeVersionRange,
+            SunderPackageFormat.DotNetWorkerModuleAbi);
+        var identity = new RuntimeExecutionRuntimeIdentity(
+            ConfiguredOfficialSourceId.DotNet,
+            requirement.RuntimeId,
+            "10.0.0",
+            rid,
+            requirement.ModuleAbi,
+            RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
+            new string('a', 128));
+        var distribution = new RuntimeExecutionRuntimeDistribution(
+            $"https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.0/{OfficialRuntimeSourcePolicy.ArchiveName(ConfiguredOfficialSourceId.DotNet, "10.0.0", rid)}",
+            OfficialRuntimeSourcePolicy.DotNetMetadata,
+            new string('b', 64),
+            null,
+            null,
+            rid.StartsWith("win-", StringComparison.Ordinal) ? RuntimeExecutionRuntimeArchiveFormat.Zip : RuntimeExecutionRuntimeArchiveFormat.TarGzip,
+            OfficialRuntimeSourcePolicy.Profile(ConfiguredOfficialSourceId.DotNet),
+            1);
+        return new RuntimePackageExecutionRuntimeBinding(
+            role,
+            rid,
+            requirement,
+            identity,
+            new RuntimeExecutionRuntimeInstalledArtifact(
+                new string('c', 64),
+                1,
+                new string('d', 64),
+                new RuntimeExecutionRuntimeProvenance(distribution, distribution.DownloadUrl, now)),
+            now);
+    }
+
     public Task<ResolvedExecutionRuntimeLaunch> ResolveAsync(
         PreparedRuntimePackage package,
         Guid activationId,
@@ -58,7 +94,7 @@ internal sealed class TestExecutionRuntimeLaunchResolver :
         var launch = new ResolvedExecutionRuntimeLaunch(
             _runtimeRoot,
             _launcherPath,
-            [SunderExecutionRuntimeFormat.DotNetExecArgument, Path.GetFullPath(package.EntryAssemblyPath)],
+            ["exec", Path.GetFullPath(package.EntryAssemblyPath)],
             new TestExecutionRuntimeProcessLease(_runtimeRoot),
             package.ExecutionRuntimeBinding?.Identity);
         return Task.FromResult(launch);
@@ -84,26 +120,8 @@ internal sealed class TestExecutionRuntimeLaunchResolver :
             throw new InvalidDataException("The shared test resolver only launches managed Worker DLL fixtures.");
         }
 
-        var now = DateTimeOffset.UtcNow;
         return Task.FromResult(new ResolvedEphemeralExecutionRuntimeBinding(
-            new RuntimePackageExecutionRuntimeBinding(
-            targetKey.Role,
-            targetKey.Rid,
-            requirement.Id!,
-            runtimeVersion,
-            1,
-            requirement.ModuleAbi!,
-            new string('a', 64),
-            new string('b', 64),
-            new FileInfo(_launcherPath).Length,
-            "https://test.invalid/",
-            Sunder.Runtime.Contracts.RuntimeExecutionRuntimeAcquisitionSources.Development,
-            "sunder.test.runtime.v1",
-            1,
-            1,
-            "supported",
-            now,
-            now)));
+            CreateBinding(targetKey.Role, targetKey.Rid)));
     }
 }
 
@@ -220,45 +238,21 @@ internal sealed class TestExecutionRuntimeProcessLease(string runtimeRootPath)
     }
 }
 
-internal sealed class TestLifecyclePolicyExecutionRuntimeLaunchResolver(
-    ExecutionRuntimeLifecyclePolicyCache lifecyclePolicies,
-    TimeProvider timeProvider) : IExecutionRuntimeLaunchResolver
-{
-    public async Task<ResolvedExecutionRuntimeLaunch> ResolveAsync(
-        PreparedRuntimePackage package,
-        Guid activationId,
-        CancellationToken cancellationToken)
-    {
-        var binding = package.ExecutionRuntimeBinding
-                      ?? throw new InvalidDataException(
-                          $"Test package '{package.PackageId}' does not carry an exact execution-runtime binding.");
-        await lifecyclePolicies.InitializeAsync(cancellationToken);
-        var policy = package.ExecutionRuntimePolicyAuthority;
-        if (policy is null)
-        {
-            lifecyclePolicies.CaptureSnapshot().TryGet(binding.Identity, out policy);
-        }
-        if (policy is not null
-            && !policy.PermitsActivation(timeProvider.GetUtcNow()))
-        {
-            throw new InvalidDataException(
-                $"Test package '{package.PackageId}' is blocked by its execution-runtime lifecycle policy.");
-        }
-        return await TestExecutionRuntimeLaunchResolver.Instance.ResolveAsync(
-            package,
-            activationId,
-            cancellationToken);
-    }
-}
-
 internal static class TestExecutionRuntimeServiceCollectionExtensions
 {
     public static IServiceCollection UseTestExecutionRuntimeLaunchResolver(
         this IServiceCollection services,
-        bool enforceLifecyclePolicy = false,
         IExecutionRuntimeLaunchResolver? launchResolver = null)
     {
+        // This fixture replaces installed runtime authority with a synthetic launcher and
+        // receipt factory. Official runtime source/store coverage lives in dedicated tests.
+        services.RemoveAll<PackageRuntimePrerequisiteService>();
+        services.RemoveAll<ExecutionRuntimeActivationUpdates>();
+        foreach (var descriptor in services.Where(value => value.ImplementationType == typeof(ExecutionRuntimeUpdateScheduler)).ToArray())
+            services.Remove(descriptor);
         services.RemoveAll<LocalExecutionRuntimeBindingResolver>();
+        services.RemoveAll<IHostExecutionRuntimeBindingPreparer>();
+        services.AddSingleton<IHostExecutionRuntimeBindingPreparer>(new PackageOnlyRuntimeBindingPreparer());
         services.RemoveAll<PackageSessionLoadService>();
         services.AddSingleton(provider => new PackageSessionLoadService(
             provider.GetRequiredService<ILogger<PackageSessionLoadService>>(),
@@ -268,49 +262,39 @@ internal static class TestExecutionRuntimeServiceCollectionExtensions
             hostStopping: provider.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>()?.ApplicationStopping
                            ?? CancellationToken.None,
             packageSessionState: provider.GetRequiredService<PackageSessionState>(),
-            executionRuntimeLaunchResolver: launchResolver ?? (enforceLifecyclePolicy
-                ? new TestLifecyclePolicyExecutionRuntimeLaunchResolver(
-                    provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>(),
-                    provider.GetRequiredService<TimeProvider>())
-                : TestExecutionRuntimeLaunchResolver.Instance),
+            executionRuntimeLaunchResolver: launchResolver ?? TestExecutionRuntimeLaunchResolver.Instance,
             ephemeralExecutionRuntimeBindingResolver: TestExecutionRuntimeLaunchResolver.Instance));
-        services.RemoveAll<RegistryExecutionRuntimeBindingPreparer>();
-        services.AddSingleton(provider => new RegistryExecutionRuntimeBindingPreparer(
-            static (origin, artifact, _, cancellationToken) =>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                const string launcherPath = "payload/bin/test-runtime";
-                var receipt = new ExecutionRuntimeReceiptV1(
-                    ExecutionRuntimeReceiptV1.CurrentSchemaVersion,
-                    new ExecutionRuntimeIdentity(
-                        artifact.Identity.RuntimeId,
-                        artifact.Identity.Version,
-                        artifact.Identity.PackagingRevision,
-                        artifact.Identity.Rid,
-                        artifact.Identity.ModuleAbi),
-                    SunderExecutionRuntimeFormat.WorkerProtocol,
-                    artifact.ArtifactSha256,
-                    artifact.ArtifactSize,
-                    artifact.ManifestSha256,
-                    new string('d', 64),
-                    launcherPath,
-                    new string('e', 64),
-                    1,
-                    [SunderExecutionRuntimeFormat.DotNetExecArgument, SunderExecutionRuntimeFormat.PackageEntryPointPlaceholder],
-                    [new ExecutionRuntimeReceiptContentV1(launcherPath, new string('e', 64), 1)],
-                    artifact.NativeAttestationSha256,
-                    artifact.NativeAttestationKeyId,
-                    artifact.SigningKeyId,
-                    Math.Max(artifact.MinimumHostTrustGeneration, 1),
-                    ExecutionRuntimeTrustEnvironment.Production,
-                    RuntimeExecutionRuntimeAcquisitionSources.Registry,
-                    origin.AbsoluteUri,
-                    DateTimeOffset.UtcNow);
-                return Task.FromResult(new ExecutionRuntimeEnsureResult(receipt, AlreadyPresent: false));
-            },
-            provider.GetRequiredService<IExecutionRuntimeRetentionManager>(),
-            provider.GetRequiredService<TimeProvider>(),
-            provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>()));
         return services;
+    }
+
+    // The package orchestration fixture substitutes only runtime authority. Real source,
+    // receipt, prerequisite and native launch behavior is exercised by the official-runtime suites.
+    private sealed class PackageOnlyRuntimeBindingPreparer : IHostExecutionRuntimeBindingPreparer
+    {
+        public Task<PreparedExecutionRuntimeBindings> PrepareAsync(IReadOnlyList<RegistryPackagePlanResolution> contexts,
+            IReadOnlyDictionary<string, InstalledPackageRecord> installed, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            var result = new Dictionary<string, IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in contexts.SelectMany(context => context.Plan.Items))
+            {
+                if (item.ActionKind == Sunder.Registry.Contracts.RegistryPackageActionKinds.Keep)
+                {
+                    result[item.PackageId] = installed.TryGetValue(item.PackageId, out var existing) ? existing.ExecutionRuntimeBindings : [];
+                    continue;
+                }
+                result[item.PackageId] = item.Targets.Where(target => target.ExecutionRuntime is not null
+                    && item.Artifacts.Any(artifact => artifact.Kind == target.Role && artifact.Rid == target.Rid)).Select(target =>
+                {
+                    var binding = TestExecutionRuntimeLaunchResolver.CreateBinding(target.Role, target.Rid);
+                    var requirement = target.ExecutionRuntime!;
+                    if (requirement.RuntimeId != binding.Runtime.RuntimeId || requirement.ModuleAbi != binding.Runtime.ModuleAbi)
+                        throw new InvalidDataException("The package-only .NET fixture does not emulate another runtime family.");
+                    return new InstalledPackageExecutionRuntimeBindingRecord(target.Role, target.Rid,
+                        new(requirement.RuntimeId, requirement.VersionRange, requirement.ModuleAbi), binding.Runtime, binding.InstalledArtifact, binding.ResolvedAtUtc);
+                }).ToArray();
+            }
+            return Task.FromResult(new PreparedExecutionRuntimeBindings(result, []));
+        }
     }
 }

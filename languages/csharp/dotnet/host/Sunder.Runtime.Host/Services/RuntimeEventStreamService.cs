@@ -15,6 +15,7 @@ internal sealed class RuntimeEventStreamService
     private RuntimeOperationPhase _operationPhase;
     private RuntimeBootstrapState _bootstrapState = RuntimeBootstrapState.Starting;
     private IReadOnlyList<string> _activePackageIds = [];
+    private bool _completed;
 
     public RuntimeEventStreamService(
         RuntimeProtocolDescriptor? protocol = null,
@@ -108,6 +109,16 @@ internal sealed class RuntimeEventStreamService
                 NormalizePackageIds(packageIds),
                 success,
                 NormalizeMessage(message)));
+        }
+    }
+
+    public void PublishExecutionRuntimesChanged()
+    {
+        lock (_stateGate)
+        {
+            if (_completed) return;
+            _feed.Publish(sequenceId => CreateEvent(sequenceId, RuntimeEventKind.ExecutionRuntimesChanged,
+                _sessionGeneration, _operationPhase, _bootstrapState, []));
         }
     }
 
@@ -221,6 +232,7 @@ internal sealed class RuntimeEventStreamService
         lock (_stateGate)
         {
             _operationPhase = RuntimeOperationPhase.ShuttingDown;
+            _completed = true;
             _feed.Complete();
         }
     }

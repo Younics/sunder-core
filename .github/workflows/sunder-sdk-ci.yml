@@ -58,7 +58,7 @@ jobs:
         run: npm ci --prefix languages/typescript/node
 
       - name: Check Markdown links and anchors
-        run: python3 scripts/release/check-markdown-links.py .
+        run: python3 -B scripts/test/check-markdown-links.py .
 
       - name: Setup .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
@@ -69,12 +69,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m unittest scripts/release/test_verify_nuget_package_set.py
-          bash scripts/release/verify-nuget-source.fixture.sh
-          bash scripts/release/preflight-npm-trusted-publishing.fixture.sh
-          bash scripts/release/verify-github-release-assets.fixture.sh
-          bash scripts/release/verify-release-tag.fixture.sh
-          bash scripts/release/verify-nuget-package.fixture.sh
+          python3 -B -m unittest discover -s scripts/test/release -p test_verify_nuget_package_set.py
+          bash scripts/test/release/verify-nuget-source.fixture.sh
+          bash scripts/test/release/preflight-npm-trusted-publishing.fixture.sh
+          bash scripts/test/release/verify-github-release-assets.fixture.sh
+          bash scripts/test/release/verify-release-tag.fixture.sh
+          bash scripts/test/release/verify-nuget-package.fixture.sh
 
       - name: Restore
         run: dotnet restore Sunder.Core.slnx --locked-mode
@@ -267,7 +267,7 @@ jobs:
           unzip -t "${archives[0]}"
 
   template-runtime-host-smoke:
-    name: Generated .NET template signed Runtime Host smoke
+    name: Generated .NET template official Runtime Host smoke
     needs: build-test-pack
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -317,7 +317,7 @@ jobs:
           echo "dev_package=$dev_package" >> "$GITHUB_OUTPUT"
       - name: Restore Runtime Host acceptance tests
         run: dotnet restore languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --locked-mode
-      - name: Require generated template activation through the signed Runtime Host
+      - name: Require generated template activation through the official Runtime Host
         env:
           SUNDER_REQUIRE_DOTNET_TEMPLATE_HOST_SMOKE: "1"
           SUNDER_DOTNET_TEMPLATE_DEV_PATH: ${{ steps.generated-template.outputs.dev_package }}
@@ -327,7 +327,7 @@ jobs:
           --no-restore
           -m:1
           -p:GeneratePackageOnBuild=false
-          --filter FullyQualifiedName=Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedDotNetTemplate_ActivatesThroughSignedRuntimeHost
+          --filter FullyQualifiedName=Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedDotNetTemplate_ActivatesThroughOfficialRuntimeHost
           --logger "trx;LogFileName=Sunder.Runtime.Host.Tests.trx"
           --results-directory artifacts/test-results/dotnet-template-runtime-host
       - name: Summarize required generated-template result
@@ -336,7 +336,7 @@ jobs:
           node scripts/test-oracles/summarize-core-test-results.mjs
           artifacts/test-results/dotnet-template-runtime-host
           --allow-partial
-          --require-test Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedDotNetTemplate_ActivatesThroughSignedRuntimeHost
+          --require-test Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedDotNetTemplate_ActivatesThroughOfficialRuntimeHost
       - name: Upload required generated-template result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

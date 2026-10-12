@@ -1,5 +1,6 @@
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 
 [assembly: SunderPackage(Id = "example.generated", Name = "Implementation-First RPC Fixture")]
@@ -15,10 +16,9 @@ internal static class Program
         ]));
 }
 
-[SunderRpcService(SunderRpcExposure.Package)]
+[SunderService]
 public sealed partial class GreetingService
 {
-    [SunderRpcMethod]
     public ValueTask<GreetingResult> GreetAsync(
         GreetingRequest request,
         SunderRpcInvocationContext context,

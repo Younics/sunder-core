@@ -400,9 +400,9 @@ public sealed class InstalledPackageStoreTests
         {
             target["executionRuntime"] = new JsonObject
             {
-                ["id"] = SunderExecutionRuntimeFormat.DotNetRuntimeId,
+                ["id"] = SunderPackageFormat.DotNetExecutionRuntimeId,
                 ["versionRange"] = ">=10.0.0 <11.0.0",
-                ["moduleAbi"] = SunderExecutionRuntimeFormat.DotNetModuleAbi,
+                ["moduleAbi"] = SunderPackageFormat.DotNetWorkerModuleAbi,
             };
         }
         File.WriteAllText(manifestPath, manifest.ToJsonString(TestJsonOptions));

@@ -57,6 +57,7 @@ internal static class PackageContentIndexValidator
                 continue;
             }
             var normalizedPath = path.ToString();
+            ValidateModelProjectionPath(normalizedPath, errors);
             if (!SunderPackageFormat.IsAllowedArchivePath(normalizedPath))
             {
                 errors.Add($"Package content index path '{normalizedPath}' is outside canonical manifest and payload layer roots.");
@@ -115,6 +116,7 @@ internal static class PackageContentIndexValidator
         foreach (var actualFile in actualFiles)
         {
             var actualPath = actualFile.Path.ToString();
+            ValidateModelProjectionPath(actualPath, errors);
             if (!SunderPackageFormat.IsAllowedArchivePath(actualPath))
             {
                 errors.Add($"Package archive contains file outside canonical roots: '{actualPath}'.");
@@ -133,6 +135,14 @@ internal static class PackageContentIndexValidator
                 errors.Add($"Package archive contains directory outside canonical roots: '{directory}'.");
             }
         }
+    }
+
+    internal static void ValidateModelProjectionPath(string path, ICollection<string> errors)
+    {
+        if (SunderPackageFormat.TryClassifyPayloadPath(path, out _, out _, out _, out var logical)
+            && string.Equals(logical, SunderPackageFormat.RpcModelProjectionLogicalPath, StringComparison.OrdinalIgnoreCase)
+            && path != SunderPackageFormat.RpcModelProjectionPath)
+            errors.Add($"Model projection sidecar path '{path}' shadows the reserved shared path '{SunderPackageFormat.RpcModelProjectionPath}'.");
     }
 
     private static bool ValidateActualContentBounds(

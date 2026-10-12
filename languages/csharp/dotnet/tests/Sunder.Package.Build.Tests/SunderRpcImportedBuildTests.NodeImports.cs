@@ -21,8 +21,7 @@ public sealed partial class SunderRpcImportedBuildTests
     private async Task VerifyNodeCandidateImportsAsync(bool provider)
     {
         var candidate = await CreateLockedCandidateAsync();
-        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
-        var cli = Path.Combine(RepositoryRoot(), "languages/csharp/dotnet/host/Sunder.Cli/bin", configuration, "net10.0", OperatingSystem.IsWindows() ? "sunder.exe" : "sunder");
+        var cli = CanonicalInspectorCli();
         var helper = Path.Combine(RepositoryRoot(), "languages/typescript/node/packages/package-tool/dist-test/test/package-import-child.js");
         Assert.True(File.Exists(cli)); Assert.True(File.Exists(helper));
         var start = new ProcessStartInfo("node") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -51,14 +50,17 @@ public sealed partial class SunderRpcImportedBuildTests
         }
         else
         {
-            Assert.Equal("runtime", Assert.Single(manifest.UsesContracts!)!.Role);
-            Assert.False(Assert.Single(manifest.UsesContracts!)!.Required);
+            Assert.Equal(new[] { "app", "runtime" }, manifest.UsesContracts!.Select(use => use!.Role).Order(StringComparer.Ordinal));
+            Assert.All(manifest.UsesContracts!, use => Assert.False(use!.Required));
             Assert.Empty(manifest.Provides!);
             Assert.Empty(manifest.ProviderImports!);
-            Assert.Equal("optional", Assert.Single(manifest.PackageApiImports!)!.Presence);
+            var import = Assert.Single(manifest.PackageApiImports!)!;
+            Assert.Equal("optional", import.Presence);
+            Assert.Equal(new[] { "app", "runtime" }, import.UseRefs!.Select(use => use!.Role).Order(StringComparer.Ordinal));
         }
         var original = SunderRpcAuthoringDocuments.ReadContractLock(LockPath);
         var node = SunderRpcAuthoringDocuments.ReadContractLock(Path.Combine(_root, "node-import/sunder-contracts.lock.json"));
+        if (!provider) Assert.Equal(new[] { "app", "runtime" }, node.PackageImports[DependencyId].ConsumerRoles);
         Assert.Equal(SunderRpcAuthoringDocuments.ValidatePackagePublicInventory(original.PackageArtifacts[DependencyId]).ToCanonicalUtf8(),
             SunderRpcAuthoringDocuments.ValidatePackagePublicInventory(node.PackageArtifacts[DependencyId]).ToCanonicalUtf8());
     }

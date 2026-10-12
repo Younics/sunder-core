@@ -15,6 +15,10 @@ import { loadProjectWithOwnedFrame, currentRid } from "../src/model";
 import { generateRpcBindingsForLoadedProject } from "../src/rpc-bindings";
 import { packageApiCommand, type PackageApiRequest } from "../src/rpc-package-commands";
 import { markerPath } from "../src/output";
+import { preparePackageImports, importProjection, importedDependenciesForRoles } from "../src/rpc-package-imports";
+import { canonicalCandidateFixture, installFixtureInspector, publishFixtureModelProjections, rebindFixtureProjection } from "./model-projection-fixtures";
+import { publishModelProjectionCache } from "../src/rpc-model-projection-cache";
+import { projectionDocumentBytes } from "../src/rpc-model-projection";
 
 const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1");
 const exec = promisify(execFile); const cli = resolve(__dirname, "../src/cli.js");
@@ -22,17 +26,20 @@ async function fixture(extension = "ts") {
   const root = await mkdtemp(join(tmpdir(), "sunder-package-imports-")); const cache = join(root, "cache"); await mkdir(join(root, "src"));
   const lockPath = join(root, "sunder-contracts.lock.json"); const original = await readFile(join(ROOT, "authoring/conformance/valid/package-api-contract-lock.json"));
   const locked = parseContractLock(original); const requirement = [...locked.requirements.values()][0]!;
+  const projection=await readFile(join(ROOT,"authoring/conformance/valid/rpc-model-projection-nonempty.json"));
+  const restoreInspector=await installFixtureInspector(root);
   const descriptor = parseRpcContractDescriptor(await readFile(join(ROOT, "conformance/valid/minimal.rpc.json")));
   await publishContractCache(cache, new Map([[requirement.descriptorSha256, Buffer.from(canonicalRpcDescriptorBytes(descriptor))]]), locked.requirements);
+  await publishFixtureModelProjections(cache, locked, new Map([[requirement.descriptorSha256, Buffer.from(canonicalRpcDescriptorBytes(descriptor))]]));
   await writeFile(lockPath, original);
   await writeFile(join(root, "sunder-contracts.owned.json"), await readFile(join(ROOT, "authoring/conformance/valid/minimal-package-owned-baseline.json")));
-  await writeFile(join(root, `src/rpc.${extension}`), 'import {rpc} from "@sunder/sdk"; export const packageRpc=rpc.router({contracts:{},providers:{}});');
-  await writeFile(join(root, `src/worker.${extension}`), 'export {packageRpc} from "./rpc.js"; export {packageApis} from "#sunder/rpc";');
-  const config = { schemaVersion: 3, id: "example.owner", name: "Import Fixture", version: "1.0.0", entry: `src/worker.${extension}`, workerCapabilities: [], rpc: { module: `src/rpc.${extension}`, export: "packageRpc" } };
+  await writeFile(join(root, `src/services.${extension}`), 'export * from "./worker.js";');
+  await writeFile(join(root, `src/worker.${extension}`), 'export {Catalogs as packageApis} from "#sunder/api";');
+  const config = { schemaVersion: 3, id: "example.owner", name: "Import Fixture", version: "1.0.0", workerCapabilities: [], services: { module: `src/services.${extension}` } };
   await writeFile(join(root, "sunder.package.json"), JSON.stringify(config));
-  return { root, cache, lockPath, original, locked, requirement, descriptor, config,
+  return { root, cache, lockPath, original, locked, requirement, descriptor, config, projection,
     run: (...args: string[]) => exec(process.execPath, [cli, ...args, "--project", root], { env: { ...process.env, SUNDER_CONTRACT_CACHE: cache }, timeout: 180_000, maxBuffer: 4_194_304 }),
-    dispose: () => rm(root, { recursive: true, force: true }) };
+    dispose: async () => {restoreInspector();await rm(root, { recursive: true, force: true });} };
 }
 
 for (const extension of ["ts", "js"]) test(`offline ${extension} imports generate, build and pack from exact cached descriptors`, { timeout: 180_000 }, async () => {
@@ -62,7 +69,7 @@ test("generated discovery keeps exact tuples, compatible ranges, opaque endpoint
   try {
     const project = await loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }); await generateRpcBindingsForLoadedProject(project);
     const bundled = join(c.root, "apis.cjs");
-    await build({ entryPoints: [join(c.root, ".sunder/generated/rpc/imports.ts")], bundle: true, platform: "browser", format: "cjs", outfile: bundled,
+    await build({ entryPoints: [join(c.root, ".sunder/generated/rpc/catalogs.ts")], bundle: true, platform: "browser", format: "cjs", outfile: bundled,
       alias: { "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser") }, logLevel: "silent" });
     const { packageApis } = createRequire(__filename)(bundled);
     const raw = { packageId: "example.dependency", packageVersion: "1.9.9+new.content", providerId: "example.implementation", contractId: c.requirement.contractId,
@@ -90,7 +97,7 @@ test("generated discovery keeps exact tuples, compatible ranges, opaque endpoint
 test("offline readiness changes and removal retain cache and defer removed-symbol errors to compilation", async () => {
   const c = await fixture();
   try {
-    await writeFile(join(c.root, "src/worker.ts"), 'export {packageRpc} from "./rpc.js"; import {packageApis} from "#sunder/rpc"; export const dependency=packageApis.dependency;');
+    await writeFile(join(c.root, "src/worker.ts"), 'import {Catalogs} from "#sunder/api"; export const dependency=Catalogs.dependency;');
     await generateRpcBindingsForLoadedProject(await loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }));
     const generated = await snapshot(join(c.root, ".sunder/generated/rpc"));
     const command = (request: PackageApiRequest) => packageApiCommand(c.root, { ...request, cacheRoot: c.cache, fetchImplementation: async () => { throw new Error("Unexpected HTTP."); } });
@@ -113,8 +120,65 @@ test("duplicate authored dependency and self authority fail before generated out
     await assert.rejects(loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }), /dependency-source-duplicate/u);
     await assert.rejects(stat(join(c.root, ".sunder/generated/rpc")), { code: "ENOENT" });
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ ...c.config, id: "example.dependency" }));
+    await rm(join(c.root, "sunder-contracts.owned.json"));
     await assert.rejects(loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }), /cannot import its own/u);
   } finally { await c.dispose(); }
+});
+test("consumer roles project per-role grants, readiness and dependencies without Runtime inheritance", async () => {
+  const c = await fixture();
+  try {
+    const raw = JSON.parse(c.original.toString()); raw.packageImports["example.dependency"].consumerRoles = ["app"];
+    const reexport = structuredClone(raw.packageArtifacts["example.dependency"]);
+    reexport.selectedPackageContentIdentity = "3".repeat(64); reexport.contracts[c.requirement.contractId].artifactSource = "imported";
+    const inventory = JSON.parse(inventoryBytes(c.locked.packageArtifacts.get("example.dependency")!).toString());
+    inventory.packageId = "example.reexport"; inventory.packageContentIdentity = reexport.selectedPackageContentIdentity; inventory.contracts[0].artifactSource = "imported";
+    reexport.publicInventorySha256 = createHash("sha256").update("sunder.package-public-api-inventory.v1\0").update(JSON.stringify(inventory)).digest("hex");
+    const projection=rebindFixtureProjection("example.reexport",reexport,c.projection);
+    raw.packageArtifacts["example.reexport"] = reexport;
+    raw.packageImports["example.reexport"] = { localName: "reexport", presence: "optional", requiredContracts: [], consumerRoles: ["runtime"] };
+    const lock = parseContractLock(Buffer.from(JSON.stringify(raw, null, 2) + "\n"));
+    await publishModelProjectionCache(c.cache,new Map([["example.reexport",projection]]),lock.packageArtifacts,new Map([[c.requirement.descriptorSha256,Buffer.from(canonicalRpcDescriptorBytes(c.descriptor))]]));
+    const imports = await preparePackageImports(lock, c.cache, "example.owner", [], new Set(["app", "runtime"]));
+    assert.deepEqual(imports.uses.map(use => [use.role, use.required]), [["app", true], ["runtime", false]]);
+    assert.deepEqual(importProjection(imports, new Set(["runtime"])).packageApiImports.map(group => [group.packageId, group.useRefs.map(ref => ref.role)]), [["example.reexport", ["runtime"]]]);
+    assert.equal(importedDependenciesForRoles(imports, new Set(["runtime"])).find(value => value.packageId === "example.dependency")!.presence, "optional");
+    await assert.rejects(preparePackageImports(lock, c.cache, "example.owner", [], new Set(["runtime"])), /consumer-roles-unavailable/);
+  } finally { await c.dispose(); }
+});
+test("explicit consumer role migration preserves old Runtime intent, rejects invalid roles, and keeps no-op mtimes", async () => {
+  const c = await fixture();
+  try {
+    const legacy = JSON.parse(c.original.toString()); delete legacy.packageImports["example.dependency"].consumerRoles;
+    const original = Buffer.from(JSON.stringify(legacy, null, 2) + "\n");
+    assert.throws(() => parseContractLock(original), /consumer-roles-migration-required/);
+    await writeFile(c.lockPath, original);
+    const result = await packageApiCommand(c.root, { operation: "migrate-consumer-roles", cacheRoot: c.cache });
+    assert.equal(result.changed, true); assert.deepEqual(result.lock.packageImports.get("example.dependency")!.consumerRoles, ["runtime"]);
+    assert.deepEqual(await readFile(c.lockPath), c.original);
+    const mtime = (await stat(c.lockPath)).mtimeMs;
+    assert.equal((await packageApiCommand(c.root, { operation: "migrate-consumer-roles", cacheRoot: c.cache })).changed, false);
+    assert.equal((await stat(c.lockPath)).mtimeMs, mtime);
+    const widened = await packageApiCommand(c.root, { operation: "migrate-consumer-roles", packageId: "example.dependency", consumerRoles: ["app", "runtime"], cacheRoot: c.cache });
+    assert.deepEqual(widened.lock.packageImports.get("example.dependency")!.consumerRoles, ["app", "runtime"]);
+    legacy.packageImports["example.dependency"].consumerRoles = ["runtime", "app"];
+    await writeFile(c.lockPath, JSON.stringify(legacy, null, 2) + "\n");
+    await assert.rejects(packageApiCommand(c.root, { operation: "migrate-consumer-roles", packageId: "example.dependency", consumerRoles: ["runtime"], cacheRoot: c.cache }), /consumer-roles-invalid/);
+  } finally { await c.dispose(); }
+});
+test("TS and JS imported service implementations derive only provider grants from exact selected types", async () => {
+  for (const extension of ["ts", "js"]) {
+    const c = await fixture(extension);
+    try {
+      const lock = JSON.parse(c.original.toString()); lock.packageImports = {};
+      lock.providerImports.extension = { packageId: "example.dependency", contractId: c.requirement.contractId };
+      await writeFile(c.lockPath, JSON.stringify(lock, null, 2) + "\n");
+      await writeFile(join(c.root, `src/services.${extension}`), 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const implementation = defineService({ ping(request,context){context.signal.throwIfAborted();return request;} },{implements:Implementations.extension});');
+      const loaded = await loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache });
+      assert.equal(loaded.contracts[0]!.descriptorSha256, c.requirement.descriptorSha256);
+      assert.equal(loaded.ownedRpc!.importedProviders.length, 1); assert.equal(loaded.config.usesContracts!.length, 0);
+      assert.equal(loaded.ownedRpc!.contracts.length, 0);
+    } finally { await c.dispose(); }
+  }
 });
 
 test("global update's last member failure and concurrent lock edits preserve the committed selection", async () => {
@@ -125,8 +189,10 @@ test("global update's last member failure and concurrent lock edits preserve the
     const inventory = JSON.parse(inventoryBytes(c.locked.packageArtifacts.get("example.dependency")!).toString());
     inventory.packageId = "example.zreexport"; inventory.packageContentIdentity = reexport.selectedPackageContentIdentity; inventory.contracts[0].artifactSource = "imported";
     reexport.publicInventorySha256 = createHash("sha256").update("sunder.package-public-api-inventory.v1\0").update(JSON.stringify(inventory)).digest("hex");
-    value.packageArtifacts["example.zreexport"] = reexport; value.packageImports["example.zreexport"] = { localName: "reexport", presence: "optional", requiredContracts: [] };
+    const projection=rebindFixtureProjection("example.zreexport",reexport,c.projection);
+    value.packageArtifacts["example.zreexport"] = reexport; value.packageImports["example.zreexport"] = { localName: "reexport", presence: "optional", requiredContracts: [], consumerRoles: ["runtime"] };
     const before = Buffer.from(JSON.stringify(value, null, 2) + "\n"); await writeFile(c.lockPath, before);
+    await publishModelProjectionCache(c.cache,new Map([["example.zreexport",projection]]),parseContractLock(before).packageArtifacts,new Map([[c.requirement.descriptorSha256,Buffer.from(canonicalRpcDescriptorBytes(c.descriptor))]]));
     const cache = await snapshot(c.cache); let calls = 0;
     const failure: typeof fetch = async (input, init) => {
       calls++; if (String(input).includes("example.zreexport")) return new Response(null, { status: 503 });
@@ -138,7 +204,7 @@ test("global update's last member failure and concurrent lock edits preserve the
     const changed = c.original.toString().replace('"presence": "required"', '"presence": "optional"');
     const mutate: typeof fetch = async (input, init) => {
       const response = await registryResponse(c, String(input), init);
-      if (String(input).endsWith("/descriptor")) await writeFile(c.lockPath, changed);
+      if (String(input).endsWith("/canonical")) await writeFile(c.lockPath, changed);
       return response;
     };
     await assert.rejects(packageApiCommand(c.root, { operation: "update", packageId: "example.dependency", cacheRoot: c.cache, fetchImplementation: mutate }), /lock changed/u);
@@ -168,7 +234,7 @@ test("package API add/update uses stable selection, explicit presence and prerel
     const stable = await command({ operation: "update", packageId: "example.dependency", includePrerelease: false, presence: "required" });
     assert.equal(stable.lock.packageArtifacts.get("example.dependency")!.selectedPackageVersion, "1.9.0");
     const saved = await readFile(c.lockPath);
-    await writeFile(join(c.root, "src/worker.ts"), 'import {packageApis} from "#sunder/rpc"; export const broken=packageApis.missing; export {packageRpc} from "./rpc.js";');
+    await writeFile(join(c.root, "src/worker.ts"), 'import {Catalogs} from "#sunder/api"; export const broken=Catalogs.missing;');
     await assert.rejects(command({ operation: "update", packageId: "example.dependency", presence: "optional" }), /rpc-authoring\./u);
     assert.deepEqual(await readFile(c.lockPath), saved); assert.notDeepEqual(saved, before);
     await assert.rejects(stat(join(c.root, ".sunder/generated/rpc")), { code: "ENOENT" });
@@ -182,13 +248,14 @@ test("fresh API selection defers source diagnostics to Accept and refuses delete
     await writeFile(c.lockPath, empty); await rm(join(c.root, "sunder-contracts.owned.json"));
     const command = () => packageApiCommand(c.root, { operation: "add", packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0",
       registryOrigin: "https://registry.example/", cacheRoot: c.cache, fetchImplementation: (input, init) => registryResponse(c, String(input), init) });
-    await writeFile(join(c.root, "src/worker.ts"), 'import {packageApis} from "#sunder/rpc"; export const broken=packageApis.missing; export {packageRpc} from "./rpc.js";');
+    await writeFile(join(c.root, "src/services.ts"), 'import {defineService} from "@sunder/sdk"; export * from "./worker.js"; export const greeting=defineService({async greet(name:string):Promise<string>{return name;}},{exposure:"public"});');
+    await writeFile(join(c.root, "src/worker.ts"), 'import {Catalogs} from "#sunder/api"; export const broken=Catalogs.missing;');
     assert.equal((await command()).changed, true);
     await assert.rejects(c.run("contracts", "accept"), /handler-incomplete/u);
     await writeFile(c.lockPath, empty);
     await assert.rejects(stat(join(c.root, "sunder-contracts.owned.json")), { code: "ENOENT" });
     await assert.rejects(stat(join(c.root, ".sunder/generated/rpc")), { code: "ENOENT" });
-    await writeFile(join(c.root, "src/worker.ts"), 'export {packageRpc} from "./rpc.js";');
+    await writeFile(join(c.root, "src/worker.ts"), 'export {};');
     await c.run("contracts", "accept");
     await generateRpcBindingsForLoadedProject(await loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }));
     const generated = join(c.root, ".sunder/generated/rpc");
@@ -249,13 +316,19 @@ for (const invalid of [
 test("explicit update refuses removal of required inventory members before cache or lock publication", async () => {
   const c = await fixture();
   try {
+    const producer=join(c.root,"replacement-producer");await mkdir(join(producer,"src"),{recursive:true});
+    await writeFile(join(producer,"src/services.ts"),'import {defineService} from "@sunder/sdk"; export const replacement=defineService({ping():string{return "replacement";}},{exposure:"public"});');
+    await writeFile(join(producer,"sunder.package.json"),JSON.stringify({schemaVersion:3,id:"example.dependency",name:"Replacement",version:"1.9.0",workerCapabilities:[],services:{module:"src/services.ts"}}));
+    await writeFile(join(producer,"sunder-contracts.lock.json"),await readFile(join(ROOT,"authoring/conformance/valid/minimal-contract-lock.json")));
+    const contract=(await loadProjectWithOwnedFrame(producer,{allowDrift:true})).contracts[0]!;
+    const raw=JSON.parse(c.original.toString()).packageArtifacts["example.dependency"];raw.selectedPackageVersion="1.9.0";
+    raw.contracts={[contract.descriptor.contractId]:{artifactSource:"owned",authorityKind:"package",authorityId:"example.dependency",selectedAuthorityRelease:"1.9.0",selectedAuthorityContentIdentity:raw.selectedPackageContentIdentity,
+      resolvedContractVersion:contract.descriptor.version,descriptorBytes:contract.canonicalBytes.length,descriptorSha256:contract.descriptorSha256,abiSha256:contract.abiSha256,etag:`"${contract.descriptorSha256}"`}};
+    const projection=projectionDocumentBytes("example.dependency","1.9.0",[{contractId:contract.descriptor.contractId,contractVersion:contract.descriptor.version,descriptorSha256:contract.descriptorSha256,abiSha256:contract.abiSha256,modelProjection:contract.modelProjection}]);
+    const replacement=await canonicalCandidateFixture("example.dependency",raw,projection,new Map([[contract.descriptorSha256,contract.canonicalBytes]]));
     const request: typeof fetch = async (input, init) => {
       const response = await registryResponse(c, String(input), init);
-      if (String(input).endsWith("/public-api")) {
-        const body = await response.json() as any; body.inventory.contracts[0].contractId = "example.replacement";
-        body.publicInventorySha256 = createHash("sha256").update("sunder.package-public-api-inventory.v1\0").update(JSON.stringify(body.inventory)).digest("hex");
-        return responseAt(String(input), JSON.stringify(body));
-      }
+      if (String(input).endsWith("/canonical")) return responseAt(String(input),replacement.bytes,{"content-type":"application/octet-stream"});
       return response;
     };
     const cache = await snapshot(c.cache);
@@ -264,17 +337,24 @@ test("explicit update refuses removal of required inventory members before cache
   } finally { await c.dispose(); }
 });
 
-test("imported runtime leaves and owned-only App leaves aggregate with exact role-scoped metadata", { timeout: 180_000 }, async () => {
+for (const roles of [["runtime"], ["app"], ["app", "runtime"]]) test(`imported ${roles.join("+")} leaves aggregate with exact role-scoped metadata`, { timeout: 180_000 }, async () => {
   const c = await fixture();
   try {
+    const lock = JSON.parse(c.original.toString()); lock.packageImports["example.dependency"].consumerRoles = roles;
+    await writeFile(c.lockPath, JSON.stringify(lock, null, 2) + "\n");
     await mkdir(join(c.root, "app")); await writeFile(join(c.root, "app/index.html"), '<html><body>App</body></html>');
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ ...c.config, app: { root: "app", entryPoint: "index.html", views: [{ viewId: "example.owner.main", displayName: "App", route: "/", defaultPlacement: "middle", showInHotbar: true }] } }));
     await c.run("build"); await c.run("package", "--discovery-root", join(c.root, "dist/targets"));
     const app = JSON.parse(await readFile(join(c.root, "dist/targets", "app-" + currentRid(), "manifest/sunder-package.json"), "utf8"));
-    assert.deepEqual(app.contractBundles, []); assert.deepEqual(app.packageApiImports, []); assert.deepEqual(app.usesContracts, []);
+    assert.equal(app.contractBundles.length, roles.includes("app") ? 1 : 0); assert.equal(app.packageApiImports.length, roles.includes("app") ? 1 : 0); assert.equal(app.usesContracts.length, roles.includes("app") ? 1 : 0);
     const aggregate = JSON.parse(await readFile(join(c.root, "dist/package/manifest/sunder-package.json"), "utf8"));
-    assert.equal(aggregate.targets.length, 2); assert.equal(aggregate.contractBundles.length, 1); assert.equal(aggregate.usesContracts[0].role, "runtime");
+    assert.equal(aggregate.targets.length, 2); assert.equal(aggregate.contractBundles.length, 1); assert.deepEqual(aggregate.usesContracts.map((use: {role:string}) => use.role), roles);
+    assert.deepEqual(aggregate.packageApiImports[0].useRefs.map((use: {role:string}) => use.role), roles);
     assert.deepEqual(await readFile(join(c.root, "dist/package/payload/shared/contracts", c.requirement.contractId + ".rpc.json")), Buffer.from(canonicalRpcDescriptorBytes(c.descriptor)));
+    if (roles.length === 1 && roles[0] === "app") {
+      await c.run("dev");
+      assert.deepEqual(await readFile(join(c.root, "dist/sunder-dev/payload/shared/contracts", c.requirement.contractId + ".rpc.json")), Buffer.from(canonicalRpcDescriptorBytes(c.descriptor)));
+    }
   } finally { await c.dispose(); }
 });
 
@@ -286,17 +366,14 @@ async function registryResponse(c: Awaited<ReturnType<typeof fixture>>, url: str
   assert.equal(init?.redirect, "error");
   if (new URL(url).pathname.endsWith("/versions")) return responseAt(url, JSON.stringify(["1.2.3", "1.9.0", "1.10.0-rc.1", "1.99.0", "2.0.0"].map(version => ({ version, isYanked: version === "1.99.0" }))),
     { "X-Total-Count": "5", "X-Skip": "0", "X-Take": "100" });
-  if (url.endsWith("/public-api")) {
-    const inventory = JSON.parse(inventoryBytes(c.locked.packageArtifacts.get("example.dependency")!).toString());
+  if (url.endsWith("/canonical")) {
+    const artifact=JSON.parse(c.original.toString()).packageArtifacts["example.dependency"];
     const version = decodeURIComponent(new URL(url).pathname.split("/").at(-2)!);
-    inventory.packageVersion = version; inventory.contracts[0].selectedAuthorityRelease = version;
-    inventory.packageContentIdentity = "2".repeat(64); inventory.contracts[0].selectedAuthorityContentIdentity = inventory.packageContentIdentity;
-    const hash = createHash("sha256").update("sunder.package-public-api-inventory.v1\0").update(JSON.stringify(inventory)).digest("hex");
-    return responseAt(url, JSON.stringify({ inventory, publicInventorySha256: hash }));
+    artifact.selectedPackageVersion=version;artifact.contracts[c.requirement.contractId].selectedAuthorityRelease=version;
+    const candidate=await canonicalCandidateFixture("example.dependency",artifact,c.projection,new Map([[c.requirement.descriptorSha256,Buffer.from(canonicalRpcDescriptorBytes(c.descriptor))]]));
+    return responseAt(url,candidate.bytes,{"content-type":"application/octet-stream"});
   }
-  if (url.endsWith("/descriptor")) return responseAt(url, canonicalRpcDescriptorBytes(c.descriptor), { "content-type": "application/schema+json", etag: `"${c.requirement.descriptorSha256}"` });
-  return responseAt(url, JSON.stringify({ contractId: c.requirement.contractId, version: c.requirement.contractVersion, descriptorSha256: c.requirement.descriptorSha256,
-    abiSha256: c.requirement.abiSha256, size: c.requirement.descriptorBytes, etag: `"${c.requirement.descriptorSha256}"`, exposure: "public", firstPublisherPackageId: "example.dependency" }));
+  throw new Error("Unexpected authoring acquisition route: "+url);
 }
 
 async function snapshot(path: string): Promise<string[]> {

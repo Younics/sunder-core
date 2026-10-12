@@ -3,7 +3,7 @@ set -euo pipefail
 
 tag="${1:?Usage: verify-release-tag.sh <tag>}"
 [[ $# -eq 1 ]] || { printf 'Usage: verify-release-tag.sh <tag>\n' >&2; exit 2; }
-[[ "$tag" =~ ^(app|cli|host|sdk|runtime)/v[A-Za-z0-9.-]+$ ]] \
+[[ "$tag" =~ ^(app|cli|host|sdk)/v[A-Za-z0-9.-]+$ ]] \
   || { printf 'Unexpected release tag: %s\n' "$tag" >&2; exit 2; }
 : "${GH_REPO:?GH_REPO must identify the GitHub repository as owner/repo.}"
 [[ "$GH_REPO" == "Younics/sunder-core" ]] \

@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
 using Sunder.Package.Format;
+using Sunder.Package.Build.Rpc.Authoring;
 
 namespace Sunder.Package.Build.Tasks;
 
@@ -38,11 +39,16 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
 
     public ITaskItem[] ContractFiles { get; set; } = [];
     public ITaskItem[] RoleContentFiles { get; set; } = [];
+    public string? ContractLockPath { get; set; }
+    public string? ProjectDirectory { get; set; }
+    public string ContractCacheRoot { get; set; } = SunderRpcContractCache.DefaultRoot;
+    public bool AllowDevelopmentRegistryOrigin { get; set; }
 
     public override bool Execute()
     {
         string? stagingPath = null;
         string? stagingMarkerPath = null;
+        string? stagingImportsPath = null;
         try
         {
             if (!File.Exists(ManifestPath))
@@ -69,6 +75,8 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
 
             stagingPath = outputPath + ".stage-" + Guid.NewGuid().ToString("N");
             stagingMarkerPath = markerPath + ".stage-" + Guid.NewGuid().ToString("N");
+            var importsPath = outputPath + SunderPackageFormat.DevelopmentImportsSuffix;
+            stagingImportsPath = importsPath + ".stage-" + Guid.NewGuid().ToString("N");
             Directory.CreateDirectory(stagingPath);
             var manifest = StrictJsonSerializer.Deserialize<SunderPackageManifest>(File.ReadAllText(ManifestPath), JsonOptions)
                            ?? throw new InvalidDataException("Generated Sunder package manifest is empty.");
@@ -204,6 +212,17 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                 }
                 Copy(item.ItemSpec, SunderPackageFormat.SharedPayloadRoot + descriptorPath, destinations, stagingPath);
             }
+            if (!destinations.ContainsKey(SunderPackageFormat.RpcModelProjectionPath)
+                && !(manifest.ContractBundles ?? []).Any(bundle => bundle?.Exposure == "public"))
+            {
+                // A producer with no public bundles still emits the required full
+                // empty document. Public bundles always require compiler evidence.
+                var projection = new SunderRpcModelProjectionDocument(1, manifest.Id!, manifest.Version!, []);
+                var path = ArchiveRelativePath.Parse(SunderPackageFormat.RpcModelProjectionPath).ToPlatformPath(stagingPath);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllBytes(path, projection.ToCanonicalUtf8());
+                destinations.Add(SunderPackageFormat.RpcModelProjectionPath, "generated public model projection");
+            }
 
             foreach (var item in workerTargets.Length == 0 ? NativeRuntimeFiles : [])
             {
@@ -245,11 +264,15 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
             }
 
             File.WriteAllText(stagingMarkerPath, "Sunder.Package.Build generated output v1\n");
+            File.WriteAllBytes(stagingImportsPath, DevelopmentImportHandoff.Create(
+                ManifestPath, ContractLockPath, ContractCacheRoot, AllowDevelopmentRegistryOrigin, ProjectDirectory));
             GeneratedOutputTransaction.Commit(
                 new GeneratedOutputTransaction.StagedOutput(outputPath, stagingPath),
-                new GeneratedOutputTransaction.StagedOutput(markerPath, stagingMarkerPath));
+                new GeneratedOutputTransaction.StagedOutput(markerPath, stagingMarkerPath),
+                new GeneratedOutputTransaction.StagedOutput(importsPath, stagingImportsPath));
             stagingPath = null;
             stagingMarkerPath = null;
+            stagingImportsPath = null;
             Log.LogMessage(MessageImportance.High, $"Emitted canonical Sunder dev package to {outputPath}");
             return true;
         }
@@ -262,6 +285,7 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
         {
             TryDeleteDirectory(stagingPath);
             TryDeleteFile(stagingMarkerPath);
+            TryDeleteFile(stagingImportsPath);
         }
     }
 

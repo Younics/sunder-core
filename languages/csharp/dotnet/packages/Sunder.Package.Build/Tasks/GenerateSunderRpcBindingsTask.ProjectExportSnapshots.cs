@@ -12,6 +12,7 @@ public sealed partial class GenerateSunderRpcBindingsTask
     private static string PublishImmutableProjectExport(string intermediateOutputPath, SourceAuthoringPlan plan)
     {
         var export = plan.Files.Single(file => file.RelativeOutputPath == SunderRpcAuthoringDocuments.PackageExportFileName);
+        var projection = plan.Files.Single(file => file.RelativeOutputPath == SunderRpcAuthoringDocuments.ModelProjectionLogicalPath);
         var hash = Convert.ToHexStringLower(SHA256.HashData(export.Contents));
         var root = Path.Combine(intermediateOutputPath, "sunder-rpc-exports");
         GeneratedOutputPathSafety.EnsureSafeAncestors(root, includeLeaf: true, "RPC export snapshot cache");
@@ -40,6 +41,7 @@ public sealed partial class GenerateSunderRpcBindingsTask
                 var stagedGenerated = Path.Combine(stage, GeneratedDirectoryName);
                 Directory.CreateDirectory(stagedGenerated);
                 WriteNewFile(Path.Combine(stagedGenerated, SunderRpcAuthoringDocuments.PackageExportFileName), export.Contents);
+                WriteStagedFile(stagedGenerated, projection.RelativeOutputPath, projection.Contents);
                 WriteNewFile(GetOwnershipMarkerPath(stagedGenerated), Utf8NoBom.GetBytes(MarkerContents));
                 GeneratedOutputPathSafety.EnsureSafeAncestors(snapshot, includeLeaf: true, "RPC export snapshot publication");
                 Directory.Move(stage, snapshot);
@@ -58,7 +60,11 @@ public sealed partial class GenerateSunderRpcBindingsTask
         GeneratedOutputPathSafety.EnsureRegularDirectory(snapshot, "RPC export snapshot");
         GeneratedOutputPathSafety.EnsureRegularDirectory(generated, "RPC export generated snapshot");
         if (!HasValidOwnershipMarker(GetOwnershipMarkerPath(generated))
-            || !SunderRpcDescriptorFileReader.ReadStableBytes(path, 67_108_864, "RPC export snapshot").AsSpan().SequenceEqual(export.Contents))
+            || !SunderRpcDescriptorFileReader.ReadStableBytes(path, 67_108_864, "RPC export snapshot").AsSpan().SequenceEqual(export.Contents)
+            || !SunderRpcDescriptorFileReader.ReadStableBytes(Path.Combine(generated, projection.RelativeOutputPath), 4_194_304,
+                "RPC export model projection snapshot").AsSpan().SequenceEqual(projection.Contents)
+            || !ReadTree(generated).Where(entry => !entry.IsDirectory).Select(entry => entry.RelativePath.Replace('\\', '/')).Order(StringComparer.Ordinal)
+                .SequenceEqual(new[] { export.RelativeOutputPath, projection.RelativeOutputPath }.Order(StringComparer.Ordinal), StringComparer.Ordinal))
             throw new InvalidDataException("The immutable RPC export snapshot does not match its content identity.");
         return path;
     }

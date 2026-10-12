@@ -388,7 +388,7 @@ function sequenceFetch(
       headers.set("content-length", descriptorBytes.byteLength.toString());
     }
     if (options.entityTag !== undefined && !headers.has("etag")) headers.set("etag", `"${options.entityTag}"`);
-    return new Response(descriptorBytes, {
+    return new Response(new Uint8Array(descriptorBytes), {
       status: options.descriptorStatus ?? 200,
       headers,
     });

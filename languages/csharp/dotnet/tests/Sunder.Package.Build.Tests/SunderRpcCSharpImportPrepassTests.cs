@@ -17,7 +17,7 @@ using Xunit;
 
 namespace Sunder.Package.Build.Tests;
 
-public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
+public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "sunder-rpc-import-prepass", Guid.NewGuid().ToString("N"));
     private readonly SunderRpcContractDescriptor _descriptor;
@@ -31,19 +31,20 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
         _descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(Fixture("conformance/valid/minimal.rpc.json")));
         File.WriteAllBytes(SunderRpcContractCache.GetDescriptorPath(_root, _descriptor.Sha256), _descriptor.GetCanonicalUtf8());
         File.Copy(Fixture("authoring/conformance/valid/cache-entry-receipt.json"), SunderRpcContractCache.GetReceiptPath(_root, _descriptor.Sha256));
+        ModelProjectionTestEvidence.Seed(_root, _lock.PackageArtifacts["example.dependency"]);
     }
 
     [Fact]
     public void Prepare_IsDeterministicReadOnlyAndCompilesWithoutOwnedSourceOrWorkerReference()
     {
-        var before = Directory.GetFiles(_root).Order().Select(path => (path, File.ReadAllText(path), File.GetLastWriteTimeUtc(path))).ToArray();
+        var before = Directory.GetFiles(_root, "*", SearchOption.AllDirectories).Order().Select(path => (path, File.ReadAllText(path), File.GetLastWriteTimeUtc(path))).ToArray();
         var result = SunderRpcCSharpImportPrepass.Prepare(_lock, _root);
         var repeated = SunderRpcCSharpImportPrepass.Prepare(_lock, _root);
         Assert.Equal(result.Sources, repeated.Sources);
-        Assert.Equal(before, Directory.GetFiles(_root).Order().Select(path => (path, File.ReadAllText(path), File.GetLastWriteTimeUtc(path))).ToArray());
+        Assert.Equal(before, Directory.GetFiles(_root, "*", SearchOption.AllDirectories).Order().Select(path => (path, File.ReadAllText(path), File.GetLastWriteTimeUtc(path))).ToArray());
         var contract = Assert.Single(result.Contracts);
         Assert.Equal(_descriptor.ContractId, contract.ContractKey);
-        Assert.Equal("Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal", contract.GeneratedLogicalName);
+        Assert.Equal("Sunder.Generated.Packages.Example_Dependency_Internal.CExample_Rpc_V1_Minimal", contract.GeneratedLogicalName);
         Assert.Equal(_descriptor.GetCanonicalUtf8(), contract.Descriptor.GetCanonicalUtf8());
         Assert.Empty(result.ProviderSurfaces);
         Assert.All(result.Sources, source =>
@@ -59,7 +60,7 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
         Assert.True(compiled.Success, string.Join(Environment.NewLine, compiled.Diagnostics));
         Assert.Empty(compiled.Contracts);
         using var probe = CompileProbe(result);
-        Assert.Null(probe.Assembly.GetType("Sunder.Generated.Rpc.ImportApis.CExample_Rpc_V1_Minimal.Provider")!.GetProperty("Endpoint"));
+        Assert.Null(probe.Assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Internal.CExample_Rpc_V1_Minimal.Api.Provider")!.GetProperty("Endpoint"));
     }
 
     [Theory]
@@ -78,18 +79,17 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
         Assert.Single(result.Contracts);
         var surface = Assert.Single(result.ProviderSurfaces);
         Assert.Same(result.Contracts[0], surface.Contract);
-        Assert.Equal("Sunder.Generated.Rpc.IMinimalProviderService", surface.InterfaceMetadataName);
+        Assert.Equal("Sunder.Generated.Packages.Example_Dependency_Services.IMinimalProviderService", surface.InterfaceMetadataName);
         const string source = """
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
-            using Sunder.Generated.Rpc;
-            using Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal;
-            [SunderRpcProvider(typeof(IMinimalProviderService))]
+            using Sunder.Sdk.Services;
+            using Sunder.Generated.Packages.Example_Dependency_Services;
+            [SunderServiceProvider(typeof(IMinimalProviderService))]
             public partial class LocalProvider : IMinimalProviderService
             {
-                public ValueTask<Empty> PingAsync(SunderRpcInvocationContext context, Empty request, CancellationToken cancellationToken)
-                    => ValueTask.FromResult(request);
+                public ValueTask PingAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
             }
             """;
         var input = new SunderRpcCSharpCompilerInput("example.consumer", "3.0.0", [new("Provider.cs", source)],
@@ -115,7 +115,7 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
     }
 
     [Fact]
-    public void Prepare_MultipleContractsAndServicePunctuationMatchParityIndependentOfMapOrder()
+    public void Prepare_ServicePunctuationPreservesTransportNamesAndRejectsAuthorityWideNaturalCollisions()
     {
         using var parity = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/parity/expectations.json")));
         var vectors = parity.RootElement.GetProperty("namingAndDefaults").GetProperty("generatedApiVectors")
@@ -152,22 +152,27 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
                   "abiSha256": "{{descriptor.AbiSha256}}"
                 }
                 """ + "\n");
+            var individual = _lock with
+            {
+                PackageArtifacts = new Dictionary<string, SunderRpcLockedPackageArtifact>
+                { [artifact.PackageId] = SeedDescriptorOnlyArtifact(artifact with { Contracts = new Dictionary<string, SunderRpcLockedArtifactContract> { [entry.ContractId] = entry } }) },
+            };
+            var generated = SunderRpcCSharpImportPrepass.Prepare(individual, _root);
+            var api = generated.Sources.Single(item => item.Path == $"apis/example.naming.c{index}.g.cs").Text;
+            Assert.Contains(" " + vectors[index].GetProperty("symbol").GetString() + " { get; }", api, StringComparison.Ordinal);
+            Assert.Contains(" SSecondservice { get; }", api, StringComparison.Ordinal);
+            var compiled = new SunderRpcCSharpSourceCompiler().Compile(new("example.consumer", "1.0.0", [], References(), SupplementalSources: generated.Sources));
+            Assert.True(compiled.Success, string.Join(Environment.NewLine, compiled.Diagnostics));
         }
         var selected = _lock with
         {
             PackageArtifacts = new Dictionary<string, SunderRpcLockedPackageArtifact>
             {
-                [artifact.PackageId] = artifact with { Contracts = contracts, PublicContractCount = contracts.Count },
+                [artifact.PackageId] = SeedDescriptorOnlyArtifact(artifact with { Contracts = contracts, PublicContractCount = contracts.Count }),
             },
         };
-        var result = SunderRpcCSharpImportPrepass.Prepare(selected, _root);
-        Assert.Equal(vectors.Length, result.Contracts.Count);
-        for (var index = 0; index < vectors.Length; index++)
-        {
-            var source = result.Sources.Single(item => item.Path == $"apis/example.naming.c{index}.g.cs").Text;
-            Assert.Contains(" " + vectors[index].GetProperty("symbol").GetString() + " { get; }", source, StringComparison.Ordinal);
-            Assert.Contains(" SSecondservice { get; }", source, StringComparison.Ordinal);
-        }
+        var collision = Assert.Throws<InvalidDataException>(() => SunderRpcCSharpImportPrepass.Prepare(selected, _root));
+        Assert.StartsWith("rpc-authoring.generated-name-collision:", collision.Message, StringComparison.Ordinal);
         var reversed = selected with
         {
             PackageArtifacts = new Dictionary<string, SunderRpcLockedPackageArtifact>
@@ -175,9 +180,7 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
                 [artifact.PackageId] = selected.PackageArtifacts[artifact.PackageId] with { Contracts = contracts.Reverse().ToDictionary() },
             },
         };
-        Assert.Equal(result.Sources, SunderRpcCSharpImportPrepass.Prepare(reversed, _root).Sources);
-        var compiled = new SunderRpcCSharpSourceCompiler().Compile(new("example.consumer", "1.0.0", [], References(), SupplementalSources: result.Sources));
-        Assert.True(compiled.Success, string.Join(Environment.NewLine, compiled.Diagnostics));
+        Assert.Equal(collision.Message, Assert.Throws<InvalidDataException>(() => SunderRpcCSharpImportPrepass.Prepare(reversed, _root)).Message);
     }
 
     [Fact]
@@ -235,7 +238,7 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
         var corrupt = Assert.Throws<InvalidDataException>(() => SunderRpcCSharpImportPrepass.Prepare(_lock, _root));
         Assert.StartsWith("contract-cache.entry-corrupt:", corrupt.Message, StringComparison.Ordinal);
         Assert.Equal(3, Directory.GetFiles(_root).Length);
-        Assert.Empty(Directory.GetDirectories(_root));
+        Assert.Equal(Path.Combine(_root, "model-projections"), Assert.Single(Directory.GetDirectories(_root)));
 
         var empty = SunderRpcAuthoringDocuments.ReadContractLock(Fixture("authoring/conformance/valid/minimal-contract-lock.json"));
         Assert.Empty(SunderRpcCSharpImportPrepass.Prepare(empty, missingRoot).Contracts);
@@ -458,9 +461,9 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
             using System.Threading.Tasks;
             using System.Collections.Generic;
             using Sunder.Sdk.Rpc;
-            using Sunder.Generated.Rpc;
-            using Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal;
-            using Sunder.Generated.Rpc.ImportApis.CExample_Rpc_V1_Minimal;
+            using Sunder.Generated.Packages.Example_Dependency_Internal;
+            using Sunder.Generated.Packages.Example_Dependency_Internal.CExample_Rpc_V1_Minimal.Api;
+            using Empty = Sunder.Generated.Packages.Example_Dependency_Models.CExample_Rpc_V1_Minimal_Empty;
             public static class Probe
             {
                 public static async Task<SunderRpcProviderSnapshot> Resolve(ISunderRpcClient rpc, CancellationToken cancellationToken)
@@ -490,6 +493,33 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
                 public static async Task<SunderRpcContentReference> RegisterContent(ISunderRpcCallScope scope, SunderRpcProviderSnapshot snapshot,
                     System.IO.Stream source, SunderRpcContentRegistrationOptions options, CancellationToken token)
                     => await new DependencyPackageApi(scope).CExample_Rpc_V1_Minimal.CreateClient(scope, new Provider(snapshot)).RegisterContentAsync(source, options, token);
+                public static object CreateNaturalCatalog(ISunderRpcClient rpc)
+                    => new Sunder.Generated.Packages.Example_Dependency_Internal.CExample_Rpc_V1_Minimal_ExampleServiceClientProviders(rpc);
+                public static async Task<object> ListNatural(object catalog, CancellationToken token)
+                    => await ((Sunder.Sdk.Services.IServiceProviders<Sunder.Generated.Packages.Example_Dependency_Services.IExampleService>)catalog).ListAsync(token);
+                public static async Task CallNatural(object provider, CancellationToken token)
+                    => await ((Sunder.Sdk.Services.ServiceProvider<Sunder.Generated.Packages.Example_Dependency_Services.IExampleService>)provider).Service.PingAsync(token);
+                public static async Task<object?> BorrowNatural(object catalog, CancellationToken token)
+                {
+                    var snapshot = await ((Sunder.Sdk.Services.IServiceProviders<Sunder.Generated.Packages.Example_Dependency_Services.IExampleService>)catalog).ListAsync(token);
+                    foreach (var provider in snapshot.Providers.Where(value => value.State == Sunder.Sdk.Services.ServiceProviderState.Active))
+                    {
+                        if (provider.RetirementToken.IsCancellationRequested) continue;
+                        using var invocation = CancellationTokenSource.CreateLinkedTokenSource(token, provider.RetirementToken);
+                        try { await provider.EnsureCurrentAsync(invocation.Token); }
+                        catch (SunderRpcException error) when (error.Error.Kind is SunderRpcErrorKind.StaleEndpoint or SunderRpcErrorKind.Unavailable) { continue; }
+                        await provider.Service.PingAsync(invocation.Token);
+                        await provider.EnsureCurrentAsync(invocation.Token);
+                        return provider;
+                    }
+                    return null;
+                }
+                public static async Task<object[]> WatchNatural(object catalog, long revision, long sequence, CancellationToken token)
+                {
+                    var result = new List<object>();
+                    await foreach (var item in ((Sunder.Sdk.Services.IServiceProviders<Sunder.Generated.Packages.Example_Dependency_Services.IExampleService>)catalog).WatchAsync(revision, sequence, token)) result.Add(item);
+                    return result.ToArray();
+                }
             }
             """));
         var compilation = CSharpCompilation.Create("Prepass_" + Guid.NewGuid().ToString("N"),
@@ -508,6 +538,11 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
     private sealed class Probe(AssemblyLoadContext context, Assembly assembly) : IDisposable
     {
         public Assembly Assembly { get; } = assembly;
+        public Func<ISunderRpcClient, object> CreateNaturalCatalog { get; } = assembly.GetType("Probe")!.GetMethod("CreateNaturalCatalog")!.CreateDelegate<Func<ISunderRpcClient, object>>();
+        public Func<object, CancellationToken, Task<object>> ListNatural { get; } = assembly.GetType("Probe")!.GetMethod("ListNatural")!.CreateDelegate<Func<object, CancellationToken, Task<object>>>();
+        public Func<object, CancellationToken, Task> CallNatural { get; } = assembly.GetType("Probe")!.GetMethod("CallNatural")!.CreateDelegate<Func<object, CancellationToken, Task>>();
+        public Func<object, CancellationToken, Task<object?>> BorrowNatural { get; } = assembly.GetType("Probe")!.GetMethod("BorrowNatural")!.CreateDelegate<Func<object, CancellationToken, Task<object?>>>();
+        public Func<object, long, long, CancellationToken, Task<object[]>> WatchNatural { get; } = assembly.GetType("Probe")!.GetMethod("WatchNatural")!.CreateDelegate<Func<object, long, long, CancellationToken, Task<object[]>>>();
         public Func<ISunderRpcClient, CancellationToken, Task<SunderRpcProviderSnapshot>> Resolve { get; } =
             assembly.GetType("Probe")!.GetMethod("Resolve")!.CreateDelegate<Func<ISunderRpcClient, CancellationToken, Task<SunderRpcProviderSnapshot>>>();
         public Func<ISunderRpcClient, Task<SunderRpcCatalogSnapshot>> List { get; } =
@@ -527,15 +562,25 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
 
     private sealed class RpcStub : ISunderRpcCallScope
     {
-        public SunderRpcProviderSnapshot[] Providers { get; init; } = [];
+        public SunderRpcProviderSnapshot[] Providers { get; set; } = [];
         public SunderRpcCatalogEvent[] Events { get; init; } = [];
+        // Ordinary clients share a live receiver observer. Raw transport facade
+        // tests deliberately keep their finite, reset-marked catalog fixture.
+        public bool LiveCatalog { get; init; }
+        public System.Collections.Concurrent.ConcurrentQueue<(long Revision, long Sequence)> WatchCursors { get; } = new();
         public SunderRpcProviderSnapshot? Current { get; set; }
         public SunderRpcException? Failure { get; set; }
+        public SunderRpcException? LookupFailure { get; set; }
+        public int LookupCount { get; private set; }
         public string? DiscoveredContract { get; private set; }
         public SunderRpcEndpointReference? RequestedEndpoint { get; private set; }
         public int DiscoverCount { get; private set; }
         public int InvokeCount { get; private set; }
         public bool Disposed { get; private set; }
+        public int ScopeCount { get; private set; }
+        public Func<CancellationToken, ValueTask<ISunderRpcCallScope>>? ScopeFactory { get; set; }
+        public Func<CancellationToken, ValueTask<JsonElement>>? Invoke { get; set; }
+        public Func<CancellationToken, IAsyncEnumerable<JsonElement>>? Subscribe { get; set; }
         public Func<SunderRpcEndpointReference, Stream, SunderRpcContentRegistrationOptions, CancellationToken, ValueTask<SunderRpcContentReference>>? Register { get; init; }
         public (long, long) WatchCursor { get; private set; }
         public DateTimeOffset DeadlineUtc => DateTimeOffset.MaxValue;
@@ -546,18 +591,23 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
             DiscoveredContract = contractId;
             cancellationToken.ThrowIfCancellationRequested();
             if (Failure is not null) throw Failure;
-            return ValueTask.FromResult(new SunderRpcCatalogSnapshot(7, 10, Providers, resetRequired: true));
+            return ValueTask.FromResult(new SunderRpcCatalogSnapshot(7, 10, Providers, resetRequired: !LiveCatalog));
         }
         public ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(SunderRpcEndpointReference endpoint, CancellationToken cancellationToken = default)
         {
             RequestedEndpoint = endpoint;
+            LookupCount++;
+            if (LookupFailure is { } failure) throw failure;
             return ValueTask.FromResult(Current);
         }
         public async IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(long afterRevision, long afterSequence,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             WatchCursor = (afterRevision, afterSequence);
+            WatchCursors.Enqueue((afterRevision, afterSequence));
             cancellationToken.ThrowIfCancellationRequested();
+            if (LiveCatalog && (afterRevision, afterSequence) == (7, 10))
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             await Task.CompletedTask;
             foreach (var item in Events) yield return item;
         }
@@ -568,13 +618,16 @@ public sealed class SunderRpcCSharpImportPrepassTests : IDisposable
             RequestedEndpoint = endpoint;
             Assert.Equal("example", serviceId);
             Assert.Equal("ping", methodId);
+            if (Invoke is not null) return Invoke(cancellationToken);
             if (Failure is not null) throw Failure;
             return ValueTask.FromResult(request.Clone());
         }
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
-        public ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(SunderRpcCallOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(SunderRpcCallOptions? options = null, CancellationToken cancellationToken = default)
+        { cancellationToken.ThrowIfCancellationRequested(); ScopeCount++; return ScopeFactory?.Invoke(cancellationToken) ?? throw new NotSupportedException(); }
         public ValueTask<bool> TryReportInvariantViolationAsync(SunderRpcEndpointReference endpoint, Exception exception, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public IAsyncEnumerable<JsonElement> SubscribeAsync(SunderRpcEndpointReference endpoint, string serviceId, string methodId, JsonElement request, SunderRpcCallOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public IAsyncEnumerable<JsonElement> SubscribeAsync(SunderRpcEndpointReference endpoint, string serviceId, string methodId, JsonElement request, SunderRpcCallOptions? options = null, CancellationToken cancellationToken = default)
+            => Subscribe?.Invoke(cancellationToken) ?? throw new NotSupportedException();
         public ValueTask<SunderRpcContentReference> RegisterContentAsync(SunderRpcEndpointReference endpoint, Stream source, SunderRpcContentRegistrationOptions options, CancellationToken cancellationToken = default)
             => Register?.Invoke(endpoint, source, options, cancellationToken) ?? throw new NotSupportedException();
         public ValueTask<SunderRpcContentReference> RegisterContentFileAsync(SunderRpcEndpointReference endpoint, string filePath, SunderRpcContentRegistrationOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();

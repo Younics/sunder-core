@@ -47,7 +47,9 @@ public sealed class LiveRegistryInstallationTests
                         Assert.Equal(RpcReadinessErrorCodes.RequiredProviderUnsatisfied, denied.Code);
                         Assert.Empty(await installed.ListAsync()); Assert.False(provider.GetRequiredService<PackageStoreCoordinator>().HasPreparedStages); return;
                     }
-                    var result = await changes.InstallAsync(Request(scenario.PackageId, "1.0.0"), default);
+                    var request = Request(scenario.PackageId, "1.0.0");
+                    if (scenario.Optional && !scenario.Required) request = await Ready(request);
+                    var result = await changes.InstallAsync(request, default);
                     Assert.Equal(scenario.Optional && !scenario.Required, result.Success);
                     var records = await installed.ListAsync();
                     if (result.Success)
@@ -65,13 +67,13 @@ public sealed class LiveRegistryInstallationTests
                 }
                 if (phase == "install")
                 {
-                    var result = await changes.InstallAsync(Request("example.install.consumer", "1.0.0"), default);
+                    var result = await changes.InstallAsync(await Ready(Request("example.install.consumer", "1.0.0")), default);
                     Assert.True(result.Success, JsonSerializer.Serialize(result)); Assert.True(result.RuntimeSessionApplied);
                     Assert.Equal(2, (await installed.ListAsync()).Count);
                 }
                 if (phase == "update")
                 {
-                    var result = await changes.InstallAsync(Request("example.install.authority", "1.1.0"), default);
+                    var result = await changes.InstallAsync(await Ready(Request("example.install.authority", "1.1.0")), default);
                     Assert.True(result.Success, JsonSerializer.Serialize(result));
                     var before = File.ReadAllBytes(paths.StateFilePath);
                     var rejected = await changes.InstallAsync(Request("example.install.authority", "2.0.0"), default);
@@ -100,6 +102,24 @@ public sealed class LiveRegistryInstallationTests
                 if (phase is "offline" or "offline-denied") Assert.Equal(0, network.Requests);
             }
             finally { await provider.GetRequiredService<RuntimeSessionOwner>().State.ClearActiveSessionAsync(); }
+
+            async Task<RuntimeRegistryPackageRequest> Ready(RuntimeRegistryPackageRequest request)
+            {
+                var before = await installed.ListAsync();
+                var source = new RuntimeRegistryPackageBatchRequest(request.RegistryOrigin,
+                    [new(request.PackageId, request.Version, request.DesiredTargets ?? [], request.Version is null ? request.Tag : null, request.VersionRange, request.Required)],
+                    request.IncludePrerelease, request.AllowDowngrade, request.Reinstall, request.CapabilityConsents, request.ExpectedResolutionFingerprint);
+                var preview = await provider.GetRequiredService<PackageRuntimePrerequisiteService>()
+                    .PreviewAsync(new(Registry: source), default);
+                Assert.True(preview.Success, preview.Message);
+                Assert.True(preview.Satisfied, preview.Message);
+                Assert.Empty(preview.Requirements); // These are App-only projections: no runtime-install prompt.
+                Assert.Equal(PackageTargetSelection.GetCurrentRuntimeIdentifier(), preview.Rid);
+                Assert.Matches("^[0-9a-f]{64}$", preview.SourceFingerprint);
+                Assert.Equal(JsonSerializer.Serialize(before), JsonSerializer.Serialize(await installed.ListAsync()));
+                Assert.False(provider.GetRequiredService<PackageStoreCoordinator>().HasPreparedStages);
+                return request with { RuntimePrerequisiteExpectation = new(preview.SourceFingerprint, preview.Rid) };
+            }
         }
         RuntimeRegistryPackageRequest Request(string id, string version) => new(input.RegistryOrigin, id, Version: version,
             DesiredTargets: [new("app", PackageTargetSelection.GetCurrentRuntimeIdentifier())]);

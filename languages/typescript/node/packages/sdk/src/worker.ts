@@ -14,6 +14,9 @@ import {
   hasCanonicalNonNegativeIntegerToken,
 } from "./framing";
 import { computeWorkerResourceProfileHash } from "./resource-profile";
+import { createApiContext, getApiBindingContext } from "./api";
+import { isResourceInvocationCancellation } from "./resources";
+import { contentReferenceError } from "./descriptor-v1";
 import { createPackageStorageKey, type PackageStorageKeyMigration, type PackageStorageKeyMigrationAction } from "./storage";
 import { formatUtcTimestamp, parseUtcTimestamp } from "./timestamp";
 import { SEMANTIC_VERSION_MAXIMUM_LENGTH, isPackageId, isSemanticVersion } from "./validation";
@@ -68,7 +71,7 @@ import {
   type WorkerStateReader,
   type WorkerStorageMigrationPlanWire,
   type WorkerStorageMigrationRuleWire,
-} from "./types";
+} from "./worker-types";
 
 const LIMITS: WorkerLimits = { ...SUNDER_WORKER_LIMITS };
 const SAFE_ERROR_CODE = /^[A-Za-z0-9._-]+$/u;
@@ -539,6 +542,7 @@ class WorkerRuntime {
     const controller = new AbortController();
     const invocation: HostInvocation = {
       id,
+      deadline:parseUtcTimestamp(deadlineUtc),
       kind,
       provider,
       serviceId,
@@ -627,7 +631,7 @@ class WorkerRuntime {
       });
       return;
     }
-    if (invocation.hostCancelled) {
+    if (invocation.hostCancelled || isResourceInvocationCancellation(error,invocation.controller.signal)) {
       await this.#writer.write({
         type: "worker.error",
         id: invocation.id,
@@ -963,6 +967,7 @@ class WorkerRuntime {
           if (!call.cancelled) call.queue.close();
         } else {
           const error = rpcError(root.error);
+          if (!call.cancelled) call.hostError?.(error);
           if (call.cancelled && error.error.kind === "cancelled") call.reject(abortError());
           else call.reject(error);
           call.queue.close(call.cancelled && error.error.kind === "cancelled" ? abortError() : error);
@@ -1008,6 +1013,7 @@ class WorkerRuntime {
         this.#activationOperation,
       ]);
       await Promise.all([...ordinaryCalls.map((call) => call.terminalPromise), ...scopeCleanup]);
+      await getApiBindingContext(this.#context).disposeAsync();
       await this.#releaseAllPayloadsForShutdown();
       await this.#options!.onShutdown?.(
         Object.freeze({ reason }),
@@ -1030,7 +1036,9 @@ class WorkerRuntime {
   }
 
   #createClient(): RpcClient {
+    const runtime=this;
     return Object.freeze({
+      get deadline(){const id=runtime.#currentInvocationId.getStore();const invocation=id?runtime.#hostInvocations.get(id):undefined;return invocation?new Date(invocation.deadline):undefined;},
       createCallScope: (options?: RpcCallOptions) => this.#createCallScope(options),
       getProvider: (endpointReference: string, options?: RpcCallOptions) => this.#getProvider(undefined, endpointReference, options),
       reportInvariantViolation: (endpointReference: string, error: unknown, options?: RpcCallOptions) => (
@@ -1106,12 +1114,12 @@ class WorkerRuntime {
       signal: combineSignals(state.controller.signal, options?.signal),
     });
     const content: RpcCallerContentClient = Object.freeze({
-      register: (endpointReference: string, source: RpcContentSource, options: RpcContentRegistrationOptions) => this.#registerContentSource(
-        { kind: "scope", scope: state, endpointReference }, source, options, state.controller.signal),
-      registerFile: (endpointReference: string, filePath: string, options: RpcContentRegistrationOptions) => this.#registerContentFile(
-        { kind: "scope", scope: state, endpointReference }, filePath, options, state.controller.signal),
-      open: (reference: RpcContentReference) => this.#openContent(
-        { kind: "scope", scope: state }, reference, state.controller.signal),
+      register: (endpointReference: string, source: RpcContentSource, options: RpcContentRegistrationOptions, call?:RpcCallOptions) => this.#registerContentSource(
+        { kind: "scope", scope: state, endpointReference }, source, options, combineSignals(state.controller.signal,call?.signal)),
+      registerFile: (endpointReference: string, filePath: string, options: RpcContentRegistrationOptions, call?:RpcCallOptions) => this.#registerContentFile(
+        { kind: "scope", scope: state, endpointReference }, filePath, options, combineSignals(state.controller.signal,call?.signal)),
+      open: (reference: RpcContentReference, options?:RpcCallOptions) => this.#openContent(
+        { kind: "scope", scope: state }, reference, combineSignals(state.controller.signal,options?.signal)),
     });
     return Object.freeze({
       deadline: new Date(state.deadline),
@@ -1351,13 +1359,27 @@ class WorkerRuntime {
   }
 
   #createInvocationContentClient(invocation: HostInvocation): RpcContentClient {
+    const retirements = new WeakMap<object, AbortSignal>();
+    const authenticate = (signal: AbortSignal | undefined) => (error: RpcError): void => {
+      const value = error.error;
+      const codes = { unavailable: "rpc.content.authority-revoked", "deadline-exceeded": "rpc.call.deadline-exceeded", "stale-endpoint": "rpc.endpoint.stale", cancelled: "rpc.call.cancelled" };
+      if (signal && !signal.aborted && !invocation.controller.signal.aborted
+        && value.dispatchState === "not-dispatched" && value.retrySafety === "safe"
+        && Object.hasOwn(codes, value.kind) && codes[value.kind as keyof typeof codes] === value.code) retirements.set(error, signal);
+    };
     return Object.freeze({
-      register: (source: RpcContentSource, options: RpcContentRegistrationOptions) => this.#registerContentSource(
-        { kind: "invocation", invocation }, source, options, invocation.controller.signal),
-      registerFile: (filePath: string, options: RpcContentRegistrationOptions) => this.#registerContentFile(
-        { kind: "invocation", invocation }, filePath, options, invocation.controller.signal),
-      open: (reference: RpcContentReference) => this.#openContent(
-        { kind: "invocation", invocation }, reference, invocation.controller.signal),
+      consumeResponseContentRetirement: (error: unknown, signal: AbortSignal): boolean => {
+        if (!error || typeof error !== "object") return false;
+        const matched = retirements.get(error) === signal;
+        retirements.delete(error);
+        return matched && !signal.aborted && !invocation.controller.signal.aborted;
+      },
+      register: (source: RpcContentSource, options: RpcContentRegistrationOptions, call?:RpcCallOptions) => this.#registerContentSource(
+        { kind: "invocation", invocation }, source, options, combineSignals(invocation.controller.signal,call?.signal), authenticate(call?.signal)),
+      registerFile: (filePath: string, options: RpcContentRegistrationOptions, call?:RpcCallOptions) => this.#registerContentFile(
+        { kind: "invocation", invocation }, filePath, options, combineSignals(invocation.controller.signal,call?.signal)),
+      open: (reference: RpcContentReference, options?:RpcCallOptions) => this.#openContent(
+        { kind: "invocation", invocation }, reference, combineSignals(invocation.controller.signal,options?.signal)),
     });
   }
 
@@ -1366,6 +1388,7 @@ class WorkerRuntime {
     source: RpcContentSource,
     options: RpcContentRegistrationOptions,
     signal: AbortSignal,
+    hostError?: (error: RpcError) => void,
   ): Promise<RpcContentReference> {
     if (source === null || typeof source !== "object" || !(Symbol.asyncIterator in source)) {
       throw new TypeError("RPC content source must be an AsyncIterable<Uint8Array>.");
@@ -1394,7 +1417,7 @@ class WorkerRuntime {
       if (normalized.length !== null && normalized.length !== length) {
         throw new RangeError("RPC content length does not match the declared length.");
       }
-      return await this.#registerContentFile(authority, filePath, { ...options, length }, signal);
+      return await this.#registerContentFile(authority, filePath, { ...options, length }, signal, hostError);
     } finally {
       await file?.close().catch(() => undefined);
       await unlink(filePath).catch(() => undefined);
@@ -1406,6 +1429,7 @@ class WorkerRuntime {
     filePath: string,
     options: RpcContentRegistrationOptions,
     signal: AbortSignal,
+    hostError?: (error: RpcError) => void,
   ): Promise<RpcContentReference> {
     this.#ensureContentAuthority(authority);
     signal.throwIfAborted();
@@ -1426,7 +1450,7 @@ class WorkerRuntime {
       ...authorityFields,
       filePath: normalizedPath,
       options: optionsWire,
-    }, { signal });
+    }, { signal }, { hostError });
     return this.#parseHostValue(value, contentReference);
   }
 
@@ -1570,7 +1594,9 @@ class WorkerRuntime {
     const secrets = this.#createSecrets();
     const logging = this.#createLogging();
     const storage = Object.freeze({ state, files, workspace: this.#environment.workspace });
+    const services = createApiContext(this.#environment.packageId, this.#client, this.#work.signal);
     return Object.freeze({
+      api: services.api,
       packageId: this.#environment.packageId,
       packageVersion: this.#environment.packageVersion,
       contentRootPath: this.#environment.content.rootPath,
@@ -2175,6 +2201,7 @@ class WorkerRuntime {
       terminal: false,
       awaitTerminalAfterAbort: behavior.awaitTerminalAfterAbort ?? false,
       abandonedResult: behavior.abandonedResult,
+      hostError: behavior.hostError,
       releaseTerminalResource: behavior.releaseTerminalResource,
       terminalPromise,
       resolveTerminal,
@@ -3329,11 +3356,18 @@ function contentReference(value: unknown, requireWireToken = true): RpcContentRe
   only(root, "id", "length", "sha256", "mediaType", "fileName", "expiresAtUtc", "repeatability");
   const hash = stringValue(root, "sha256", 64);
   if (!SHA256_ANY_CASE.test(hash)) throw new ProtocolError("RPC content SHA-256 is invalid.");
-  const expiresAtUtc = stringValue(root, "expiresAtUtc", 64);
-  if (!Number.isFinite(parseUtcTimestamp(expiresAtUtc))) throw new ProtocolError("RPC content expiry is invalid.");
+  const expiry = stringValue(root, "expiresAtUtc", 64);
+  // Worker metadata uses fixed seven-digit UTC; RPC logical content uses exact
+  // canonical UTC. Convert only the Host registration result, never a reference
+  // supplied for opening. No Date reformatting (which would lose sub-ms digits).
+  const expiresAtUtc = requireWireToken && Number.isFinite(parseUtcTimestamp(expiry))
+    ? expiry.replace(/\.([0-9]{7})Z$/u, (_match, fraction: string) => {
+      const significant = fraction.replace(/0+$/u, "");
+      return significant ? `.${significant}Z` : "Z";
+    }) : expiry;
   const repeatability = stringValue(root, "repeatability", 32);
   if (repeatability !== "single-use" && repeatability !== "repeatable") throw new ProtocolError("RPC content repeatability is invalid.");
-  return Object.freeze({
+  const reference = {
     id: idValue(root, "id"),
     length: requireWireToken
       ? integerValue(root, "length")
@@ -3343,7 +3377,12 @@ function contentReference(value: unknown, requireWireToken = true): RpcContentRe
     fileName: stringValue(root, "fileName", 255),
     expiresAtUtc,
     repeatability,
-  });
+  };
+  // Validate the logical profile separately from the stricter Worker transport
+  // bounds above. Canonical references retain every digit and their exact text.
+  const error = contentReferenceError(reference, "RPC content reference");
+  if (error) throw new ProtocolError(error);
+  return Object.freeze(reference) as RpcContentReference;
 }
 
 function contentFileHandle(value: JsonValue): Readonly<{ handleId: string; filePath: string }> {
@@ -3931,6 +3970,7 @@ interface NormalizedAuthHandler extends WorkerAuthHandler {}
 
 interface HostInvocation {
   readonly id: string;
+  readonly deadline:number;
   readonly kind: "unary" | "server-stream";
   readonly provider: NormalizedProviderRegistration;
   readonly serviceId: string;
@@ -3956,6 +3996,7 @@ interface HostContribution {
 type ClientCallLane = "ordinary" | "control" | "logging";
 
 interface ClientCall {
+  readonly hostError?: (error: RpcError) => void;
   readonly id: string;
   readonly kind: "unary" | "stream";
   readonly lane: ClientCallLane;
@@ -3981,6 +4022,7 @@ interface OutboundStreamIdentity {
 }
 
 interface ClientCallBehavior {
+  readonly hostError?: (error: RpcError) => void;
   readonly lane?: ClientCallLane;
   readonly migrationPreparationRead?: boolean;
   readonly awaitTerminalAfterAbort?: boolean;

@@ -8,6 +8,7 @@ using Microsoft.CodeAnalysis.Diagnostics;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Package.Build.Tasks;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Xunit;
 
 namespace Sunder.Package.Build.Tests;
@@ -31,16 +32,18 @@ public sealed class ServiceApiEditorGeneratorTests
     [Fact]
     public void LiveApiMatchesBuildCompilerForContextDefaultsAndStreaming()
     {
-        var input = Compilation(Source);
+        var source = Source;
+        var input = Compilation(source);
         var driver = CreateDriver();
         driver.RunGeneratorsAndUpdateCompilation(input, out var live, out var diagnostics);
         Assert.Empty(diagnostics);
         Assert.Empty(live.GetDiagnostics().Where(value => value.Severity == DiagnosticSeverity.Error));
         var build = SunderRpcCSharpOwnedClientPrepass.Compile(new SunderRpcCSharpSourceCompiler(),
-            new("example.editor", "1.0.0", [new("service.cs", Source)], ReferencePaths, AssemblyName: "EditorPackage", GenerateServiceInterfaces: true));
+            new("example.editor", "1.0.0", [new("service.cs", source)], ReferencePaths, AssemblyName: "EditorPackage", GenerateServiceInterfaces: true));
         Assert.True(build.Compilation.Success, string.Join(Environment.NewLine, build.Compilation.Diagnostics.Select(value => value.Message)));
         Assert.Equal(Signatures(build.Compilation.SourceCompilation!), Signatures(live));
-        var method = Assert.Single(live.GetTypeByMetadataName("Example.INotesService")!.GetMembers("ReadAsync").OfType<IMethodSymbol>());
+        var method = Assert.Single(live.GetTypeByMetadataName(ApiName)!.GetMembers("ReadAsync").OfType<IMethodSymbol>());
+        Assert.Null(live.GetTypeByMetadataName("Example.INotesService"));
         Assert.Equal(2, method.Parameters.Length);
         Assert.True(method.Parameters[1].HasExplicitDefaultValue);
         var sourceMethod = Assert.Single(input.GetTypeByMetadataName("Example.NotesService")!.GetMembers("ReadAsync"));
@@ -49,25 +52,35 @@ public sealed class ServiceApiEditorGeneratorTests
     }
 
     [Fact]
+    public void RetiredMarkerIsUnsupportedAndDoesNotGenerateAnEditorInterface()
+    {
+        var source = Source.Replace("[SunderService]", "[SunderRpcService]", StringComparison.Ordinal);
+        CreateDriver().RunGeneratorsAndUpdateCompilation(Compilation(source), out var result, out _);
+        Assert.Null(result.GetTypeByMetadataName(ApiName));
+        Assert.Contains(result.GetDiagnostics(), diagnostic => diagnostic.Id == "CS0246"
+            && diagnostic.GetMessage().Contains("SunderRpcService", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ReusedDriverTracksUnsavedRenameRemovalAndIncompleteBody()
     {
         var driver = CreateDriver();
         driver = driver.RunGeneratorsAndUpdateCompilation(Compilation(Source), out var initial, out var diagnostics);
         Assert.Empty(diagnostics);
-        Assert.Single(initial.GetTypeByMetadataName("Example.INotesService")!.GetMembers("ReadAsync"));
+        Assert.Single(initial.GetTypeByMetadataName(ApiName)!.GetMembers("ReadAsync"));
         var renamed = Source.Replace("ReadAsync", "UnsavedAsync", StringComparison.Ordinal);
         driver = driver.RunGeneratorsAndUpdateCompilation(Compilation(renamed), out var updated, out diagnostics);
         Assert.Empty(diagnostics);
-        Assert.Empty(updated.GetTypeByMetadataName("Example.INotesService")!.GetMembers("ReadAsync"));
-        Assert.Single(updated.GetTypeByMetadataName("Example.INotesService")!.GetMembers("UnsavedAsync"));
+        Assert.Empty(updated.GetTypeByMetadataName(ApiName)!.GetMembers("ReadAsync"));
+        Assert.Single(updated.GetTypeByMetadataName(ApiName)!.GetMembers("UnsavedAsync"));
         var incomplete = renamed.Replace("=> Task.FromResult(new Note { Number = request.Number });", "=> ;", StringComparison.Ordinal);
         driver = driver.RunGeneratorsAndUpdateCompilation(Compilation(incomplete), out var typing, out diagnostics);
         Assert.Empty(diagnostics);
         Assert.Contains(typing.GetDiagnostics(), value => value.Severity == DiagnosticSeverity.Error);
-        Assert.Single(typing.GetTypeByMetadataName("Example.INotesService")!.GetMembers("UnsavedAsync"));
-        driver = driver.RunGeneratorsAndUpdateCompilation(Compilation(Source.Replace("[SunderRpcService]", "", StringComparison.Ordinal)), out var removed, out diagnostics);
+        Assert.Single(typing.GetTypeByMetadataName(ApiName)!.GetMembers("UnsavedAsync"));
+        driver = driver.RunGeneratorsAndUpdateCompilation(Compilation(Source.Replace("[SunderService]", "", StringComparison.Ordinal)), out var removed, out diagnostics);
         Assert.Empty(diagnostics);
-        Assert.Null(removed.GetTypeByMetadataName("Example.INotesService"));
+        Assert.Null(removed.GetTypeByMetadataName(ApiName));
         Assert.DoesNotContain(driver.GetRunResult().Results.SelectMany(value => value.GeneratedSources), value => value.SourceText.ToString().Contains("interface INotesService", StringComparison.Ordinal));
     }
 
@@ -79,13 +92,13 @@ public sealed class ServiceApiEditorGeneratorTests
         var driver = CreateDriver(enabled);
         driver = driver.RunGeneratorsAndUpdateCompilation(Compilation(Source), out var output, out var diagnostics);
         Assert.Empty(diagnostics);
-        Assert.Null(output.GetTypeByMetadataName("Example.INotesService"));
+        Assert.Null(output.GetTypeByMetadataName(ApiName));
         Assert.Empty(driver.GetRunResult().Results.SelectMany(value => value.GeneratedSources));
     }
 
     [Theory]
     [InlineData("public sealed partial class NotesService", "public sealed class NotesService", "SUNDEREDIT001")]
-    [InlineData("public sealed record NoteRequest", "public interface INotesService { }\npublic sealed record NoteRequest", "SUNDEREDIT002")]
+    [InlineData("namespace Example;", "namespace Sunder.Generated.Packages.Example_Editor_Services; public interface INotesService { }", "SUNDEREDIT002")]
     public void InvalidDeclarationsReportLocatedDiagnostics(string oldText, string newText, string id)
     {
         var driver = CreateDriver();
@@ -95,7 +108,41 @@ public sealed class ServiceApiEditorGeneratorTests
         Assert.True(error.Location.IsInSource);
     }
 
-    private static string[] Signatures(Compilation compilation) => compilation.GetTypeByMetadataName("Example.INotesService")!.GetMembers().OfType<IMethodSymbol>()
+    [Fact]
+    public void DeclarationOnlyInterfaceUsesPackageNamespaceWithoutDoubleIPrefix()
+    {
+        const string source = """
+            using System.Threading;
+            using System.Threading.Tasks;
+            using Sunder.Sdk.Services;
+            [SunderService(SunderServiceExposure.Public, Key = "extension")]
+            public interface IExtensionService { ValueTask<string> ReadAsync(string value, CancellationToken token = default); }
+            """;
+        CreateDriver().RunGeneratorsAndUpdateCompilation(Compilation(source), out var live, out var diagnostics);
+        Assert.Empty(diagnostics);
+        Assert.Empty(live.GetDiagnostics().Where(value => value.Severity == DiagnosticSeverity.Error));
+        var api = live.GetTypeByMetadataName("Sunder.Generated.Packages.Example_Editor_Services.IExtensionService");
+        Assert.NotNull(api);
+        Assert.Null(live.GetTypeByMetadataName("Sunder.Generated.Packages.Example_Editor_Services.IIExtensionService"));
+        var build = SunderRpcCSharpOwnedClientPrepass.Compile(new(), new("example.editor", "1.0.0",
+            [new("extension.cs", source)], ReferencePaths, GenerateServiceInterfaces: true));
+        Assert.True(build.Compilation.Success, string.Join(Environment.NewLine, build.Compilation.Diagnostics));
+        Assert.Equal(api.GetMembers("ReadAsync").Single().ToDisplayString(),
+            build.Compilation.SourceCompilation!.GetTypeByMetadataName(api.ToDisplayString())!.GetMembers("ReadAsync").Single().ToDisplayString());
+    }
+
+    [Fact]
+    public void SourcePackageIdentityMustAgreeWithEvaluatedPackageIdentity()
+    {
+        var source = Source.Replace("namespace Example;",
+            "[assembly: Sunder.Sdk.Packaging.SunderPackage(Id = \"example.other\", Name = \"Other\")]\nnamespace Example;", StringComparison.Ordinal);
+        CreateDriver().RunGeneratorsAndUpdateCompilation(Compilation(source), out var live, out var diagnostics);
+        Assert.Contains(diagnostics, value => value.Id == "SUNDEREDIT001" && value.GetMessage().Contains("package ID", StringComparison.Ordinal));
+        Assert.Null(live.GetTypeByMetadataName(ApiName));
+    }
+
+    private const string ApiName = "Sunder.Generated.Packages.Example_Editor_Services.INotesService";
+    private static string[] Signatures(Compilation compilation) => compilation.GetTypeByMetadataName(ApiName)!.GetMembers().OfType<IMethodSymbol>()
         .Select(value => value.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)).Order(StringComparer.Ordinal).ToArray();
     private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.CSharp14);
     private static GeneratorDriver CreateDriver(string enabled = "true")
@@ -123,12 +170,13 @@ public sealed class ServiceApiEditorGeneratorTests
         public override bool TryGetValue(string key, out string value)
         {
             value = enabled;
+            if (key == "build_property.SunderPackageId") { value = "example.editor"; return true; }
             return key == "build_property.SunderPackageEditorCompilation";
         }
     }
     private static string AnalyzerPath => Path.Combine(Path.GetDirectoryName(typeof(GenerateSunderRpcBindingsTask).Assembly.Location)!, "Sunder.Package.Build.Editor.dll");
     private static string[] ReferencePaths => ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
-        .Append(typeof(SunderRpcServiceAttribute).Assembly.Location).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        .Append(typeof(SunderServiceAttribute).Assembly.Location).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     private static CSharpCompilation Compilation(string source) => CSharpCompilation.Create("EditorPackage",
         [CSharpSyntaxTree.ParseText(source, ParseOptions, "service.cs")], ReferencePaths.Select(path => MetadataReference.CreateFromFile(path)),
         new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
@@ -139,14 +187,13 @@ public sealed class ServiceApiEditorGeneratorTests
         using System.Threading.Tasks;
         using System.Collections.Generic;
         using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         namespace Example;
-        [SunderRpcService]
+        [SunderService]
         public sealed partial class NotesService
         {
-            [SunderRpcMethod]
             public Task<Note> ReadAsync(NoteRequest request, SunderRpcInvocationContext context, CancellationToken token = default)
                 => Task.FromResult(new Note { Number = request.Number });
-            [SunderRpcMethod]
             public IAsyncEnumerable<Note> WatchAsync(CancellationToken token = default) => throw new NotSupportedException();
         }
         public sealed record NoteRequest { public required long Number { get; init; } }

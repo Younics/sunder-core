@@ -24,9 +24,14 @@ public partial class SettingsWindow : Window
             this,
             hideOnClose: true,
             closeOnEscape: true,
-            persistWindowState: () => _stateController?.PersistWindowState(),
+             persistWindowState: () => _stateController?.PersistWindowState(),
+             hiding: () => ViewModel?.SetWindowVisible(false),
             closed: OnLifecycleClosed);
         Opened += OnOpened;
+        PropertyChanged += (_, change) =>
+        {
+            if (change.Property == IsVisibleProperty) ViewModel?.SetWindowVisible(IsVisible);
+        };
         Closed += (_, _) => _tasks.Dispose();
     }
 

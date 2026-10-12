@@ -1,5 +1,6 @@
 import { TextDecoder } from "node:util";
 import type { JsonValue } from "./types";
+import { recordResourceIntegerToken } from "./resource-integers";
 
 export interface FrameLimits {
   readonly maxFrameBytes: number;
@@ -261,6 +262,7 @@ interface DecodedIntegerTokens {
   readonly holderOrdinals: readonly number[];
   readonly nameIndexes: readonly number[];
   readonly values: readonly number[];
+  readonly resourceHolders:readonly number[];readonly resourceNames:readonly string[];readonly resourceTokens:readonly string[];
 }
 
 function validateJson(text: string, maximumDepth: number, collectIntegerTokens = false): JsonValidation {
@@ -271,6 +273,7 @@ function validateJson(text: string, maximumDepth: number, collectIntegerTokens =
   const integerTokenHolderOrdinals: number[] = [];
   const integerTokenNameIndexes: number[] = [];
   const integerTokenValues: number[] = [];
+  const resourceHolders:number[]=[];const resourceNames:string[]=[];const resourceTokens:string[]=[];
   let activeStats: { rootDepth: number; nodes: number; maximumDepth: number; maximumObjectMembers: number } | undefined;
   let lastNumberToken: string | undefined;
   let lastNumberValue: number | undefined;
@@ -380,6 +383,9 @@ function validateJson(text: string, maximumDepth: number, collectIntegerTokens =
         const numberValue = lastNumberValue;
         lastNumberToken = undefined;
         lastNumberValue = undefined;
+        if(collectIntegerTokens&&numberToken!==undefined&&["activationEpoch","sessionGeneration","length"].includes(key)){
+          resourceHolders.push(currentContainerOrdinal);resourceNames.push(key);resourceTokens.push(numberToken);
+        }
         if (numberToken !== undefined
           && numberValue !== undefined
           && Number.isSafeInteger(numberValue)
@@ -479,17 +485,19 @@ function validateJson(text: string, maximumDepth: number, collectIntegerTokens =
       holderOrdinals: integerTokenHolderOrdinals,
       nameIndexes: integerTokenNameIndexes,
       values: integerTokenValues,
+      resourceHolders,resourceNames,resourceTokens,
     },
   };
 }
 
 function attachDecodedIntegerTokens(value: unknown, entries: DecodedIntegerTokens): void {
-  if (entries.holderOrdinals.length === 0) return;
+  if (entries.holderOrdinals.length === 0 && entries.resourceHolders.length===0) return;
   if (value === null || typeof value !== "object" || entries.containerParents[0] !== -1) {
     throw new ProtocolError("Protocol integer-token provenance did not match the decoded JSON structure.");
   }
   let maximumOrdinal = 0;
   for (const ordinal of entries.holderOrdinals) maximumOrdinal = Math.max(maximumOrdinal, ordinal);
+  for (const ordinal of entries.resourceHolders) maximumOrdinal=Math.max(maximumOrdinal,ordinal);
   const containers: object[] = [value];
   for (let ordinal = 1; ordinal <= maximumOrdinal; ordinal++) {
     const parent = containers[entries.containerParents[ordinal]!] as object | undefined;
@@ -505,6 +513,7 @@ function attachDecodedIntegerTokens(value: unknown, entries: DecodedIntegerToken
     const name = trackedIntegerNames[entries.nameIndexes[index]!]!;
     decodedIntegerTokens.get(name)!.set(holder, entries.values[index]!);
   }
+  for(let index=0;index<entries.resourceHolders.length;index++)recordResourceIntegerToken(containers[entries.resourceHolders[index]!]!,entries.resourceNames[index]!,entries.resourceTokens[index]!);
 }
 
 function asciiCaseFold(value: string): string {

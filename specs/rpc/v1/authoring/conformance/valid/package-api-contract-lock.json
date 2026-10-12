@@ -9,6 +9,8 @@
       "registryOrigin": "https://registry.example/",
       "publicContractCount": 1,
       "publicInventorySha256": "1d1c5dbcae220e7052df3f87f9b4fe9e5feb3fd2a23c70f2b41453039ccb9fbe",
+      "modelProjectionBytes": 475,
+      "modelProjectionSha256": "6547e16179e682ab249c64dfbf496d972aad6ff6e4965bc96ef662c0395e2b0a",
       "contracts": {
         "example.rpc.v1.minimal": {
           "artifactSource": "owned",
@@ -31,6 +33,9 @@
       "presence": "required",
       "requiredContracts": [
         "example.rpc.v1.minimal"
+      ],
+      "consumerRoles": [
+        "runtime"
       ]
     }
   },

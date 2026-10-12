@@ -13,29 +13,30 @@ namespace Sunder.Package.Build.Editor;
 [Generator(LanguageNames.CSharp)]
 public sealed class ServiceApiEditorGenerator : IIncrementalGenerator
 {
-    private const string ServiceAttribute = "Sunder.Sdk.Rpc.SunderRpcServiceAttribute";
-    private const string MethodAttribute = "Sunder.Sdk.Rpc.SunderRpcMethodAttribute";
+    private const string ServiceAttribute = "Sunder.Sdk.Services.SunderServiceAttribute";
+    private const string MethodAttribute = "Sunder.Sdk.Services.SunderMethodAttribute";
     private static readonly DiagnosticDescriptor InvalidSurface = new DiagnosticDescriptor(
         "SUNDEREDIT001", "Invalid service API declaration", "{0}", "Sunder.Authoring", DiagnosticSeverity.Error, true);
     private static readonly DiagnosticDescriptor Collision = new DiagnosticDescriptor(
-        "SUNDEREDIT002", "Service API name collision", "Generated API '{0}' conflicts with an authored declaration", "Sunder.Authoring", DiagnosticSeverity.Error, true);
+        "SUNDEREDIT002", "Service API name collision", "Generated API '{0}' conflicts with another declaration", "Sunder.Authoring", DiagnosticSeverity.Error, true);
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        var enabled = context.AnalyzerConfigOptionsProvider.Select((options, _) =>
-            options.GlobalOptions.TryGetValue("build_property.SunderPackageEditorCompilation", out var value)
-            && string.Equals(value, "true", StringComparison.OrdinalIgnoreCase));
+        var settings = context.AnalyzerConfigOptionsProvider.Select((options, _) => (
+            Enabled: options.GlobalOptions.TryGetValue("build_property.SunderPackageEditorCompilation", out var value)
+                && string.Equals(value, "true", StringComparison.OrdinalIgnoreCase),
+            PackageId: options.GlobalOptions.TryGetValue("build_property.SunderPackageId", out var packageId) ? packageId : null));
         var services = context.SyntaxProvider.ForAttributeWithMetadataName(ServiceAttribute,
-            (node, _) => node is ClassDeclarationSyntax,
+            (node, _) => node is ClassDeclarationSyntax || node is InterfaceDeclarationSyntax,
             (value, _) => (INamedTypeSymbol)value.TargetSymbol).Collect();
-        context.RegisterSourceOutput(services.Combine(context.CompilationProvider).Combine(enabled),
+        context.RegisterSourceOutput(services.Combine(context.CompilationProvider).Combine(settings),
             (output, value) =>
             {
-                if (value.Right) Generate(output, value.Left.Left, value.Left.Right);
+                if (value.Right.Enabled) Generate(output, value.Left.Left, value.Left.Right, value.Right.PackageId);
             });
     }
 
-    private static void Generate(SourceProductionContext context, ImmutableArray<INamedTypeSymbol> services, Compilation compilation)
+    private static void Generate(SourceProductionContext context, ImmutableArray<INamedTypeSymbol> services, Compilation compilation, string? suppliedPackageId)
     {
         var marker = compilation.GetTypeByMetadataName(ServiceAttribute);
         var methodMarker = compilation.GetTypeByMetadataName(MethodAttribute);
@@ -44,7 +45,37 @@ public sealed class ServiceApiEditorGenerator : IIncrementalGenerator
         if (marker == null || methodMarker == null || marker.ContainingAssembly.Identity.Name != "Sunder.Sdk"
             || marker.ContainingAssembly.Identity.Version != new Version(1, 1, 0, 0)
             || !SymbolEqualityComparer.Default.Equals(marker.ContainingAssembly, methodMarker.ContainingAssembly)) return;
+        var packageMarker = marker.ContainingAssembly.GetTypeByMetadataName("Sunder.Sdk.Packaging.SunderPackageAttribute");
+        if (services.Length == 0 || packageMarker == null) return;
+        if (!GeneratedPackageNames.TryResolvePackageId(compilation, packageMarker, suppliedPackageId, out var packageId, out var identityError))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(InvalidSurface, services[0].Locations.FirstOrDefault(value => value.IsInSource), identityError));
+            return;
+        }
+        var authoredCompilation = compilation;
+        var forwards = new StringBuilder();
+        foreach (var service in services)
+        {
+            try
+            {
+                var name = GeneratedPackageNames.ServiceInterface(packageId, service);
+                if (compilation.GetTypeByMetadataName(name) != null) continue;
+                var dot = name.LastIndexOf('.');
+                forwards.Append("namespace ").Append(name.Substring(0, dot)).Append(" { public interface ")
+                    .Append(name.Substring(dot + 1)).AppendLine(" { } }");
+            }
+            catch (ArgumentException) { /* Located service diagnostics below own invalid keys. */ }
+        }
+        if (forwards.Length != 0)
+        {
+            var syntax = CSharpSyntaxTree.ParseText(forwards.ToString(), (CSharpParseOptions?)compilation.SyntaxTrees.FirstOrDefault()?.Options, "sunder-editor-forward-types.g.cs");
+            compilation = compilation.AddSyntaxTrees(syntax);
+            var resolved = ImmutableArray.CreateBuilder<INamedTypeSymbol>();
+            foreach (var service in services) resolved.Add(compilation.GetTypeByMetadataName(service.ToDisplayString()) ?? service);
+            services = resolved.ToImmutable();
+        }
         var seen = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var output = new StringBuilder("// <auto-generated />\n#nullable enable\n");
         foreach (var service in services.OrderBy(value => value.ToDisplayString(), StringComparer.Ordinal))
         {
@@ -56,21 +87,29 @@ public sealed class ServiceApiEditorGenerator : IIncrementalGenerator
                 context.ReportDiagnostic(Diagnostic.Create(InvalidSurface, location, "The editor service API limit is 128 declarations."));
                 break;
             }
-            if (service.IsGenericType || service.ContainingType != null || service.IsAbstract || service.IsRecord
-                || service.DeclaringSyntaxReferences.Any(reference => !(reference.GetSyntax(context.CancellationToken) is ClassDeclarationSyntax declaration)
-                    || !declaration.Modifiers.Any(SyntaxKind.PartialKeyword)))
+            if (service.IsGenericType || service.ContainingType != null || service.IsRecord
+                || service.TypeKind == TypeKind.Class && (service.IsAbstract
+                    || service.DeclaringSyntaxReferences.Any(reference => !(reference.GetSyntax(context.CancellationToken) is ClassDeclarationSyntax declaration)
+                        || !declaration.Modifiers.Any(SyntaxKind.PartialKeyword))))
             {
                 context.ReportDiagnostic(Diagnostic.Create(InvalidSurface, location, "A concrete RPC service must be an ordinary top-level, non-generic partial class."));
                 continue;
             }
-            var name = "I" + service.Name;
-            if (service.ContainingNamespace.GetTypeMembers(name).Length != 0)
+            string name;
+            try { name = GeneratedPackageNames.ServiceInterface(packageId, service); }
+            catch (ArgumentException exception)
+            {
+                context.ReportDiagnostic(Diagnostic.Create(InvalidSurface, location, exception.Message));
+                continue;
+            }
+            if (!names.Add(name) || authoredCompilation.GetTypeByMetadataName(name) != null)
             {
                 context.ReportDiagnostic(Diagnostic.Create(Collision, location, name));
                 continue;
             }
             var methods = service.GetMembers().OfType<IMethodSymbol>()
-                .Where(method => method.GetAttributes().Any(attribute => SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, methodMarker)))
+                .Where(method => method.GetAttributes().Any(attribute => SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, methodMarker))
+                    || ServiceAuthoringSemantics.IsImplicitMethod(method))
                 .OrderBy(method => method.Name, StringComparer.Ordinal).ToArray();
             if (methods.Length > 512)
             {
@@ -96,7 +135,7 @@ public sealed class ServiceApiEditorGenerator : IIncrementalGenerator
                 if (HasErrorType(method.ReturnType) || method.Parameters.Any(parameter => HasErrorType(parameter.Type))) continue;
                 valid.Add(method);
             }
-            ServiceApiSyntax.AppendInterface(output, service, valid, mapSourceLocations: true);
+            ServiceApiSyntax.AppendInterface(output, packageId, service, valid, mapSourceLocations: true);
         }
         context.AddSource("sunder-service-apis.editor.g.cs", SourceText.From(output.ToString().Replace("\r\n", "\n"), Encoding.UTF8));
     }

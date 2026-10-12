@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
@@ -9,6 +10,8 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
     internal static readonly TimeSpan DebounceDelay = TimeSpan.FromMilliseconds(750);
     internal static readonly TimeSpan StabilityProbeDelay = TimeSpan.FromMilliseconds(250);
     internal static readonly TimeSpan MaxStabilityWait = TimeSpan.FromSeconds(5);
+    // The generated-output V1 journal fences the directory and its sibling handoff.
+    private const string OutputTransactionSuffix = ".sunder-output-transaction.json";
 
     private readonly Func<PackageLifecycleStageRequest, CancellationToken, Task<PackageLifecycleStageResult>> _stageAsync;
     private readonly Func<string, CancellationToken, Task<PackageLifecycleOperationResult>> _commitAsync;
@@ -327,6 +330,7 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
     private static bool IsLoadableDevPackageFolder(string folder)
         => Directory.Exists(folder)
+           && !File.Exists(folder + OutputTransactionSuffix)
            && File.Exists(Path.Combine(folder, "manifest", "sunder-package.json"))
            && File.Exists(Path.Combine(folder, "manifest", "content-index.json"))
            && Directory.Exists(Path.Combine(folder, "payload"));
@@ -340,6 +344,7 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
         {
             foreach (var registration in registrations)
             {
+                if (!IsLoadableDevPackageFolder(registration.Folder)) return false;
                 foreach (var filePath in Directory.EnumerateFiles(registration.Folder, "*", SearchOption.AllDirectories))
                 {
                     if (ShouldIgnorePath(filePath))
@@ -350,6 +355,11 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
                     var info = new FileInfo(filePath);
                     snapshot[filePath] = new FileSnapshot(info.Length, info.LastWriteTimeUtc);
                 }
+
+                var imports = new FileInfo(registration.Folder + SunderPackageFormat.DevelopmentImportsSuffix);
+                snapshot[imports.FullName] = imports.Exists
+                    ? new FileSnapshot(imports.Length, imports.LastWriteTimeUtc)
+                    : new FileSnapshot(-1, default);
             }
 
             return true;
@@ -467,10 +477,7 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
                                | NotifyFilters.CreationTime,
                 Filter = filter ?? "*",
             };
-            if (includeSubdirectories)
-            {
-                watcher.Changed += OnChanged;
-            }
+            watcher.Changed += OnChanged;
             watcher.Created += OnChanged;
             watcher.Deleted += OnChanged;
             watcher.Renamed += OnRenamed;
@@ -496,14 +503,14 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
                     return;
                 }
             }
-            if (ReferenceEquals(sender, _parentWatcher) && !IsTargetFolder(e.FullPath))
+            if (ReferenceEquals(sender, _parentWatcher) && !IsPublicationPath(e.FullPath))
             {
                 return;
             }
 
             if (!ShouldIgnorePath(e.FullPath))
             {
-                _onChanged(PackageId, ReferenceEquals(sender, _parentWatcher));
+                _onChanged(PackageId, ReferenceEquals(sender, _parentWatcher) && IsTargetFolder(e.FullPath));
             }
         }
 
@@ -517,15 +524,16 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
                 }
             }
             if (ReferenceEquals(sender, _parentWatcher)
-                && !IsTargetFolder(e.FullPath)
-                && !IsTargetFolder(e.OldFullPath))
+                && !IsPublicationPath(e.FullPath)
+                && !IsPublicationPath(e.OldFullPath))
             {
                 return;
             }
 
             if (!ShouldIgnorePath(e.FullPath) || !ShouldIgnorePath(e.OldFullPath))
             {
-                _onChanged(PackageId, ReferenceEquals(sender, _parentWatcher));
+                _onChanged(PackageId, ReferenceEquals(sender, _parentWatcher)
+                    && (IsTargetFolder(e.FullPath) || IsTargetFolder(e.OldFullPath)));
             }
         }
 
@@ -543,6 +551,14 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
         private bool IsTargetFolder(string path)
             => string.Equals(Path.GetFullPath(path), Folder, PathComparison);
+
+        private bool IsPublicationPath(string path)
+        {
+            var fullPath = Path.GetFullPath(path);
+            return IsTargetFolder(fullPath)
+                || string.Equals(fullPath, Folder + SunderPackageFormat.DevelopmentImportsSuffix, PathComparison)
+                || string.Equals(fullPath, Folder + OutputTransactionSuffix, PathComparison);
+        }
     }
 }
 

@@ -3,18 +3,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\tools\Sunder.ExecutionRuntime.Build\Sunder.ExecutionRuntime.Build.csproj" />
     <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
-    <ProjectReference Include="..\..\libraries\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\..\..\..\..\eng\execution-runtimes\execution-runtime-lock.schema.json"
-          Link="Fixtures\execution-runtime-lock.schema.json"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\eng\execution-runtimes\test-fixtures.lock.json"
-          Link="Fixtures\test-fixtures.lock.json"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Update="Fixtures\archive-goldens.sha256"
-          CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\packages\Sunder.Sdk.Stacks\Contracts\sunder.stack.contributor.rpc.json"
           Link="Fixtures\PlatformCatalog\real-stack.rpc.json"
           CopyToOutputDirectory="PreserveNewest" />

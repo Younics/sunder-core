@@ -5,7 +5,6 @@
     "revision": 42,
     "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   },
-  "runtimePolicyRevision": 3,
   "checkpoint": {
     "sequence": 99,
     "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -45,26 +44,6 @@
       "lifecycleState": "Supported",
       "disposition": "Allowed",
       "errorCode": null,
-      "revokedAtUtc": null
-    }
-  ],
-  "runtimes": [
-    {
-      "subject": {
-        "runtime": {
-          "runtimeId": "sunder.runtime.dotnet",
-          "version": "10.0.0",
-          "packagingRevision": 1,
-          "rid": "osx-arm64",
-          "moduleAbi": "sunder.dotnet-worker-module.v1"
-        },
-        "manifestSha256": "2222222222222222222222222222222222222222222222222222222222222222",
-        "artifactSha256": "3333333333333333333333333333333333333333333333333333333333333333"
-      },
-      "lifecycleState": "supported",
-      "disposition": "Allowed",
-      "errorCode": null,
-      "activationBlockedAtUtc": null,
       "revokedAtUtc": null
     }
   ]

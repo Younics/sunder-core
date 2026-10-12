@@ -1,5 +1,0 @@
-{
-  "domain": "sunder.execution-runtime.native-attestation.v1\u0000",
-  "signedFixture": "conformance/valid/dotnet-linux-x64.native-attestation.json",
-  "statementSha256": "66709b4f8b785d7c720768396c5559bcc9852a2063ede3b85e03b361cc81e9c8"
-}

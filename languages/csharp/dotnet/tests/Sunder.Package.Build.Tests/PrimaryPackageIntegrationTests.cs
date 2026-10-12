@@ -32,7 +32,11 @@ public sealed class PrimaryPackageIntegrationTests
             "Sunder.Package.Build.TestFixtures",
             "WorkerV1Executable");
         var project = Path.Combine(fixtureDirectory, "WorkerV1Executable.csproj");
-        var configuration = ResolveConfiguration();
+        var sharedRoot = Path.Combine(fixtureDirectory, "bin", ResolveConfiguration(), "net10.0", RuntimeInformation.RuntimeIdentifier);
+        var sharedFiles = new[] { "WorkerV1Executable.runtimeconfig.json", "WorkerV1Executable.deps.json" }
+            .ToDictionary(name => Path.Combine(sharedRoot, name), name => File.ReadAllBytes(Path.Combine(sharedRoot, name)));
+        // Build and Clean must never consume the test project's shared fixture outputs.
+        var configuration = "PrimaryIntegration-" + Guid.NewGuid().ToString("N");
         var outputRoot = Path.Combine(fixtureDirectory, "bin", configuration, "net10.0");
         var composed = Path.Combine(outputRoot, "sunder-dev");
         var currentLeaf = Path.Combine(outputRoot, RuntimeInformation.RuntimeIdentifier, "sunder-dev");
@@ -230,6 +234,7 @@ public sealed class PrimaryPackageIntegrationTests
                 project,
                 "-t:Clean",
                 $"-p:Configuration={configuration}",
+                "-p:BuildProjectReferences=false",
                 "-m:1",
                 "-nr:false",
                 "-nologo"));
@@ -254,6 +259,7 @@ public sealed class PrimaryPackageIntegrationTests
                 "-nologo");
             AssertFailure(unsafeClean, "not a safely marked generated directory");
             Assert.Equal("keep", await File.ReadAllTextAsync(sentinel));
+            foreach (var (path, bytes) in sharedFiles) Assert.Equal(bytes, await File.ReadAllBytesAsync(path));
         }
         finally
         {

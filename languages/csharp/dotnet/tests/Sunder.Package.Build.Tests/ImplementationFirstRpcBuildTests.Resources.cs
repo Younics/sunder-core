@@ -23,7 +23,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var linked = ResolvePhysicalTemporaryPath(scope.WriteAllText("linked/banner.txt", "app-only-asset"));
         var repository = FindRepositoryRoot(); var packages = Path.Combine(repository, "languages/csharp/dotnet/packages");
         var baseline = Path.Combine(repository, "languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ImplementationFirstRpc");
-        foreach (var file in new[] { "sunder-contracts.owned.json", "sunder-contracts.lock.json" }) File.Copy(Path.Combine(baseline, file), Path.Combine(root, file));
+        File.Copy(Path.Combine(baseline, "sunder-contracts.lock.json"), Path.Combine(root, "sunder-contracts.lock.json"));
         var source = SingleProjectSource.Replace("public sealed class GreetingView : Avalonia.Controls.UserControl;", """
             public sealed partial class GreetingView : Avalonia.Controls.UserControl
             {
@@ -131,7 +131,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Assert.Contains("MissingProperty", invalid.StandardOutput + invalid.StandardError, StringComparison.Ordinal);
         Assert.Equal(before, HashTree(dev));
         await File.WriteAllTextAsync(xaml, originalXaml);
-        AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:FreezeSunderContracts;PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet"]));
+        AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet"]));
         var inspection = await SunderPackageArchiveInspector.ExtractAndValidateAsync(Path.Combine(root, "bin/Debug/net10.0/ResourceRoles.7.6.5.sunderpkg"), scope.GetPath("extracted"));
         Assert.True(inspection.Success, string.Join(Environment.NewLine, inspection.Errors));
         Assert.True(File.Exists(scope.GetPath("extracted", "payload", "app", "shared", "lib/data/app.json")));

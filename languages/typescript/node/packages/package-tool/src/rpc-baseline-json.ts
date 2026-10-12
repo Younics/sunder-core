@@ -30,8 +30,8 @@ export const MAX_BASELINE_BYTES = 268_435_456;
 // 11 snapshot fields, 2 release fields and 6 publication fields. Count BOTH keys
 // and values, plus containers; this bound admits that entire valid maximum.
 const MAX_VALUES_AND_PROPERTIES = 2_097_152;
-export function parseOuter(bytes: Buffer): OuterObject {
-  if (!bytes.length || bytes.length > MAX_BASELINE_BYTES) invalid("outer byte limit exceeded");
+export function parseOuter(bytes: Buffer, limits: { readonly bytes: number; readonly values: number } = { bytes: MAX_BASELINE_BYTES, values: MAX_VALUES_AND_PROPERTIES }): OuterObject {
+  if (!bytes.length || bytes.length > limits.bytes) invalid("outer byte limit exceeded");
   if (bytes[bytes.length - 1] !== 10 || bytes.includes(13) || bytes.subarray(0, 3).equals(Buffer.from([239, 187, 191]))) invalid("strict UTF-8, no BOM, LF endings and exactly one terminal LF required");
   // Scan structural resources BEFORE allocating a JSON object graph. Quoted
   // descriptor/ABI bodies are opaque strings and cannot consume outer depth.
@@ -46,7 +46,7 @@ export function parseOuter(bytes: Buffer): OuterObject {
       budget++;
       while (i + 1 < bytes.length && ![32, 9, 10, 44, 93, 125].includes(bytes[i + 1]!)) i++;
     }
-    if (budget > MAX_VALUES_AND_PROPERTIES) invalid("outer structural budget exceeded before parsing");
+    if (budget > limits.values) invalid("outer structural budget exceeded before parsing");
   }
   const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   let position = 0;

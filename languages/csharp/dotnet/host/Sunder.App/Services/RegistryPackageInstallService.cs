@@ -1,547 +1,238 @@
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-public sealed record RegistryPackageInstallExecutionResult(
-    bool Success,
-    string Message,
-    bool RuntimeSessionApplied,
-    bool RequiresAppRestart,
-    IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors,
-    IReadOnlyList<string> ImpactedPackageIds,
-    IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems)
+public sealed record RegistryPackageInstallExecutionResult(bool Success, string Message, bool RuntimeSessionApplied,
+    bool RequiresAppRestart, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors,
+    IReadOnlyList<string> ImpactedPackageIds, IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems)
 {
     public bool AppShellApplied { get; init; }
-
     public RuntimePackageStamp? CommittedStamp { get; init; }
-
     public IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts { get; init; } = [];
-
     public IReadOnlyList<PackageCapabilityConsent> RequiredCapabilityConsents { get; init; } = [];
-
-    public IReadOnlyList<RuntimeRegistryExecutionRuntimeResolutionConflict> RuntimeConflicts { get; init; } = [];
-
-    public static RegistryPackageInstallExecutionResult Empty(string message)
-        => new(true, message, true, false, [], [], [], []);
-
-    public static RegistryPackageInstallExecutionResult Failed(
-        string message,
-        IReadOnlyList<string>? errors = null,
-        IReadOnlyList<string>? warnings = null,
-        IReadOnlyList<RuntimeRegistryPackageInstallPlanItem>? planItems = null)
+    public static RegistryPackageInstallExecutionResult Empty(string message) => new(true, message, true, false, [], [], [], []);
+    public static RegistryPackageInstallExecutionResult Failed(string message, IReadOnlyList<string>? errors = null,
+        IReadOnlyList<string>? warnings = null, IReadOnlyList<RuntimeRegistryPackageInstallPlanItem>? planItems = null)
         => new(false, message, false, false, warnings ?? [], errors ?? [message], [], planItems ?? []);
 }
 
 public sealed record RegistryPackageInstallProgress(string StatusText, double? ProgressPercent);
 
-public sealed class RegistryPackageInstallService
+/// <summary>Preview and combined consent happen before either SDK queue job is submitted.</summary>
+public sealed class RegistryPackageInstallService : IDisposable
 {
-    private const string AnySemanticVersionRange = ">=0.0.0-0";
-    private readonly Func<RegistryPackageChangePreflight, CancellationToken, Task<bool>>? _confirmationPrompt;
+    private readonly Func<RegistryPackageChangePreflight, CancellationToken, Task<bool>>? _confirmation;
+    private readonly BackgroundProcessQueueService _queue;
+    private readonly bool _ownsQueue;
+    private readonly Func<Exception, Task>? _notifyFailure;
 
     public RegistryPackageInstallService(
-        Func<RegistryPackageChangePreflight, CancellationToken, Task<bool>>? confirmationPrompt = null)
+        Func<RegistryPackageChangePreflight, CancellationToken, Task<bool>>? confirmationPrompt = null,
+        BackgroundProcessQueueService? backgroundProcesses = null,
+        Func<Exception, Task>? notifyFailure = null)
     {
-        _confirmationPrompt = confirmationPrompt;
+        _confirmation = confirmationPrompt;
+        _ownsQueue = backgroundProcesses is null;
+        _queue = backgroundProcesses ?? new BackgroundProcessQueueService();
+        _notifyFailure = notifyFailure;
     }
 
-    public async Task<RegistryPackageInstallExecutionResult> InstallPackageAsync(
-        string packageId,
-        string? version,
-        string? tag,
-        bool allowDowngrade,
-        bool reinstall,
-        IRegistryClient registryClient,
-        IRuntimeRegistryPackageClient runtimeApiClient,
-        Action<RegistryPackageInstallProgress>? progress = null,
+    public void Dispose() { if (_ownsQueue) _queue.Dispose(); }
+
+    internal Task<PreparedRegistryPackageInstallation?> PreparePackageAsync(string packageId, string? version, string? tag,
+        bool allowDowngrade, bool reinstall, IRegistryClient registry, IRuntimeRegistryPackageClient client, CancellationToken token)
+    {
+        var batch = new RuntimeRegistryPackageBatchRequest(registry.RegistryUrl.AbsoluteUri,
+            [new(packageId, version, [], version is null ? tag ?? "latest" : null)], AllowDowngrade: allowDowngrade, Reinstall: reinstall);
+        return PrepareAsync(client, cancellation => PreviewBatchAsync(client, batch, cancellation),
+            (preview, ready, cancellation) => client.InstallRegistryPackageAsync(new(registry.RegistryUrl.AbsoluteUri, packageId, version,
+                version is null ? tag ?? "latest" : null, AllowDowngrade: allowDowngrade, Reinstall: reinstall,
+                CapabilityConsents: preview.Plan.RequiredCapabilityConsents, ExpectedResolutionFingerprint: preview.Plan.ResolutionFingerprint)
+            { RuntimePrerequisiteExpectation = ready }, cancellation), token);
+    }
+
+    internal Task<PreparedRegistryPackageInstallation?> PrepareBatchAsync(IReadOnlyList<SunderStackPackageRequirement> packages,
+        IRegistryClient registry, IRuntimeRegistryPackageClient client, CancellationToken token)
+    {
+        var request = Batch(packages, registry.RegistryUrl);
+        return PrepareAsync(client, cancellation => PreviewBatchAsync(client, request, cancellation),
+            (preview, ready, cancellation) => client.ApplyRegistryPackagePlanAsync(request with
+            {
+                CapabilityConsents = preview.Plan.RequiredCapabilityConsents,
+                ExpectedResolutionFingerprint = preview.Plan.ResolutionFingerprint,
+                RuntimePrerequisiteExpectation = ready,
+            }, cancellation), token);
+    }
+
+    internal Task<PreparedRegistryPackageInstallation?> PrepareUpdateAsync(string? packageId, IRuntimeRegistryPackageClient client, CancellationToken token)
+    {
+        // Keep one backend update transaction, including multi-origin/package batches.
+        var request = new RuntimeRegistryUpdateRequest(PackageId: packageId, DryRun: true);
+        return PrepareAsync(client, async cancellation =>
+        {
+            var result = await client.UpdateRegistryPackagesAsync(request, cancellation).ConfigureAwait(false);
+            RequireSuccessfulPreview(result);
+            var plan = FromPreview(result);
+            var runtimes = result.RuntimePrerequisites
+                ?? throw new InvalidOperationException("The update preview did not include runtime readiness. Refresh the installation preview.");
+            ValidateExpectations(result.PlanExpectations, plan.Items.Count != 0);
+            return new(plan, runtimes, result.PlanExpectations);
+        }, (preview, ready, cancellation) => client.UpdateRegistryPackagesAsync(request with
+        {
+            DryRun = false,
+            CapabilityConsents = preview.Plan.RequiredCapabilityConsents,
+            ExpectedPlans = preview.ExpectedPlans,
+            RuntimePrerequisiteExpectation = ready,
+        }, cancellation), token);
+    }
+
+    internal Task<PreparedRegistryPackageInstallation?> PrepareAdoptionAsync(string packageId, Uri origin,
+        IRuntimeRegistryPackageClient client, CancellationToken token)
+    {
+        var request = new RuntimeRegistrySourceAdoptionRequest(packageId, origin.AbsoluteUri, Tag: "latest", DryRun: true);
+        return PrepareAsync(client, async cancellation =>
+        {
+            var result = await client.AdoptRegistryPackageSourceAsync(request, cancellation).ConfigureAwait(false);
+            RequireSuccessfulPreview(result);
+            ValidateExpectations(result.PlanExpectations, required: true);
+            if (result.PlanExpectations.Count != 1 || result.PlanExpectations[0].RegistryOrigin != origin.AbsoluteUri
+                || result.PlanExpectations[0].IncludePrerelease)
+                throw new InvalidOperationException("The adoption preview changed source. Review it again.");
+            var runtimes = result.RuntimePrerequisites ?? await client.PreviewPackageRuntimePrerequisitesAsync(new() { Adoption = request }, cancellation).ConfigureAwait(false);
+            return new(FromPreview(result) with { ResolutionFingerprint = result.PlanExpectations[0].ExpectedResolutionFingerprint }, runtimes, result.PlanExpectations);
+        }, (preview, ready, cancellation) => client.AdoptRegistryPackageSourceAsync(request with
+        {
+            DryRun = false, Confirm = true,
+            CapabilityConsents = preview.Plan.RequiredCapabilityConsents,
+            ExpectedResolutionFingerprint = preview.ExpectedPlans[0].ExpectedResolutionFingerprint,
+            RuntimePrerequisiteExpectation = ready,
+        }, cancellation), token);
+    }
+
+    private async Task<PreparedRegistryPackageInstallation?> PrepareAsync(IRuntimeRegistryPackageClient client,
+        Func<CancellationToken, Task<RegistryInstallationPreview>> preview,
+        Func<RegistryInstallationPreview, RuntimePackageRuntimePrerequisiteExpectation, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> apply,
+        CancellationToken token)
+    {
+        var selected = await preview(token).ConfigureAwait(false);
+        ValidateRuntimePreview(selected.Runtimes);
+        var review = await RegistryPackageChangePreflight.CreateAsync(selected.Plan, client, token, selected.ExpectedPlans,
+            selected.Runtimes).ConfigureAwait(false);
+        if (_confirmation is null) throw new InvalidOperationException("Package confirmation is unavailable. Open Packages to review the installation.");
+        if (!await _confirmation(review, token).WaitAsync(token).ConfigureAwait(false)) return null;
+        token.ThrowIfCancellationRequested();
+        return new(client, selected, preview, apply);
+    }
+
+    private static async Task<RegistryInstallationPreview> PreviewBatchAsync(IRuntimeRegistryPackageClient client,
+        RuntimeRegistryPackageBatchRequest request, CancellationToken token)
+    {
+        var plan = await client.ResolveRegistryPackagePlanAsync(request, token).ConfigureAwait(false);
+        if (!plan.Success || plan.Conflicts.Count != 0 || plan.CompatibilityConflicts.Count != 0 || plan.Errors.Count != 0)
+            throw new InvalidOperationException(plan.Errors.FirstOrDefault() ?? plan.Conflicts.FirstOrDefault()?.Message ?? "The package plan is not available.");
+        if (!RuntimeManagementUi.IsFingerprint(plan.ResolutionFingerprint))
+            throw new InvalidOperationException("The package preview has no valid resolution fingerprint. Refresh and review again.");
+        var runtimes = plan.RuntimePrerequisites ?? await client.PreviewPackageRuntimePrerequisitesAsync(new(Registry: request), token).ConfigureAwait(false);
+        return new(plan, runtimes, [new(request.RegistryOrigin, request.IncludePrerelease, plan.ResolutionFingerprint)]);
+    }
+
+    internal PackageInstallationCohort EnqueuePrepared(PreparedRegistryPackageInstallation prepared, string title,
+        PackageOperationMetadata metadata, CancellationToken token, Func<ValueTask> release,
+        Func<BackgroundProcessContext, RegistryPackageInstallExecutionResult, Task>? applied = null)
+        => PackageInstallationCohort.Enqueue(_queue, title, (metadata with { PackageIds = prepared.PackageIds }).ToMetadata(),
+            prepared.NeedsRuntimeInstallation ? prepared.InstallRuntimesAsync : null,
+            async context =>
+            {
+                var result = ToAppResult(await prepared.ApplyAsync(context).ConfigureAwait(false));
+                if (applied is not null) await applied(context, result).ConfigureAwait(false);
+                else context.ReportProgress(100, result.Message);
+            }, token, release, _notifyFailure);
+
+    private async Task<RegistryPackageInstallExecutionResult> ExecuteAsync(Task<PreparedRegistryPackageInstallation?> preparation,
+        string title, PackageOperationKind kind, string? packageId, Action<RegistryPackageInstallProgress>? progress, CancellationToken token)
+    {
+        IProgress<RegistryPackageInstallProgress>? reports = progress is null ? null : new Progress<RegistryPackageInstallProgress>(progress);
+        try
+        {
+            var prepared = await preparation.ConfigureAwait(false);
+            if (prepared is null) return RegistryPackageInstallExecutionResult.Failed("Installation cancelled before queueing.");
+            RegistryPackageInstallExecutionResult? result = null;
+            reports?.Report(new("Queueing the approved runtime and package installation…", null));
+            var installation = EnqueuePrepared(prepared, title, new(packageId, kind, title), token, () => ValueTask.CompletedTask,
+                (_, applied) => { result = applied; return Task.CompletedTask; });
+            // Stack/other UI callers await outside the queue, so maxParallelism=1 cannot deadlock.
+            var completed = await installation.Completion.ConfigureAwait(false);
+            return completed.Success ? result! : RegistryPackageInstallExecutionResult.Failed(completed.Failure?.Message ?? "Installation cancelled.");
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception error) { return RegistryPackageInstallExecutionResult.Failed(error.Message); }
+    }
+
+    public Task<RegistryPackageInstallExecutionResult> InstallPackageAsync(string packageId, string? version, string? tag,
+        bool allowDowngrade, bool reinstall, IRegistryClient registryClient, IRuntimeRegistryPackageClient runtimeApiClient,
+        Action<RegistryPackageInstallProgress>? progress = null, CancellationToken cancellationToken = default)
+        => ExecuteAsync(PreparePackageAsync(packageId, version, tag, allowDowngrade, reinstall, registryClient, runtimeApiClient, cancellationToken),
+            $"Install {packageId}", PackageOperationKind.InstallMarketplace, packageId, progress, cancellationToken);
+
+    public Task<RegistryPackageInstallExecutionResult> InstallPackagesAsync(IReadOnlyList<SunderStackPackageRequirement> packages,
+        IRegistryClient registryClient, IRuntimeRegistryPackageClient runtimeApiClient, Action<RegistryPackageInstallProgress>? progress = null,
+        CancellationToken cancellationToken = default, string? expectedResolutionFingerprint = null)
+        => ExecuteAsync(PrepareBatchAsync(packages, registryClient, runtimeApiClient, cancellationToken),
+            "Install Stack packages", PackageOperationKind.InstallMarketplace, null, progress, cancellationToken);
+
+    public Task<RegistryPackageInstallExecutionResult> UpdateAllAsync(IRuntimeRegistryPackageClient runtimeApiClient,
+        Action<RegistryPackageInstallProgress>? progress = null, CancellationToken cancellationToken = default)
+        => ExecuteAsync(PrepareUpdateAsync(null, runtimeApiClient, cancellationToken), "Update packages", PackageOperationKind.UpdateAll, null, progress, cancellationToken);
+
+    public Task<RegistryPackageInstallExecutionResult> UpdatePackageAsync(string packageId, IRuntimeRegistryPackageClient runtimeApiClient,
+        Action<RegistryPackageInstallProgress>? progress = null, CancellationToken cancellationToken = default)
+        => ExecuteAsync(PrepareUpdateAsync(packageId, runtimeApiClient, cancellationToken), $"Update {packageId}", PackageOperationKind.UpdateMarketplace, packageId, progress, cancellationToken);
+
+    public Task<RegistryPackageInstallExecutionResult> AdoptPackageSourceAsync(string packageId, Uri registryUrl, IRuntimeRegistryPackageClient runtimeApiClient,
+        Action<RegistryPackageInstallProgress>? progress = null, CancellationToken cancellationToken = default)
+        => ExecuteAsync(PrepareAdoptionAsync(packageId, registryUrl, runtimeApiClient, cancellationToken), $"Adopt source for {packageId}",
+            PackageOperationKind.AdoptRegistrySource, packageId, progress, cancellationToken);
+
+    public async Task<RuntimeRegistryResolveInstallPlanResponse> ResolveInstallPlanForPackagesAsync(IReadOnlyList<SunderStackPackageRequirement> packages,
+        IRegistryClient registryClient, IRuntimeRegistryPackageClient runtimeApiClient, Action<RegistryPackageInstallProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        string? expectedResolutionFingerprint = null;
-        if (_confirmationPrompt is not null)
-        {
-            var batch = ToBatchRequest(
-                registryClient.RegistryUrl,
-                packageId,
-                version,
-                tag,
-                allowDowngrade,
-                reinstall);
-            var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(batch, cancellationToken);
-            if (HasPlanFailures(plan))
-            {
-                return PlanFailed(plan);
-            }
-            if (!IsResolutionFingerprint(plan.ResolutionFingerprint))
-            {
-                return InvalidPreviewFingerprint(plan);
-            }
-            expectedResolutionFingerprint = plan.ResolutionFingerprint;
-            var expectedPlans = CreateExpectedPlans(batch, plan);
-            var preflight = await RegistryPackageChangePreflight.CreateAsync(
-                plan,
-                runtimeApiClient,
-                cancellationToken,
-                expectedPlans);
-            consents = await RequestConfirmationAsync(preflight, cancellationToken);
-            if (consents is null)
-            {
-                return ConfirmationDeclined(plan.RequiredCapabilityConsents, plan.Items);
-            }
-        }
-        progress?.Invoke(new("Runtime is resolving and applying the package transaction...", 10));
-        var result = await runtimeApiClient.InstallRegistryPackageAsync(
-            new RuntimeRegistryPackageRequest(
-                registryClient.RegistryUrl.AbsoluteUri,
-                packageId,
-                version,
-                string.IsNullOrWhiteSpace(version) ? tag ?? "latest" : null,
-                AllowDowngrade: allowDowngrade,
-                Reinstall: reinstall,
-                CapabilityConsents: consents,
-                ExpectedResolutionFingerprint: expectedResolutionFingerprint),
-            cancellationToken);
-        progress?.Invoke(new(result.Message, 100));
-        return ToAppResult(result);
+        progress?.Invoke(new("Resolving package changes…", null));
+        return await runtimeApiClient.ResolveRegistryPackagePlanAsync(Batch(packages, registryClient.RegistryUrl), cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<RuntimeRegistryResolveInstallPlanResponse> ResolveInstallPlanForPackagesAsync(
-        IReadOnlyList<SunderStackPackageRequirement> packages,
-        IRegistryClient registryClient,
-        IRuntimeRegistryPackageClient runtimeApiClient,
-        Action<RegistryPackageInstallProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+    private static RuntimeRegistryPackageBatchRequest Batch(IReadOnlyList<SunderStackPackageRequirement> packages, Uri origin)
+        => new(origin.AbsoluteUri, packages.Where(package => !string.IsNullOrWhiteSpace(package.PackageId)).Select(package =>
+            new RuntimeRegistryPackageChangeRequest(package.PackageId!, null, [], string.IsNullOrWhiteSpace(package.InstallTag) ? "latest" : package.InstallTag,
+                string.IsNullOrWhiteSpace(package.MinimumVersion) ? ">=0.0.0-0" : $">={package.MinimumVersion}", package.Required != false)).ToArray());
+
+    private static void RequireSuccessfulPreview(RuntimeRegistryPackageChangeResult result)
     {
-        progress?.Invoke(new("Runtime is resolving the package graph...", 10));
-        var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(
-            ToBatchRequest(packages, registryClient.RegistryUrl),
-            cancellationToken);
-        return plan.Success && !IsResolutionFingerprint(plan.ResolutionFingerprint)
-            ? InvalidPreviewFingerprintPlan(plan)
-            : plan;
+        if ((!result.Success && result.ErrorCode != RuntimeRegistryErrorCode.RuntimePrerequisitesRequired) || result.Conflicts.Count != 0)
+            throw new InvalidOperationException(result.Errors.FirstOrDefault() ?? result.Message);
     }
 
-    public async Task<RegistryPackageInstallExecutionResult> InstallPackagesAsync(
-        IReadOnlyList<SunderStackPackageRequirement> packages,
-        IRegistryClient registryClient,
-        IRuntimeRegistryPackageClient runtimeApiClient,
-        Action<RegistryPackageInstallProgress>? progress = null,
-        CancellationToken cancellationToken = default,
-        string? expectedResolutionFingerprint = null)
+    private static void ValidateExpectations(IReadOnlyList<RuntimeRegistryPackagePlanExpectation> expectations, bool required)
     {
-        var request = ToBatchRequest(packages, registryClient.RegistryUrl);
-        if (_confirmationPrompt is not null)
-        {
-            var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(request, cancellationToken);
-            if (HasPlanFailures(plan))
-            {
-                return PlanFailed(plan);
-            }
-            if (!IsResolutionFingerprint(plan.ResolutionFingerprint))
-            {
-                return InvalidPreviewFingerprint(plan);
-            }
-            expectedResolutionFingerprint = plan.ResolutionFingerprint;
-            var preflight = await RegistryPackageChangePreflight.CreateAsync(
-                plan,
-                runtimeApiClient,
-                cancellationToken,
-                CreateExpectedPlans(request, plan));
-            var consents = await RequestConfirmationAsync(preflight, cancellationToken);
-            if (consents is null)
-            {
-                return ConfirmationDeclined(plan.RequiredCapabilityConsents, plan.Items);
-            }
-            request = request with
-            {
-                CapabilityConsents = consents,
-                ExpectedResolutionFingerprint = expectedResolutionFingerprint,
-            };
-        }
-        else if (expectedResolutionFingerprint is not null)
-        {
-            if (!IsResolutionFingerprint(expectedResolutionFingerprint))
-            {
-                return InvalidPreviewFingerprint(new RuntimeRegistryResolveInstallPlanResponse(
-                    true,
-                    [],
-                    [],
-                    [],
-                    [],
-                    [],
-                    ResolutionFingerprint: expectedResolutionFingerprint));
-            }
-            request = request with { ExpectedResolutionFingerprint = expectedResolutionFingerprint };
-        }
-        progress?.Invoke(new("Runtime is applying the package transaction...", 10));
-        var result = await runtimeApiClient.ApplyRegistryPackagePlanAsync(request, cancellationToken);
-        progress?.Invoke(new(result.Message, 100));
-        return ToAppResult(result);
+        if (required && expectations.Count == 0 || expectations.Any(item => !RuntimeManagementUi.IsFingerprint(item.ExpectedResolutionFingerprint)))
+            throw new InvalidOperationException("The package preview has no valid resolution fingerprint. Refresh and review again.");
     }
 
-    public async Task<RegistryPackageInstallExecutionResult> UpdateAllAsync(
-        IRuntimeRegistryPackageClient runtimeApiClient,
-        Action<RegistryPackageInstallProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+    internal static void ValidateRuntimePreview(RuntimePackageRuntimePrerequisitePlan plan)
     {
-        IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        IReadOnlyList<RuntimeRegistryPackagePlanExpectation>? expectedPlans = null;
-        if (_confirmationPrompt is not null)
-        {
-            var preview = await runtimeApiClient.UpdateRegistryPackagesAsync(
-                new RuntimeRegistryUpdateRequest(DryRun: true),
-                cancellationToken);
-            if (!preview.Success)
-            {
-                return ToAppResult(preview);
-            }
-            if (preview.PlanItems.Count == 0)
-            {
-                return ToAppResult(preview);
-            }
-            var resolved = ResolveUpdatePlan(preview);
-            var plan = resolved.Plan;
-            if (HasPlanFailures(plan))
-            {
-                return PlanFailed(plan);
-            }
-            expectedPlans = resolved.ExpectedPlans;
-            var preflight = await RegistryPackageChangePreflight.CreateAsync(
-                plan,
-                runtimeApiClient,
-                cancellationToken,
-                expectedPlans);
-            consents = await RequestConfirmationAsync(preflight, cancellationToken);
-            if (consents is null)
-            {
-                return ConfirmationDeclined(plan.RequiredCapabilityConsents, plan.Items);
-            }
-        }
-        progress?.Invoke(new("Runtime is resolving and applying updates...", 10));
-        var result = await runtimeApiClient.UpdateRegistryPackagesAsync(
-            new RuntimeRegistryUpdateRequest(
-                CapabilityConsents: consents,
-                ExpectedPlans: expectedPlans),
-            cancellationToken);
-        progress?.Invoke(new(result.Message, 100));
-        return ToAppResult(result);
+        if (!plan.Success || !RuntimeManagementUi.IsFingerprint(plan.SourceFingerprint) || string.IsNullOrWhiteSpace(plan.Rid)
+            || plan.Requirements.Any(item => !item.Satisfied && item.Installation is not { Success: true, Plan: not null, Resolution: not null, RetainUntilUninstall: true }))
+            throw new InvalidOperationException(plan.Message);
     }
 
-    public async Task<RegistryPackageInstallExecutionResult> UpdatePackageAsync(
-        string packageId,
-        IRuntimeRegistryPackageClient runtimeApiClient,
-        Action<RegistryPackageInstallProgress>? progress = null,
-        CancellationToken cancellationToken = default)
-    {
-        IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        IReadOnlyList<RuntimeRegistryPackagePlanExpectation>? expectedPlans = null;
-        if (_confirmationPrompt is not null)
-        {
-            var preview = await runtimeApiClient.UpdateRegistryPackagesAsync(
-                new RuntimeRegistryUpdateRequest(PackageId: packageId, DryRun: true),
-                cancellationToken);
-            if (!preview.Success)
-            {
-                return ToAppResult(preview);
-            }
-            if (preview.PlanItems.Count == 0)
-            {
-                return ToAppResult(preview);
-            }
-            var resolved = ResolveUpdatePlan(preview);
-            var plan = resolved.Plan;
-            if (HasPlanFailures(plan))
-            {
-                return PlanFailed(plan);
-            }
-            expectedPlans = resolved.ExpectedPlans;
-            var preflight = await RegistryPackageChangePreflight.CreateAsync(
-                plan,
-                runtimeApiClient,
-                cancellationToken,
-                expectedPlans);
-            consents = await RequestConfirmationAsync(preflight, cancellationToken);
-            if (consents is null)
-            {
-                return ConfirmationDeclined(plan.RequiredCapabilityConsents, plan.Items);
-            }
-        }
-        progress?.Invoke(new($"Runtime is resolving and applying the recorded update policy for {packageId}...", 10));
-        var result = await runtimeApiClient.UpdateRegistryPackagesAsync(
-            new RuntimeRegistryUpdateRequest(
-                PackageId: packageId,
-                CapabilityConsents: consents,
-                ExpectedPlans: expectedPlans),
-            cancellationToken);
-        progress?.Invoke(new(result.Message, 100));
-        return ToAppResult(result);
-    }
+    private static RuntimeRegistryResolveInstallPlanResponse FromPreview(RuntimeRegistryPackageChangeResult preview)
+        => new(true, preview.PlanItems, preview.Warnings, [], preview.Conflicts, [], preview.RequiredCapabilityConsents)
+        { RuntimePrerequisites = preview.RuntimePrerequisites };
 
-    public async Task<RegistryPackageInstallExecutionResult> AdoptPackageSourceAsync(
-        string packageId,
-        Uri registryUrl,
-        IRuntimeRegistryPackageClient runtimeApiClient,
-        Action<RegistryPackageInstallProgress>? progress = null,
-        CancellationToken cancellationToken = default)
-    {
-        var previewRequest = new RuntimeRegistrySourceAdoptionRequest(
-            packageId,
-            registryUrl.AbsoluteUri,
-            Tag: "latest",
-            DryRun: true);
-        var preview = await runtimeApiClient.AdoptRegistryPackageSourceAsync(
-            previewRequest,
-            cancellationToken);
-        if (!preview.Success)
-        {
-            return ToAppResult(preview);
-        }
-        var resolved = ResolveAdoptionPlan(preview, registryUrl, includePrerelease: false);
-        if (HasPlanFailures(resolved.Plan))
-        {
-            return PlanFailed(resolved.Plan);
-        }
-
-        IReadOnlyList<PackageCapabilityConsent>? consents = null;
-        if (_confirmationPrompt is not null)
-        {
-            var preflight = await RegistryPackageChangePreflight.CreateAsync(
-                resolved.Plan,
-                runtimeApiClient,
-                cancellationToken,
-                resolved.ExpectedPlans);
-            consents = await RequestConfirmationAsync(preflight, cancellationToken);
-            if (consents is null)
-            {
-                return ConfirmationDeclined(resolved.Plan.RequiredCapabilityConsents, resolved.Plan.Items);
-            }
-        }
-        progress?.Invoke(new($"Runtime is adopting the Registry source and updating {packageId}...", 10));
-        var result = await runtimeApiClient.AdoptRegistryPackageSourceAsync(
-            previewRequest with
-            {
-                Confirm = true,
-                DryRun = false,
-                CapabilityConsents = consents,
-                ExpectedResolutionFingerprint = resolved.ExpectedPlans[0].ExpectedResolutionFingerprint,
-            },
-            cancellationToken);
-        progress?.Invoke(new(result.Message, 100));
-        return ToAppResult(result);
-    }
-
-    private static RuntimeRegistryPackageBatchRequest ToBatchRequest(
-        IReadOnlyList<SunderStackPackageRequirement> packages,
-        Uri registryUrl)
-        => new RuntimeRegistryPackageBatchRequest(
-            registryUrl.AbsoluteUri,
-            packages
-                .Where(package => !string.IsNullOrWhiteSpace(package.PackageId))
-                .Select(package => new RuntimeRegistryPackageChangeRequest(
-                    package.PackageId!,
-                    null,
-                    [],
-                    string.IsNullOrWhiteSpace(package.InstallTag) ? "latest" : package.InstallTag,
-                    string.IsNullOrWhiteSpace(package.MinimumVersion)
-                        ? AnySemanticVersionRange
-                        : $">={package.MinimumVersion}",
-                    package.Required != false))
-                .ToArray());
-
-    private static RuntimeRegistryPackageBatchRequest ToBatchRequest(
-        Uri registryUrl,
-        string packageId,
-        string? version,
-        string? tag,
-        bool allowDowngrade,
-        bool reinstall)
-        => new(
-            registryUrl.AbsoluteUri,
-            [new RuntimeRegistryPackageChangeRequest(
-                packageId,
-                version,
-                [],
-                version is null ? tag ?? "latest" : null)],
-            AllowDowngrade: allowDowngrade,
-            Reinstall: reinstall);
-
-    private static ResolvedUpdatePlan ResolveUpdatePlan(RuntimeRegistryPackageChangeResult preview)
-    {
-        var plan = PlanFromPreview(preview);
-        if (preview.PlanExpectations.Count == 0
-            || preview.PlanExpectations.Any(static expectation =>
-                !IsResolutionFingerprint(expectation.ExpectedResolutionFingerprint)))
-        {
-            return new ResolvedUpdatePlan(InvalidPreviewFingerprintPlan(plan), []);
-        }
-        return new ResolvedUpdatePlan(plan, preview.PlanExpectations);
-    }
-
-    private static ResolvedUpdatePlan ResolveAdoptionPlan(
-        RuntimeRegistryPackageChangeResult preview,
-        Uri registryUrl,
-        bool includePrerelease)
-    {
-        var plan = PlanFromPreview(preview);
-        if (preview.PlanExpectations.Count != 1)
-        {
-            return new ResolvedUpdatePlan(InvalidAdoptionPreviewPlan(plan), []);
-        }
-
-        var expectation = preview.PlanExpectations[0];
-        if (!IsResolutionFingerprint(expectation.ExpectedResolutionFingerprint)
-            || expectation.IncludePrerelease != includePrerelease
-            || !SameRegistryOrigin(registryUrl, expectation.RegistryOrigin))
-        {
-            return new ResolvedUpdatePlan(InvalidAdoptionPreviewPlan(plan), []);
-        }
-        return new ResolvedUpdatePlan(
-            plan with { ResolutionFingerprint = expectation.ExpectedResolutionFingerprint },
-            [expectation]);
-    }
-
-    private static RuntimeRegistryResolveInstallPlanResponse PlanFromPreview(
-        RuntimeRegistryPackageChangeResult preview)
-        => new(
-            preview.Success,
-            preview.PlanItems,
-            preview.Warnings,
-            preview.Errors,
-            preview.Conflicts,
-            [],
-            preview.RequiredCapabilityConsents,
-            RuntimeArtifacts: preview.RuntimeArtifacts,
-            RuntimeConflicts: preview.RuntimeConflicts);
-
-    private async Task<IReadOnlyList<PackageCapabilityConsent>?> RequestConfirmationAsync(
-        RegistryPackageChangePreflight preflight,
-        CancellationToken cancellationToken)
-    {
-        return await _confirmationPrompt!(preflight, cancellationToken).ConfigureAwait(false)
-            ? preflight.Plan.RequiredCapabilityConsents
-            : null;
-    }
-
-    private static RegistryPackageInstallExecutionResult ConfirmationDeclined(
-        IReadOnlyList<PackageCapabilityConsent> required,
-        IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> planItems)
-        => RegistryPackageInstallExecutionResult.Failed(
-            "Package changes were not approved; no package changes were applied.",
-            planItems: planItems) with
-        {
-            RequiredCapabilityConsents = required,
-        };
-
-    private static RegistryPackageInstallExecutionResult PlanFailed(
-        RuntimeRegistryResolveInstallPlanResponse plan)
-    {
-        var errors = plan.Errors
-            .Concat(plan.Conflicts.Select(static conflict => string.IsNullOrWhiteSpace(conflict.Message)
-                ? $"Package '{conflict.PackageId}' conflicts with the requested change."
-                : conflict.Message))
-            .Concat(plan.RuntimeConflicts.Select(static conflict => conflict.Message))
-            .DefaultIfEmpty("Registry package plan resolution failed.")
-            .ToArray();
-        return RegistryPackageInstallExecutionResult.Failed(
-            errors[0],
-            errors,
-            plan.Warnings,
-            plan.Items) with
-        {
-            Conflicts = plan.Conflicts,
-            RequiredCapabilityConsents = plan.RequiredCapabilityConsents,
-            RuntimeConflicts = plan.RuntimeConflicts,
-        };
-    }
-
-    private static RegistryPackageInstallExecutionResult InvalidPreviewFingerprint(
-        RuntimeRegistryResolveInstallPlanResponse plan)
-        => PlanFailed(InvalidPreviewFingerprintPlan(plan));
-
-    private static RuntimeRegistryResolveInstallPlanResponse InvalidPreviewFingerprintPlan(
-        RuntimeRegistryResolveInstallPlanResponse plan)
-        => new(
-            false,
-            plan.Items,
-            plan.Warnings,
-            ["Registry package preview did not return a valid resolution fingerprint. Refresh the preview and retry."],
-            plan.Conflicts,
-            plan.TrustedArtifactOrigins,
-            plan.RequiredCapabilityConsents,
-            plan.RuntimeArtifacts,
-            plan.RuntimeConflicts,
-            plan.ResolutionFingerprint,
-            plan.RuntimePolicyRevision,
-            plan.ExpiresAtUtc);
-
-    private static RuntimeRegistryResolveInstallPlanResponse InvalidAdoptionPreviewPlan(
-        RuntimeRegistryResolveInstallPlanResponse plan)
-        => new(
-            false,
-            plan.Items,
-            plan.Warnings,
-            plan.Errors.Concat([
-                "Registry source adoption preview did not return one valid plan fingerprint for the selected Registry source. Refresh the preview and retry.",
-            ]).ToArray(),
-            plan.Conflicts,
-            plan.TrustedArtifactOrigins,
-            plan.RequiredCapabilityConsents,
-            plan.RuntimeArtifacts,
-            plan.RuntimeConflicts,
-            plan.ResolutionFingerprint,
-            plan.RuntimePolicyRevision,
-            plan.ExpiresAtUtc);
-
-    private static IReadOnlyList<RuntimeRegistryPackagePlanExpectation> CreateExpectedPlans(
-        RuntimeRegistryPackageBatchRequest request,
-        RuntimeRegistryResolveInstallPlanResponse plan)
-        =>
-        [
-            new RuntimeRegistryPackagePlanExpectation(
-                request.RegistryOrigin,
-                request.IncludePrerelease,
-                plan.ResolutionFingerprint),
-        ];
-
-    private static bool IsResolutionFingerprint(string? value)
-        => value is { Length: 64 }
-           && value.All(static character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
-
-    private static bool HasPlanFailures(RuntimeRegistryResolveInstallPlanResponse plan)
-        => !plan.Success
-           || plan.Errors.Count != 0
-           || plan.Conflicts.Count != 0
-           || plan.RuntimeConflicts.Count != 0;
-
-    private static bool SameRegistryOrigin(Uri expected, string actual)
-        => Uri.TryCreate(actual, UriKind.Absolute, out var actualUri)
-           && Uri.Compare(
-               expected,
-               actualUri,
-               UriComponents.SchemeAndServer | UriComponents.Path,
-               UriFormat.SafeUnescaped,
-               StringComparison.Ordinal) == 0;
-
-    private static RegistryPackageInstallExecutionResult ToAppResult(RuntimeRegistryPackageChangeResult result)
-        => new RegistryPackageInstallExecutionResult(
-            result.Success,
-            result.Message,
-            result.RuntimeSessionApplied,
-            result.RequiresAppRestart,
-            result.Warnings,
-            result.Errors,
-            result.ImpactedPackageIds,
-            result.PlanItems)
-        {
-            CommittedStamp = result.CommittedStamp,
-            Conflicts = result.Conflicts,
-            RequiredCapabilityConsents = result.RequiredCapabilityConsents,
-            RuntimeConflicts = result.RuntimeConflicts,
-        };
-
-    private sealed record ResolvedUpdatePlan(
-        RuntimeRegistryResolveInstallPlanResponse Plan,
-        IReadOnlyList<RuntimeRegistryPackagePlanExpectation> ExpectedPlans);
+    internal static RegistryPackageInstallExecutionResult ToAppResult(RuntimeRegistryPackageChangeResult result)
+        => new(result.Success, result.Message, result.RuntimeSessionApplied, result.RequiresAppRestart, result.Warnings, result.Errors,
+            result.ImpactedPackageIds, result.PlanItems)
+        { CommittedStamp = result.CommittedStamp, Conflicts = result.Conflicts, RequiredCapabilityConsents = result.RequiredCapabilityConsents };
 }

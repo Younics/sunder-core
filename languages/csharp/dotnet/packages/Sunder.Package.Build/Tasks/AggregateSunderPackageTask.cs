@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
 using Sunder.Package.Format;
+using Sunder.Package.Build.Rpc.Authoring;
 
 namespace Sunder.Package.Build.Tasks;
 
@@ -40,16 +41,22 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
     [Required]
     public string ExpectedPackageVersion { get; set; } = string.Empty;
 
+    public string? ContractLockPath { get; set; }
+    public string ContractCacheRoot { get; set; } = SunderRpcContractCache.DefaultRoot;
+    public bool AllowDevelopmentRegistryOrigin { get; set; }
+
     [Output]
     public string NormalizedOutputPath { get; private set; } = string.Empty;
 
     internal bool InputsAlreadyLeased { get; set; }
+    internal bool EmitDevelopmentImports { get; set; } = true;
     internal CancellationToken CancellationToken { get; set; }
 
     public override bool Execute()
     {
         string? temporaryPath = null;
         string? temporaryMarkerPath = null;
+        string? temporaryImportsPath = null;
         try
         {
             CancellationToken.ThrowIfCancellationRequested();
@@ -156,6 +163,8 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             Directory.CreateDirectory(parent);
             temporaryPath = output + ".stage-" + Guid.NewGuid().ToString("N");
             temporaryMarkerPath = markerPath + ".stage-" + Guid.NewGuid().ToString("N");
+            var importsPath = output + SunderPackageFormat.DevelopmentImportsSuffix;
+            temporaryImportsPath = importsPath + ".stage-" + Guid.NewGuid().ToString("N");
             Directory.CreateDirectory(temporaryPath);
             WriteAggregate(
                 temporaryPath,
@@ -163,6 +172,13 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
                 targets,
                 roleContracts.Uses,
                 roleContracts.Providers);
+
+            // Role sidecars are allowed to be different subsets. Merge their
+            // validated public entries, never hoist a leaf sidecar as a role file.
+            var modelProjection = MergeModelProjections(packageManifest, leaves.Select(leaf => leaf.ModelProjection).ToArray());
+            var projectionPath = ArchiveRelativePath.Parse(SunderRpcAuthoringDocuments.ModelProjectionArchivePath).ToPlatformPath(temporaryPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(projectionPath)!);
+            File.WriteAllBytes(projectionPath, modelProjection.ToCanonicalUtf8());
 
             PackageContentIndexer.Write(temporaryPath);
             var validation = SunderPackageArchiveInspector
@@ -183,12 +199,18 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             }
 
             File.WriteAllText(temporaryMarkerPath, "Sunder.Package.Build aggregate generated output v1\n");
+            File.WriteAllBytes(temporaryImportsPath, EmitDevelopmentImports
+                ? DevelopmentImportHandoff.Create(Path.Combine(temporaryPath, SunderPackageFormat.ManifestPath),
+                    ContractLockPath, ContractCacheRoot, AllowDevelopmentRegistryOrigin, ProjectDirectory)
+                : "null\n"u8.ToArray());
             CancellationToken.ThrowIfCancellationRequested();
             GeneratedOutputTransaction.Commit(
                 new GeneratedOutputTransaction.StagedOutput(output, temporaryPath),
-                new GeneratedOutputTransaction.StagedOutput(markerPath, temporaryMarkerPath));
+                new GeneratedOutputTransaction.StagedOutput(markerPath, temporaryMarkerPath),
+                new GeneratedOutputTransaction.StagedOutput(importsPath, temporaryImportsPath));
             temporaryPath = null;
             temporaryMarkerPath = null;
+            temporaryImportsPath = null;
             NormalizedOutputPath = output + Path.DirectorySeparatorChar;
             Log.LogMessage(MessageImportance.High, $"Aggregated canonical Sunder package at {output}");
             return true;
@@ -202,6 +224,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
         {
             TryDeleteDirectory(temporaryPath);
             TryDeleteFile(temporaryMarkerPath);
+            TryDeleteFile(temporaryImportsPath);
         }
     }
 
@@ -261,7 +284,8 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             }
 
             ValidateDescriptor(item, targets);
-            leaves.Add(new Leaf(root, manifest, targets));
+            var modelProjection = SunderPackagePublicApiInspection.ReadValidated(root, manifest).ModelProjection;
+            leaves.Add(new Leaf(root, manifest, targets, modelProjection));
         }
         return Log.HasLoggedErrors ? null : leaves;
     }
@@ -309,7 +333,16 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
                 if (roleLeaves.Skip(1).Any(leaf => !expected.AsSpan().SequenceEqual(MetadataFingerprint(leaf.Manifest))))
                     throw new InvalidDataException($"Target leaves disagree on package-wide manifest metadata/import evidence across RIDs of role '{role}'.");
             }
-            var documents = leaves.Select(leaf => JsonSerializer.SerializeToNode(CloneManifest(leaf.Manifest, [], [], []), JsonOptions)!.AsObject()).ToArray();
+            return MergeAuthoringProjections(leaves.Select(leaf => leaf.Manifest).ToArray());
+        }
+        catch (InvalidDataException error) { Log.LogError(error.Message); return null; }
+    }
+
+    // Shared by actual leaf aggregation and source/prebuilt projection checks.
+    internal static SunderPackageManifest MergeAuthoringProjections(IReadOnlyList<SunderPackageManifest> manifests)
+    {
+            if (manifests.Count == 0) throw new InvalidDataException("At least one role projection is required.");
+            var documents = manifests.Select(manifest => JsonSerializer.SerializeToNode(CloneManifest(manifest, [], [], []), JsonOptions)!.AsObject()).ToArray();
             string[] groups = ["dependsOn", "contractBundles", "packageArtifactImports", "packageApiImports", "providerImports", "platformImports"];
             JsonObject Identity(JsonObject value)
             {
@@ -318,9 +351,6 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             var identity = Identity(documents[0]);
             if (documents.Skip(1).Any(value => !JsonNode.DeepEquals(identity, Identity(value))))
                 throw new InvalidDataException("Target leaves disagree on package-wide manifest metadata (identity).");
-            var owned = Owned(documents[0]);
-            if (documents.Skip(1).Any(value => !JsonNode.DeepEquals(owned, Owned(value))))
-                throw new InvalidDataException("Target leaves disagree on package-wide manifest metadata: every role must retain the complete identical owned-contract projection.");
             var merged = documents[0].DeepClone().AsObject();
             merged["contractBundles"] = Merge("contractBundles", value => Text(value, "contractId") + "\0" + Text(value, "version"));
             merged["packageArtifactImports"] = Merge("packageArtifactImports", value => Text(value, "packageId"));
@@ -339,6 +369,10 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
                 }
             }
             merged["dependsOn"] = new JsonArray(dependencies.Values.Select(value => (JsonNode)value).ToArray());
+            merged["usesContracts"] = JsonSerializer.SerializeToNode(manifests.SelectMany(manifest => manifest.UsesContracts ?? [])
+                .DistinctBy(value => JsonSerializer.Serialize(value, JsonOptions)).OrderBy(value => value!.Role, StringComparer.Ordinal).ThenBy(value => value!.ContractId, StringComparer.Ordinal).ToArray(), JsonOptions);
+            merged["provides"] = JsonSerializer.SerializeToNode(manifests.SelectMany(manifest => manifest.Provides ?? [])
+                .DistinctBy(value => JsonSerializer.Serialize(value, JsonOptions)).OrderBy(value => value!.Role, StringComparer.Ordinal).ThenBy(value => value!.ProviderId, StringComparer.Ordinal).ToArray(), JsonOptions);
             return merged.Deserialize<SunderPackageManifest>(JsonOptions)!;
 
             JsonArray Merge(string group, Func<JsonObject, string> key, string? roleRefs = null)
@@ -362,10 +396,6 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             }
             static IEnumerable<JsonObject> Items(JsonObject value, string field) => value[field] is JsonArray values ? values.Select(item => item!.AsObject()) : [];
             static string Text(JsonObject value, string field) => value[field]!.GetValue<string>();
-            static JsonArray Owned(JsonObject value) => new(Items(value, "contractBundles").Where(item => Text(item, "source") == "owned")
-                .OrderBy(item => Text(item, "contractId"), StringComparer.Ordinal).ThenBy(item => Text(item, "version"), StringComparer.Ordinal).Select(item => item.DeepClone()).ToArray());
-        }
-        catch (InvalidDataException error) { Log.LogError(error.Message); return null; }
     }
 
     private static byte[] MetadataFingerprint(SunderPackageManifest source)
@@ -376,6 +406,30 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
         value["contractBundles"] = JsonSerializer.SerializeToNode((source.ContractBundles ?? [])
             .OrderBy(static bundle => bundle!.ContractId, StringComparer.Ordinal).ThenBy(static bundle => bundle!.Version, StringComparer.Ordinal), JsonOptions);
         return JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
+    }
+
+    internal static SunderRpcModelProjectionDocument MergeModelProjections(SunderPackageManifest manifest,
+        IReadOnlyList<SunderRpcModelProjectionDocument> documents)
+    {
+        var entries = new Dictionary<string, SunderRpcModelProjectionContract>(StringComparer.Ordinal);
+        foreach (var document in documents)
+        {
+            if (document.PackageId != manifest.Id || document.PackageVersion != manifest.Version)
+                throw new InvalidDataException("Target leaf model projection package identity differs from the aggregate.");
+            foreach (var contract in document.Contracts)
+            {
+                if (entries.TryGetValue(contract.ContractId, out var previous)
+                    && !SunderRpcAuthoringDocuments.SameProjectionContract(previous, contract))
+                    throw new InvalidDataException($"Target leaves disagree on model projection for '{contract.ContractId}'.");
+                entries[contract.ContractId] = contract;
+            }
+        }
+        var bundles = (manifest.ContractBundles ?? []).Where(bundle => bundle!.Exposure == "public").ToArray();
+        if (!entries.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(bundles.Select(bundle => bundle!.ContractId!))
+            || bundles.Any(bundle => entries[bundle!.ContractId!].ContractVersion != bundle.Version
+                || entries[bundle.ContractId!].DescriptorSha256 != bundle.DescriptorSha256 || entries[bundle.ContractId!].AbiSha256 != bundle.AbiSha256))
+            throw new InvalidDataException("Aggregate model projection must cover exactly its owned and imported public bundles.");
+        return new(1, manifest.Id!, manifest.Version!, entries.Values.ToArray());
     }
 
     private RoleScopedContracts? MergeRoleScopedContracts(IReadOnlyList<Leaf> leaves)
@@ -499,6 +553,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             .Order(StringComparer.Ordinal);
         foreach (var logicalPath in logicalPaths)
         {
+            if (logicalPath == SunderRpcAuthoringDocuments.ModelProjectionLogicalPath) continue;
             var occurrences = orderedTargets
                 .Where(target => target.Files.ContainsKey(logicalPath))
                 .ToArray();
@@ -789,7 +844,8 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
     private sealed record Leaf(
         string RootPath,
         SunderPackageManifest Manifest,
-        IReadOnlyList<TargetLeaf> Targets);
+        IReadOnlyList<TargetLeaf> Targets,
+        SunderRpcModelProjectionDocument ModelProjection);
 
     private sealed record TargetLeaf(
         SunderPackageTargetKey Key,

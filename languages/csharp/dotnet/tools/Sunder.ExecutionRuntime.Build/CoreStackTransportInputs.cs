@@ -2,6 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Package.Build.Tasks;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.ExecutionRuntime.Build;
 
@@ -43,7 +44,7 @@ internal static class CoreStackTransportInputs
         var sdkReferences = references.Where(path => Path.GetFileName(path) == "Sunder.Sdk.dll").ToArray();
         if (sdkReferences.Length != 1) throw new InvalidDataException("Core transport requires exactly one current Sunder.Sdk reference.");
         var sdkReference = sdkReferences[0];
-        var currentSdk = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(typeof(SunderRpcServiceAttribute).Assembly.Location);
+        var currentSdk = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(typeof(SunderServiceAttribute).Assembly.Location);
         if (fields.Contains("sdk-project") || fields.Contains("sdk-reference"))
         {
             var sdkProject = SinglePath("sdk-project");

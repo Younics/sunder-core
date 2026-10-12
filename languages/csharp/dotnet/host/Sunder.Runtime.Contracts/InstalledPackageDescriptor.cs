@@ -25,7 +25,7 @@ public sealed record InstalledPackageDescriptor(
     private IReadOnlyList<string> _grantedSensitiveCapabilities =
         RuntimeContractCollections.Freeze(GrantedSensitiveCapabilities ?? []);
     private IReadOnlyList<PackageTargetExecutionRuntimeBinding> _executionRuntimeBindings =
-        RuntimeContractCollections.Freeze(ExecutionRuntimeBindings ?? []);
+        RuntimeContractCollections.FreezeBounded(ExecutionRuntimeBindings ?? [], RuntimeExecutionRuntimeManagementLimits.MaximumItems);
 
     public IReadOnlyList<PackageRpcContractUseDescriptor> RpcContractUses
     {
@@ -45,9 +45,10 @@ public sealed record InstalledPackageDescriptor(
         init => _grantedSensitiveCapabilities = RuntimeContractCollections.Freeze(value);
     }
 
+    [System.Text.Json.Serialization.JsonRequired]
     public IReadOnlyList<PackageTargetExecutionRuntimeBinding> ExecutionRuntimeBindings
     {
         get => _executionRuntimeBindings;
-        init => _executionRuntimeBindings = RuntimeContractCollections.Freeze(value);
+        init => _executionRuntimeBindings = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
     }
 }

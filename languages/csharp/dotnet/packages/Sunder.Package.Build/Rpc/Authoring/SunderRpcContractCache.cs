@@ -1,4 +1,5 @@
 using Sunder.Package.Build.Tasks;
+using Sunder.Package.Format;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.Package.Build.Rpc.Authoring;
@@ -23,9 +24,15 @@ internal sealed record SunderRpcResolvedContractCacheEntry(
     byte[] CanonicalUtf8);
 
 internal sealed record SunderRpcResolvedContractCache(
-    IReadOnlyDictionary<string, SunderRpcResolvedContractCacheEntry> EntriesByDescriptorSha256);
+    IReadOnlyDictionary<string, SunderRpcResolvedContractCacheEntry> EntriesByDescriptorSha256)
+{
+    internal IReadOnlyDictionary<string, SunderRpcModelProjection> ModelProjectionsByContractId { get; init; }
+        = new System.Collections.ObjectModel.ReadOnlyDictionary<string, SunderRpcModelProjection>(new Dictionary<string, SunderRpcModelProjection>(StringComparer.Ordinal));
+    internal IReadOnlyDictionary<string, SunderRpcMethodPolicies> MethodPoliciesByContractId { get; init; }
+        = new System.Collections.ObjectModel.ReadOnlyDictionary<string, SunderRpcMethodPolicies>(new Dictionary<string, SunderRpcMethodPolicies>(StringComparer.Ordinal));
+}
 
-internal static class SunderRpcContractCache
+internal static partial class SunderRpcContractCache
 {
     internal const string ReceiptSuffix = ".receipt.json";
 
@@ -40,7 +47,27 @@ internal static class SunderRpcContractCache
     public static SunderRpcResolvedContractCache Resolve(SunderRpcContractLock contractLock, string cacheRoot)
     {
         ArgumentNullException.ThrowIfNull(contractLock);
-        return Resolve(GetRequirements(contractLock), cacheRoot);
+        var all = Resolve(GetVerificationRequirements(contractLock), cacheRoot);
+        var projections = ResolveProjectionContracts(contractLock.PackageArtifacts.Values.ToArray(), cacheRoot, all);
+        var selected = GetMaterializationRequirements(contractLock, projections.ToDictionary(pair => pair.Key,
+            pair => pair.Value.ModelProjection, StringComparer.Ordinal));
+        var materialized = all.EntriesByDescriptorSha256.Where(pair => selected.ContainsKey(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        if (materialized.Values.Select(entry => entry.Descriptor.ContractId).Distinct(StringComparer.Ordinal).Count() != materialized.Count)
+            throw new InvalidDataException("rpc-authoring.identity-collision: Imported contracts select more than one version for the same contract ID.");
+        var authorities = contractLock.PackageArtifacts.Values.SelectMany(artifact => artifact.Contracts.Values)
+            .Concat(contractLock.PlatformImports.Values.Select(SunderRpcPlatformCatalogCache.AsArtifactContract))
+            .Where(contract => selected.ContainsKey(contract.DescriptorSha256)).GroupBy(contract => contract.ContractId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().AuthorityKind + ":" + group.First().AuthorityId, StringComparer.Ordinal);
+        var projected = materialized.Values.Select(entry => new SunderRpcModelProjectionContract(entry.Descriptor.ContractId, entry.Descriptor.Version,
+            entry.Descriptor.Sha256, entry.Descriptor.AbiSha256, authorities[entry.Descriptor.ContractId].StartsWith("platform:", StringComparison.Ordinal)
+                ? SunderRpcModelProjection.Empty : projections[entry.Descriptor.ContractId].ModelProjection,
+            projections.TryGetValue(entry.Descriptor.ContractId, out var projection) ? projection.MethodPolicies : SunderRpcMethodPolicies.Empty)).ToArray();
+        SunderRpcModelProjectionGraph.Validate(projected, materialized.Values.ToDictionary(entry => entry.Descriptor.ContractId, entry => entry.Descriptor, StringComparer.Ordinal), authorities);
+        return new(materialized) { ModelProjectionsByContractId = new System.Collections.ObjectModel.ReadOnlyDictionary<string, SunderRpcModelProjection>(
+            projected.ToDictionary(entry => entry.ContractId, entry => entry.ModelProjection, StringComparer.Ordinal)),
+            MethodPoliciesByContractId = new System.Collections.ObjectModel.ReadOnlyDictionary<string, SunderRpcMethodPolicies>(
+                projected.ToDictionary(entry => entry.ContractId, entry => entry.MethodPolicies, StringComparer.Ordinal)) };
     }
 
     internal static SunderRpcResolvedContractCache Resolve(IReadOnlyDictionary<string, SunderRpcContractCacheRequirement> requirements, string cacheRoot)
@@ -170,6 +197,46 @@ internal static class SunderRpcContractCache
         foreach (var import in contractLock.PlatformImports.Values)
         {
             AddRequirement(requirements, From(import));
+        }
+        return requirements;
+    }
+
+    internal static IReadOnlyDictionary<string, SunderRpcContractCacheRequirement> GetVerificationRequirements(SunderRpcContractLock contractLock)
+    {
+        var requirements = new Dictionary<string, SunderRpcContractCacheRequirement>(GetRequirements(contractLock), StringComparer.Ordinal);
+        foreach (var contract in contractLock.PackageArtifacts.Values.SelectMany(artifact => artifact.Contracts.Values))
+            AddRequirement(requirements, From(contract));
+        return requirements;
+    }
+
+    // Type/reference closure is resolved only within each explicitly selected
+    // artifact's pinned public inventory. Cached bytes or another selection can
+    // never make an absent target a dependency of this provider import.
+    internal static IReadOnlyDictionary<string, SunderRpcContractCacheRequirement> GetMaterializationRequirements(
+        SunderRpcContractLock contractLock, IReadOnlyDictionary<string, SunderRpcModelProjection> projections)
+    {
+        var requirements = new Dictionary<string, SunderRpcContractCacheRequirement>(GetRequirements(contractLock), StringComparer.Ordinal);
+        var pending = new Queue<(string PackageId, string ContractId)>();
+        foreach (var import in contractLock.PackageImports.Values)
+            foreach (var contract in contractLock.PackageArtifacts[import.PackageId].Contracts.Values.Where(contract => contract.AuthorityKind == "package"))
+                pending.Enqueue((import.PackageId, contract.ContractId));
+        foreach (var import in contractLock.ProviderImports.Values) pending.Enqueue((import.PackageId, import.ContractId));
+        var visited = new HashSet<(string PackageId, string ContractId)>();
+        while (pending.TryDequeue(out var current))
+        {
+            if (!visited.Add(current)) continue;
+            var artifact = contractLock.PackageArtifacts[current.PackageId];
+            if (!projections.TryGetValue(current.ContractId, out var projection))
+                throw new InvalidDataException($"rpc-authoring.model-projection-invalid: Selected artifact '{current.PackageId}' has no validated projection for '{current.ContractId}'.");
+            foreach (var target in projection.ServiceReferences.Values.OrderBy(target => target.ContractId, StringComparer.Ordinal).ThenBy(target => target.ServiceId, StringComparer.Ordinal))
+            {
+                if (!artifact.Contracts.TryGetValue(target.ContractId, out var contract) || contract.AuthorityKind != "package")
+                    throw new InvalidDataException($"rpc-authoring.service-reference-target-unselected: '{current.ContractId}' references '{target.ContractId}/{target.ServiceId}', absent from the same pinned package-authority inventory '{current.PackageId}'. Select a candidate containing its complete public reference closure.");
+                if (!contractLock.PackageArtifacts.ContainsKey(contract.AuthorityId))
+                    throw new InvalidDataException($"package-api.authority-release-conflict: Service-reference target '{target.ContractId}' has no explicitly reviewed range selection for its ultimate authority '{contract.AuthorityId}'. Select that authority before materializing the reference closure.");
+                AddRequirement(requirements, From(contract));
+                pending.Enqueue((current.PackageId, target.ContractId));
+            }
         }
         return requirements;
     }

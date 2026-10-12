@@ -7,6 +7,7 @@
     <a href="docs/SUNDER.md"><strong>Overview</strong></a> &middot;
     <a href="docs/SUNDER-PACKAGE-DEVELOPMENT.md"><strong>Package Development</strong></a> &middot;
     <a href="docs/SUNDER-CLI.md"><strong>CLI</strong></a> &middot;
+    <a href="scripts/README.md"><strong>Scripts</strong></a> &middot;
     <a href="https://github.com/Younics/sunder-agent-package"><strong>Agent Packages</strong></a>
   </p>
   <p>

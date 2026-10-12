@@ -66,7 +66,7 @@ public sealed partial class SunderRpcImportedBuildTests
         Assert.False((await Run(new("PlatformImplement", ContractId: imported.ContractId))).Changed);
         Assert.Equal(requests, handler.Requests); Assert.Equal(time, File.GetLastWriteTimeUtc(LockPath));
         Assert.False(CreateGeneration().Execute());
-        File.WriteAllText(Path.Combine(_root, "Provider.cs"), ProviderSource.Replace("IMinimalProviderService", "IStackContributorService", StringComparison.Ordinal)
+        File.WriteAllText(Path.Combine(_root, "Provider.cs"), PlatformProviderSource.Replace("IMinimalProviderService", "IStackContributorService", StringComparison.Ordinal)
             .Replace("CExample_Rpc_V1_Minimal", "CSunder_Stack_Contributor", StringComparison.Ordinal));
         File.WriteAllText(Path.Combine(_root, "Program.cs"), WorkerSource.Replace("new SunderWorkerOptions([])",
             "new SunderWorkerOptions([new LocalProvider().CreateSunderRpcProviderRegistration()])", StringComparison.Ordinal));

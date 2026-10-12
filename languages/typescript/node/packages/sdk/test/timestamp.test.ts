@@ -18,6 +18,8 @@ test("all advertised browser calls use the host round-trip deadline shape", asyn
   const received = new Map<string, BrowserCallOptions | undefined>();
   const candidate: SunderBrowserApi = {
     version: 1,
+    protocol: "sunder.bridge.v1",
+    signal: new AbortController().signal,
     resourceProfile: {
       reportedByRuntime: true,
       runtimeInstanceId: "11111111-1111-1111-1111-111111111111",

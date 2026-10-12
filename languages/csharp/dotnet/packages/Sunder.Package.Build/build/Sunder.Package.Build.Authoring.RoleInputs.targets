@@ -51,7 +51,7 @@
   </Target>
 
   <Target Name="_ValidateSunderPrebuiltRoleInput" DependsOnTargets="_ValidateSunderPrebuiltPackMode;_CaptureSunderQualifiedRoleInputs" Returns="@(_SunderValidatedRoleInput)">
-    <ManageSunderPackageRoleInputsTask Action="Validate" ProjectDirectory="$(MSBuildProjectDirectory)"
+    <ManageSunderPackageRoleInputsTask Action="Validate" ProjectDirectory="$(MSBuildProjectDirectory)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                       CapturedInputs="@(_SunderQualifiedRoleInputFrame)" SelectionFile="$(SunderPackagePrebuiltRoleInputsFile)">
       <Output TaskParameter="Result" ItemName="_SunderValidatedRoleInput" />
     </ManageSunderPackageRoleInputsTask>
@@ -83,7 +83,7 @@
              RemoveProperties="SunderPackageCompilationRole;SunderPackageReferenceRole;OutDir">
       <Output TaskParameter="TargetOutputs" ItemName="_SunderPrebuiltValidatedInput" />
     </MSBuild>
-    <ManageSunderPackageRoleInputsTask Action="Pack" ProjectDirectory="$(MSBuildProjectDirectory)" PackageVersion="$(Version)"
+    <ManageSunderPackageRoleInputsTask Action="Pack" ProjectDirectory="$(MSBuildProjectDirectory)" PackageVersion="$(Version)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                       ValidatedInputs="@(_SunderPrebuiltValidatedInput)" SelectionFile="$(SunderPackagePrebuiltRoleInputsFile)"
                                       PackageOutputPath="$(SunderPackageOutputPath)" ExpectedRuntimeIdentifiers="$(_SunderPrebuiltRids)" />
   </Target>

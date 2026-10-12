@@ -404,28 +404,24 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             if (binding is null
                 || !string.Equals(binding.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
                 || !SunderPackageFormat.IsRuntimeIdentifier(binding.Rid)
-                || !IsExecutionRuntimePair(binding.RuntimeId, binding.ModuleAbi)
-                || !SemanticVersion.TryParse(binding.RuntimeVersion, out var runtimeVersion)
-                || runtimeVersion.Prerelease is not null
-                || binding.RuntimePackagingRevision is <= 0 or > SunderExecutionRuntimeFormat.MaxPackagingRevision
-                || !IsCanonicalHash(binding.RuntimeManifestSha256)
-                || !IsCanonicalHash(binding.RuntimeArtifactSha256)
-                || binding.RuntimeArtifactSize is <= 0 or > SunderExecutionRuntimeFormat.MaxArchiveBytes
-                || !IsCanonicalRegistryOrigin(binding.RegistryOrigin)
-                || binding.AcquisitionSource is not (RuntimeExecutionRuntimeAcquisitionSources.Registry
-                    or RuntimeExecutionRuntimeAcquisitionSources.LocalImport
-                    or RuntimeExecutionRuntimeAcquisitionSources.Development)
-                || !IsLowerIdentifier(binding.SigningKeyId, SunderExecutionRuntimeFormat.MaxKeyIdLength)
-                || binding.TrustStoreGeneration <= 0
-                || binding.RuntimePolicyRevision <= 0
-                || binding.RuntimeLifecycleState is not ("supported" or "deprecated" or "retired" or "revoked")
-                || !IsCanonicalUtc(binding.PolicyObservedAtUtc)
+                || binding.Requirement is null || binding.Runtime is null || binding.InstalledArtifact is null
+                || binding.Runtime.Rid != binding.Rid
                 || !IsCanonicalUtc(binding.ResolvedAtUtc)
                 || !targetKeys.Add((binding.Role, binding.Rid)))
             {
                 throw new InvalidDataException(
                     $"Installed package '{package.PackageId}' contains an invalid execution-runtime binding.");
             }
+            try
+            {
+                OfficialRuntimeSourcePolicy.ValidateRequirement(binding.Requirement);
+                OfficialRuntimeSourcePolicy.ValidateInstalledArtifact(binding.Runtime, binding.InstalledArtifact);
+                if (binding.Requirement.RuntimeId != binding.Runtime.RuntimeId || binding.Requirement.ModuleAbi != binding.Runtime.ModuleAbi
+                    || !PackageVersionRange.IsSatisfiedBy(binding.Runtime.VendorVersion, binding.Requirement.VersionRange))
+                    throw new InvalidDataException("The committed runtime does not satisfy its package requirement.");
+            }
+            catch (Exception error) when (error is ArgumentException or FormatException or RuntimeException or InvalidDataException)
+            { throw new InvalidDataException($"Installed package '{package.PackageId}' contains invalid official runtime evidence.", error); }
         }
     }
 
@@ -442,8 +438,9 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
                     && string.Equals(target.Rid, binding.Rid, StringComparison.Ordinal));
             var requirement = target?.ExecutionRuntime;
             if (requirement is null
-                || !string.Equals(requirement.Id, binding.RuntimeId, StringComparison.Ordinal)
-                || !string.Equals(requirement.ModuleAbi, binding.ModuleAbi, StringComparison.Ordinal))
+                || binding.Requirement != new RuntimeExecutionRuntimeRequirement(requirement.Id!, requirement.VersionRange!, requirement.ModuleAbi!)
+                || requirement.Id != binding.Runtime.RuntimeId || requirement.ModuleAbi != binding.Runtime.ModuleAbi
+                || !PackageVersionRange.IsSatisfiedBy(binding.Runtime.VendorVersion, requirement.VersionRange!))
             {
                 throw new InvalidDataException(
                     $"Installed package '{package.PackageId}' execution-runtime binding for target "
@@ -453,56 +450,18 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             return new PackageTargetExecutionRuntimeBinding(
                 binding.Role,
                 binding.Rid,
-                new RuntimeExecutionRuntimeRequirement(
-                    binding.RuntimeId,
-                    requirement.VersionRange!,
-                    binding.ModuleAbi),
-                new RuntimeExecutionRuntimeIdentity(
-                    binding.RuntimeId,
-                    binding.RuntimeVersion,
-                    binding.RuntimePackagingRevision,
-                    binding.Rid,
-                    binding.ModuleAbi,
-                    binding.RuntimeManifestSha256,
-                    binding.RuntimeArtifactSha256),
-                binding.RuntimeArtifactSize,
-                binding.RegistryOrigin,
-                binding.AcquisitionSource,
-                binding.SigningKeyId,
-                binding.TrustStoreGeneration,
-                new RuntimeExecutionRuntimeLifecycle(
-                    binding.RuntimeLifecycleState,
-                    SupportedFromUtc: null,
-                    DeprecatedAtUtc: null,
-                    InstallBlockedAtUtc: null,
-                    ActivationBlockedAtUtc: null,
-                    RevokedAtUtc: null,
-                    PolicyMessage: null,
-                    binding.RuntimePolicyRevision,
-                    binding.PolicyObservedAtUtc),
+                binding.Requirement,
+                binding.Runtime,
+                binding.InstalledArtifact,
                 binding.ResolvedAtUtc);
         }).ToArray();
-
-    private static bool IsExecutionRuntimePair(string? runtimeId, string? moduleAbi)
-        => runtimeId switch
-        {
-            SunderExecutionRuntimeFormat.DotNetRuntimeId => string.Equals(
-                moduleAbi,
-                SunderExecutionRuntimeFormat.DotNetModuleAbi,
-                StringComparison.Ordinal),
-            SunderExecutionRuntimeFormat.NodeRuntimeId => string.Equals(
-                moduleAbi,
-                SunderExecutionRuntimeFormat.NodeModuleAbi,
-                StringComparison.Ordinal),
-            _ => false,
-        };
 
     private static bool IsCanonicalRegistryOrigin(string? value)
     {
         try
         {
             return value is not null
-                   && value.Length <= SunderExecutionRuntimeFormat.MaxSourceUriLength
+                   && value.Length <= 2048
                    && string.Equals(RegistryOrigin.Normalize(value).AbsoluteUri, value, StringComparison.Ordinal);
         }
         catch (ArgumentException)
@@ -510,20 +469,6 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             return false;
         }
     }
-
-    private static bool IsLowerIdentifier(string? value, int maxLength)
-        => !string.IsNullOrEmpty(value)
-           && value.Length <= maxLength
-           && value[0] is >= 'a' and <= 'z' or >= '0' and <= '9'
-           && value[^1] is >= 'a' and <= 'z' or >= '0' and <= '9'
-           && !value.Contains("..", StringComparison.Ordinal)
-           && value.Split('.').All(static segment => segment.Length > 0
-                                                       && segment[0] != '-'
-                                                       && segment[^1] != '-')
-           && value.All(static character => character is >= 'a' and <= 'z'
-                                                   or >= '0' and <= '9'
-                                                   or '.'
-                                                   or '-');
 
     private static bool IsCanonicalUtc(DateTimeOffset value)
         => value != default && value.Offset == TimeSpan.Zero;

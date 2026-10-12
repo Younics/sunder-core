@@ -11,11 +11,18 @@ internal sealed record SunderPackagePublicApiSnapshot(
     SunderPackagePublicApiInventory Inventory,
     string ManifestSha256,
     string ContentIndexSha256,
-    IReadOnlyDictionary<string, byte[]> Descriptors);
+    IReadOnlyDictionary<string, byte[]> Descriptors,
+    SunderRpcModelProjectionDocument ModelProjection)
+{
+    internal byte[] ModelProjectionUtf8 => ModelProjection.ToCanonicalUtf8();
+    internal int ModelProjectionBytes => ModelProjection.ModelProjectionBytes;
+    internal string ModelProjectionSha256 => ModelProjection.ModelProjectionSha256;
+}
 
 internal static class SunderPackagePublicApiInspection
 {
     internal const string ReceiptFileName = "inspection.json";
+    internal const int MaximumOutputFiles = 130;
     private static readonly JsonSerializerOptions Json = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     // The caller owns the private extraction and has just passed full archive validation.
@@ -26,6 +33,7 @@ internal static class SunderPackagePublicApiInspection
         var manifestHash = SHA256.HashData(manifestBytes); var indexHash = SHA256.HashData(indexBytes);
         var contentIdentity = Convert.ToHexStringLower(SHA256.HashData([.. manifestHash, .. indexHash]));
         var contracts = new JsonArray(); var descriptors = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var parsedDescriptors = new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal);
         foreach (var bundle in (manifest.ContractBundles ?? []).Where(bundle => bundle?.Exposure == "public").OrderBy(bundle => bundle!.ContractId, StringComparer.Ordinal))
         {
             var path = SunderArchive.ResolveFile(root, ArchiveRelativePath.Parse(SunderPackageFormat.SharedPayloadRoot + bundle!.DescriptorPath));
@@ -33,6 +41,7 @@ internal static class SunderPackagePublicApiInspection
             if (descriptor.ContractId != bundle.ContractId || descriptor.Version != bundle.Version || descriptor.Sha256 != bundle.DescriptorSha256 || descriptor.AbiSha256 != bundle.AbiSha256)
                 throw new InvalidDataException("Validated public descriptor identity changed during inspection.");
             var canonical = descriptor.GetCanonicalUtf8();
+            parsedDescriptors.Add(descriptor.ContractId, descriptor);
             if (includeDescriptors) descriptors.Add(descriptor.Sha256, canonical);
             var record = new JsonObject
             {
@@ -49,7 +58,17 @@ internal static class SunderPackagePublicApiInspection
             ["schemaVersion"] = 1, ["packageId"] = manifest.Id, ["packageVersion"] = manifest.Version,
             ["packageContentIdentity"] = contentIdentity, ["publicContractCount"] = contracts.Count, ["contracts"] = contracts,
         }, Json));
-        return new(inventory, Convert.ToHexStringLower(manifestHash), Convert.ToHexStringLower(indexHash), descriptors);
+        var projectionBytes = ReadBounded(SunderArchive.ResolveFile(root, ArchiveRelativePath.Parse(SunderPackageFormat.RpcModelProjectionPath)),
+            SunderPackageFormat.MaxRpcModelProjectionBytes);
+        var projection = SunderRpcModelProjectionDocument.Parse(projectionBytes);
+        projection.Validate(manifest, parsedDescriptors);
+        using var index = JsonDocument.Parse(indexBytes);
+        var projectionIndex = index.RootElement.GetProperty("files").EnumerateArray()
+            .Where(file => file.GetProperty("path").GetString() == SunderPackageFormat.RpcModelProjectionPath).ToArray();
+        if (projectionIndex.Length != 1 || projectionIndex[0].GetProperty("size").GetInt64() != projection.ModelProjectionBytes
+            || projectionIndex[0].GetProperty("sha256").GetString() != projection.ModelProjectionSha256)
+            throw new InvalidDataException("Validated model projection sidecar changed during inspection.");
+        return new(inventory, Convert.ToHexStringLower(manifestHash), Convert.ToHexStringLower(indexHash), descriptors, projection);
     }
 
     internal static async Task<SunderPackageArchiveValidationResult> ExportArchiveAsync(string archivePath, string outputPath, CancellationToken token = default)
@@ -83,9 +102,11 @@ internal static class SunderPackagePublicApiInspection
                 schemaVersion = 1, archiveSha256 = archiveHash, manifestSha256 = snapshot.ManifestSha256,
                 contentIndexSha256 = snapshot.ContentIndexSha256, inventory = snapshot.Inventory.Payload,
                 publicInventorySha256 = snapshot.Inventory.PublicInventorySha256,
+                modelProjectionBytes = snapshot.ModelProjectionBytes, modelProjectionSha256 = snapshot.ModelProjectionSha256,
             }, Json);
             if (receipt.Length > 2_097_152) throw new InvalidDataException("API inspection metadata exceeds its byte bound.");
             await WriteNewAsync(Path.Combine(stage, ReceiptFileName), receipt, token);
+            await WriteNewAsync(Path.Combine(stage, SunderPackageFormat.RpcModelProjectionFileName), snapshot.ModelProjectionUtf8, token);
             token.ThrowIfCancellationRequested(); EnsureSafePath(outputPath); EnsureSafePath(stage);
             Directory.Move(stage, outputPath); stageCreated = false;
             return validation;
@@ -96,8 +117,8 @@ internal static class SunderPackagePublicApiInspection
             if (stageCreated && Directory.Exists(stage))
             {
                 EnsureSafePath(stage);
-                var files = Directory.EnumerateFileSystemEntries(stage).Take(130).ToArray();
-                if (files.Length <= 129 && files.All(file => (File.GetAttributes(file) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0))
+                var files = Directory.EnumerateFileSystemEntries(stage).Take(MaximumOutputFiles + 1).ToArray();
+                if (files.Length <= MaximumOutputFiles && files.All(file => (File.GetAttributes(file) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0))
                 { foreach (var file in files) File.Delete(file); Directory.Delete(stage); }
             }
         }

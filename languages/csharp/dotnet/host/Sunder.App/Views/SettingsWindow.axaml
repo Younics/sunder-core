@@ -156,6 +156,9 @@
             <ScrollViewer Grid.Row="1"
                           IsVisible="{Binding ShowScrollableSelectionContent}">
               <StackPanel Spacing="16">
+                <Border IsVisible="{Binding IsPackageRuntimesSelection}">
+                  <controls:PackageRuntimesSettings DataContext="{Binding PackageRuntimes}" />
+                </Border>
                 <Border Classes="card-surface"
                         IsVisible="{Binding ShowPlainCoreSelection}">
                   <ItemsControl ItemsSource="{Binding SelectedCoreLines}">

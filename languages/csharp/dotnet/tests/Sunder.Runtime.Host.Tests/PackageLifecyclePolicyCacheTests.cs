@@ -10,22 +10,20 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class PackageLifecyclePolicyCacheTests
 {
     private static RegistryPackageVersionIdentity Package => ActivePolicyTestContext.Package;
-    private static RegistryRuntimePolicySubject Runtime => ActivePolicyTestContext.Runtime;
-
     [Fact]
     public async Task SameBootOfflineRestartUsesRequestStartDeadlineAndIgnoresWallTime()
     {
         using var context = new ActivePolicyTestContext();
         var started = context.Clock.Value.Ticks;
         context.Response = request => { context.Clock.Advance(TimeSpan.FromSeconds(10)); return Allowed(request); };
-        await context.RefreshAsync(platforms: [Platform], runtimes: [Runtime]);
+        await context.RefreshAsync(platforms: [Platform]);
         context.Time.UtcNow = ObservedAt.AddYears(-10);
         context.Clock.Advance(TimeSpan.FromHours(23));
         var reloaded = new PackageLifecyclePolicyCache(context.Paths, context.Clock);
-        await reloaded.RequireActivationAsync(Origin, Package, [Runtime], default);
+        await reloaded.RequireActivationAsync(Origin, Package, default);
         context.Clock.Value = context.Clock.Value with { Ticks = started + 86_400 * context.Clock.Value.Frequency };
         Assert.Equal(PackagePolicyErrorCodes.PolicyExpired,
-            Assert.Throws<PackagePolicyDeniedException>(() => reloaded.RequireActivation(Origin, Package, [Runtime])).Code);
+            Assert.Throws<PackagePolicyDeniedException>(() => reloaded.RequireActivation(Origin, Package)).Code);
     }
 
     [Theory]
@@ -66,14 +64,14 @@ public sealed class PackageLifecyclePolicyCacheTests
         await context.RefreshAsync([Package, other]);
         await context.Cache.InvalidateClockAsync(Origin);
         var reloaded = new PackageLifecyclePolicyCache(context.Paths, context.Clock);
-        var failure = await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => reloaded.RequireActivationAsync(Origin, Package, [], default));
+        var failure = await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => reloaded.RequireActivationAsync(Origin, Package, default));
         Assert.Equal(PackagePolicyErrorCodes.PolicyClockInvalid, failure.Code);
         await context.RefreshAsync();
         context.Require();
         Assert.Equal(PackagePolicyErrorCodes.PolicyClockInvalid, Assert.Throws<PackagePolicyDeniedException>(() => context.Require(other)).Code);
         var again = new PackageLifecyclePolicyCache(context.Paths, context.Clock);
-        await again.RequireActivationAsync(Origin, Package, [], default);
-        Assert.Equal(PackagePolicyErrorCodes.PolicyClockInvalid, Assert.Throws<PackagePolicyDeniedException>(() => again.RequireActivation(Origin, other, [])).Code);
+        await again.RequireActivationAsync(Origin, Package, default);
+        Assert.Equal(PackagePolicyErrorCodes.PolicyClockInvalid, Assert.Throws<PackagePolicyDeniedException>(() => again.RequireActivation(Origin, other)).Code);
     }
 
     [Fact]
@@ -117,7 +115,7 @@ public sealed class PackageLifecyclePolicyCacheTests
         Assert.Equal(bytes, await File.ReadAllBytesAsync(context.Cache.FilePath(Origin)));
         var reloaded = new PackageLifecyclePolicyCache(context.Paths, context.Clock);
         Assert.Equal(PackagePolicyErrorCodes.SecurityBlocked,
-            (await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => reloaded.RequireActivationAsync(Origin, Package, [], default))).Code);
+            (await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => reloaded.RequireActivationAsync(Origin, Package, default))).Code);
         context.Response = request => Allowed(request, 3);
         await Assert.ThrowsAsync<InvalidDataException>(() => context.RefreshAsync());
         Assert.Equal(PackagePolicyErrorCodes.SecurityBlocked, Assert.Throws<PackagePolicyDeniedException>(() => context.Require()).Code);
@@ -153,18 +151,6 @@ public sealed class PackageLifecyclePolicyCacheTests
     }
 
     [Fact]
-    public async Task RuntimeCutoffUsesContinuousTimeAndCannotBeBroadened()
-    {
-        using var context = new ActivePolicyTestContext();
-        context.Response = request => Allowed(request) with { Runtimes = [new(Runtime, "retired", "Allowed", null, ObservedAt.AddMinutes(5), null)] };
-        await context.RefreshAsync(runtimes: [Runtime]);
-        context.Require(runtimes: [Runtime]);
-        context.Time.UtcNow = ObservedAt.AddYears(-10);
-        context.Clock.Advance(TimeSpan.FromMinutes(5));
-        Assert.Equal(ExecutionRuntimeErrorCodes.Retired, Assert.Throws<PackagePolicyDeniedException>(() => context.Require(runtimes: [Runtime])).Code);
-    }
-
-    [Fact]
     public async Task ConcurrentWritersKeepHighestCompleteSnapshot()
     {
         using var context = new ActivePolicyTestContext();
@@ -176,7 +162,7 @@ public sealed class PackageLifecyclePolicyCacheTests
         Assert.Null(results[1]);
         var reloaded = new PackageLifecyclePolicyCache(context.Paths, context.Clock);
         Assert.Equal(PackagePolicyErrorCodes.SecurityBlocked,
-            (await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => reloaded.RequireActivationAsync(Origin, Package, [], default))).Code);
+            (await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => reloaded.RequireActivationAsync(Origin, Package, default))).Code);
     }
 
     [Theory]

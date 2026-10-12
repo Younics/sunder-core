@@ -9,28 +9,30 @@ import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@sunder
 import { parseContractLock, inventoryBytes, parseContractWireJson } from "../src/rpc-contract-lock";
 import { publishContractCache, readContractCache, receiptBytes } from "../src/rpc-contract-cache";
 import { restoreContracts } from "../src/rpc-contract-restore";
+import { canonicalCandidateFixture, installFixtureInspector } from "./model-projection-fixtures";
+import { createHash } from "node:crypto";
 
 const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1");
 const fixture = (name: string): Promise<Buffer> => readFile(join(ROOT, "authoring/conformance/valid", name));
 async function context() {
   const root = await mkdtemp(join(tmpdir(), "sunder-contract-cache-node-"));
-  const lockBytes = await fixture("package-api-contract-lock.json"); const lock = parseContractLock(lockBytes);
+  const raw = JSON.parse((await fixture("package-api-contract-lock.json")).toString());
   const descriptor = Buffer.from(canonicalRpcDescriptorBytes(parseRpcContractDescriptor(await readFile(join(ROOT, "conformance/valid/minimal.rpc.json")))));
+  const original = parseContractLock(Buffer.from(JSON.stringify(raw,null,2)+"\n")); const requirement = [...original.requirements.values()][0]!;
+  const candidate=await canonicalCandidateFixture("example.dependency",raw.packageArtifacts["example.dependency"],await fixture("rpc-model-projection-nonempty.json"),new Map([[requirement.descriptorSha256,descriptor]]));
+  raw.packageArtifacts["example.dependency"]=candidate.artifact;
+  const lockBytes=Buffer.from(JSON.stringify(raw,null,2)+"\n");const lock=parseContractLock(lockBytes);
+  const restoreInspector=await installFixtureInspector(root);
   await writeFile(join(root, "sunder-contracts.lock.json"), lockBytes);
-  const artifact = lock.packageArtifacts.get("example.dependency")!; const requirement = [...lock.requirements.values()][0]!;
   const cache = join(root, "cache");
   let requests = 0;
   const fetchImplementation: typeof fetch = async (input, init) => {
     requests++; assert.equal(init?.redirect, "error"); const url = String(input);
-    let body: Buffer; const headers: Record<string, string> = { "content-type": "application/json" };
-    if (url.endsWith("/public-api")) body = Buffer.from(JSON.stringify({ inventory: JSON.parse(inventoryBytes(artifact).toString()) as unknown, publicInventorySha256: artifact.publicInventorySha256 }));
-    else if (url.endsWith("/descriptor")) { body = descriptor; headers["content-type"] = "application/schema+json"; headers.etag = `"${requirement.descriptorSha256}"`; }
-    else body = Buffer.from(JSON.stringify({ contractId: requirement.contractId, version: requirement.contractVersion,
-      descriptorSha256: requirement.descriptorSha256, abiSha256: requirement.abiSha256, size: requirement.descriptorBytes, etag: `"${requirement.descriptorSha256}"`,
-      exposure: "public", firstPublisherPackageId: artifact.packageId }));
+    assert.ok(url.endsWith("/canonical"));
+    const body=candidate.bytes;const headers={"content-type":"application/octet-stream","content-length":String(body.length)};
     const response = new Response(new Uint8Array(body), { status: 200, headers }); Object.defineProperty(response, "url", { value: url, configurable: true }); return response;
   };
-  return { root, cache, lock, lockBytes, descriptor, requirement, fetchImplementation, requests: () => requests, dispose: () => rm(root, { recursive: true, force: true }) };
+  return { root, cache, lock, lockBytes, descriptor, requirement, candidate, fetchImplementation, requests: () => requests, dispose: async () => {restoreInspector();await rm(root, { recursive: true, force: true });} };
 }
 
 test("Node lock reader consumes the existing C# lock and cache receipt oracles", async () => {
@@ -75,8 +77,8 @@ test("exact online restore preserves committed bytes and warm cache timestamps",
   try {
     assert.equal(await restoreContracts(c.root, { cacheRoot: c.cache, fetchImplementation: c.fetchImplementation }), 1);
     const before = await snapshot(c.cache);
-    assert.equal(await restoreContracts(c.root, { cacheRoot: c.cache, fetchImplementation: c.fetchImplementation }), 1);
-    assert.equal(c.requests(), 6); assert.deepEqual(await snapshot(c.cache), before);
+    assert.equal(await restoreContracts(c.root, { cacheRoot: c.cache, fetchImplementation: c.fetchImplementation }), 0);
+    assert.equal(c.requests(), 1); assert.deepEqual(await snapshot(c.cache), before);
     assert.deepEqual(await readFile(join(c.root, "sunder-contracts.lock.json")), c.lockBytes);
     const entries = await readContractCache(c.cache, c.lock.requirements);
     assert.deepEqual(entries.get(c.requirement.descriptorSha256)!.canonicalBytes, c.descriptor);
@@ -87,24 +89,31 @@ for (const failure of ["inventory", "authority", "weak-etag", "media-type", "red
   test(`restore rejects ${failure} without publishing cache or rewriting the lock`, async () => {
     const c = await context();
     try {
+      let expectedLock=c.lockBytes;
+      if(failure==="weak-etag"){
+        const raw=JSON.parse(expectedLock.toString());raw.packageArtifacts["example.dependency"].contracts[c.requirement.contractId].etag=`W/"${c.requirement.descriptorSha256}"`;
+        expectedLock=Buffer.from(JSON.stringify(raw,null,2)+"\n");await writeFile(join(c.root,"sunder-contracts.lock.json"),expectedLock);
+      }
       const fetchImplementation: typeof fetch = async (url, init) => {
         let response = await c.fetchImplementation(url, init); const path = String(url);
-        if (path.endsWith("/public-api") && failure === "inventory") response = new Response("{}", { headers: response.headers });
-        else if (!path.endsWith("/descriptor") && !path.endsWith("/public-api") && failure === "authority") response = new Response("{}", { headers: response.headers });
-        else if (path.endsWith("/descriptor")) {
-          if (failure === "weak-etag") response.headers.set("etag", `W/"${c.requirement.descriptorSha256}"`);
-          if (failure === "media-type") response.headers.set("content-type", "application/json");
-          if (failure === "redirect") response = new Response(null, { status: 302, headers: response.headers });
-          if (failure === "oversize") response = new Response("x".repeat(c.requirement.descriptorBytes + 1), { headers: response.headers });
-          if (failure === "lock-edit") await writeFile(join(c.root, "sunder-contracts.lock.json"), c.lockBytes.toString().replace('"required"', '"optional"'));
+        if (["inventory","authority","duplicate"].includes(failure)) {
+          const recipe=structuredClone(c.candidate.recipe) as any;
+          if(failure==="inventory")recipe.inspection.inventory.packageVersion="9.0.0";
+          if(failure==="authority")recipe.inspection.inventory.contracts[0].authorityId="example.other";
+          recipe.inspection.publicInventorySha256=createHash("sha256").update("sunder.package-public-api-inventory.v1\0").update(JSON.stringify(recipe.inspection.inventory)).digest("hex");
+          if(failure==="duplicate")recipe.receiptText='{"schemaVersion":1,"schemaVersion":1}';
+          const body=JSON.stringify(recipe);response=new Response(body,{headers:{"content-type":"application/octet-stream","content-length":String(Buffer.byteLength(body))}});
         }
-        if (path.endsWith("/public-api") && failure === "duplicate") response = new Response('{"inventory":{},"inventory":{}}', { headers: response.headers });
+        if (failure === "media-type") response.headers.set("content-type", "application/json");
+        if (failure === "redirect") response = new Response(null, { status: 302, headers: response.headers });
+        if (failure === "oversize") response.headers.set("content-length","536870913");
+        if (failure === "lock-edit") await writeFile(join(c.root, "sunder-contracts.lock.json"), c.lockBytes.toString().replace('"required"', '"optional"'));
         if (response.url === "" || failure === "origin") Object.defineProperty(response, "url", { value: failure === "origin" ? "https://other.example/" : path, configurable: true });
         return response;
       };
-      await assert.rejects(restoreContracts(c.root, { cacheRoot: c.cache, fetchImplementation }), /(?:public-inventory-invalid|evidence-mismatch|entry-corrupt)/u);
+      await assert.rejects(restoreContracts(c.root, { cacheRoot: c.cache, fetchImplementation }), /(?:public-inventory-invalid|evidence-mismatch|entry-corrupt|model-projection-invalid)/u);
       await assert.rejects(stat(c.cache), { code: "ENOENT" });
-      if (failure !== "lock-edit") assert.deepEqual(await readFile(join(c.root, "sunder-contracts.lock.json")), c.lockBytes);
+      if (failure !== "lock-edit") assert.deepEqual(await readFile(join(c.root, "sunder-contracts.lock.json")), expectedLock);
     } finally { await c.dispose(); }
   });
 }
@@ -146,6 +155,11 @@ test("CLI restore supports empty exact locks and rejects empty/override/offline 
   } finally { await c.dispose(); }
 });
 
-async function snapshot(root: string): Promise<unknown[]> {
-  const names = (await readdir(root)).sort(); return Promise.all(names.map(async name => [name, await readFile(join(root, name)), (await stat(join(root, name))).mtimeMs]));
+async function snapshot(root: string, prefix=""): Promise<unknown[]> {
+  const values:unknown[]=[];
+  for(const name of (await readdir(root)).sort()){
+    const path=join(root,name);const info=await stat(path);
+    if(info.isDirectory())values.push(...await snapshot(path,prefix+name+"/"));else values.push([prefix+name,await readFile(path),info.mtimeMs]);
+  }
+  return values;
 }

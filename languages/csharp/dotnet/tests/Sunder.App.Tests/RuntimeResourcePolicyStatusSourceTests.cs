@@ -62,7 +62,7 @@ public sealed class RuntimeResourcePolicyStatusSourceTests
             RuntimeProtocol.MinimumSupportedRevision,
             RuntimeProtocol.MaximumSupportedRevision,
             Guid.NewGuid(),
-            [RuntimeProtocolFeatures.VersionedApiV1],
+            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1],
             new RuntimeProductVersionDiagnostics("Runtime", "1.0.0", "1.0.0"));
         using var transport = new RuntimeClientTransport(
             () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
@@ -85,7 +85,7 @@ public sealed class RuntimeResourcePolicyStatusSourceTests
             RuntimeProtocol.MinimumSupportedRevision,
             RuntimeProtocol.MaximumSupportedRevision,
             Guid.NewGuid(),
-            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.RuntimeResourcePolicyV1],
+            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1, RuntimeProtocolFeatures.RuntimeResourcePolicyV1],
             new RuntimeProductVersionDiagnostics("Runtime", "1.0.0", "1.0.0"),
             new RuntimeResourceProfileDescriptor(
                 RuntimeResourcePolicyContract.GetEffectiveProfileHash(policy),

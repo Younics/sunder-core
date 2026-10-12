@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, writeFile, rm, stat, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -12,35 +12,37 @@ import { captureBaseline, withBaselineLease } from "../src/rpc-baseline-store";
 import { aggregateAndPack, prepareProject } from "../src/package";
 import { loadProject, currentRid } from "../src/model";
 import { withOutputLeases } from "../src/output";
+import { generatedProviders, invocation, fixtureSource, writeSourceFile as writeFile } from "./service-fixtures";
 
 const exec = promisify(execFile);
 const cli = resolve(__dirname, "../../dist/cli.js");
 const lock = `${JSON.stringify({ lockVersion: 1, packageArtifacts: {}, packageImports: {}, providerImports: {}, platformImports: {} }, null, 2)}\n`;
-function source(limit = 10, title = "Input", exposure = "package", idle = true, reversed = false): string {
-  const echo = `echo: rpc.contract({exposure: "${exposure}", errors: {}, definitions: {Input:s.string({maxLength:${limit},title:${JSON.stringify(title)}}), Output:s.string({maxLength:10})}, services: {main:{call:rpc.unary({request:s.ref("Input"),response:s.ref("Output")})}}})`;
-  const declaration = 'idle:rpc.contract({exposure:"public",errors:{},definitions:{Unit:s.object({})},services:{ping:{run:rpc.unary({request:s.ref("Unit"),response:s.ref("Unit")})}}})';
-  return `import {rpc} from "@sunder/sdk"; const s=rpc.schema;
-export const packageRpc=rpc.router({contracts:{${idle ? reversed ? declaration + "," + echo : echo + "," + declaration : echo}},providers:{echo:rpc.provider({contract:"echo",handlers:{main:{call(request,context){context.signal.throwIfAborted(); return "ok";}}}})}});`;
+function source(limit = 10, title = "Input", exposure = "public", idle = true, reversed = false): string {
+  const echo = `export const echo=defineService({
+/** @param {string} request @param {import("@sunder/sdk").ServiceContext} context @returns {string} */
+call(request/*: string*/,context/*: import("@sunder/sdk").ServiceContext*/)/*: string*/{context.signal.throwIfAborted(); return "ok";}
+},{exposure:"${exposure}", serviceId:"main", constraints:{"call.request":{maxLength:${limit},title:${JSON.stringify(title)}},"call.result":{maxLength:10}}});`;
+  const declaration = '/** @type {import("@sunder/sdk").ServiceDefinition<{run():Promise<void>}>} */\nexport const idle=defineService/*<{run():Promise<void>}>*/(null,{exposure:"public",declarationOnly:true,serviceId:"ping"});';
+  return `import {defineService} from "@sunder/sdk";\n${idle ? reversed ? declaration + "\n" + echo : echo + "\n" + declaration : echo}`;
 }
 async function project(extension = "ts", text = source()): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-owned-lifecycle-")); await mkdir(resolve(root, "src"));
   await writeFile(resolve(root, `src/rpc.${extension}`), text);
-  await writeFile(resolve(root, `src/worker.${extension}`), 'export {packageRpc} from "./rpc.js";');
+  await writeFile(resolve(root, `src/worker.${extension}`), 'export {};');
+  await writeFile(resolve(root, `src/rpc.${extension}`), `import "./worker.js";\n${text}`);
   await writeFile(resolve(root, "sunder-contracts.lock.json"), lock);
-  await writeFile(resolve(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.lifecycle", name: "Lifecycle", version: "7.6.5", entry: `src/worker.${extension}`, workerCapabilities: [], rpc: { module: `src/rpc.${extension}`, export: "packageRpc" } }));
+  await writeFile(resolve(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.lifecycle", name: "Lifecycle", version: "7.6.5", workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
   return root;
 }
 const run = (root: string, ...args: string[]) => exec(process.execPath, [cli, ...args, "--project", root], { maxBuffer: 4 * 1024 * 1024 });
 const baseline = async (root: string) => parseBaseline(await readFile(resolve(root, "sunder-contracts.owned.json")));
 const contractVersion = async (root: string) => (await baseline(root)).contracts.get("echo")!.current!.descriptor.version;
 async function workerIdentity(root: string): Promise<{ contractId: string; contractVersion: string; descriptorSha256: string; abiSha256: string; value: string }> {
-  const worker = resolve(root, "dist/targets", currentRid(), "payload/runtime", currentRid(), "bin/worker.cjs");
-  const result = await exec(process.execPath, ["-e", `const provider=require(process.argv[1]).packageRpc.providerRegistrations[0];
-    Promise.resolve(provider.handler.invokeUnary({signal:new AbortController().signal},"main","call","hello")).then(value=>console.log(JSON.stringify({...provider,handler:undefined,value})));`, worker]);
-  return JSON.parse(result.stdout);
+  const provider = (await generatedProviders(root))[0]!;
+  return { ...provider, value: await provider.handler.invokeUnary(invocation(), "main", "call", {request:"hello"}) as string };
 }
 for (const extension of ["ts", "js"]) test(`first ${extension} selected Accept permits stable next-only and binds 2.0.0 before Freeze`, { timeout: 120_000 }, async () => {
-  const text = source(10, "Input", "package", false).replaceAll("echo", "greeting"); const root = await project(extension, text);
+  const text = source(10, "Input", "public", false).replaceAll("echo", "greeting"); const root = await project(extension, text);
   try {
     const config = await readFile(resolve(root, "sunder.package.json"));
     await writeFile(resolve(root, "sunder-contracts.lock.json"), "{}\n");
@@ -53,9 +55,9 @@ for (const extension of ["ts", "js"]) test(`first ${extension} selected Accept p
     await assert.rejects(stat(resolve(root, ".sunder/generated/rpc")), { code: "ENOENT" });
     const loaded = await loadProject(root);
     assert.equal(loaded.config.providers[0]!.contractVersion, "2.0.0"); assert.equal(loaded.config.providers[0]!.contractId, "example.lifecycle.greeting");
-    assert.match(loaded.ownedRpc!.files.get(`greeting.${extension}`)!, /CONTRACT_VERSION\s*=\s*"2\.0\.0"/);
+    assert.match(loaded.ownedRpc!.files.get(`owned/greeting.${extension}`)!, /CONTRACT_VERSION\s*=\s*"2\.0\.0"/);
     await run(root, "contracts", "check"); await run(root, "generate"); await run(root, "build");
-    assert.match(await readFile(resolve(root, `.sunder/generated/rpc/greeting.${extension}`), "utf8"), /CONTRACT_VERSION\s*=\s*"2\.0\.0"/);
+    assert.match(await readFile(resolve(root, `.sunder/generated/rpc/owned/greeting.${extension}`), "utf8"), /CONTRACT_VERSION\s*=\s*"2\.0\.0"/);
     const provider = await workerIdentity(root);
     assert.equal(provider.contractVersion, "2.0.0"); assert.equal(provider.contractId, "example.lifecycle.greeting"); assert.equal(provider.value, "ok");
     assert.equal(provider.descriptorSha256, snapshot.json.descriptorSha256); assert.equal(provider.abiSha256, snapshot.json.abiSha256);
@@ -69,7 +71,7 @@ for (const extension of ["ts", "js"]) test(`first ${extension} selected Accept p
     await assert.rejects(run(root, "contracts", "accept", "greeting", "--next-version", "2.1.0"), /current\/next version pair/);
     assert.deepEqual((await baseline(root)).bytes, frozen.bytes);
     assert.deepEqual(await readFile(resolve(root, "sunder.package.json")), config);
-    assert.equal(await readFile(resolve(root, `src/rpc.${extension}`), "utf8"), text); assert.equal(await readFile(resolve(root, "sunder-contracts.lock.json"), "utf8"), lock);
+    assert.equal(await readFile(resolve(root, `src/rpc.${extension}`), "utf8"), fixtureSource(`import "./worker.js";\n${text}`, extension)); assert.equal(await readFile(resolve(root, "sunder-contracts.lock.json"), "utf8"), lock);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 test("contractsCommand rejects unknown JavaScript operations before filesystem access or draft freeze", async () => {
@@ -116,7 +118,7 @@ for (const extension of ["ts", "js"]) test(`actual ${extension.toUpperCase()} CL
     await run(root, "contracts", "accept"); assert.equal(await contractVersion(root), "1.0.1");
     await run(root, "contracts", "freeze"); await run(root, "build"); assert.equal((await workerIdentity(root)).contractVersion, "1.0.1");
     // Declaration enumeration is joined by contractKey, not the array position.
-    await writeFile(resolve(root, `src/rpc.${extension}`), source(10, "Reviewed λ", "package", true, true));
+    await writeFile(resolve(root, `src/rpc.${extension}`), source(10, "Reviewed λ", "public", true, true));
     await run(root, "contracts", "check");
     await writeFile(resolve(root, `src/rpc.${extension}`), source(20, "Reviewed λ"));
     await run(root, "contracts", "accept"); assert.equal(await contractVersion(root), "1.1.0");
@@ -146,10 +148,12 @@ test("closed contracts CLI rejects flags, extra keys, booleans with values, dupl
       await assert.rejects(run(root, "contracts", ...args));
     }
     await assert.rejects(stat(resolve(root, "sunder-contracts.owned.json")), { code: "ENOENT" });
-    await run(root, "generate");
-    for (const operation of ["check", "accept", "freeze"]) await assert.rejects(run(root, "contracts", operation), /Existing owned baseline is required/);
+    await assert.rejects(run(root, "generate"), /baseline/);
+    await run(root, "contracts", "accept"); await run(root, "generate");
+    await rm(resolve(root, "sunder-contracts.owned.json"));
+    for (const operation of ["check", "accept", "freeze"]) await assert.rejects(run(root, "contracts", operation), /baseline/);
     const receiptPath = resolve(root, ".sunder/generated/rpc/authoring-receipt.v1.json"); const receipt = await readFile(receiptPath);
-    await assert.rejects(run(root, "contracts", "accept", "echo", "--next-version", "2.0.0"), /Existing owned baseline is required/);
+    await assert.rejects(run(root, "contracts", "accept", "echo", "--next-version", "2.0.0"), /baseline/);
     assert.deepEqual(await readFile(receiptPath), receipt); await assert.rejects(stat(resolve(root, "sunder-contracts.owned.json")), { code: "ENOENT" });
     await assert.rejects(run(root, "package"), /baseline/);
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -161,8 +165,8 @@ test("deleted baseline, V3->V2 and non-RPC laundering cannot bypass current sour
     await rm(resolve(root, "sunder-contracts.owned.json"));
     for (const command of ["generate", "build", "package"]) await assert.rejects(run(root, command), /baseline/);
     await writeFile(resolve(root, "sunder-contracts.owned.json"), saved);
-    const configPath = resolve(root, "sunder.package.json"); const config = JSON.parse(await readFile(configPath, "utf8")); delete config.rpc;
-    for (const schemaVersion of [2, 3]) { await writeFile(configPath, JSON.stringify({ ...config, schemaVersion, ...(schemaVersion === 2 ? { contracts: [], providers: [] } : {}) })); await assert.rejects(loadProject(root), /fallback/); }
+    const configPath = resolve(root, "sunder.package.json"); const config = JSON.parse(await readFile(configPath, "utf8")); delete config.services; config.entry="src/worker.ts";
+    for (const schemaVersion of [2, 3]) { await writeFile(configPath, JSON.stringify({ ...config, schemaVersion, ...(schemaVersion === 2 ? { contracts: [], providers: [] } : {}) })); await assert.rejects(loadProject(root), /fallback|retired/); }
     await rm(resolve(root, ".sunder"), { recursive: true, force: true }); await rm(resolve(root, "sunder-contracts.owned.json"));
     await assert.rejects(loadProject(root), /fallback/); // canonical lock is itself source evidence
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -171,7 +175,7 @@ test("draft removal retains only immutable history and stale prebuilt/incomplete
   const root = await project();
   try {
     await run(root, "contracts", "accept"); await run(root, "contracts", "freeze", "echo"); await run(root, "build");
-    await writeFile(resolve(root, "src/rpc.ts"), source(10, "Input", "package", false));
+    await writeFile(resolve(root, "src/rpc.ts"), source(10, "Input", "public", false));
     await run(root, "contracts", "accept", "idle", "--current-version", "1.0.0", "--next-version", "2.0.0", "--acknowledge-breaking-change");
     assert.equal((await baseline(root)).contracts.has("idle"), false);
     await assert.rejects(run(root, "package", "--discovery-root", resolve(root, "dist/targets")), /metadata/);
@@ -179,9 +183,9 @@ test("draft removal retains only immutable history and stale prebuilt/incomplete
     const before = await readFile(resolve(root, "dist/example.lifecycle.7.6.5.sunderpkg"));
     // A valid but changed ordinary implementation must not be laundered by an
     // old descriptor-equivalent prebuilt module.
-    await writeFile(resolve(root, "src/rpc.ts"), source(10, "Input", "package", false).replace('return "ok"', 'return "other"'));
+    await writeFile(resolve(root, "src/rpc.ts"), source(10, "Input", "public", false).replace('return "ok"', 'return "other"'));
     await assert.rejects(run(root, "package", "--discovery-root", resolve(root, "dist/targets")), /fresh full ordinary source/);
-    await writeFile(resolve(root, "src/rpc.ts"), source(10, "Input", "package", false).replace('return "ok"', 'return 42'));
+    await writeFile(resolve(root, "src/rpc.ts"), source(10, "Input", "public", false).replace('return "ok"', 'return 42'));
     await assert.rejects(run(root, "package", "--discovery-root", resolve(root, "dist/targets")), /handler-incomplete/);
     assert.deepEqual(await readFile(resolve(root, "dist/example.lifecycle.7.6.5.sunderpkg")), before);
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -191,13 +195,13 @@ test("targeted exposure acceptance cannot omit other source contracts or drift t
   try {
     await run(root, "contracts", "accept"); await run(root, "contracts", "freeze");
     const before = (await baseline(root)).bytes;
-    await writeFile(resolve(root, "src/rpc.ts"), source(10, "Input", "public", false));
+    await writeFile(resolve(root, "src/rpc.ts"), source(10, "Input", "package", false));
     await assert.rejects(run(root, "contracts", "accept", "echo", "--current-version", "1.0.0", "--next-version", "2.0.0", "--acknowledge-breaking-change"), /outside the selected/);
     assert.deepEqual((await baseline(root)).bytes, before);
-    await writeFile(resolve(root, "src/rpc.ts"), source(10, "Input", "public"));
+    await writeFile(resolve(root, "src/rpc.ts"), source(10, "Input", "package"));
     await assert.rejects(run(root, "contracts", "accept"), /acknowledgement/);
-    await run(root, "contracts", "accept", "echo", "--current-version", "1.0.0", "--next-version", "2.0.0", "--acknowledge-breaking-change");
-    assert.equal((await baseline(root)).contracts.get("echo")!.current!.exposure, "public");
+    await run(root, "contracts", "accept", "echo", "--current-version", "1.0.0", "--next-version", "7.6.5", "--acknowledge-breaking-change");
+    assert.equal((await baseline(root)).contracts.get("echo")!.current!.exposure, "package");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 for (const extension of ["ts", "js"]) test(`Accept recompiles ${extension} contextual generated identity constraints before writing the baseline`, { timeout: 90_000 }, async () => {
@@ -205,10 +209,10 @@ for (const extension of ["ts", "js"]) test(`Accept recompiles ${extension} conte
   try {
     await run(root, "contracts", "accept"); await run(root, "contracts", "freeze"); const before = (await baseline(root)).bytes;
     const constraint = extension === "ts" ? 'const exact: "1.0.0" = CONTRACT_VERSION;' : '/** @type {"1.0.0"} */ const exact = CONTRACT_VERSION;';
-    await writeFile(resolve(root, `src/helper.${extension}`), `import {CONTRACT_VERSION} from "../.sunder/generated/rpc/echo.js"; ${constraint} export {exact};`);
-    await writeFile(resolve(root, `src/worker.${extension}`), 'import {exact} from "./helper.js"; export {packageRpc} from "./rpc.js"; if(exact!=="1.0.0") throw new Error("version");');
+    await writeFile(resolve(root, `src/helper.${extension}`), `import {CONTRACT_VERSION} from "../.sunder/generated/rpc/owned/echo.js"; ${constraint} export {exact};`);
+    await writeFile(resolve(root, `src/worker.${extension}`), 'import {exact} from "./helper.js"; if(exact!=="1.0.0") throw new Error("version");');
     await run(root, "contracts", "check");
-    await writeFile(resolve(root, `src/rpc.${extension}`), source(10, "Patch"));
+    await writeFile(resolve(root, `src/rpc.${extension}`), `import "./worker.js";\n${source(10, "Patch")}`);
     await assert.rejects(run(root, "contracts", "accept"), /handler-incomplete.*|not assignable/s);
     assert.deepEqual((await baseline(root)).bytes, before);
     await assert.rejects(stat(resolve(root, ".sunder/generated/rpc")), { code: "ENOENT" });
@@ -248,7 +252,7 @@ for (const mutation of ["source", "config", "lock", "baseline", "file-set"]) tes
   try {
     if (mutation === "file-set") {
       await writeFile(resolve(root, "src/helper.js"), 'export function helper(){return "ok";}');
-      await writeFile(resolve(root, "src/worker.ts"), 'import {helper} from "./helper.js"; export {packageRpc} from "./rpc.js"; if(helper()!=="ok") throw new Error("helper");');
+      await writeFile(resolve(root, "src/worker.ts"), 'import {helper} from "./helper.js"; if(helper()!=="ok") throw new Error("helper");');
     }
     await contractsCommand("accept", root); const input = await captureBaseline(root); const saved = (await baseline(root)).bytes;
     await assert.rejects(heldBaseline(input.path, () => contractsCommand("accept", root), async () => {
@@ -266,7 +270,7 @@ test("Pack revalidates source/config/lock/baseline/runtime/file-set after archiv
   try {
     await writeFile(resolve(root, "src/helper.js"), 'export function helper(){return "ok";}');
     await writeFile(resolve(root, "src/helper.d.ts"), 'export declare function helper(): string;');
-    await writeFile(resolve(root, "src/worker.ts"), 'import {helper} from "./helper.js"; export {packageRpc} from "./rpc.js"; if(helper()!=="ok") throw new Error("helper");');
+    await writeFile(resolve(root, "src/worker.ts"), 'import {helper} from "./helper.js"; if(helper()!=="ok") throw new Error("helper");');
     await run(root, "contracts", "accept"); await run(root, "contracts", "freeze"); await run(root, "build");
     const project = await prepareProject(root); const packed = await aggregateAndPack(root); const before = await readFile(packed.archivePath); const evidence = await readFile(packed.evidencePath);
     for (const name of ["src/rpc.ts", "sunder.package.json", "sunder-contracts.lock.json", "sunder-contracts.owned.json", "src/helper.js", "src/helper.ts"]) {

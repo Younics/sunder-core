@@ -6,7 +6,7 @@
     "language": "csharp"
   },
   "inputFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "lockSha256": "0e6ae942272b88e8ffb91cc34aa3790652d65357b7f2dc3051ea14a8d15bfa47",
+  "lockSha256": "e06b9d71283895d9c67e9f58649facf4e4df4a808ab7522867c217585ace732b",
   "packageId": "example.consumer",
   "packageVersion": "1.0.0",
   "contracts": [
@@ -18,7 +18,11 @@
       "descriptorBytes": 487,
       "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"example.rpc.v1.minimal\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0\"}",
       "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
-      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42"
+      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+      "modelProjection": {
+        "models": {},
+        "serviceReferences": {}
+      }
     }
   ],
   "packageArtifacts": [
@@ -31,6 +35,8 @@
       "registryOrigin": "https://registry.example/",
       "publicContractCount": 2,
       "publicInventorySha256": "6f69988fd727caa6b6eeab5a8f0635264a3c663b7a03cfd865784fa4ef022329",
+      "modelProjectionBytes": 840,
+      "modelProjectionSha256": "2bfacdb1415230a81b6004e0d1cf2c2d3be9e68b6e5295c3cba83b7d418732e1",
       "contracts": [
         {
           "contractId": "example.rpc.v1.minimal",

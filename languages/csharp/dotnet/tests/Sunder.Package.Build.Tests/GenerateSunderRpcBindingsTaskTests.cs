@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -9,6 +8,7 @@ using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Package.Build.Tasks;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 
@@ -59,7 +59,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             var provider = Assert.Single(first.RpcProviders);
             Assert.Equal("example.generated.greeting.provider", provider.ItemSpec);
             Assert.Equal("runtime", provider.GetMetadata("Role"));
-            Assert.Equal("owner", provider.GetMetadata("Audience"));
+            Assert.Equal("public", provider.GetMetadata("Audience"));
 
             var exportPath = Assert.Single(first.PackageProjectExports).ItemSpec;
             var receiptItem = Assert.Single(first.AuthoringReceipts);
@@ -126,8 +126,8 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             File.WriteAllText(
                 sourcePath,
                 ImplementationFirstSource.Replace(
-                    "    [SunderRpcMethod]",
-                    "    public SunderWorkerProviderRegistration CreateSunderRpcProviderRegistration() => throw null!;\n    [SunderRpcMethod]",
+                    "    [SunderMethod]",
+                    "    public SunderWorkerProviderRegistration CreateSunderRpcProviderRegistration() => throw null!;\n    [SunderMethod]",
                     StringComparison.Ordinal));
             var failed = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
             Assert.False(failed.Execute());
@@ -141,7 +141,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             File.WriteAllText(
                 sourcePath,
                 ImplementationFirstSource.Replace(
-                    "[SunderRpcService(SunderRpcExposure.Package)]",
+                    "[SunderService(SunderServiceExposure.Public)]\n[SunderAppUse(Required = true)]",
                     string.Empty,
                     StringComparison.Ordinal));
             var removed = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
@@ -211,6 +211,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                     produced.RootElement.GetProperty("inputFingerprint").GetString()!,
                     producerLockSha256,
                     "example.generated",
+                    "7.6.5",
                     candidate.Contracts);
                 File.WriteAllBytes(exportPath, bytes);
                 exportItem.SetMetadata("Sha256", Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
@@ -221,7 +222,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                 exportTask.ProjectIdentity,
                 exportTask.Configuration,
                 exportTask.TargetFramework,
-                "example.generated");
+                "example.generated", "7.6.5");
             Assert.Equal(lockSha256, projectExport.LockSha256);
             Assert.Equal(exportItem.GetMetadata("Sha256"), SunderRpcAuthoringDocuments.ValidatePackageProjectExport(
                 exportPath,
@@ -230,6 +231,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                 exportTask.Configuration,
                 exportTask.TargetFramework,
                 "example.generated",
+                "7.6.5",
                 lockSha256,
                 candidate.Contracts));
             var sharedIntermediate = Path.GetDirectoryName(Path.GetDirectoryName(exportPath)!)!;
@@ -274,10 +276,10 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             Assert.DoesNotContain(importTask.CompileItems, item => Path.GetFileName(item.ItemSpec) == "authoring.g.cs");
             Assert.Contains(importTask.CompileItems, item => Path.GetFileName(item.ItemSpec) == "imports.g.cs");
             var bindingPath = importTask.CompileItems.Single(item => item.ItemSpec.EndsWith(
-                Path.Combine("bindings", "greeting.g.cs"),
+                Path.Combine("bindings", "imports", "example.generated.greeting.g.cs"),
                 PathComparison)).ItemSpec;
             var binding = File.ReadAllText(bindingPath);
-            Assert.Contains("namespace Sunder.Generated.Rpc.Greeting;", binding, StringComparison.Ordinal);
+            Assert.Contains("namespace Sunder.Generated.Packages.Example_Generated_Internal.CExample_Generated_Greeting;", binding, StringComparison.Ordinal);
             Assert.Contains("internal sealed class GreetingClient", binding, StringComparison.Ordinal);
             Assert.DoesNotContain("Sunder.Sdk.Worker", binding, StringComparison.Ordinal);
 
@@ -367,7 +369,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             var lockSha256 = new string('b', 64);
             var contents = Encoding.UTF8.GetString(SunderRpcAuthoringDocuments.WritePackageExport(
                 "1.0.0", "ImplementationFirstRpc", "Debug", "net10.0", new string('a', 64),
-                lockSha256, "example.generated", []));
+                lockSha256, "example.generated", "7.6.5", []));
             var lockLine = $"  \"lockSha256\": \"{lockSha256}\",\n";
             const string packageLine = "  \"packageId\": \"example.generated\",\n";
             contents = mutation switch
@@ -386,7 +388,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             File.WriteAllText(path, contents);
 
             var exception = Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ReadPackageProjectExport(
-                path, "1.0.0", "ImplementationFirstRpc", "Debug", "net10.0", "example.generated"));
+                path, "1.0.0", "ImplementationFirstRpc", "Debug", "net10.0", "example.generated", "7.6.5"));
             Assert.Contains(expectedError, exception.Message, StringComparison.Ordinal);
         }
         finally
@@ -444,6 +446,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                 produced.RootElement.GetProperty("inputFingerprint").GetString()!,
                 new string('f', 64),
                 "example.generated",
+                "7.6.5",
                 candidate.Contracts);
             File.WriteAllBytes(exportItem.ItemSpec, tamperedBytes);
             // Keep file identity current so only the exact-RID lock comparison can reject this export.
@@ -455,6 +458,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                 exportTask.Configuration,
                 exportTask.TargetFramework,
                 "example.generated",
+                "7.6.5",
                 lockSha256,
                 candidate.Contracts));
             Assert.Contains("exact-RID contract lock", exception.Message, StringComparison.Ordinal);
@@ -1284,7 +1288,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         var trustedPlatformAssemblies = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")
                                         ?? throw new InvalidOperationException("Trusted platform assemblies are unavailable.");
         return trustedPlatformAssemblies.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Append(typeof(SunderRpcServiceAttribute).Assembly.Location)
+            .Append(typeof(SunderServiceAttribute).Assembly.Location)
             .Append(typeof(SunderWorkerProviderRegistration).Assembly.Location)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -1304,8 +1308,8 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                        + "      \"contractId\": \"example.generated.greeting\",\n"
                        + "      \"current\": {\n"
                        + "        \"state\": \"draft\",\n"
-                       + "        \"exposure\": \"package\",\n"
-                       + "        \"contractVersion\": \"1.0.0\",\n"
+                       + "        \"exposure\": \"public\",\n"
+                       + $"        \"contractVersion\": \"{descriptor.Version}\",\n"
                        + $"        \"descriptorBytes\": {descriptor.GetCanonicalUtf8().Length},\n"
                         + $"        \"canonicalDescriptor\": {JsonSerializer.Serialize(canonicalDescriptor, DeterministicJson)},\n"
                        + $"        \"descriptorSha256\": \"{descriptor.Sha256}\",\n"
@@ -1394,6 +1398,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         using System.Threading.Tasks;
         using Sunder.Sdk.Packaging;
         using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         using Sunder.Sdk.Worker;
         [assembly: SunderPackage(Id = "example.generated", Name = "Generated")]
         namespace Example.Generated;
@@ -1402,10 +1407,11 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             public static SunderWorkerProviderRegistration Create()
                 => new GreetingService().CreateSunderRpcProviderRegistration();
         }
-        [SunderRpcService(SunderRpcExposure.Package)]
+        [SunderService(SunderServiceExposure.Public)]
+        [SunderAppUse(Required = true)]
         public sealed partial class GreetingService
         {
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<GreetingResult> GreetAsync(
                 GreetingRequest request,
                 SunderRpcInvocationContext context,
@@ -1421,31 +1427,4 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         }
         """;
 
-    private sealed class TestBuildEngine : IBuildEngine
-    {
-        public List<string> Errors { get; } = [];
-
-        public bool ContinueOnError => false;
-        public int LineNumberOfTaskNode => 0;
-        public int ColumnNumberOfTaskNode => 0;
-        public string ProjectFileOfTaskNode => string.Empty;
-
-        public bool BuildProjectFile(string projectFileName, string[] targetNames, IDictionary globalProperties, IDictionary targetOutputs)
-            => true;
-
-        public void LogCustomEvent(CustomBuildEventArgs e)
-        {
-        }
-
-        public void LogErrorEvent(BuildErrorEventArgs e)
-            => Errors.Add(e.Message ?? string.Empty);
-
-        public void LogMessageEvent(BuildMessageEventArgs e)
-        {
-        }
-
-        public void LogWarningEvent(BuildWarningEventArgs e)
-        {
-        }
-    }
 }

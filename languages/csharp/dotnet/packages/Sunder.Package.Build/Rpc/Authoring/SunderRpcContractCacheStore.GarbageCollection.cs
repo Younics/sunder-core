@@ -42,7 +42,10 @@ internal static partial class SunderRpcContractCacheStore
             total += bytes.Length;
             var value = SunderRpcAuthoringDocuments.ParseContractLock(bytes, allowDevelopmentRegistryOrigin: true);
             foreach (var artifact in value.PackageArtifacts.Values)
+            {
+                marks.Add(ProjectionKey(artifact.ModelProjectionSha256));
                 foreach (var contract in artifact.Contracts.Values) marks.Add(contract.DescriptorSha256);
+            }
             foreach (var contract in value.PlatformImports.Values) marks.Add(contract.DescriptorSha256);
             foreach (var catalog in SunderRpcPlatformCatalogCache.Requirements(value)) marks.Add(CatalogKey(catalog.ContentIdentity));
         }
@@ -118,6 +121,34 @@ internal static partial class SunderRpcContractCacheStore
                     else if (!child.EndsWith(SunderRpcPlatformCatalogCache.ReceiptSuffix, StringComparison.Ordinal)
                         || !Digest(child[..^SunderRpcPlatformCatalogCache.ReceiptSuffix.Length])
                         || !GeneratedOutputPathSafety.PathExists(Path.Combine(directory, child[..^SunderRpcPlatformCatalogCache.ReceiptSuffix.Length] + ".json"))) unproven++;
+                }
+            }
+            else if (name == SunderRpcContractCache.ModelProjectionDirectoryName)
+            {
+                var parents = DirectoryNames(Path.Combine(root, name), MaximumCacheDirectoryEntries);
+                unproven += parents.Count(parent => parent != "sha256");
+                if (!parents.Contains("sha256", StringComparer.Ordinal)) continue;
+                var directory = Path.Combine(root, name, "sha256");
+                foreach (var child in DirectoryNames(directory, MaximumCacheDirectoryEntries).Order(StringComparer.Ordinal))
+                {
+                    token.ThrowIfCancellationRequested();
+                    GeneratedOutputPathSafety.EnsureSafeAncestors(Path.Combine(directory, child), includeLeaf: true, "model projection cache inventory");
+                    if (child.Length == 69 && child.EndsWith(".json", StringComparison.Ordinal) && Digest(child[..64]))
+                    {
+                        var hash = child[..64]; var key = ProjectionKey(hash);
+                        if (marks.Contains(key)) continue;
+                        var receipt = hash + SunderRpcContractCache.ReceiptSuffix;
+                        if (!GeneratedOutputPathSafety.PathExists(Path.Combine(directory, receipt))) { unproven++; continue; }
+                        if (new[] { child, receipt }.Any(file => Modified(Path.Combine(directory, file)) > cutoff)) continue;
+                        byte[] body;
+                        try { body = SunderRpcContractCache.ReadOwnedModelProjectionPair(directory, hash); }
+                        catch (InvalidDataException) { unproven++; continue; }
+                        var ownership = SunderRpcContractCache.ModelProjectionReceiptBytes(hash, body.Length);
+                        Select(new("projection", key, [new(child, hash, body.Length), new(receipt, Hash(ownership), ownership.Length)]));
+                    }
+                    else if (!child.EndsWith(SunderRpcContractCache.ReceiptSuffix, StringComparison.Ordinal)
+                        || !Digest(child[..^SunderRpcContractCache.ReceiptSuffix.Length])
+                        || !GeneratedOutputPathSafety.PathExists(Path.Combine(directory, child[..^SunderRpcContractCache.ReceiptSuffix.Length] + ".json"))) unproven++;
                 }
             }
             else if (name.StartsWith(".write-", StringComparison.Ordinal) || name.StartsWith(".gc-stage-", StringComparison.Ordinal)) unproven++;
@@ -272,8 +303,9 @@ internal static partial class SunderRpcContractCacheStore
         long totalBytes = 0;
         foreach (var unit in intent.Units)
         {
-            if (unit.Kind is not ("entry" or "catalog" or "artifact") || unit.Kind == "entry" && !Digest(unit.Key)
+            if (unit.Kind is not ("entry" or "catalog" or "projection" or "artifact") || unit.Kind == "entry" && !Digest(unit.Key)
                 || unit.Kind == "catalog" && !IsCatalogKey(unit.Key)
+                || unit.Kind == "projection" && !IsProjectionKey(unit.Key)
                 || unit.Kind == "artifact" && !IsArtifactKey(unit.Key) || unit.Files is not { Length: >= 1 and <= 257 }
                 || (count += unit.Files.Length) > 1024) throw Corrupt("GC unit shape is invalid.");
             RequireOrdered(unit.Files.Select(file => file.Name));
@@ -284,7 +316,8 @@ internal static partial class SunderRpcContractCacheStore
                     || !Digest(file.Sha256) || file.Bytes < 0 || file.Bytes > MaximumFileBytes(unit.Key)
                     || (totalBytes += file.Bytes) > MaximumCollectionBytes) throw Corrupt("GC file shape is invalid.");
             }
-            var hash = unit.Kind == "catalog" ? unit.Key[(SunderRpcPlatformCatalogCache.DirectoryName.Length + 1)..] : unit.Key;
+            var hash = unit.Kind == "catalog" ? unit.Key[(SunderRpcPlatformCatalogCache.DirectoryName.Length + 1)..]
+                : unit.Kind == "projection" ? unit.Key[(SunderRpcContractCache.ModelProjectionCacheDirectory.Length + 1)..] : unit.Key;
             if (unit.Kind != "artifact" && !unit.Files.Select(file => file.Name).SequenceEqual(new[] { hash + ".json", hash + SunderRpcContractCache.ReceiptSuffix }, StringComparer.Ordinal))
                 throw Corrupt("GC entry is not one complete content/receipt pair.");
             if (unit.Kind != "artifact" && unit.Files[0].Sha256 != hash) throw Corrupt("GC entry preimage differs from its content address.");
@@ -371,6 +404,9 @@ internal static partial class SunderRpcContractCacheStore
     private static bool CanonicalToken(string? value) => Guid.TryParseExact(value, "D", out var token) && token.ToString("D") == value;
     private static string? TokenAfter(string value, string prefix) => value.StartsWith(prefix, StringComparison.Ordinal) && CanonicalToken(value[prefix.Length..]) ? value[prefix.Length..] : null;
     private static string CatalogKey(string hash) => SunderRpcPlatformCatalogCache.DirectoryName + "/" + hash;
+    private static string ProjectionKey(string hash) => SunderRpcContractCache.ModelProjectionCacheDirectory + "/" + hash;
+    private static bool IsProjectionKey(string key) => key.StartsWith(SunderRpcContractCache.ModelProjectionCacheDirectory + "/", StringComparison.Ordinal)
+        && Digest(key[(SunderRpcContractCache.ModelProjectionCacheDirectory.Length + 1)..]);
     private static bool IsCatalogKey(string key) => key.StartsWith(SunderRpcPlatformCatalogCache.DirectoryName + "/", StringComparison.Ordinal)
         && Digest(key[(SunderRpcPlatformCatalogCache.DirectoryName.Length + 1)..]);
     private static int MaximumFileBytes(string key) => IsCatalogKey(key) || SunderRpcPlatformCatalogCache.IsPublicationArtifact(key)
@@ -378,7 +414,8 @@ internal static partial class SunderRpcContractCacheStore
     private static bool IsArtifactKey(string key) => TokenAfter(key, ".stage-") is not null || TokenAfter(key, ".completed-") is not null || TokenAfter(key, ".quarantine/") is not null || TokenAfter(key, ".gc-stage-") is not null || SunderRpcPlatformCatalogCache.IsPublicationArtifact(key);
     private static string ArtifactPath(string root, string key) => IsArtifactKey(key) ? Path.Combine(root, key.Replace('/', Path.DirectorySeparatorChar)) : throw Corrupt("Invalid cache artifact path.");
     private static string SourceFile(string root, CollectionUnit unit, string name) => Path.Combine(unit.Kind == "entry" ? root
-        : unit.Kind == "catalog" ? Path.Combine(root, SunderRpcPlatformCatalogCache.DirectoryName) : ArtifactPath(root, unit.Key), name);
+        : unit.Kind == "catalog" ? Path.Combine(root, SunderRpcPlatformCatalogCache.DirectoryName)
+        : unit.Kind == "projection" ? Path.Combine(root, SunderRpcContractCache.ModelProjectionDirectoryName, "sha256") : ArtifactPath(root, unit.Key), name);
     private static string UnitDirectory(int index) => index.ToString("D4", CultureInfo.InvariantCulture);
     private static void RequireOrdered(IEnumerable<string> values)
     { string? previous = null; foreach (var value in values) { if (value is null || previous is not null && string.CompareOrdinal(previous, value) >= 0) throw Corrupt("GC sets must be ascending and unique."); previous = value; } }

@@ -13,6 +13,28 @@ namespace Sunder.App.Tests;
 public sealed class SettingsWindowViewModelTests
 {
     [Fact]
+    public async Task PackageRuntimesDeepLinkSelectsRealPageAndStopsItsLifetimeWhenHidden()
+    {
+        using var runtime = new FakeRuntimeApiClient();
+        var management = new TestSupport.RuntimeManagementTestClient();
+        var page = SettingsPackageRuntimesViewModelTests.Page(management);
+        using var settings = new SettingsWindowViewModel(runtime, PackageViewHostService.Empty, new CliInstallationService(), packageRuntimes: page);
+        settings.SetWindowVisible(true);
+        Assert.True(await settings.SelectCoreSectionAsync(SettingsWindowViewModel.PackageRuntimesSectionId));
+        Assert.True(settings.IsPackageRuntimesSelection);
+        Assert.Equal("Package Runtimes", settings.SelectedTitle);
+        Assert.False(settings.ShowPlainCoreSelection);
+        Assert.False(settings.ShowApplySaveButtons);
+        Assert.Contains("inventory", management.Calls);
+        settings.SetWindowVisible(false);
+        var count = management.Calls.Count;
+        await page.RefreshAsync();
+        Assert.Equal(count, management.Calls.Count);
+        Assert.False(await settings.SelectCoreSectionAsync("unknown-section"));
+        Assert.True(settings.IsPackageRuntimesSelection);
+    }
+
+    [Fact]
     public async Task HostedSettings_DirectSelectionAndRestorationNavigateExactlyOnceEach()
     {
         using var runtimeClient = new FakeRuntimeApiClient();

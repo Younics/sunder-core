@@ -7,9 +7,11 @@ aggregator, deterministic archive writer and transactional publisher as ordinary
 
 ## Native producer
 
-Use the reviewed source checkout, frozen owned baseline, exact import lock and an
+Use the reviewed source checkout, frozen public baseline when present, exact import lock and an
 explicitly restored tool/dependency set. Local imports need no Registry. Freeze before
-the native Build: changing the baseline afterward invalidates its qualification.
+the native Build for public contracts: changing the baseline afterward invalidates its qualification.
+Private-only source needs no baseline or Freeze; Core binds explicit baseline absence
+and exact package-version private tuples. See [ordinary services](ORDINARY-SERVICES.md).
 
 ```sh
 dotnet msbuild Package.csproj -t:FreezeSunderContracts -p:Configuration=Release
@@ -124,7 +126,8 @@ or malformed metadata preserve the prior archive.
 Schemas: [evidence V1](../../specs/package/v1/prebuilt-role-inputs/evidence.schema.json)
 and [selection V1](../../specs/package/v1/prebuilt-role-inputs/selection.schema.json).
 Semantic checks additionally enforce exact role/RID sets, ordinal/case-safe paths,
-complete canonical package validity, matching RPC projections and frozen owned tuples.
+complete canonical package validity, matching role-scoped import projections, frozen
+public tuples and exact current package-version private tuples.
 
 Evidence is bounded to 64 MiB, depth 16 and the shared 262,144-value/property JSON
 budget; selections to 32 KiB and six entries. Trees have at most 16,384 files, 65,536

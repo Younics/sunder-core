@@ -1,12 +1,12 @@
 using Sunder.Sdk.Compatibility;
-using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Sdk.Stacks;
 
 /// <summary>Identifies one package-scoped Stack contributor.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 [SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
-[SunderRpcPlatformImport("sunder.stack.contributor", typeof(StackContributorServiceAdapter))]
+[SunderPlatformImport("sunder.stack.contributor", typeof(StackContributorServiceAdapter))]
 public interface IPackageStackContributor
 {
     /// <summary>Gets the stable package-scoped contributor id.</summary>

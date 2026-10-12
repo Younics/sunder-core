@@ -10,6 +10,10 @@ const { policy, declarations } = loadCoreTestModel();
 const requestedArguments = process.argv.slice(2);
 const primaryLane = takeOption("--primary-lane");
 const project = takeOption("--project");
+const timeoutMilliseconds = Number(takeOption("--timeout-ms") ?? 60 * 60 * 1000);
+if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds <= 0) {
+  throw new Error("--timeout-ms must be a positive safe integer.");
+}
 const list = takeFlag("--list");
 const requestedOutputDirectory = takeOption("--results-directory")
   ?? (project === undefined ? "artifacts/test-results/dotnet" : `artifacts/test-results/local/${project}/${primaryLane ?? "full"}`);
@@ -71,7 +75,7 @@ for (const projectPath of projectPaths) {
     outputDirectory,
     ...(filter === undefined ? [] : ["--filter", filter]),
     ...requestedArguments,
-  ], { cwd: repositoryRoot, encoding: "utf8", timeout: 60 * 60 * 1000 });
+  ], { cwd: repositoryRoot, encoding: "utf8", timeout: timeoutMilliseconds, maxBuffer: 128 * 1024 * 1024 });
   process.stdout.write(result.stdout ?? "");
   process.stderr.write(result.stderr ?? "");
   if (result.error !== undefined || result.status !== 0) failed.push(projectName);

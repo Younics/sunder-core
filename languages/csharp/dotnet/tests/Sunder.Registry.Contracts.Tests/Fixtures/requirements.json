@@ -1,60 +1,4 @@
 {
-  "packages": [
-    {
-      "packageId": "sunder.package.sample",
-      "version": null,
-      "desiredTargets": [
-        {
-          "role": "runtime",
-          "rid": "win-x64"
-        }
-      ],
-      "tag": "preview",
-      "versionRange": "\u003E=2.3.0",
-      "required": false
-    }
-  ],
-  "installedPackages": [
-    {
-      "packageId": "sunder.package.base",
-      "version": "1.5.0",
-      "dependsOn": [
-        {
-          "packageId": "sunder.package.shared",
-          "versionRange": "\u003E=1.0.0"
-        }
-      ],
-      "acquiredProjections": [
-        {
-          "kind": "shared",
-          "rid": null
-        },
-        {
-          "kind": "runtime",
-          "rid": "win-x64"
-        }
-      ],
-      "packageContentIdentity": "package-content-base-150",
-      "runtimeBindings": [
-        {
-          "role": "runtime",
-          "rid": "win-x64",
-          "requirement": {
-            "runtimeId": "sunder.runtime.dotnet",
-            "versionRange": "\u003E=10.0.0 \u003C11.0.0",
-            "moduleAbi": "sunder.dotnet-worker-module.v1"
-          },
-          "runtime": {
-            "runtimeId": "sunder.runtime.dotnet",
-            "version": "10.0.0",
-            "packagingRevision": 1,
-            "rid": "win-x64",
-            "moduleAbi": "sunder.dotnet-worker-module.v1"
-          }
-        }
-      ]
-    }
-  ],
   "compatibility": {
     "manifestVersions": [
       1
@@ -73,12 +17,46 @@
     "sdkBaseline": "sdk-baseline-1-1.v1",
     "rid": "win-x64"
   },
-  "runtimeTrust": {
-    "profileId": "sunder.runtime-trust.v1",
-    "generation": 2
-  },
   "expectedResolutionFingerprint": "previous-fingerprint-001",
   "includePrerelease": true,
   "allowDowngrade": false,
-  "reinstall": false
+  "reinstall": false,
+  "packages": [
+    {
+      "packageId": "sunder.package.sample",
+      "version": null,
+      "tag": "preview",
+      "versionRange": "\u003E=2.3.0",
+      "required": false,
+      "desiredTargets": [
+        {
+          "role": "runtime",
+          "rid": "win-x64"
+        }
+      ]
+    }
+  ],
+  "installedPackages": [
+    {
+      "packageId": "sunder.package.base",
+      "version": "1.5.0",
+      "packageContentIdentity": "package-content-base-150",
+      "dependsOn": [
+        {
+          "packageId": "sunder.package.shared",
+          "versionRange": "\u003E=1.0.0"
+        }
+      ],
+      "acquiredProjections": [
+        {
+          "kind": "shared",
+          "rid": null
+        },
+        {
+          "kind": "runtime",
+          "rid": "win-x64"
+        }
+      ]
+    }
+  ]
 }

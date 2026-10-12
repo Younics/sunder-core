@@ -8,7 +8,7 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
+internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
 {
     internal static readonly TimeSpan GarbageCollectionGraceInterval = TimeSpan.FromDays(1);
 
@@ -26,16 +26,14 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
     };
 
     private readonly ExecutionRuntimeStoreLayout _layout;
-    private readonly ExecutionRuntimeHostTrustService _trust;
     private readonly IExecutionRuntimeGarbageCollectionAuthority _garbageCollectionAuthority;
-    private readonly ISunderExecutionRuntimeArchiveSignatureVerifier _signatureVerifier;
+    private readonly OfficialRuntimeMaterializer _materializer;
     private readonly IExecutionRuntimeVerificationIoObserver? _verificationIoObserver;
     private readonly TimeProvider _timeProvider;
     private readonly IExecutionRuntimeStoreFaultInjector? _faultInjector;
     private readonly ExecutionRuntimeStoreRecovery _recovery;
     private readonly ExecutionRuntimeLeaseRegistry _leases;
     private readonly ExecutionRuntimePhaseTelemetry _telemetry;
-    private readonly bool _developmentAllowInsecureLoopbackRegistry;
     private readonly ExecutionRuntimeRetentionRegistry _retentions = new();
     private readonly SemaphoreSlim _initializeGate = new(1, 1);
     private readonly ConcurrentDictionary<string, ExecutionRuntimeSingleFlight> _singleFlights =
@@ -46,28 +44,24 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
 
     public ExecutionRuntimeStore(
         ExecutionRuntimeStoreLayout layout,
-        ExecutionRuntimeHostTrustService trust,
         IExecutionRuntimeGarbageCollectionAuthority garbageCollectionAuthority,
         TimeProvider? timeProvider = null,
         IExecutionRuntimeStoreFaultInjector? faultInjector = null,
-        ISunderExecutionRuntimeArchiveSignatureVerifier? signatureVerifier = null,
         Guid? hostInstanceId = null,
         IExecutionRuntimeProcessController? processController = null,
         IExecutionRuntimeProcessContainmentController? containmentController = null,
         IExecutionRuntimeVerificationIoObserver? verificationIoObserver = null,
         ExecutionRuntimePhaseTelemetry? telemetry = null,
-        bool developmentAllowInsecureLoopbackRegistry = false)
+        OfficialRuntimeMaterializer? materializer = null)
     {
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
-        _trust = trust ?? throw new ArgumentNullException(nameof(trust));
         _garbageCollectionAuthority = garbageCollectionAuthority
-                                      ?? throw new ArgumentNullException(nameof(garbageCollectionAuthority));
+                                       ?? throw new ArgumentNullException(nameof(garbageCollectionAuthority));
+        _materializer = materializer ?? new OfficialRuntimeMaterializer(new OfficialRuntimePlatformProbe());
         _timeProvider = timeProvider ?? TimeProvider.System;
         _faultInjector = faultInjector;
-        _signatureVerifier = signatureVerifier ?? new ExecutionRuntimeEd25519SignatureVerifier();
         _verificationIoObserver = verificationIoObserver;
         _telemetry = telemetry ?? ExecutionRuntimePhaseTelemetry.Disabled;
-        _developmentAllowInsecureLoopbackRegistry = developmentAllowInsecureLoopbackRegistry;
         _leases = new ExecutionRuntimeLeaseRegistry(
             _layout,
             hostInstanceId is { } instanceId && instanceId != Guid.Empty ? instanceId : Guid.NewGuid(),
@@ -138,58 +132,6 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                .Any(path => !PathsEqual(path, _layout.GarbageCollectionMarkRootPath)
                             && !_deferredCommittedTombstones.ContainsKey(Path.GetFullPath(path)));
 
-    public Task<ExecutionRuntimeEnsureResult> ImportLocalArchiveAsync(
-        ExecutionRuntimeAcquisitionPlan plan,
-        string archivePath,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(plan);
-        if (plan.AcquisitionSource != RuntimeExecutionRuntimeAcquisitionSources.LocalImport)
-        {
-            throw new ArgumentException(
-                "Local archive import requires the local-import acquisition source.",
-                nameof(plan));
-        }
-        return EnsureAsync(plan, archivePath, cancellationToken);
-    }
-
-    public async Task<ExecutionRuntimeEnsureResult> ImportLocalArchiveAsync(
-        string archivePath,
-        string artifactSha256,
-        long artifactSize,
-        CancellationToken cancellationToken = default)
-    {
-        var (manifest, manifestSha256) = await SunderExecutionRuntimeArchiveInspector
-            .ReadManifestMetadataAsync(archivePath, cancellationToken)
-            .ConfigureAwait(false);
-        var currentRid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
-        if (!string.Equals(manifest.Rid, currentRid, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException(
-                $"Execution runtime import RID '{manifest.Rid}' does not match current Host RID '{currentRid}'.");
-        }
-
-        var plan = new ExecutionRuntimeAcquisitionPlan(
-            new ExecutionRuntimeIdentity(
-                manifest.Id!,
-                manifest.Version!,
-                manifest.PackagingRevision,
-                manifest.Rid!,
-                manifest.ModuleAbi!),
-            artifactSha256,
-            artifactSize,
-            manifestSha256,
-            ContentIdentity: null,
-            manifest.Signing!.KeyId!,
-            _trust.Generation,
-            ExecutionRuntimeTrustEnvironment.Production,
-            RuntimeExecutionRuntimeAcquisitionSources.LocalImport,
-            RegistryOrigin: null,
-            manifest.Provenance!.AttestationSha256,
-            manifest.Provenance.AttestationKeyId);
-        return await ImportLocalArchiveAsync(plan, archivePath, cancellationToken).ConfigureAwait(false);
-    }
-
     public async Task<ExecutionRuntimeEnsureResult?> RepairAsync(
         ExecutionRuntimeIdentity identity,
         CancellationToken cancellationToken = default)
@@ -202,21 +144,16 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         }
 
         var plan = new ExecutionRuntimeAcquisitionPlan(
-            receipt.Identity,
-            receipt.ArtifactSha256,
-            receipt.ArtifactSize,
-            receipt.ManifestSha256,
-            receipt.ContentIdentity,
-            receipt.SigningKeyId,
-            receipt.TrustGeneration,
-            receipt.TrustEnvironment,
-            receipt.AcquisitionSource,
-            receipt.RegistryOrigin,
-            receipt.NativeAttestationSha256,
-            receipt.NativeAttestationKeyId);
+            new RuntimeExecutionRuntimeVendorArtifact(
+                receipt.Identity.ToContract(),
+                receipt.Provenance.Distribution,
+                receipt.Support),
+            receipt.ArchiveSha256,
+            receipt.ArchiveSize,
+            receipt.ContentIdentity);
         return await EnsureAsync(
                 plan,
-                _layout.GetArchivePath(receipt.ArtifactSha256),
+                _layout.GetArchivePath(receipt.ArchiveSha256),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -227,7 +164,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        plan.Validate(_developmentAllowInsecureLoopbackRegistry);
+        plan.Validate();
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(archivePath) || !File.Exists(archivePath))
         {
@@ -281,8 +218,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         return EnsureSourceCoreAsync(
             plan,
             async operationToken => await sourceFactory(operationToken).ConfigureAwait(false),
-            cancellationToken,
-            allowExactLocalImportReuse: true);
+            cancellationToken);
     }
 
     private async Task<ExecutionRuntimeEnsureResult> EnsureTransferredOwnedArchiveAsync(
@@ -402,13 +338,12 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         CancellationToken cancellationToken,
         Action? claimSource = null,
         Action? discardSource = null,
-        Action? releaseClaimedSource = null,
-        bool allowExactLocalImportReuse = false)
+        Action? releaseClaimedSource = null)
     {
         using var operation = _telemetry.BeginOperation();
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(sourceFactory);
-        plan.Validate(_developmentAllowInsecureLoopbackRegistry);
+        plan.Validate();
         cancellationToken.ThrowIfCancellationRequested();
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
 
@@ -451,7 +386,6 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                 operationToken => EnsureCoreAsync(
                     plan,
                     sourceFactory,
-                    allowExactLocalImportReuse,
                     operationToken),
                 releaseClaimedSource);
             if (_singleFlights.TryAdd(flightKey, candidate))
@@ -639,17 +573,15 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
             _layout.GarbageCollectionRetentionFencePath);
         if (crossProcessPin is null)
         {
-            return new ExecutionRuntimeGarbageCollectionResult(0, 0, 0);
+            return new ExecutionRuntimeGarbageCollectionResult(0, 0);
         }
         await RecoverTombstonesUnderFenceAsync(cancellationToken).ConfigureAwait(false);
         var receiptPaths = EnumerateFiles(_layout.ReceiptRootPath, "*.json");
         var archivePaths = EnumerateFiles(_layout.ArchiveRootPath, "*");
-        var manifestPaths = EnumerateFiles(_layout.ManifestRootPath, "*");
         var allContent = EnumerateContentRootIdentitiesUnderFence();
         var boundIdentities = new HashSet<string>(StringComparer.Ordinal);
         var activeContent = new HashSet<string>(StringComparer.Ordinal);
         var reachableArchives = new HashSet<string>(StringComparer.Ordinal);
-        var reachableManifests = new HashSet<string>(StringComparer.Ordinal);
         var protectedReceiptPaths = new HashSet<string>(PathComparer);
 
         foreach (var installedBinding in authority.PackageBindings)
@@ -696,24 +628,19 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
 
             boundIdentities.Add(binding.Identity.SingleFlightKey);
             activeContent.Add(receipt.ContentIdentity);
-            reachableArchives.Add(binding.RuntimeArtifactSha256);
-            reachableManifests.Add(binding.RuntimeManifestSha256);
+            reachableArchives.Add(receipt.ArchiveSha256);
         }
 
-        foreach (var retention in _retentions.SnapshotUnderFence())
+        foreach (var retention in _retentions.SnapshotUnderFence().Concat(authority.Retentions))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (retention.ContentIdentity is not null)
             {
                 activeContent.Add(retention.ContentIdentity);
             }
-            if (retention.ArtifactSha256 is not null)
+            if (retention.ArchiveSha256 is not null)
             {
-                reachableArchives.Add(retention.ArtifactSha256);
-            }
-            if (retention.ManifestSha256 is not null)
-            {
-                reachableManifests.Add(retention.ManifestSha256);
+                reachableArchives.Add(retention.ArchiveSha256);
             }
             if (retention.Identity is null)
             {
@@ -746,8 +673,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                     $"Execution-runtime retention for '{retention.Identity.SingleFlightKey}' failed integrity verification: {verification.Message}");
             }
             activeContent.Add(receipt.ContentIdentity);
-            reachableArchives.Add(receipt.ArtifactSha256);
-            reachableManifests.Add(receipt.ManifestSha256);
+            reachableArchives.Add(receipt.ArchiveSha256);
         }
 
         var leasedContentIdentities = await _leases
@@ -841,8 +767,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
 
         foreach (var receipt in retainedReceipts.Concat(pendingReceipts))
         {
-            reachableArchives.Add(receipt.ArtifactSha256);
-            reachableManifests.Add(receipt.ManifestSha256);
+            reachableArchives.Add(receipt.ArchiveSha256);
         }
         var cutoff = now - minimumUnreferencedAge;
         var archivesRemoved = CollectContentAddressedFiles(
@@ -850,15 +775,9 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
             reachableArchives,
             cutoff,
             cancellationToken);
-        var manifestsRemoved = CollectContentAddressedFiles(
-            manifestPaths,
-            reachableManifests,
-            cutoff,
-            cancellationToken);
         return new ExecutionRuntimeGarbageCollectionResult(
             rootsRemoved,
-            archivesRemoved,
-            manifestsRemoved);
+            archivesRemoved);
     }
 
     internal async Task<IExecutionRuntimeProcessLease> ReserveProcessLeaseAsync(
@@ -917,7 +836,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                 FileShare.Read,
                 16 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            if (stream.Length > SunderExecutionRuntimeFormat.MaxMetadataBytes)
+            if (stream.Length > OfficialRuntimeSourcePolicy.MaxMetadataBytes)
             {
                 throw new InvalidDataException($"Execution runtime receipt '{path}' is too large.");
             }
@@ -938,62 +857,52 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         ArgumentNullException.ThrowIfNull(receipt);
         if (receipt.SchemaVersion != ExecutionRuntimeReceiptV1.CurrentSchemaVersion
             || receipt.Identity is null
-            || receipt.Identity.PackagingRevision is <= 0 or > SunderExecutionRuntimeFormat.MaxPackagingRevision
-            || !string.Equals(
-                receipt.WorkerProtocol,
-                SunderExecutionRuntimeFormat.WorkerProtocol,
-                StringComparison.Ordinal)
-            || receipt.ArtifactSize is <= 0 or > SunderExecutionRuntimeFormat.MaxArchiveBytes
+            || receipt.ArchiveSize is <= 0 or > OfficialRuntimeSourcePolicy.MaxArchiveBytes
             || receipt.LauncherSize <= 0
             || receipt.LauncherArguments is null
             || receipt.Content is null
             || receipt.Content.Count == 0
-            || receipt.Content.Count > SunderExecutionRuntimeFormat.MaxContentIndexEntries
-            || receipt.TrustGeneration <= 0
-            || !Enum.IsDefined(receipt.TrustEnvironment)
+            || receipt.Content.Count > OfficialRuntimeSourcePolicy.MaxEntries
+            || receipt.Provenance is null
+            || receipt.Support is null
             || receipt.InstalledAtUtc == default)
         {
             throw InvalidReceipt(receiptPath);
         }
+        try
+        {
+            OfficialRuntimeSourcePolicy.ValidateArtifact(new RuntimeExecutionRuntimeVendorArtifact(
+                receipt.Identity.ToContract(),
+                receipt.Provenance.Distribution,
+                receipt.Support));
+        }
+        catch (Exception exception) when (exception is InvalidDataException or ArgumentException or RuntimeExecutionRuntimeException)
+        {
+            throw InvalidReceipt(receiptPath);
+        }
         ValidateReceiptSegment(receipt.Identity.RuntimeId, nameof(receipt.Identity.RuntimeId), receiptPath);
-        ValidateReceiptSegment(receipt.Identity.Version, nameof(receipt.Identity.Version), receiptPath);
+        ValidateReceiptSegment(receipt.Identity.VendorVersion, nameof(receipt.Identity.VendorVersion), receiptPath);
         ValidateReceiptSegment(receipt.Identity.Rid, nameof(receipt.Identity.Rid), receiptPath);
         ValidateReceiptSegment(receipt.Identity.ModuleAbi, nameof(receipt.Identity.ModuleAbi), receiptPath);
-        ValidateReceiptSegment(receipt.SigningKeyId, nameof(receipt.SigningKeyId), receiptPath);
-        ValidateReceiptSha256(receipt.ArtifactSha256, nameof(receipt.ArtifactSha256), receiptPath);
-        ValidateReceiptSha256(receipt.ManifestSha256, nameof(receipt.ManifestSha256), receiptPath);
+        ValidateReceiptSegment(receipt.Identity.VendorChecksumDigest, nameof(receipt.Identity.VendorChecksumDigest), receiptPath);
+        ValidateReceiptSha256(receipt.ArchiveSha256, nameof(receipt.ArchiveSha256), receiptPath);
         ValidateReceiptSha256(receipt.ContentIdentity, nameof(receipt.ContentIdentity), receiptPath);
         ValidateReceiptSha256(receipt.LauncherSha256, nameof(receipt.LauncherSha256), receiptPath);
-        ValidateReceiptSha256(
-            receipt.NativeAttestationSha256,
-            nameof(receipt.NativeAttestationSha256),
-            receiptPath);
-        ValidateReceiptSegment(
-            receipt.NativeAttestationKeyId,
-            nameof(receipt.NativeAttestationKeyId),
-            receiptPath);
         ValidateLauncherArguments(receipt, receiptPath);
-
-        if (receipt.AcquisitionSource is not (
-                RuntimeExecutionRuntimeAcquisitionSources.Registry
-                or RuntimeExecutionRuntimeAcquisitionSources.LocalImport
-                or RuntimeExecutionRuntimeAcquisitionSources.Development)
-            || (receipt.TrustEnvironment == ExecutionRuntimeTrustEnvironment.Development)
-            != (receipt.AcquisitionSource == RuntimeExecutionRuntimeAcquisitionSources.Development)
-            || receipt.AcquisitionSource == RuntimeExecutionRuntimeAcquisitionSources.Registry
-            && (!Uri.TryCreate(receipt.RegistryOrigin, UriKind.Absolute, out var registryOrigin)
-                || !string.Equals(registryOrigin.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal))
-            || receipt.AcquisitionSource == RuntimeExecutionRuntimeAcquisitionSources.Development
-            && receipt.RegistryOrigin is not null
-            && (!Uri.TryCreate(receipt.RegistryOrigin, UriKind.Absolute, out var developmentRegistryOrigin)
-                || !string.Equals(developmentRegistryOrigin.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)
-                   && (!_developmentAllowInsecureLoopbackRegistry
-                       || !string.Equals(
-                           developmentRegistryOrigin.Scheme,
-                           Uri.UriSchemeHttp,
-                           StringComparison.Ordinal)
-                       || !developmentRegistryOrigin.IsLoopback
-                       || !string.IsNullOrEmpty(developmentRegistryOrigin.UserInfo))))
+        if (receipt.Provenance.RetrievedAtUtc == default
+            || !Uri.TryCreate(receipt.Provenance.FinalDownloadUrl, UriKind.Absolute, out var finalDownloadUrl))
+        {
+            throw InvalidReceipt(receiptPath);
+        }
+        try
+        {
+            OfficialRuntimeSourcePolicy.ValidateUri(
+                finalDownloadUrl,
+                receipt.Identity.SourceId,
+                receipt.Identity.VendorVersion,
+                receipt.Identity.Rid);
+        }
+        catch (RuntimeExecutionRuntimeException)
         {
             throw InvalidReceipt(receiptPath);
         }
@@ -1004,10 +913,11 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         {
             if (content is null
                 || string.IsNullOrEmpty(content.Path)
-                || !SunderExecutionRuntimeFormat.IsPayloadPath(content.Path)
+                || !IsMaterializedPath(content.Path)
                 || !paths.Add(content.Path)
                 || previous is not null && string.Compare(previous, content.Path, StringComparison.Ordinal) >= 0
-                || content.Size < 0)
+                || content.Size is < 0 or > OfficialRuntimeSourcePolicy.MaxFileBytes
+                || content.UnixMode is not (OfficialRuntimeMaterializer.ReadOnlyMode or OfficialRuntimeMaterializer.ExecutableMode))
             {
                 throw InvalidReceipt(receiptPath);
             }
@@ -1019,6 +929,17 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         if (launcher is null
             || launcher.Size != receipt.LauncherSize
             || !string.Equals(launcher.Sha256, receipt.LauncherSha256, StringComparison.Ordinal))
+        {
+            throw InvalidReceipt(receiptPath);
+        }
+        var expectedLauncherPath = OfficialRuntimeMaterializer.LauncherPath(receipt.Identity.ToContract());
+        var expectedContentIdentity = OfficialRuntimeMaterializer.ComputeContentIdentity(
+            receipt.Provenance.Distribution.MaterializationProfile,
+            receipt.Content);
+        if (!string.Equals(receipt.LauncherPath, expectedLauncherPath, StringComparison.Ordinal)
+            || !string.Equals(receipt.ContentIdentity, expectedContentIdentity, StringComparison.Ordinal)
+            || receipt.Content.Any(content => (content.UnixMode == OfficialRuntimeMaterializer.ExecutableMode)
+                                             != string.Equals(content.Path, receipt.LauncherPath, StringComparison.Ordinal)))
         {
             throw InvalidReceipt(receiptPath);
         }
@@ -1036,11 +957,11 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         var arguments = receipt.LauncherArguments;
         var validRecipe = receipt.Identity.RuntimeId switch
         {
-            SunderExecutionRuntimeFormat.DotNetRuntimeId => arguments.Count == 2
-                && string.Equals(arguments[0], SunderExecutionRuntimeFormat.DotNetExecArgument, StringComparison.Ordinal)
-                && string.Equals(arguments[1], SunderExecutionRuntimeFormat.PackageEntryPointPlaceholder, StringComparison.Ordinal),
-            SunderExecutionRuntimeFormat.NodeRuntimeId => arguments.Count == 1
-                && string.Equals(arguments[0], SunderExecutionRuntimeFormat.PackageEntryPointPlaceholder, StringComparison.Ordinal),
+            _ when receipt.Identity.SourceId == ConfiguredOfficialSourceId.DotNet => arguments.Count == 2
+                && string.Equals(arguments[0], "exec", StringComparison.Ordinal)
+                && string.Equals(arguments[1], OfficialRuntimeSourcePolicy.EntryPointToken, StringComparison.Ordinal),
+            _ when receipt.Identity.SourceId == ConfiguredOfficialSourceId.Node => arguments.Count == 1
+                && string.Equals(arguments[0], OfficialRuntimeSourcePolicy.EntryPointToken, StringComparison.Ordinal),
             _ => false,
         };
         if (!validRecipe)
@@ -1079,11 +1000,9 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
     {
         ValidateJournal(journal);
         var receipt = journal.Receipt;
-        var archivePath = _layout.GetArchivePath(receipt.ArtifactSha256);
-        var manifestPath = _layout.GetManifestPath(receipt.ManifestSha256);
+        var archivePath = _layout.GetArchivePath(receipt.ArchiveSha256);
         var rootPath = _layout.GetContentRootPath(receipt.ContentIdentity);
         if (!File.Exists(archivePath)
-            || !File.Exists(manifestPath)
             || !Directory.Exists(rootPath))
         {
             return false;
@@ -1225,10 +1144,13 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
     private async Task<ExecutionRuntimeEnsureResult> EnsureCoreAsync(
         ExecutionRuntimeAcquisitionPlan plan,
         Func<CancellationToken, Task<ExecutionRuntimeOwnedArchive?>> sourceFactory,
-        bool allowExactLocalImportReuse,
         CancellationToken cancellationToken)
     {
         using var recoveryFence = await EnterInitializedRecoveryReadAsync(cancellationToken).ConfigureAwait(false);
+        using var versionLock = await RuntimeFileLock.AcquireExclusiveAsync(
+                _layout.GetVersionLockPath(plan.Identity),
+                cancellationToken)
+            .ConfigureAwait(false);
         using var identityLock = await RuntimeFileLock.AcquireExclusiveAsync(
                 _layout.GetSingleFlightLockPath(plan.Identity),
                 cancellationToken)
@@ -1236,15 +1158,16 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         await using var operationRetention = await RetainAsync(
                 new ExecutionRuntimeRetention(
                     plan.Identity,
-                    plan.ContentIdentity,
-                    plan.ArtifactSha256,
-                    plan.ArtifactSize,
-                    plan.ManifestSha256),
+                    plan.ExpectedContentIdentity,
+                    plan.ExpectedArchiveSha256,
+                    plan.ExpectedArchiveSize),
                 cancellationToken)
             .ConfigureAwait(false);
         var receiptPath = _layout.GetReceiptPath(plan.Identity);
         using (var fence = await _leases.EnterFenceAsync(cancellationToken).ConfigureAwait(false))
         {
+            await RejectSameVersionChangedArtifactAsync(plan.Identity, receiptPath, cancellationToken)
+                .ConfigureAwait(false);
             if (File.Exists(receiptPath))
             {
                 ExecutionRuntimeReceiptV1 existing;
@@ -1261,16 +1184,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
 
                 if (existing is not null)
                 {
-                    var reusingLocalImport = allowExactLocalImportReuse
-                                             && ReceiptMatchesRegistryPlanForLocalImport(existing, plan);
-                    if (!reusingLocalImport)
-                    {
-                        EnsureReceiptMatchesPlan(existing, plan);
-                    }
-                    _ = _trust.Resolve(
-                        existing.SigningKeyId,
-                        existing.TrustEnvironment,
-                        plan.MinimumHostTrustGeneration);
+                    EnsureReceiptMatchesPlan(existing, plan);
                     var verification = await VerifyReceiptAsync(existing, deep: false, cancellationToken)
                         .ConfigureAwait(false);
                     if (!verification.Healthy)
@@ -1282,12 +1196,6 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                     {
                         return new ExecutionRuntimeEnsureResult(existing, AlreadyPresent: true);
                     }
-                    if (reusingLocalImport)
-                    {
-                        throw new InvalidDataException(
-                            "The exact local-import execution runtime is unhealthy and cannot be replaced by Registry acquisition.");
-                    }
-
                     var rootPath = _layout.GetContentRootPath(existing.ContentIdentity);
                     if (Directory.Exists(rootPath))
                     {
@@ -1304,7 +1212,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         var transactionId = Guid.NewGuid().ToString("N");
         var stagingPath = _layout.GetStagingPath(transactionId);
         var extractedPath = Path.Combine(stagingPath, "root");
-        var validatedArchivePath = Path.Combine(stagingPath, "validated.sunderruntime");
+        var validatedArchivePath = Path.Combine(stagingPath, "validated.archive");
         var transactionPath = _layout.GetTransactionPath(transactionId);
         var journalPath = _layout.GetTransactionJournalPath(transactionId);
         var journalPrepared = false;
@@ -1314,32 +1222,23 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
             Directory.CreateDirectory(transactionPath);
             Hit(ExecutionRuntimeStoreFaultPoint.ArchiveSourceOpening);
             var sourceArchivePath = SelectArchiveSource(plan, suppliedArchivePath);
-            var trustedKey = _trust.Resolve(
-                plan.SigningKeyId,
-                plan.TrustEnvironment,
-                plan.MinimumHostTrustGeneration);
-            SunderExecutionRuntimeArchiveValidationResult validation;
+            OfficialRuntimeMaterializationResult materialization;
             using (var inspection = _telemetry.BeginPhase(
                        ExecutionRuntimePhaseNames.Inspect,
                        plan.Identity,
-                       plan.ArtifactSize,
+                       plan.ExpectedArchiveSize ?? plan.Artifact.Distribution.DownloadSize ?? 0,
                        cacheHit: false))
             {
                 try
                 {
-                    validation = await SunderExecutionRuntimeArchiveInspector.InspectAsync(
+                    materialization = await _materializer.MaterializeAsync(
+                            plan.Artifact,
                             sourceArchivePath,
                             validatedArchivePath,
                             extractedPath,
-                            _signatureVerifier,
-                            trustedKey,
-                            new ArchiveInspectionTelemetryObserver(
-                                _telemetry,
-                                plan.Identity,
-                                plan.ArtifactSize),
                             cancellationToken)
                         .ConfigureAwait(false);
-                    ValidateArchiveResult(plan, validation);
+                    ValidateMaterializationResult(plan, materialization);
                     inspection.Succeeded();
                 }
                 catch (OperationCanceledException)
@@ -1356,7 +1255,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
             Hit(ExecutionRuntimeStoreFaultPoint.Validated);
             cancellationToken.ThrowIfCancellationRequested();
 
-            var receipt = CreateReceipt(plan, validation);
+            var receipt = CreateReceipt(plan, materialization, ownedArchive?.FinalDownloadUrl);
             var journal = new ExecutionRuntimeStoreTransactionJournal(
                 ExecutionRuntimeStoreTransactionJournal.CurrentSchemaVersion,
                 transactionId,
@@ -1372,9 +1271,9 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
 
                 await PublishFileUnderFenceAsync(
                         validatedArchivePath,
-                        _layout.GetArchivePath(receipt.ArtifactSha256),
-                        receipt.ArtifactSha256,
-                        receipt.ArtifactSize,
+                        _layout.GetArchivePath(receipt.ArchiveSha256),
+                        receipt.ArchiveSha256,
+                        receipt.ArchiveSize,
                         "archive-conflict")
                     .ConfigureAwait(false);
                 journal = await SetJournalPhaseAsync(
@@ -1383,25 +1282,6 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                         ExecutionRuntimeStoreTransactionPhase.ArchivePublished)
                     .ConfigureAwait(false);
                 Hit(ExecutionRuntimeStoreFaultPoint.ArchivePublished);
-
-                var stagedManifestPath = Path.Combine(stagingPath, "manifest-object.json");
-                File.Copy(
-                    GetArchiveRelativePath(extractedPath, SunderExecutionRuntimeFormat.ManifestPath),
-                    stagedManifestPath,
-                    overwrite: false);
-                await PublishFileUnderFenceAsync(
-                        stagedManifestPath,
-                        _layout.GetManifestPath(receipt.ManifestSha256),
-                        receipt.ManifestSha256,
-                        expectedSize: null,
-                        "manifest-conflict")
-                    .ConfigureAwait(false);
-                journal = await SetJournalPhaseAsync(
-                        journalPath,
-                        journal,
-                        ExecutionRuntimeStoreTransactionPhase.ManifestPublished)
-                    .ConfigureAwait(false);
-                Hit(ExecutionRuntimeStoreFaultPoint.ManifestPublished);
 
                 ExecutionRuntimeRootFileSystem.PrepareForPublication(
                     extractedPath,
@@ -1489,7 +1369,13 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         {
             return Path.GetFullPath(suppliedArchivePath);
         }
-        var storedArchivePath = _layout.GetArchivePath(plan.ArtifactSha256);
+        if (plan.ExpectedArchiveSha256 is null)
+        {
+            throw new FileNotFoundException(
+                "No source archive is available for the exact execution runtime acquisition plan.",
+                suppliedArchivePath);
+        }
+        var storedArchivePath = _layout.GetArchivePath(plan.ExpectedArchiveSha256);
         if (File.Exists(storedArchivePath))
         {
             return storedArchivePath;
@@ -1497,6 +1383,47 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         throw new FileNotFoundException(
             "No source archive is available for the exact execution runtime acquisition plan.",
             suppliedArchivePath);
+    }
+
+    private async Task RejectSameVersionChangedArtifactAsync(
+        ExecutionRuntimeIdentity identity,
+        string targetReceiptPath,
+        CancellationToken cancellationToken)
+    {
+        // The canonical sibling directory already fixes source/version/RID/ABI/algorithm.
+        // A damaged sibling cannot erase the earlier digest reservation for that version.
+        var siblingDirectory = Path.GetDirectoryName(targetReceiptPath)!;
+        PackageStorePathGuard.EnsureSafe(siblingDirectory, _layout.ReceiptRootPath);
+        if (!Directory.Exists(siblingDirectory))
+        {
+            if (File.Exists(siblingDirectory)) throw new InvalidDataException("The runtime receipt namespace is not a directory.");
+            return;
+        }
+        foreach (var receiptPath in EnumerateFiles(siblingDirectory, "*.json"))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (PathsEqual(receiptPath, targetReceiptPath))
+            {
+                continue;
+            }
+            ExecutionRuntimeReceiptV1 receipt;
+            try
+            {
+                receipt = await ReadReceiptAsync(receiptPath, cancellationToken).ConfigureAwait(false);
+                ValidateReceipt(receipt, receiptPath);
+            }
+            catch (InvalidDataException error)
+            {
+                throw new InvalidDataException("A conflicting same-version runtime receipt is damaged; exact acquisition requires recovery first.", error);
+            }
+            if (string.Equals(receipt.Identity.VersionKey, identity.VersionKey, StringComparison.Ordinal)
+                && !string.Equals(receipt.Identity.VendorChecksumDigest, identity.VendorChecksumDigest, StringComparison.Ordinal))
+            {
+                throw new RuntimeExecutionRuntimeException(
+                    ExecutionRuntimeErrorCodes.ArtifactChanged,
+                    "The vendor checksum changed for an already installed runtime version.");
+            }
+        }
     }
 
     private async Task<ExecutionRuntimeOwnedArchive?> CaptureArchiveSourceAsync(
@@ -1513,7 +1440,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
 
         var captureId = Guid.NewGuid().ToString("N");
         var capturePath = _layout.GetStagingPath(captureId);
-        var archivePath = Path.Combine(capturePath, "owned-source.sunderruntime");
+        var archivePath = Path.Combine(capturePath, "owned-source.archive");
         try
         {
             Directory.CreateDirectory(capturePath);
@@ -1527,7 +1454,12 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                     FileOptions.Asynchronous | FileOptions.SequentialScan)
                 : null;
             var source = stableSource ?? openedSource!;
-            if (source.Length != plan.ArtifactSize)
+            if (source.Length is <= 0 or > OfficialRuntimeSourcePolicy.MaxArchiveBytes)
+            {
+                throw new ExecutionRuntimePlanMismatchException(
+                    "The execution runtime archive size is outside the official-source bounds.");
+            }
+            if (plan.ExpectedArchiveSize is { } expectedSize && source.Length != expectedSize)
             {
                 throw new ExecutionRuntimePlanMismatchException(
                     "The execution runtime archive size does not match its acquisition plan.");
@@ -1541,24 +1473,23 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
             var buffer = new byte[128 * 1024];
             long copied = 0;
-            while (copied < plan.ArtifactSize)
+            while (true)
             {
                 var read = await source.ReadAsync(
-                        buffer.AsMemory(0, (int)Math.Min(buffer.Length, plan.ArtifactSize - copied)),
+                        buffer.AsMemory(0, buffer.Length),
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (read == 0)
                 {
-                    throw new ExecutionRuntimePlanMismatchException(
-                        "The execution runtime archive ended before its acquisition-plan size.");
+                    break;
                 }
                 await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 copied += read;
-            }
-            if (await source.ReadAsync(buffer.AsMemory(0, 1), cancellationToken).ConfigureAwait(false) != 0)
-            {
-                throw new ExecutionRuntimePlanMismatchException(
-                    "The execution runtime archive exceeds its acquisition-plan size.");
+                if (copied > OfficialRuntimeSourcePolicy.MaxArchiveBytes)
+                {
+                    throw new ExecutionRuntimePlanMismatchException(
+                        "The execution runtime archive exceeds its acquisition-plan size.");
+                }
             }
             await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
             return new ExecutionRuntimeOwnedArchive(
@@ -1572,132 +1503,73 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         }
     }
 
-    private void ValidateArchiveResult(
+    private static void ValidateMaterializationResult(
         ExecutionRuntimeAcquisitionPlan plan,
-        SunderExecutionRuntimeArchiveValidationResult result)
+        OfficialRuntimeMaterializationResult result)
     {
-        if (!result.Success)
-        {
-            throw new InvalidDataException(
-                "Execution runtime archive validation failed: " + string.Join(" ", result.Errors));
-        }
-        var manifest = result.Manifest!;
-        var mismatch = !string.Equals(manifest.Id, plan.Identity.RuntimeId, StringComparison.Ordinal)
-                       || !string.Equals(manifest.Version, plan.Identity.Version, StringComparison.Ordinal)
-                       || manifest.PackagingRevision != plan.Identity.PackagingRevision
-                       || !string.Equals(manifest.Rid, plan.Identity.Rid, StringComparison.Ordinal)
-                       || !string.Equals(manifest.ModuleAbi, plan.Identity.ModuleAbi, StringComparison.Ordinal)
-                       || !string.Equals(result.ArchiveSha256, plan.ArtifactSha256, StringComparison.Ordinal)
-                       || result.ArchiveSize != plan.ArtifactSize
-                       || !string.Equals(result.ManifestSha256, plan.ManifestSha256, StringComparison.Ordinal)
-                       || plan.ContentIdentity is not null
-                       && !string.Equals(result.ContentIdentity, plan.ContentIdentity, StringComparison.Ordinal)
-                       || !string.Equals(manifest.Signing?.KeyId, plan.SigningKeyId, StringComparison.Ordinal)
-                       || plan.NativeAttestationSha256 is not null
-                       && !string.Equals(
-                           manifest.Provenance?.AttestationSha256,
-                           plan.NativeAttestationSha256,
-                           StringComparison.Ordinal)
-                       || plan.NativeAttestationKeyId is not null
-                       && !string.Equals(
-                           manifest.Provenance?.AttestationKeyId,
-                           plan.NativeAttestationKeyId,
-                           StringComparison.Ordinal);
+        var mismatch = plan.ExpectedArchiveSha256 is not null
+                       && !string.Equals(result.ArchiveSha256, plan.ExpectedArchiveSha256, StringComparison.Ordinal)
+                       || plan.ExpectedArchiveSize is not null && result.ArchiveSize != plan.ExpectedArchiveSize
+                       || plan.ExpectedContentIdentity is not null
+                       && !string.Equals(result.ContentIdentity, plan.ExpectedContentIdentity, StringComparison.Ordinal);
         if (mismatch)
         {
             throw new ExecutionRuntimePlanMismatchException(
-                "The validated execution runtime archive does not exactly match its acquisition plan.");
+                "The materialized execution runtime archive does not exactly match its acquisition plan.");
         }
     }
 
     private ExecutionRuntimeReceiptV1 CreateReceipt(
         ExecutionRuntimeAcquisitionPlan plan,
-        SunderExecutionRuntimeArchiveValidationResult validation)
+        OfficialRuntimeMaterializationResult materialization,
+        string? finalDownloadUrl)
     {
-        var manifest = validation.Manifest!;
-        var launcher = validation.LauncherContentRecord!;
+        var launcher = materialization.Content.Single(content => string.Equals(
+            content.Path,
+            materialization.LauncherPath,
+            StringComparison.Ordinal));
         return new ExecutionRuntimeReceiptV1(
             ExecutionRuntimeReceiptV1.CurrentSchemaVersion,
             plan.Identity,
-            manifest.WorkerProtocol!,
-            validation.ArchiveSha256!,
-            validation.ArchiveSize,
-            validation.ManifestSha256!,
-            validation.ContentIdentity!,
-            launcher.Path!,
-            launcher.Sha256!,
+            materialization.ArchiveSha256,
+            materialization.ArchiveSize,
+            materialization.ContentIdentity,
+            launcher.Path,
+            launcher.Sha256,
             launcher.Size,
-            manifest.Launch!.Arguments!.Select(static argument => argument!).ToArray(),
-            validation.ContentInventory.Select(static content =>
-                    new ExecutionRuntimeReceiptContentV1(content.Path!, content.Sha256!, content.Size))
-                .ToArray(),
-            manifest.Provenance!.AttestationSha256!,
-            manifest.Provenance.AttestationKeyId!,
-            plan.SigningKeyId,
-            _trust.Generation,
-            plan.TrustEnvironment,
-            plan.AcquisitionSource,
-            plan.RegistryOrigin,
+            LauncherArguments(plan.Identity).ToArray(),
+            materialization.Content,
+            plan.RetainedProvenance ?? new RuntimeExecutionRuntimeProvenance(
+                plan.Artifact.Distribution,
+                finalDownloadUrl ?? plan.Artifact.Distribution.DownloadUrl,
+                _timeProvider.GetUtcNow()),
+            plan.Artifact.Support,
             _timeProvider.GetUtcNow());
     }
+
+    private static IReadOnlyList<string> LauncherArguments(ExecutionRuntimeIdentity identity)
+        => identity.SourceId == ConfiguredOfficialSourceId.DotNet
+            ? ["exec", OfficialRuntimeSourcePolicy.EntryPointToken]
+            : [OfficialRuntimeSourcePolicy.EntryPointToken];
 
     private void EnsureReceiptMatchesPlan(
         ExecutionRuntimeReceiptV1 receipt,
         ExecutionRuntimeAcquisitionPlan plan)
     {
         var matches = receipt.Identity == plan.Identity
-                      && string.Equals(receipt.ArtifactSha256, plan.ArtifactSha256, StringComparison.Ordinal)
-                      && receipt.ArtifactSize == plan.ArtifactSize
-                      && string.Equals(receipt.ManifestSha256, plan.ManifestSha256, StringComparison.Ordinal)
-                      && (plan.ContentIdentity is null
-                          || string.Equals(receipt.ContentIdentity, plan.ContentIdentity, StringComparison.Ordinal))
-                      && string.Equals(receipt.SigningKeyId, plan.SigningKeyId, StringComparison.Ordinal)
-                      && (plan.NativeAttestationSha256 is null
-                          || string.Equals(
-                              receipt.NativeAttestationSha256,
-                              plan.NativeAttestationSha256,
-                              StringComparison.Ordinal))
-                      && (plan.NativeAttestationKeyId is null
-                          || string.Equals(
-                              receipt.NativeAttestationKeyId,
-                              plan.NativeAttestationKeyId,
-                              StringComparison.Ordinal))
-                      && receipt.TrustEnvironment == plan.TrustEnvironment
-                      && string.Equals(receipt.AcquisitionSource, plan.AcquisitionSource, StringComparison.Ordinal)
-                      && string.Equals(receipt.RegistryOrigin, plan.RegistryOrigin, StringComparison.Ordinal);
+                      && (plan.ExpectedArchiveSha256 is null
+                          || string.Equals(receipt.ArchiveSha256, plan.ExpectedArchiveSha256, StringComparison.Ordinal))
+                      && (plan.ExpectedArchiveSize is null || receipt.ArchiveSize == plan.ExpectedArchiveSize)
+                      && (plan.ExpectedContentIdentity is null
+                          || string.Equals(receipt.ContentIdentity, plan.ExpectedContentIdentity, StringComparison.Ordinal))
+                      && receipt.Provenance.Distribution.MaterializationProfile == plan.Artifact.Distribution.MaterializationProfile
+                      && (plan.RetainedProvenance is null || plan.RetainedProvenance == receipt.Provenance);
         if (!matches)
         {
             throw new ExecutionRuntimeStoreConflictException(
                 "The exact execution runtime identity already has a different immutable receipt.");
         }
     }
-
-    private static bool ReceiptMatchesRegistryPlanForLocalImport(
-        ExecutionRuntimeReceiptV1 receipt,
-        ExecutionRuntimeAcquisitionPlan plan)
-        => plan.AcquisitionSource == RuntimeExecutionRuntimeAcquisitionSources.Registry
-           && plan.RegistryOrigin is not null
-           && receipt.AcquisitionSource == RuntimeExecutionRuntimeAcquisitionSources.LocalImport
-           && receipt.RegistryOrigin is null
-           && receipt.TrustEnvironment == ExecutionRuntimeTrustEnvironment.Production
-           && receipt.TrustGeneration >= plan.MinimumHostTrustGeneration
-           && receipt.Identity == plan.Identity
-           && string.Equals(receipt.ArtifactSha256, plan.ArtifactSha256, StringComparison.Ordinal)
-           && receipt.ArtifactSize == plan.ArtifactSize
-           && string.Equals(receipt.ManifestSha256, plan.ManifestSha256, StringComparison.Ordinal)
-           && (plan.ContentIdentity is null
-               || string.Equals(receipt.ContentIdentity, plan.ContentIdentity, StringComparison.Ordinal))
-           && string.Equals(receipt.SigningKeyId, plan.SigningKeyId, StringComparison.Ordinal)
-           && (plan.NativeAttestationSha256 is null
-               || string.Equals(
-                   receipt.NativeAttestationSha256,
-                   plan.NativeAttestationSha256,
-                   StringComparison.Ordinal))
-           && (plan.NativeAttestationKeyId is null
-               || string.Equals(
-                   receipt.NativeAttestationKeyId,
-                   plan.NativeAttestationKeyId,
-                   StringComparison.Ordinal));
 
     private async Task<ExecutionRuntimeVerificationResult> VerifyReceiptAsync(
         ExecutionRuntimeReceiptV1 receipt,
@@ -1751,17 +1623,15 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         bool persistHealthMarker)
     {
         var checkedAt = _timeProvider.GetUtcNow();
-        string? signingKeySha256 = null;
         string? receiptSha256 = null;
         try
         {
             ValidateReceipt(receipt, _layout.GetReceiptPath(receipt.Identity));
             receiptSha256 = ComputeReceiptSha256(receipt);
-            signingKeySha256 = ResolveCurrentSigningKeySha256(receipt);
             if (!deep)
             {
                 var marker = await ReadHealthMarkerAsync(receipt, cancellationToken).ConfigureAwait(false);
-                var refreshSignature = ValidateHealthMarker(
+                ValidateHealthMarker(
                     marker,
                     receipt,
                     receiptSha256);
@@ -1770,31 +1640,6 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                 {
                     throw new InvalidDataException(
                         "The execution runtime health marker does not match current root/launcher metadata.");
-                }
-                if (!refreshSignature
-                    && !string.Equals(marker.SigningKeySha256, signingKeySha256, StringComparison.Ordinal))
-                {
-                    await VerifySignedRootMetadataAsync(receipt, cancellationToken).ConfigureAwait(false);
-                    throw new InvalidDataException(
-                        "The execution runtime health marker does not match the current signing key.");
-                }
-                if (refreshSignature)
-                {
-                    await VerifySignedRootMetadataAsync(receipt, cancellationToken).ConfigureAwait(false);
-                    if (persistHealthMarker)
-                    {
-                        await WriteHealthMarkerAsync(
-                                receipt,
-                                marker with
-                                {
-                                    CheckedAtUtc = checkedAt,
-                                    TrustGeneration = _trust.Generation,
-                                    SigningKeySha256 = signingKeySha256,
-                                    Files = observations,
-                                },
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                    }
                 }
                 return new ExecutionRuntimeVerificationResult(true, false, checkedAt, null);
             }
@@ -1812,11 +1657,6 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                             DeepVerified: true,
                             checkedAt,
                             Message: null,
-                            _trust.ProfileId,
-                            _trust.Generation,
-                            receipt.TrustEnvironment,
-                            receipt.SigningKeyId,
-                            signingKeySha256,
                             receiptSha256,
                             observations),
                         cancellationToken)
@@ -1827,8 +1667,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         catch (Exception exception) when (exception is IOException
                                            or UnauthorizedAccessException
                                            or InvalidDataException
-                                           or CryptographicException
-                                           or ExecutionRuntimeTrustException)
+                                           or CryptographicException)
         {
             if (persistHealthMarker)
             {
@@ -1844,11 +1683,6 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                                 DeepVerified: deep,
                                 checkedAt,
                                 exception.Message,
-                                _trust.ProfileId,
-                                _trust.Generation,
-                                receipt.TrustEnvironment,
-                                receipt.SigningKeyId,
-                                signingKeySha256,
                                 receiptSha256,
                                 []),
                             CancellationToken.None)
@@ -1889,7 +1723,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                 FileShare.Read,
                 16 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            if (stream.Length is <= 0 or > SunderExecutionRuntimeFormat.MaxMetadataBytes)
+            if (stream.Length is <= 0 or > OfficialRuntimeSourcePolicy.MaxMetadataBytes)
             {
                 throw new InvalidDataException("The execution runtime health marker is malformed.");
             }
@@ -1905,7 +1739,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         }
     }
 
-    private bool ValidateHealthMarker(
+    private static void ValidateHealthMarker(
         ExecutionRuntimeHealthMarkerV1 marker,
         ExecutionRuntimeReceiptV1 receipt,
         string receiptSha256)
@@ -1918,42 +1752,26 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
             || marker.Files is null
             || marker.Files.Count == 0
             || !string.Equals(marker.ContentIdentity, receipt.ContentIdentity, StringComparison.Ordinal)
-            || !string.Equals(marker.TrustProfileId, _trust.ProfileId, StringComparison.Ordinal)
-            || marker.TrustGeneration < receipt.TrustGeneration
-            || marker.TrustGeneration > _trust.Generation
-            || marker.TrustEnvironment != receipt.TrustEnvironment
-            || !string.Equals(marker.SigningKeyId, receipt.SigningKeyId, StringComparison.Ordinal)
-            || !IsSha256(marker.SigningKeySha256)
             || !string.Equals(marker.ReceiptSha256, receiptSha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 "The execution runtime health marker is stale or does not match its immutable receipt.");
         }
-
-        return marker.TrustGeneration != _trust.Generation;
     }
 
     private async Task DeepVerifyAsync(
         ExecutionRuntimeReceiptV1 receipt,
         CancellationToken cancellationToken)
     {
-        var archivePath = _layout.GetArchivePath(receipt.ArtifactSha256);
-        await VerifyFileAsync(
+        var archivePath = _layout.GetArchivePath(receipt.ArchiveSha256);
+        await VerifyArchiveFileAsync(
             archivePath,
-            receipt.ArtifactSha256,
-            receipt.ArtifactSize,
-            "content-addressed archive",
+            receipt.Identity,
+            receipt.ArchiveSha256,
+            receipt.ArchiveSize,
             cancellationToken).ConfigureAwait(false);
 
-        var manifestObjectPath = _layout.GetManifestPath(receipt.ManifestSha256);
-        await VerifyFileAsync(
-            manifestObjectPath,
-            receipt.ManifestSha256,
-            expectedSize: null,
-            "content-addressed manifest",
-            cancellationToken).ConfigureAwait(false);
-
-        var rootPath = await VerifySignedRootMetadataAsync(receipt, cancellationToken).ConfigureAwait(false);
+        var rootPath = VerifyRoot(receipt);
 
         foreach (var content in receipt.Content)
         {
@@ -1971,9 +1789,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         EnsureExactRootInventory(rootPath, receipt);
     }
 
-    private async Task<string> VerifySignedRootMetadataAsync(
-        ExecutionRuntimeReceiptV1 receipt,
-        CancellationToken cancellationToken)
+    private string VerifyRoot(ExecutionRuntimeReceiptV1 receipt)
     {
         var rootPath = _layout.GetContentRootPath(receipt.ContentIdentity);
         if (!Directory.Exists(rootPath))
@@ -1981,153 +1797,31 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
             throw new InvalidDataException("The content-addressed execution runtime root is missing.");
         }
         PackageStorePathGuard.EnsureSafe(rootPath, _layout.ContentRootPath);
-        var rootManifestPath = GetArchiveRelativePath(rootPath, SunderExecutionRuntimeFormat.ManifestPath);
-        var contentIndexPath = GetArchiveRelativePath(rootPath, SunderExecutionRuntimeFormat.ContentIndexPath);
-        var signaturePath = GetArchiveRelativePath(rootPath, SunderExecutionRuntimeFormat.SignaturePath);
-        PackageStorePathGuard.EnsureSafe(rootManifestPath, rootPath);
-        PackageStorePathGuard.EnsureSafe(contentIndexPath, rootPath);
-        PackageStorePathGuard.EnsureSafe(signaturePath, rootPath);
-
-        var manifestBytes = await ReadBoundedFileAsync(
-                rootManifestPath,
-                SunderExecutionRuntimeFormat.MaxMetadataBytes,
-                "root manifest",
-                cancellationToken)
-            .ConfigureAwait(false);
-        var actualManifestSha256 = Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant();
-        if (!string.Equals(actualManifestSha256, receipt.ManifestSha256, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException(
-                "The root manifest SHA-256 digest does not match its immutable receipt.");
-        }
-        var manifest = SunderExecutionRuntimeCanonicalJson.DeserializeManifest(manifestBytes)
-                       ?? throw new InvalidDataException("The published execution runtime manifest is empty.");
-        if (!manifestBytes.AsSpan().SequenceEqual(SunderExecutionRuntimeCanonicalJson.SerializeManifest(manifest))
-            || !ManifestMatchesReceipt(manifest, receipt))
-        {
-            throw new InvalidDataException(
-                "The published execution runtime manifest does not match its immutable receipt.");
-        }
-
-        var contentIndexBytes = await ReadBoundedFileAsync(
-                contentIndexPath,
-                SunderExecutionRuntimeFormat.MaxMetadataBytes,
-                "root content index",
-                cancellationToken)
-            .ConfigureAwait(false);
-        var signature = await ReadBoundedFileAsync(
-                signaturePath,
-                SunderExecutionRuntimeFormat.Ed25519SignatureBytes,
-                "root signature",
-                cancellationToken)
-            .ConfigureAwait(false);
-        EnsureContentIndexMatchesReceipt(contentIndexBytes, receipt);
-        if (signature.Length != SunderExecutionRuntimeFormat.Ed25519SignatureBytes)
-        {
-            throw new InvalidDataException("The published execution runtime signature has an invalid length.");
-        }
-        var signatureInput = SunderExecutionRuntimeSignatureInput.Create(manifestBytes, contentIndexBytes);
-        var contentIdentity = Convert.ToHexString(SHA256.HashData(signatureInput)).ToLowerInvariant();
-        if (!string.Equals(contentIdentity, receipt.ContentIdentity, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("The published execution runtime content identity is invalid.");
-        }
-        var trustedKey = _trust.Resolve(
-            receipt.SigningKeyId,
-            receipt.TrustEnvironment,
-            receipt.TrustGeneration);
-        if (!_signatureVerifier.Verify(signatureInput, signature, trustedKey.PublicKey.Span))
-        {
-            throw new CryptographicException(
-                "The published execution runtime signature no longer verifies with Host trust.");
-        }
+        EnsureExactRootInventory(rootPath, receipt);
         return rootPath;
-    }
-
-    private string ResolveCurrentSigningKeySha256(ExecutionRuntimeReceiptV1 receipt)
-    {
-        var trustedKey = _trust.Resolve(
-            receipt.SigningKeyId,
-            receipt.TrustEnvironment,
-            receipt.TrustGeneration);
-        return Convert.ToHexString(SHA256.HashData(trustedKey.PublicKey.Span)).ToLowerInvariant();
     }
 
     private static string ComputeReceiptSha256(ExecutionRuntimeReceiptV1 receipt)
         => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(receipt, JsonOptions)))
             .ToLowerInvariant();
 
-    private static void EnsureContentIndexMatchesReceipt(
-        ReadOnlySpan<byte> contentIndexBytes,
-        ExecutionRuntimeReceiptV1 receipt)
+    private static bool IsMaterializedPath(string path)
     {
-        SunderExecutionRuntimeContentIndex? contentIndex;
         try
         {
-            contentIndex = SunderExecutionRuntimeCanonicalJson.DeserializeContentIndex(contentIndexBytes);
+            return string.Equals(OfficialRuntimeMaterializer.ValidateRelativePath(path), path, StringComparison.Ordinal);
         }
-        catch (JsonException exception)
+        catch (InvalidDataException)
         {
-            throw new InvalidDataException(
-                "The published execution runtime content index is invalid.",
-                exception);
-        }
-
-        if (contentIndex is null
-            || contentIndex.SchemaVersion != SunderExecutionRuntimeFormat.CurrentContentIndexVersion
-            || contentIndex.Files is null
-            || contentIndex.Files.Count != receipt.Content.Count
-            || !contentIndexBytes.SequenceEqual(SunderExecutionRuntimeCanonicalJson.SerializeContentIndex(contentIndex)))
-        {
-            throw new InvalidDataException(
-                "The published execution runtime content index does not match its immutable receipt.");
-        }
-
-        for (var index = 0; index < receipt.Content.Count; index++)
-        {
-            var signed = contentIndex.Files[index];
-            var expected = receipt.Content[index];
-            if (signed is null
-                || !string.Equals(signed.Path, expected.Path, StringComparison.Ordinal)
-                || !string.Equals(signed.Sha256, expected.Sha256, StringComparison.Ordinal)
-                || signed.Size != expected.Size)
-            {
-                throw new InvalidDataException(
-                    "The published execution runtime content index does not match its immutable receipt.");
-            }
+            return false;
         }
     }
-
-    private static bool ManifestMatchesReceipt(
-        SunderExecutionRuntimeManifest manifest,
-        ExecutionRuntimeReceiptV1 receipt)
-        => string.Equals(manifest.Id, receipt.Identity.RuntimeId, StringComparison.Ordinal)
-           && string.Equals(manifest.Version, receipt.Identity.Version, StringComparison.Ordinal)
-           && manifest.PackagingRevision == receipt.Identity.PackagingRevision
-           && string.Equals(manifest.Rid, receipt.Identity.Rid, StringComparison.Ordinal)
-           && string.Equals(manifest.ModuleAbi, receipt.Identity.ModuleAbi, StringComparison.Ordinal)
-           && string.Equals(manifest.WorkerProtocol, receipt.WorkerProtocol, StringComparison.Ordinal)
-           && string.Equals(manifest.Launch?.Executable, receipt.LauncherPath, StringComparison.Ordinal)
-           && manifest.Launch?.Arguments is { } launcherArguments
-           && launcherArguments.SequenceEqual(receipt.LauncherArguments)
-           && string.Equals(
-               manifest.Provenance?.AttestationSha256,
-               receipt.NativeAttestationSha256,
-               StringComparison.Ordinal)
-           && string.Equals(
-               manifest.Provenance?.AttestationKeyId,
-               receipt.NativeAttestationKeyId,
-               StringComparison.Ordinal)
-           && string.Equals(manifest.Signing?.KeyId, receipt.SigningKeyId, StringComparison.Ordinal);
 
     private static void EnsureExactRootInventory(
         string rootPath,
         ExecutionRuntimeReceiptV1 receipt)
     {
         var expected = receipt.Content.Select(static content => content.Path).ToHashSet(StringComparer.Ordinal);
-        expected.Add(SunderExecutionRuntimeFormat.ManifestPath);
-        expected.Add(SunderExecutionRuntimeFormat.ContentIndexPath);
-        expected.Add(SunderExecutionRuntimeFormat.SignaturePath);
         var expectedDirectories = expected
             .SelectMany(static path => GetParentPaths(path))
             .ToHashSet(StringComparer.Ordinal);
@@ -2152,16 +1846,12 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
     {
         var paths = new List<(string Name, string Path)>
         {
-            ("archive", _layout.GetArchivePath(receipt.ArtifactSha256)),
-            ("manifest", _layout.GetManifestPath(receipt.ManifestSha256)),
+            ("archive", _layout.GetArchivePath(receipt.ArchiveSha256)),
         };
         var rootPath = _layout.GetContentRootPath(receipt.ContentIdentity);
         PackageStorePathGuard.EnsureSafe(rootPath, _layout.ContentRootPath);
         var launcherPath = GetArchiveRelativePath(rootPath, receipt.LauncherPath);
         PackageStorePathGuard.EnsureSafe(launcherPath, rootPath);
-        paths.Add(("root/" + SunderExecutionRuntimeFormat.ManifestPath, GetArchiveRelativePath(rootPath, SunderExecutionRuntimeFormat.ManifestPath)));
-        paths.Add(("root/" + SunderExecutionRuntimeFormat.ContentIndexPath, GetArchiveRelativePath(rootPath, SunderExecutionRuntimeFormat.ContentIndexPath)));
-        paths.Add(("root/" + SunderExecutionRuntimeFormat.SignaturePath, GetArchiveRelativePath(rootPath, SunderExecutionRuntimeFormat.SignaturePath)));
         paths.AddRange(receipt.Content.Select(content =>
             ("root/" + content.Path, GetArchiveRelativePath(rootPath, content.Path))));
 
@@ -2263,8 +1953,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                     catch (Exception exception) when (exception is IOException
                                                        or UnauthorizedAccessException
                                                        or InvalidDataException
-                                                       or CryptographicException
-                                                       or ExecutionRuntimeTrustException)
+                                                       or CryptographicException)
                     {
                         if (storeFenceHeld)
                         {
@@ -2305,7 +1994,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
 
     private static long GetDeepVerificationBytes(ExecutionRuntimeReceiptV1 receipt)
     {
-        var total = Math.Max(0, receipt.ArtifactSize);
+        var total = Math.Max(0, receipt.ArchiveSize);
         foreach (var content in receipt.Content)
         {
             var size = Math.Max(0, content?.Size ?? 0);
@@ -2316,43 +2005,6 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
             total += size;
         }
         return total;
-    }
-
-    private sealed class ArchiveInspectionTelemetryObserver(
-        ExecutionRuntimePhaseTelemetry telemetry,
-        ExecutionRuntimeIdentity identity,
-        long archiveBytes) : ISunderExecutionRuntimeArchiveInspectionObserver
-    {
-        private ExecutionRuntimePhaseTelemetry.PhaseScope? _phase;
-
-        public void ExtractionStarted()
-            => _phase = telemetry.BeginPhase(
-                ExecutionRuntimePhaseNames.Extract,
-                identity,
-                archiveBytes,
-                cacheHit: false);
-
-        public void ExtractionCompleted(bool succeeded, bool canceled)
-        {
-            var phase = Interlocked.Exchange(ref _phase, null);
-            if (phase is null)
-            {
-                return;
-            }
-            if (succeeded)
-            {
-                phase.Succeeded();
-            }
-            else if (canceled)
-            {
-                phase.Canceled();
-            }
-            else
-            {
-                phase.Failed("ExtractionFailure");
-            }
-            phase.Dispose();
-        }
     }
 
     private async Task<ExecutionRuntimeReceiptV1> PublishReceiptAsync(
@@ -2426,22 +2078,15 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         ExecutionRuntimeReceiptV1 first,
         ExecutionRuntimeReceiptV1 second)
         => first.Identity == second.Identity
-           && first.WorkerProtocol == second.WorkerProtocol
-           && first.ArtifactSha256 == second.ArtifactSha256
-           && first.ArtifactSize == second.ArtifactSize
-           && first.ManifestSha256 == second.ManifestSha256
+           && first.ArchiveSha256 == second.ArchiveSha256
+           && first.ArchiveSize == second.ArchiveSize
            && first.ContentIdentity == second.ContentIdentity
            && first.LauncherPath == second.LauncherPath
-            && first.LauncherSha256 == second.LauncherSha256
-            && first.LauncherSize == second.LauncherSize
-            && first.LauncherArguments.SequenceEqual(second.LauncherArguments)
-            && first.Content.SequenceEqual(second.Content)
-           && first.NativeAttestationSha256 == second.NativeAttestationSha256
-           && first.NativeAttestationKeyId == second.NativeAttestationKeyId
-           && first.SigningKeyId == second.SigningKeyId
-           && first.TrustEnvironment == second.TrustEnvironment
-           && first.AcquisitionSource == second.AcquisitionSource
-           && first.RegistryOrigin == second.RegistryOrigin;
+           && first.LauncherSha256 == second.LauncherSha256
+           && first.LauncherSize == second.LauncherSize
+           && first.LauncherArguments.SequenceEqual(second.LauncherArguments)
+           && first.Content.SequenceEqual(second.Content)
+           && first.Provenance.Distribution.MaterializationProfile == second.Provenance.Distribution.MaterializationProfile;
 
     private async Task VerifyFileAsync(
         string path,
@@ -2485,6 +2130,50 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         if (!string.Equals(actualHash, expectedSha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException($"The {label} SHA-256 digest does not match its immutable receipt.");
+        }
+    }
+
+    private static async Task VerifyArchiveFileAsync(
+        string path,
+        ExecutionRuntimeIdentity identity,
+        string expectedSha256,
+        long expectedSize,
+        CancellationToken cancellationToken)
+    {
+        var info = new FileInfo(path);
+        if (!info.Exists
+            || info.LinkTarget is not null
+            || (info.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidDataException("The content-addressed archive is missing or is a link.");
+        }
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            128 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (stream.Length != expectedSize)
+        {
+            throw new InvalidDataException("The content-addressed archive size does not match its immutable receipt.");
+        }
+        using var local = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var vendor = IncrementalHash.CreateHash(OfficialRuntimeSourcePolicy.VendorHash(identity.ToContract()));
+        var buffer = new byte[128 * 1024];
+        int count;
+        while ((count = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) != 0)
+        {
+            local.AppendData(buffer, 0, count);
+            vendor.AppendData(buffer, 0, count);
+        }
+        if (!string.Equals(Convert.ToHexStringLower(local.GetHashAndReset()), expectedSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("The content-addressed archive SHA-256 digest does not match its immutable receipt.");
+        }
+        if (!CryptographicOperations.FixedTimeEquals(vendor.GetHashAndReset(), Convert.FromHexString(identity.VendorChecksumDigest)))
+        {
+            throw new InvalidDataException("The content-addressed archive vendor checksum does not match its immutable receipt.");
         }
     }
 
@@ -2550,8 +2239,8 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
     {
         if (retention.Identity is null
             && retention.ContentIdentity is null
-            && retention.ArtifactSha256 is null
-            && retention.ManifestSha256 is null)
+            && retention.ArchiveSha256 is null
+            && retention.ArchiveSize is null)
         {
             throw new ArgumentException(
                 "Execution-runtime retention must identify at least one immutable store object.",
@@ -2565,16 +2254,12 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         {
             ExecutionRuntimeStoreLayout.ValidateSha256(retention.ContentIdentity, nameof(retention));
         }
-        if (retention.ArtifactSha256 is not null)
+        if (retention.ArchiveSha256 is not null)
         {
-            ExecutionRuntimeStoreLayout.ValidateSha256(retention.ArtifactSha256, nameof(retention));
+            ExecutionRuntimeStoreLayout.ValidateSha256(retention.ArchiveSha256, nameof(retention));
         }
-        if (retention.ManifestSha256 is not null)
-        {
-            ExecutionRuntimeStoreLayout.ValidateSha256(retention.ManifestSha256, nameof(retention));
-        }
-        if (retention.ArtifactSize is <= 0 or > SunderExecutionRuntimeFormat.MaxArchiveBytes
-            || retention.ArtifactSize is not null && retention.ArtifactSha256 is null)
+        if (retention.ArchiveSize is <= 0 or > OfficialRuntimeSourcePolicy.MaxArchiveBytes
+            || retention.ArchiveSize is not null && retention.ArchiveSha256 is null)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(retention),
@@ -2588,11 +2273,10 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         => (retention.Identity is null || receipt.Identity == retention.Identity)
            && (retention.ContentIdentity is null
                || string.Equals(receipt.ContentIdentity, retention.ContentIdentity, StringComparison.Ordinal))
-           && (retention.ArtifactSha256 is null
-               || string.Equals(receipt.ArtifactSha256, retention.ArtifactSha256, StringComparison.Ordinal))
-           && (retention.ArtifactSize is null || receipt.ArtifactSize == retention.ArtifactSize)
-           && (retention.ManifestSha256 is null
-               || string.Equals(receipt.ManifestSha256, retention.ManifestSha256, StringComparison.Ordinal));
+            && (retention.ArchiveSha256 is null
+                || string.Equals(receipt.ArchiveSha256, retention.ArchiveSha256, StringComparison.Ordinal))
+            && (retention.ArchiveSize is null || receipt.ArchiveSize == retention.ArchiveSize)
+            ;
 
     private async Task<IReadOnlyList<ExecutionRuntimeReceiptV1>> ReadPendingTransactionReceiptsAsync(
         CancellationToken cancellationToken)
@@ -2626,7 +2310,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                     FileShare.Read,
                     4096,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
-                if (stream.Length is <= 0 or > SunderExecutionRuntimeFormat.MaxMetadataBytes)
+                if (stream.Length is <= 0 or > OfficialRuntimeSourcePolicy.MaxMetadataBytes)
                 {
                     throw new InvalidDataException(
                         $"Execution-runtime transaction journal '{journalPath}' has an invalid size.");
@@ -2659,6 +2343,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
 
     private HashSet<string> EnumerateContentRootIdentitiesUnderFence()
     {
+        PackageStorePathGuard.EnsureSafe(_layout.ContentRootPath, _layout.RootPath);
         var identities = new HashSet<string>(StringComparer.Ordinal);
         foreach (var shardPath in Directory.EnumerateDirectories(_layout.ContentRootPath).ToArray())
         {
@@ -2862,10 +2547,8 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
     {
         _ = EnumerateFiles(_layout.ReceiptRootPath, "*.json");
         _ = EnumerateFiles(_layout.ArchiveRootPath, "*");
-        _ = EnumerateFiles(_layout.ManifestRootPath, "*");
         _ = EnumerateContentRootIdentitiesUnderFence();
         _ = EnumerateFiles(_layout.HealthRootPath, "*");
-        _ = EnumerateFiles(_layout.PolicyRootPath, "*");
         _ = EnumerateFiles(_layout.GarbageCollectionMarkRootPath, "*");
         var tombstonePaths = Directory.EnumerateDirectories(_layout.TombstoneRootPath).ToArray();
         foreach (var tombstonePath in tombstonePaths)
@@ -2922,7 +2605,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                     FileShare.Read,
                     4096,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
-                if (stream.Length is <= 0 or > SunderExecutionRuntimeFormat.MaxMetadataBytes)
+                if (stream.Length is <= 0 or > OfficialRuntimeSourcePolicy.MaxMetadataBytes)
                 {
                     throw new InvalidDataException(
                         $"Execution-runtime tombstone '{documentPath}' has an invalid size.");
@@ -3293,7 +2976,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                     FileShare.Read,
                     4096,
                     FileOptions.SequentialScan);
-                if (stream.Length is <= 0 or > SunderExecutionRuntimeFormat.MaxMetadataBytes)
+                if (stream.Length is <= 0 or > OfficialRuntimeSourcePolicy.MaxMetadataBytes)
                 {
                     throw new InvalidDataException(
                         $"Execution-runtime tombstone '{documentPath}' has an invalid size.");
@@ -3505,6 +3188,15 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
         }
     }
 
+    private static bool SameSingleFlightPlan(
+        ExecutionRuntimeAcquisitionPlan first,
+        ExecutionRuntimeAcquisitionPlan second)
+        => Equals(OfficialRuntimeSourcePolicy.Selection(first.Artifact), OfficialRuntimeSourcePolicy.Selection(second.Artifact))
+           && string.Equals(first.ExpectedArchiveSha256, second.ExpectedArchiveSha256, StringComparison.Ordinal)
+           && first.ExpectedArchiveSize == second.ExpectedArchiveSize
+           && string.Equals(first.ExpectedContentIdentity, second.ExpectedContentIdentity, StringComparison.Ordinal)
+           && first.RetainedProvenance == second.RetainedProvenance;
+
     private sealed class ExecutionRuntimeSingleFlight(
         ExecutionRuntimeAcquisitionPlan plan,
         Func<CancellationToken, Task<ExecutionRuntimeEnsureResult>> operation,
@@ -3561,7 +3253,7 @@ internal sealed class ExecutionRuntimeStore : IExecutionRuntimeRetentionManager
                 {
                     return false;
                 }
-                if (Plan != joiningPlan)
+                if (!SameSingleFlightPlan(Plan, joiningPlan))
                 {
                     planConflict = true;
                     return false;

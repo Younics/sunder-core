@@ -310,7 +310,7 @@ jobs:
           retention-days: 14
 
   runtime-host-handoff:
-    name: Required package and signed Runtime Host handoff
+    name: Required package and official Runtime Host handoff
     needs:
       - module-package
       - template-lifecycle
@@ -373,14 +373,14 @@ jobs:
           --filter FullyQualifiedName=Sunder.Package.Format.Tests.NodePackageArchiveCompatibilityTests.NodePackageArchive_WhenConfigured_IsAcceptedByDotNetInspector
           --logger "trx;LogFileName=Sunder.Package.Format.Tests.trx"
           --results-directory artifacts/test-results/node-runtime-host
-      - name: Require signed Runtime Host interop and generated-template smoke
+      - name: Require official Runtime Host interop and generated-template smoke
         run: >-
           dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj
           --configuration Release
           --no-restore
           -m:1
           -p:GeneratePackageOnBuild=false
-          --filter "FullyQualifiedName~Sunder.Runtime.Host.Tests.CrossLanguageWorkerRuntimeHostTests|FullyQualifiedName=Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedNodeTemplate_ActivatesThroughSignedRuntimeHost"
+          --filter "FullyQualifiedName~Sunder.Runtime.Host.Tests.CrossLanguageWorkerRuntimeHostTests|FullyQualifiedName=Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedNodeTemplate_ActivatesThroughOfficialRuntimeHost"
           --logger "trx;LogFileName=Sunder.Runtime.Host.Tests.trx"
           --results-directory artifacts/test-results/node-runtime-host
       - name: Summarize required package and Runtime Host results
@@ -392,7 +392,7 @@ jobs:
           --require-test Sunder.Package.Format.Tests.NodePackageArchiveCompatibilityTests.NodePackageArchive_WhenConfigured_IsAcceptedByDotNetInspector
           --require-test Sunder.Runtime.Host.Tests.CrossLanguageWorkerRuntimeHostTests.DotNetToNode_RealRuntimeHostRunsRuntimeBackedModuleUnaryStreamDataFaultAndShutdown
           --require-test Sunder.Runtime.Host.Tests.CrossLanguageWorkerRuntimeHostTests.NodeToDotNet_RealRuntimeHostRoutesRpcToNativeDotNetWorker
-          --require-test Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedNodeTemplate_ActivatesThroughSignedRuntimeHost
+          --require-test Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedNodeTemplate_ActivatesThroughOfficialRuntimeHost
       - name: Upload required Runtime Host results and metrics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

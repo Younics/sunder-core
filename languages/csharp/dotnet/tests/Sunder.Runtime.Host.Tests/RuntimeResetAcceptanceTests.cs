@@ -57,11 +57,9 @@ public sealed class RuntimeResetAcceptanceTests
         Assert.Equal(
             [
                 RuntimeV1StateDescriptor.ExecutionRuntimeArtifactsDirectory,
-                RuntimeV1StateDescriptor.ExecutionRuntimeManifestsDirectory,
                 RuntimeV1StateDescriptor.ExecutionRuntimeRootsDirectory,
                 RuntimeV1StateDescriptor.ExecutionRuntimeReceiptsDirectory,
                 RuntimeV1StateDescriptor.ExecutionRuntimeHealthDirectory,
-                RuntimeV1StateDescriptor.ExecutionRuntimePolicyDirectory,
                 RuntimeV1StateDescriptor.ExecutionRuntimeStagingDirectory,
                 RuntimeV1StateDescriptor.ExecutionRuntimeTransactionsDirectory,
                 RuntimeV1StateDescriptor.ExecutionRuntimeQuarantineDirectory,
@@ -168,7 +166,6 @@ public sealed class RuntimeResetAcceptanceTests
             Assert.False(File.Exists(paths.StateFilePath));
             Assert.False(Directory.Exists(paths.GetInstalledPackagePath(PackageId, PackageVersion)));
             Assert.False(Directory.Exists(paths.ExecutionRuntimeArtifactRootPath));
-            Assert.False(Directory.Exists(paths.ExecutionRuntimeManifestRootPath));
             Assert.False(Directory.Exists(paths.ExecutionRuntimeRootsPath));
             Assert.False(Directory.Exists(paths.ExecutionRuntimeTransactionRootPath));
             Assert.False(Directory.Exists(paths.ExecutionRuntimeQuarantineRootPath));
@@ -258,14 +255,12 @@ public sealed class RuntimeResetAcceptanceTests
     {
         var hash = new string('a', 64);
         var executionRuntimeRoot = Path.Combine(paths.ExecutionRuntimeRootsPath, hash);
-        var executionRuntimeLauncher = Path.Combine(executionRuntimeRoot, "payload", "runtime");
-        WriteSentinel(Path.Combine(paths.ExecutionRuntimeArtifactRootPath, hash));
-        WriteSentinel(Path.Combine(paths.ExecutionRuntimeManifestRootPath, $"{hash}.json"));
+        var executionRuntimeLauncher = Path.Combine(executionRuntimeRoot, "dotnet");
+        WriteSentinel(new ExecutionRuntimeStoreLayout(paths).GetArchivePath(hash));
         WriteSentinel(executionRuntimeLauncher);
         ExecutionRuntimeRootFileSystem.Seal(executionRuntimeRoot, executionRuntimeLauncher);
         WriteSentinel(Path.Combine(paths.ExecutionRuntimeReceiptRootPath, "runtime", "receipt.json"));
         WriteSentinel(Path.Combine(paths.ExecutionRuntimeHealthRootPath, $"{hash}.json"));
-        WriteSentinel(paths.ExecutionRuntimeLifecyclePolicyFilePath);
         WriteSentinel(Path.Combine(paths.ExecutionRuntimeStagingRootPath, Guid.NewGuid().ToString("N"), "content"));
         WriteSentinel(Path.Combine(paths.ExecutionRuntimeTransactionRootPath, Guid.NewGuid().ToString("N"), "journal.json"));
         WriteSentinel(Path.Combine(paths.ExecutionRuntimeQuarantineRootPath, Guid.NewGuid().ToString("N"), "content"));

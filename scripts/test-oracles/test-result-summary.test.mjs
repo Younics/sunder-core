@@ -139,6 +139,30 @@ test("expected skip evidence requires an explicit reason and owning lane", () =>
   }, model.policy, "MacOS"), /Unexpected skipped test/u);
 });
 
+test("suspension evidence permits only its Windows reason and never substitutes a skip or omission for required execution", () => {
+  const model = loadCoreTestModel();
+  const expected = model.policy.expectedSkips.find((item) => item.id === "node-process-suspension");
+  assert.ok(expected);
+  const declaration = model.declarations.find((item) => item.framework === "node"
+    && item.source === expected.source && item.name === expected.name);
+  assert.ok(declaration);
+  const report = parseJunitReport(`<testsuites><testcase name="${expected.name}" classname="test" file="${expected.source}">
+    <skipped message="SIGSTOP/SIGCONT unavailable on Windows"/></testcase></testsuites>`, "node-package-tool.junit.xml");
+  const result = { ...report.results[0], declaration, primaryLane: declaration.primaryLane, project: declaration.project };
+  assert.equal(materializeExpectedSkip(result, model.policy, "Windows").owner, "node");
+  assert.throws(() => materializeExpectedSkip(result, model.policy, "MacOS"), /Unexpected skipped test/u);
+  assert.throws(() => materializeExpectedSkip({ ...result, skipReason: "some other failure" }, model.policy, "Windows"), /unapproved reason/u);
+  const selection = { allowPartial: true, requiredTests: [declaration.id], operatingSystem: "Windows" };
+  assert.throws(() => buildCoreTestEvidence([report], model, selection), /prerequisite gate was READY/u);
+  const missing = structuredClone(report);
+  missing.results[0].name = "another Node test";
+  missing.results[0].outcome = "Passed";
+  assert.throws(() => buildCoreTestEvidence([missing], model, selection), /produced no result/u);
+  report.results[0].outcome = "Passed";
+  assert.deepEqual(buildCoreTestEvidence([report], model, selection).counts,
+    { discovered: 1, executed: 1, passed: 1, failed: 0, skipped: 0 });
+});
+
 test("TRX counter mutation cannot hide omitted runtime cases", () => {
   assert.throws(() => parseTrxReport(`
     <TestRun>

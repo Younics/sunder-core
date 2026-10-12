@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "packageId": "example.dependency",
+  "packageVersion": "1.2.3",
+  "contracts": [
+    {
+      "contractId": "example.rpc.v1.minimal",
+      "contractVersion": "2.0.0",
+      "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+      "modelProjection": {
+        "models": {},
+        "serviceReferences": {}
+      }
+    },
+    {
+      "contractId": "sunder.stack.contributor",
+      "contractVersion": "2.0.0",
+      "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567",
+      "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+      "modelProjection": {
+        "models": {},
+        "serviceReferences": {}
+      }
+    }
+  ]
+}

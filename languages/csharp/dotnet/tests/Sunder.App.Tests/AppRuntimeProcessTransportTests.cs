@@ -110,7 +110,7 @@ public sealed class AppRuntimeProcessTransportTests
             : new(RuntimeIpcTransportKind.UnixSocket, "/tmp/sunder-app-test.sock"),
     };
     private static RuntimeHandshakeResponse Handshake() => new(RuntimeProtocol.Identity, 1, 1, 1, Guid.NewGuid(),
-        [RuntimeProtocolFeatures.VersionedApiV1], new("Sunder.Runtime.Host", "1.0.0", "1.0.0"));
+        [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1], new("Sunder.Runtime.Host", "1.0.0", "1.0.0"));
     private static HttpResponseMessage Json<T>(T value) => new(HttpStatusCode.OK) { Content = JsonContent.Create(value) };
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> response) : HttpMessageHandler
     {

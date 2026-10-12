@@ -10,6 +10,9 @@ namespace Sunder.Package.Build.Tasks;
 /// <summary>Reads one immutable single-project compilation plan and validates its exact source inputs before an inner role build.</summary>
 public sealed partial class ReadSunderPackageRoleInputsTask : Microsoft.Build.Utilities.Task
 {
+    private ITaskItem[] _sourceFiles = [];
+    private bool _sourceEvaluationSupplied;
+
     /// <summary>Gets or sets the path to the generated role plan.</summary>
     [Required]
     public string PlanPath { get; set; } = string.Empty;
@@ -39,9 +42,26 @@ public sealed partial class ReadSunderPackageRoleInputsTask : Microsoft.Build.Ut
     public string PackageVersion { get; set; } = string.Empty;
 
     /// <summary>Gets or sets the ordinary evaluated source inputs, before role projection replaces Compile items.</summary>
-    public ITaskItem[] SourceFiles { get; set; } = [];
+    public ITaskItem[] SourceFiles
+    {
+        get => _sourceFiles;
+        set
+        {
+            _sourceFiles = value ?? throw new ArgumentNullException(nameof(value));
+            _sourceEvaluationSupplied = true;
+        }
+    }
 
     public string ProjectDirectory { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the SDK-generated global-using input in this role's intermediate directory.</summary>
+    public string GeneratedGlobalUsingsFile { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets that SDK input's original analysis path; its contents must still match the source snapshot.</summary>
+    public string AnalysisGlobalUsingsFile { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets whether an evaluated Compile set must be checked, including when MSBuild supplies an empty item list.</summary>
+    public bool ValidateSourceEvaluation { get; set; }
 
     public string DefineConstants { get; set; } = string.Empty;
     public ITaskItem[] EvaluatedResources { get; set; } = [];
@@ -92,19 +112,37 @@ public sealed partial class ReadSunderPackageRoleInputsTask : Microsoft.Build.Ut
                 || PackageVersion.Length != 0 && plan.GetProperty("packageVersion").GetString() != PackageVersion)
                 throw new InvalidDataException("The role plan does not match the build configuration, framework, RID and package version.");
             if (Role == "app" && !plan.GetProperty("hasApp").GetBoolean()) throw new InvalidDataException("The package has no generated App role.");
-            if (SourceFiles.Length != 0)
+            // The dependency/resource prepass has a project root but deliberately
+            // omits Compile evaluation. Only the compilation read supplies this
+            // parameter; an explicitly supplied empty set must still be checked.
+            if (_sourceEvaluationSupplied || ValidateSourceEvaluation)
             {
                 var reader = new GenerateSunderRpcBindingsTask { BuildEngine = BuildEngine, SourceFiles = SourceFiles };
                 var sources = reader.ReadSourceFiles(Path.GetFullPath(ProjectDirectory))
                     ?? throw new InvalidDataException("The evaluated role sources could not be read.");
-                var hashes = sources.Select(source => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(source.Text)))).Order(StringComparer.Ordinal);
-                if (!hashes.SequenceEqual(plan.GetProperty("sourceSha256").EnumerateArray().Select(value => value.GetString()), StringComparer.Ordinal))
-                    throw new InvalidDataException("The evaluated source set changed between package analysis and role compilation.");
+                var globalUsings = string.IsNullOrWhiteSpace(GeneratedGlobalUsingsFile) ? null : Path.GetFullPath(GeneratedGlobalUsingsFile, ProjectDirectory);
+                var analysisUsings = string.IsNullOrWhiteSpace(AnalysisGlobalUsingsFile) ? null : Path.GetFullPath(AnalysisGlobalUsingsFile, ProjectDirectory);
+                var actual = sources.Select(source => (Path: Path.GetRelativePath(Path.GetFullPath(ProjectDirectory),
+                        globalUsings is not null && analysisUsings is not null && string.Equals(source.Path, globalUsings, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+                            ? analysisUsings : source.Path).Replace('\\', '/'),
+                    Hash: Convert.ToHexStringLower(SHA256.HashData(SunderRpcDescriptorFileReader.ReadStableBytes(source.Path, 4_194_304, "evaluated role source")))))
+                    .OrderBy(value => value.Path, StringComparer.Ordinal).ToArray();
+                var expected = plan.GetProperty("sourceFiles").EnumerateArray().Select(value =>
+                    (Path: value.GetProperty("path").GetString()!, Hash: value.GetProperty("sha256").GetString()!)).OrderBy(value => value.Path, StringComparer.Ordinal).ToArray();
+                if (!actual.SequenceEqual(expected))
+                    throw new InvalidDataException("The evaluated source set changed between package analysis and role compilation. Missing: "
+                        + string.Join(", ", expected.Select(value => value.Path).Except(actual.Select(value => value.Path), StringComparer.Ordinal).Take(16))
+                        + "; added: " + string.Join(", ", actual.Select(value => value.Path).Except(expected.Select(value => value.Path), StringComparer.Ordinal).Take(16))
+                        + "; changed: " + string.Join(", ", actual.Where(value => expected.Any(previous => previous.Path == value.Path && previous.Hash != value.Hash)).Select(value => value.Path).Take(16)));
+                if (!actual.Select(value => value.Hash).Order(StringComparer.Ordinal).SequenceEqual(
+                    plan.GetProperty("sourceSha256").EnumerateArray().Select(value => value.GetString()).Order(StringComparer.Ordinal), StringComparer.Ordinal))
+                    throw new InvalidDataException("The role plan source hash inventory differs from its exact source membership.");
                 var constants = DefineConstants.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
                 if (!constants.SequenceEqual(plan.GetProperty("defineConstants").EnumerateArray().Select(value => value.GetString()), StringComparer.Ordinal))
                     throw new InvalidDataException("The compilation constants changed between package analysis and role compilation.");
             }
             var files = plan.GetProperty(Role + "Compile");
+            ValidateGeneratedSourceMembership(plan, root);
             if (files.ValueKind != JsonValueKind.Array || files.GetArrayLength() is < 1 or > 16384) throw new InvalidDataException("The role plan has an invalid compilation input count.");
             var items = new List<ITaskItem>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

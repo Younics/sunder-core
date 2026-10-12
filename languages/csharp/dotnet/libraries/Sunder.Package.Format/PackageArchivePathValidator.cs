@@ -11,6 +11,12 @@ internal static class PackageArchivePathValidator
         int maxLength = SunderPackageFormat.MaxLogicalPathLength,
         int maxDepth = SunderPackageFormat.MaxLogicalPathDepth)
     {
+        if (string.Equals(value, SunderPackageFormat.RpcModelProjectionLogicalPath, StringComparison.OrdinalIgnoreCase))
+        {
+            path = default;
+            errors.Add($"Package {label} cannot use the tool-reserved model projection logical path '{SunderPackageFormat.RpcModelProjectionLogicalPath}'.");
+            return false;
+        }
         if (ArchiveRelativePath.TryParse(
                 value,
                 maxLength,

@@ -5,7 +5,7 @@
   "description": "A project-neutral and RID-neutral export of only package-owned contracts for an associated App build.",
   "type": "object",
   "additionalProperties": false,
-  "maxProperties": 9,
+  "maxProperties": 11,
   "required": [
     "schemaVersion",
     "producer",
@@ -15,9 +15,20 @@
     "inputFingerprint",
     "lockSha256",
     "packageId",
+    "packageVersion",
     "contracts"
   ],
   "properties": {
+    "roleUses": {
+      "description": "Runtime source intent is retained as evidence and never inherited as App use.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "authoring-receipt.schema.json#/$defs/roleUse"
+      }
+    },
     "schemaVersion": {
       "const": 1
     },
@@ -41,6 +52,9 @@
     },
     "packageId": {
       "$ref": "#/$defs/packageId"
+    },
+    "packageVersion": {
+      "$ref": "#/$defs/semanticVersion"
     },
     "contracts": {
       "type": "array",
@@ -119,7 +133,7 @@
     "exportedContract": {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 13,
+      "maxProperties": 15,
       "required": [
         "contractKey",
         "contractId",
@@ -131,7 +145,8 @@
         "descriptorBytes",
         "canonicalDescriptor",
         "descriptorSha256",
-        "abiSha256"
+        "abiSha256",
+        "modelProjection"
       ],
       "properties": {
         "contractKey": {
@@ -171,6 +186,12 @@
         },
         "abiSha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "modelProjection": {
+          "$ref": "rpc-model-projection.schema.json#/$defs/modelProjection"
+        },
+        "methodPolicies": {
+          "$ref": "rpc-model-projection.schema.json#/$defs/methodPolicies"
         },
         "appUse": {
           "$ref": "#/$defs/ownedUsePolicy"

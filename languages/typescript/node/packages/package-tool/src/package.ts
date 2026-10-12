@@ -60,9 +60,10 @@ import {
 import { renderBundledDependencyNotice } from "./notices";
 import { ownedRpcPlugins, revalidateOwnedRpc } from "./rpc-authoring-plugin";
 import { validateBaselineSource } from "./rpc-baseline";
-import { authority, importProjection } from "./rpc-package-imports";
+import { authority, importProjection, importedContractsForRoles, importedDependenciesForRoles } from "./rpc-package-imports";
 import { withBaselineLease } from "./rpc-baseline-store";
 import { workerResolutionOptions } from "./rpc-runtime-inputs";
+import { emptyModelProjection, MODEL_PROJECTION_ARCHIVE_PATH, MODEL_PROJECTION_PATH, projectionDocumentBytes, validateModelProjectionSet } from "./rpc-model-projection";
 import {
   generateRpcBindingsForLoadedProjectLocked,
   withRpcBindingsOutputLock,
@@ -164,6 +165,7 @@ export async function prepareProject(projectPath: string, options: RegistryOrigi
       canonical,
       descriptorSha256: sha256(canonicalBytes),
       abiSha256: rpcAbiSha256(descriptor),
+      modelProjection: emptyModelProjection(),
       exposure: configured.exposure,
     });
   }
@@ -538,8 +540,8 @@ async function writeWebTargetLeafLocked(
     async (stagingRoot) => {
       await validateWebOutput(app, webRoot);
       await copyDirectory(webRoot, resolve(stagingRoot, "payload", "app", rid));
-      await copyContracts(project, stagingRoot, "app");
-      await writeCanonicalPackageMetadata(stagingRoot, createManifest(project, [webTarget(app, rid)]));
+      await copyContracts(project, stagingRoot, new Set(["app"]));
+      await writeCanonicalPackageMetadata(stagingRoot, createManifest(project, [webTarget(app, rid,project.config)]));
     },
     false,
     () => revalidateOwnedRpc(project),
@@ -547,9 +549,10 @@ async function writeWebTargetLeafLocked(
 }
 
 export function assertRpcReleaseSupported(project: LoadedProject): void {
-  if (project.config.schemaVersion === 3 && project.config.rpc !== undefined) {
-    if (!project.ownedRpc?.baseline) throw new Error("V3 RPC release packing is denied without an accepted owned baseline; restore it or run first contracts accept before generation.");
-    validateBaselineSource(project.ownedRpc.baseline, project.ownedRpc.contracts, true);
+  if (project.config.schemaVersion === 3 && project.config.services !== undefined) {
+    if (!project.ownedRpc) throw new Error("Service release packing requires source analysis.");
+    if (project.ownedRpc.baseline) validateBaselineSource(project.ownedRpc.baseline, project.ownedRpc.contracts, true);
+    else if (project.ownedRpc.contracts.some(contract => contract.exposure === "public")) throw new Error("Public service release packing requires an accepted, frozen owned baseline.");
   }
 }
 
@@ -639,6 +642,7 @@ export async function aggregateAndPack(
           const logicalPaths = new Set(leaves.flatMap((leaf) => [...leaf.files.keys()]));
           const packageSharedPaths = new Set(aggregateManifest.contractBundles.map((bundle) => bundle.descriptorPath));
           for (const logicalPath of [...logicalPaths].sort(ordinal)) {
+            if (logicalPath === MODEL_PROJECTION_PATH) continue;
             const occurrences = leaves.filter((leaf) => leaf.files.has(logicalPath));
             if (isExactRidNativeAsset(logicalPath, occurrences, project.config)) {
               for (const leaf of occurrences) {
@@ -676,6 +680,9 @@ export async function aggregateAndPack(
               await copyLeafFile(leaf, logicalPath, resolve(stagingRoot, "payload", target.role, target.rid, ...logicalPath.split("/")));
             }
           }
+          const projectionPath = resolve(stagingRoot, ...MODEL_PROJECTION_ARCHIVE_PATH.split("/"));
+          await mkdir(dirname(projectionPath), { recursive: true });
+          await writeFile(projectionPath, packageProjectionBytes(project, aggregateManifest.contractBundles.map(bundle => bundle.contractId)));
           await writeCanonicalPackageMetadata(stagingRoot, aggregateManifest);
         },
       );
@@ -748,7 +755,7 @@ async function emitDevTree(
     requiredHostCapabilities: workerTargetCapabilities(project.config),
     executionRuntime: NODE_EXECUTION_RUNTIME,
   }];
-  if (project.config.app !== undefined) targets.push(webTarget(project.config.app, rid));
+  if (project.config.app !== undefined) targets.push(webTarget(project.config.app, rid,project.config));
   const manifest = createManifest(project, targets);
   await withOutputLocks([root, obsoleteSidecarPath], async () => {
     await assertReplaceableGeneratedDirectory(root);
@@ -767,7 +774,7 @@ async function emitDevTree(
         if (webRoot !== undefined) {
           await copyDirectory(webRoot, resolve(stagingRoot, "payload", "app", rid));
         }
-        await copyContracts(project, stagingRoot);
+        await copyContracts(project, stagingRoot, new Set(targets.map(target => target.role)));
         await writeCanonicalPackageMetadata(stagingRoot, manifest);
       },
     );
@@ -789,7 +796,8 @@ function createManifest(
 ): PackageManifest {
   const targetRoles = new Set<PackageRole>(targets.map((target) => target.role));
   const imports = project.ownedRpc?.imports;
-  const contractBundles = project.contracts.filter(contract => !contract.imported || targetRoles.has("runtime")).map((contract): ContractBundleManifest => ({
+  const importedContracts = imports ? importedContractsForRoles(imports, targetRoles) : new Set<string>();
+  const contractBundles = project.contracts.filter(contract => !contract.imported || importedContracts.has(contract.descriptor.contractId)).map((contract): ContractBundleManifest => ({
     contractId: contract.descriptor.contractId,
     version: contract.descriptor.version,
     descriptorPath: contract.descriptorPath,
@@ -812,7 +820,7 @@ function createManifest(
       packageId: dependency.packageId,
       versionRange: dependency.versionRange,
       presence: "required" as const,
-    })), ...(imports && targetRoles.has("runtime") ? imports.dependencies : [])].sort((a, b) => ordinal(a.packageId, b.packageId)),
+    })), ...(imports ? importedDependenciesForRoles(imports, targetRoles) : [])].sort((a, b) => ordinal(a.packageId, b.packageId)),
     targets: [...targets].sort(compareTargets),
     contractBundles,
     usesContracts: [...selectedDeclarations.usesContracts].sort(compareContractUses),
@@ -864,12 +872,26 @@ function exactContract(project: PreparedProject, contractId: string, contractVer
   return contract;
 }
 
-async function copyContracts(project: PreparedProject, packageRoot: string, role: PackageRole = "runtime"): Promise<void> {
-  for (const contract of project.contracts.filter(contract => !contract.imported || role === "runtime")) {
+async function copyContracts(project: PreparedProject, packageRoot: string, roles: ReadonlySet<PackageRole> = new Set(["runtime"])): Promise<void> {
+  const imported = project.ownedRpc ? importedContractsForRoles(project.ownedRpc.imports, roles) : new Set<string>();
+  const contracts = project.contracts.filter(contract => !contract.imported || imported.has(contract.descriptor.contractId));
+  for (const contract of contracts) {
+    if (contract.descriptorPath.toLowerCase() === MODEL_PROJECTION_PATH) throw new Error("Contract descriptor shadows the reserved model projection sidecar.");
     const path = resolve(packageRoot, "payload", "shared", ...contract.descriptorPath.split("/"));
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, contract.canonicalBytes);
   }
+  const path = resolve(packageRoot, ...MODEL_PROJECTION_ARCHIVE_PATH.split("/"));
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, packageProjectionBytes(project, contracts.map(contract => contract.descriptor.contractId)));
+}
+function packageProjectionBytes(project: PreparedProject, ids: readonly string[]): Buffer {
+  const evidence = project.contracts.filter(contract => contract.exposure === "public" && ids.includes(contract.descriptor.contractId)).map(contract => ({
+    contractId: contract.descriptor.contractId, contractVersion: contract.descriptor.version, descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256,
+    modelProjection: contract.modelProjection,methodPolicies:contract.methodPolicies, descriptor: contract.descriptor, authorityKind: contract.imported?.authorityKind ?? "package", authorityId: contract.imported?.authorityId ?? project.config.id,
+  }));
+  validateModelProjectionSet(evidence);
+  return projectionDocumentBytes(project.config.id, project.config.version, evidence);
 }
 
 async function copyNativeAssets(project: PreparedProject, rid: SunderRid, packageRoot: string): Promise<void> {
@@ -1017,7 +1039,10 @@ async function copyDirectory(source: string, destination: string): Promise<void>
   }
 }
 
-function webTarget(app: AppConfig, rid: SunderRid): TargetManifest {
+function webTargetCapabilities(config:SunderNodePackageConfig):readonly string[]{
+  return ["core.v1","rpc.v1",packageToolCompatibility().sdkBaselineCapability,"views.v1",...(config.workerCapabilities.includes("rpc.extended-deadline.v1")?["rpc.extended-deadline.v1"]:[])].sort(ordinal);
+}
+function webTarget(app: AppConfig, rid: SunderRid,config:SunderNodePackageConfig): TargetManifest {
   const compatibility = packageToolCompatibility();
   return {
     role: "app",
@@ -1026,7 +1051,7 @@ function webTarget(app: AppConfig, rid: SunderRid): TargetManifest {
     entryPoint: app.entryPoint,
     targetFramework: "web",
     sdkVersion: compatibility.sdkVersion,
-    requiredHostCapabilities: ["core.v1", "rpc.v1", compatibility.sdkBaselineCapability, "views.v1"],
+    requiredHostCapabilities: webTargetCapabilities(config),
     views: app.views.map((view) => ({ ...view })),
   };
 }
@@ -1040,7 +1065,7 @@ async function writeCanonicalPackageMetadata(root: string, manifest: PackageMani
   if (entries.length + 1 > MAXIMUM_ARCHIVE_ENTRIES) {
     throw new Error(`Canonical package output exceeds the ${MAXIMUM_ARCHIVE_ENTRIES}-file content-index limit.`);
   }
-  for (const entry of entries) canonicalArchivePath(entry);
+  for (const entry of entries) { canonicalArchivePath(entry); assertProjectionPath(entry); }
   const files: ContentIndexEntry[] = [];
   for (const entry of entries.filter((entry) => entry !== INDEX_PATH)) {
     const path = resolve(root, ...entry.split("/"));
@@ -1211,6 +1236,7 @@ async function readLeaf(root: string, config: SunderNodePackageConfig, project: 
   let indexedBytes = 0;
   for (const item of index.files) {
     const archivePath = canonicalArchivePath(item.path);
+    assertProjectionPath(archivePath);
     if (indexedPaths.has(archivePath)) throw new Error(`Target leaf '${root}' indexes '${archivePath}' more than once.`);
     indexedPaths.add(archivePath);
     if (!/^[0-9a-f]{64}$/u.test(item.sha256) || !Number.isSafeInteger(item.size) || item.size < 0 || item.size > MAXIMUM_ENTRY_BYTES) {
@@ -1254,7 +1280,15 @@ async function readLeaf(root: string, config: SunderNodePackageConfig, project: 
     throw new Error(`Target leaf '${root}' does not contain its declared entry point '${target.entryPoint}'.`);
   }
   await validateBundledDescriptorFiles(manifest.contractBundles, files, root);
+  const projection = files.get(MODEL_PROJECTION_PATH);
+  if (!projection || !(await readProjectDescriptorFile(root, projection.fullPath, "Leaf model projection", 4_194_304))
+    .equals(packageProjectionBytes(project, manifest.contractBundles.map(bundle => bundle.contractId))))
+    throw new Error("Target leaf model projection differs from the complete fresh role-scoped source/artifact projection.");
   return { root, manifest, files };
+}
+function assertProjectionPath(path: string): void {
+  if (path.toLowerCase().endsWith("/" + MODEL_PROJECTION_PATH) && path !== MODEL_PROJECTION_ARCHIVE_PATH)
+    throw new Error("Model projection sidecar is reserved to its exact package-shared path; role/RID and case shadows are forbidden.");
 }
 
 function validateManifestMetadata(
@@ -1276,13 +1310,6 @@ function validateManifestMetadata(
     if (imports.length > 0 && !expected) {
       throw new Error(`${label} nonempty ${name} is not supported by descriptor-first Node package tooling.`);
     }
-  }
-  if (expected) {
-    const project = (value: PackageManifest) => ({ dependsOn: value.dependsOn, contractBundles: value.contractBundles, usesContracts: value.usesContracts,
-      provides: value.provides, packageArtifactImports: value.packageArtifactImports ?? [], packageApiImports: value.packageApiImports ?? [],
-      providerImports: value.providerImports ?? [], platformImports: value.platformImports ?? [] });
-    if (canonicalizeDescriptor(asJsonValue(project(manifest))) !== canonicalizeDescriptor(asJsonValue(project(expected))))
-      throw new Error(`${label} RPC/import metadata differs from the complete fresh source and lock projection.`);
   }
 
   if (!Array.isArray(manifest.dependsOn) || manifest.dependsOn.length > 128) {
@@ -1433,6 +1460,15 @@ function validateManifestMetadata(
       throw new Error(`${label} provider '${provider.role}/${provider.providerId}' cannot have public audience for package-only contract '${provider.contractId}'.`);
     }
   }
+  // Structural/identity checks remain authoritative and actionable before the
+  // final source equality fence; a malformed leaf must not mask its own defect.
+  if (expected) {
+    const projection = (value: PackageManifest) => ({ dependsOn: value.dependsOn, contractBundles: value.contractBundles, usesContracts: value.usesContracts,
+      provides: value.provides, packageArtifactImports: value.packageArtifactImports ?? [], packageApiImports: value.packageApiImports ?? [],
+      providerImports: value.providerImports ?? [], platformImports: value.platformImports ?? [] });
+    if (canonicalizeDescriptor(asJsonValue(projection(manifest))) !== canonicalizeDescriptor(asJsonValue(projection(expected))))
+      throw new Error(`${label} RPC/import metadata differs from the complete fresh source and lock projection.`);
+  }
 }
 
 async function validateBundledDescriptorFiles(
@@ -1514,7 +1550,7 @@ function validateTarget(
   }
   const compatibility = packageToolCompatibility();
   const expectedCapabilities = target.role === "app"
-    ? ["core.v1", "rpc.v1", compatibility.sdkBaselineCapability, "views.v1"]
+    ? webTargetCapabilities(config)
     : workerTargetCapabilities(config);
   const capabilitiesMatch = Array.isArray(target.requiredHostCapabilities)
     && target.requiredHostCapabilities.length === expectedCapabilities.length

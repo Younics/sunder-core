@@ -96,26 +96,24 @@ public sealed class LiveRegistryDevelopmentImportTests
             projection.ContentIndex!.Files!.Select(entry => new InstalledPackageContentRecord(entry.Path!, entry.Sha256!, entry.Size)).ToArray(), [], true, DateTimeOffset.UtcNow,
             new(InstalledPackageSourceKind.Registry, InstalledPackageVersionPolicy.ExplicitVersion, input.RegistryOrigin, authority.PackageId,
                 RequestedVersion: manifest.Version, SourceIdentity: authority.ContentIdentity), []) { AcquiredTargets = [], SourcePackageContentIdentity = authority.ContentIdentity }]);
-        var runtimes = new SignedCurrentRidExecutionRuntimeFixture(); await runtimes.InitializeAsync();
+        var runtimes = new OfficialRuntimeFixture(); await runtimes.InitializeAsync();
         RuntimePackageSessionTestHost? host = null; int[] processIds = [];
         try
         {
-            var dotnet = await runtimes.EnsureDotNetAsync(CurrentRidRuntimeHostTestSupport.GetCurrentDotNetVersion(), 1);
-            await runtimes.ObserveSupportedAsync(dotnet);
+            var dotnet = await runtimes.EnsureDotNetAsync("10.0.12");
             var node = Node24Availability.Current; Assert.True(node.IsAvailable, node.UnavailableReason);
-            var nodeRuntime = await runtimes.EnsureNodeAsync(node.Version!, 1, node.ExecutablePath!);
-            await runtimes.ObserveSupportedAsync(nodeRuntime);
+            var nodeRuntime = await runtimes.EnsureNodeAsync("24.21.0");
             var logs = new RecordingLogSink();
             host = new(logs.CreateLogger<RuntimePackageSessionTestHost>(), installed, new(paths),
                 executionRuntimeLaunchResolver: runtimes.LaunchResolver, localExecutionRuntimeBindingResolver: runtimes.LocalBindingResolver,
-                executionRuntimeLifecyclePolicies: runtimes.LifecyclePolicies, developmentImports: imports);
+                developmentImports: imports);
             await host.InitializeAsync();
             foreach (var folder in input.Packages)
             {
                 var result = await host.LoadStartupDevPackagesAsync([folder]);
                 Assert.True(result.Success, string.Join(" | ", result.Errors) + "\n" + string.Join("\n", logs.Entries.Select(entry => entry.Message + "\n" + entry.Exception)));
                 var loaded = Assert.Single(host.ActiveSession.LoadedPackageMap.Values);
-                var receipt = loaded.ExecutionRuntimeBinding!.RuntimeId == SunderPackageFormat.NodeExecutionRuntimeId ? nodeRuntime : dotnet;
+                var receipt = loaded.ExecutionRuntimeBinding!.Runtime.RuntimeId == SunderPackageFormat.NodeExecutionRuntimeId ? nodeRuntime : dotnet;
                 CurrentRidRuntimeHostTestSupport.AssertRuntimeLaunch(loaded, receipt, runtimes);
                 processIds = CurrentRidRuntimeHostTestSupport.GetActiveProcessIds(host); Assert.Single(processIds);
                 var provider = Assert.Single(host.RpcCatalog.GetSnapshot().Providers);
@@ -181,6 +179,8 @@ public sealed class LiveRegistryDevelopmentImportTests
         internal int Requests { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
+            Assert.Equal("localhost", request.RequestUri!.Host);
+            Assert.DoesNotContain("execution-runtimes", request.RequestUri.AbsolutePath, StringComparison.Ordinal);
             Assert.False(offline, "Offline Runtime import replay must not make a Registry request.");
             Requests++; return base.SendAsync(request, token);
         }

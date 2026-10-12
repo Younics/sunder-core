@@ -24,6 +24,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly RegistryPackageInstallService _registryPackageInstallService;
     private readonly Func<RuntimePackageStamp, CancellationToken, Task> _waitUntilPackagePresentationAppliedAsync;
     private readonly Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>> _waitForPackagePresentationAsync;
+    private readonly IRuntimeExecutionRuntimeStatusSource? _runtimeStatusSource;
     private readonly SettingsWindowFactory _settingsWindowFactory;
     private readonly PackagesWindowFactory _packagesWindowFactory;
     private readonly StacksWindowFactory _stacksWindowFactory;
@@ -67,6 +68,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         _ownsBackgroundProcessQueue = backgroundProcessQueue is null;
         _backgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
+        _runtimeStatusSource = runtimeEventSubscription;
         _waitUntilPackagePresentationAppliedAsync = runtimeEventSubscription is null
             ? WaitForUnavailablePresentationAsync
             : runtimeEventSubscription.WaitUntilAppliedAsync;
@@ -76,14 +78,26 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 : Task.FromResult(PackagePresentationResult.Unavailable(
                     "Sunder is running in the Core Shell without a live Runtime presentation."))
             : runtimeEventSubscription.WaitForPresentationAsync;
-        _registryPackageInstallService = new RegistryPackageInstallService(ConfirmPackageChangeAsync);
+        _registryPackageInstallService = new RegistryPackageInstallService(ConfirmPackageChangeAsync, _backgroundProcessQueue,
+            error => _notificationCenter.PublishAsync("sunder.app", "Sunder",
+                new Sunder.Sdk.Notifications.PackageNotificationRequest("Installation failed", error.Message,
+                    Sunder.Sdk.Notifications.PackageNotificationDisplayMode.ToastAndTray,
+                    Sunder.Sdk.Notifications.PackageNotificationSeverity.Error)).AsTask());
         _packageOperationService = new PackageOperationService(
             _backgroundProcessQueue,
             _runtimeApiClientFactory,
             _waitUntilPackagePresentationAppliedAsync,
             _notificationCenter,
             registryInstallService: _registryPackageInstallService,
-            waitForPresentationAsync: _waitForPackagePresentationAsync);
+            waitForPresentationAsync: _waitForPackagePresentationAsync,
+            confirmLocalPackage: (review, token) => _uiDispatcher.InvokeAsync(async () =>
+            {
+                token.ThrowIfCancellationRequested();
+                var dialog = new LocalPackageInstallConsentWindow(review);
+                var result = dialog.ShowDialog<bool>(GetPackageDialogOwner());
+                using var registration = token.Register(() => Avalonia.Threading.Dispatcher.UIThread.Post(() => dialog.Close(false)));
+                return await result.WaitAsync(token);
+            }));
     }
 
     public void AttachShell(MainWindowViewModel viewModel)
@@ -104,6 +118,9 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         var createdWindow = _settingsWindow is null;
         _settingsWindow ??= CreateSettingsWindow();
         ShowWindow(_settingsWindow);
+        if (parameters?.GetValueOrDefault("section") is { } section
+            && _settingsWindow.DataContext is SettingsWindowViewModel settings)
+            _tasks.Observe(settings.SelectCoreSectionAsync(section, _tasks.Token), "selecting Settings section");
         if (!createdWindow)
         {
             _tasks.Observe(RefreshSettingsWindowPackageSectionsAsync(_tasks.Token), "refreshing Settings package sections");
@@ -232,6 +249,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
         _disposed = true;
         _packageOperationService.Dispose();
+        _registryPackageInstallService.Dispose();
         _tasks.Dispose();
         if (_ownsBackgroundProcessQueue)
         {
@@ -246,7 +264,8 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private SettingsWindow CreateSettingsWindow()
     {
-        var window = _settingsWindowFactory.Create(_packageViewHostService, PersistBackgroundProcessPopoverSize);
+        var window = _settingsWindowFactory.Create(_packageViewHostService, PersistBackgroundProcessPopoverSize,
+            _waitForPackagePresentationAsync, _runtimeStatusSource);
 
         window.Closed += (_, _) =>
         {
@@ -308,8 +327,16 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
             }
             var dialog = new PackageCapabilityConsentWindow(
                 new PackageCapabilityConsentViewModel(preflight));
-            return await dialog.ShowDialog<bool>(owner);
+            var result = dialog.ShowDialog<bool>(owner);
+            using var registration = cancellationToken.Register(() => Avalonia.Threading.Dispatcher.UIThread.Post(() => dialog.Close(false)));
+            return await result.WaitAsync(cancellationToken);
         }).WaitAsync(cancellationToken);
+
+    private Window GetPackageDialogOwner()
+        => (_packagesWindow is { IsVisible: true } ? (Window)_packagesWindow : null)
+            ?? (_stacksWindow is { IsVisible: true } ? _stacksWindow : null)
+            ?? (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow
+            ?? throw new InvalidOperationException("Open Packages to review this installation.");
 
     private DeveloperLogWindow CreateDeveloperLogWindow()
     {

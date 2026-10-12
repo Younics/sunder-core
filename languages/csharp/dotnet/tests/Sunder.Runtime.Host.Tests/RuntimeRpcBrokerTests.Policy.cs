@@ -67,8 +67,7 @@ public sealed partial class RuntimeRpcBrokerTests
                 ? result with
                 {
                     Worker = new TestRuntimePackageWorker(disposeAsync: () => { disposed.TrySetResult(); return ValueTask.CompletedTask; }),
-                    ExecutionRuntimeBinding = new("runtime", "osx-arm64", "sunder.runtime.dotnet", "10.0.0", 1, "sunder.dotnet.worker.v1",
-                        Hash("manifest"), Hash("artifact"), 1, Origin, RuntimeExecutionRuntimeAcquisitionSources.Registry, "test-key", 1, 1, "supported", ObservedAt, ObservedAt),
+                    ExecutionRuntimeBinding = TestExecutionRuntimeLaunchResolver.CreateBinding("runtime", "osx-arm64"),
                 }
                 : result;
         });
@@ -113,12 +112,11 @@ public sealed partial class RuntimeRpcBrokerTests
         var activation = await fixture.PublishAsync(new TestHandler(), transform: package => AttachPolicy(package) with
         {
             Worker = new TestRuntimePackageWorker(disposeAsync: () => { if (package.Descriptor.PackageId == "provider.package") disposed.TrySetResult(); return ValueTask.CompletedTask; }),
-            ExecutionRuntimeBinding = new("runtime", "osx-arm64", "sunder.runtime.dotnet", "10.0.0", 1, "sunder.dotnet.worker.v1",
-                Hash("manifest"), Hash("artifact"), 1, Origin, RuntimeExecutionRuntimeAcquisitionSources.Registry, "test-key", 1, 1, "supported", ObservedAt, ObservedAt),
+            ExecutionRuntimeBinding = TestExecutionRuntimeLaunchResolver.CreateBinding("runtime", "osx-arm64"),
         });
         await activation.Session.CommitRuntimeGenerationAsync(fixture.Owner.Generation);
         var subjects = activation.Session.LoadedPackageMap.Values.Select(value => new RegistryPackageVersionIdentity(value.Descriptor.PackageId, "1.0.0", Hash(value.Descriptor.PackageId))).ToArray();
-        await policy.RefreshAsync(subjects, [], [ActivePolicyTestContext.Runtime]);
+        await policy.RefreshAsync(subjects);
         var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         policy.Send = async (_, token) => { waiting.TrySetResult(); await Task.Delay(Timeout.InfiniteTimeSpan, token); throw new InvalidOperationException(); };
         using var network = new RegistryPackagePolicySynchronizer(policy.Client, policy.Cache);

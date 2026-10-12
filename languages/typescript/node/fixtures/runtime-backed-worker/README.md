@@ -1,7 +1,7 @@
 # Runtime-backed Node conformance fixture
 
 The schema-3 project derives its public contract, provider registration, codecs,
-and client from `src/rpc.ts`. The checked owned baseline was created with the
+and client from ordinary `src/services.ts` definitions. The checked public owned baseline was created with the
 owning commands:
 
 ```sh

@@ -3,6 +3,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Sunder.Package.Build.Rpc.Authoring;
+using Sunder.Package.Format;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
@@ -12,9 +13,9 @@ public sealed class SunderRpcContractLockTests
 {
     [Theory]
     [InlineData("minimal-contract-lock.json", "48300c172fe8e323956ee95aa7cde02e30ca9ebd330179e328e3209fe31ead5a", 0, 0, 0, 0)]
-    [InlineData("package-api-contract-lock.json", "0cf9e01de041b7430792a2813793a64a223b780800fc90bdbce0b39014784d6f", 1, 1, 0, 1)]
-    [InlineData("package-api-mixed-authority-contract-lock.json", "0e6ae942272b88e8ffb91cc34aa3790652d65357b7f2dc3051ea14a8d15bfa47", 1, 1, 0, 1)]
-    [InlineData("mixed-contract-lock.json", "4d2c20ba9591c04449ee4fe1e48fbbd1664642807e039a6984245317a9735c1d", 2, 1, 1, 1)]
+    [InlineData("package-api-contract-lock.json", "c89732eb3e01fb179574808f1d4794e35a0e2cc32dbf384a7f0c498be4cf24f9", 1, 1, 0, 1)]
+    [InlineData("package-api-mixed-authority-contract-lock.json", "e06b9d71283895d9c67e9f58649facf4e4df4a808ab7522867c217585ace732b", 1, 1, 0, 1)]
+    [InlineData("mixed-contract-lock.json", "6ea46e7a2e9dcfc2b04f221224cb61434dcc181bc53f540fe3b3f9527f36a93e", 2, 1, 1, 1)]
     public void ReadContractLock_AcceptsConformingLocks(
         string fileName,
         string expectedSha256,
@@ -325,7 +326,7 @@ public sealed class SunderRpcContractLockTests
     }
 
     [Fact]
-    public void ResolveContractCache_ValidatesSelectedDescriptorsAndIgnoresMetadataOnlyPlatformContracts()
+    public void ResolveContractCache_ValidatesCompleteSidecarButDoesNotMaterializeMetadataOnlyPlatformContracts()
     {
         var directory = CreateTempDirectory();
         try
@@ -333,6 +334,16 @@ public sealed class SunderRpcContractLockTests
             var contractLock = SunderRpcAuthoringDocuments.ReadContractLock(
                 Fixture("valid", "package-api-mixed-authority-contract-lock.json"));
             WriteMinimalCacheEntry(directory);
+            var catalog = SunderPlatformContractCatalog.Verify(SunderRpcAuthoringJson.WriteCompact(
+                JsonSerializer.SerializeToElement(JsonNode.Parse(File.ReadAllBytes(Fixture("valid", "platform-catalog.json")))), SunderRpcPlatformCatalogCache.MaximumBytes));
+            foreach (var descriptor in catalog.Contracts)
+            {
+                var requirement = new SunderRpcContractCacheRequirement(descriptor.ContractId, descriptor.Version, descriptor.GetCanonicalUtf8().Length,
+                    descriptor.Sha256, descriptor.AbiSha256);
+                SunderRpcContractCacheStore.Publish(directory, new Dictionary<string, byte[]> { [descriptor.Sha256] = descriptor.GetCanonicalUtf8() },
+                    new Dictionary<string, SunderRpcContractCacheRequirement> { [descriptor.Sha256] = requirement });
+            }
+            ModelProjectionTestEvidence.Seed(directory, contractLock.PackageArtifacts["example.dependency"]);
 
             var cache = SunderRpcContractCache.Resolve(contractLock, directory);
 
@@ -340,9 +351,10 @@ public sealed class SunderRpcContractLockTests
             Assert.Equal("example.rpc.v1.minimal", entry.Descriptor.ContractId);
             Assert.Equal("2.0.0", entry.Descriptor.Version);
             Assert.Equal(487, entry.CanonicalUtf8.Length);
-            Assert.False(File.Exists(SunderRpcContractCache.GetDescriptorPath(
+            Assert.True(File.Exists(SunderRpcContractCache.GetDescriptorPath(
                 directory,
                 "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567")));
+            Assert.DoesNotContain(cache.EntriesByDescriptorSha256.Values, value => value.Descriptor.ContractId == "sunder.stack.contributor");
         }
         finally
         {

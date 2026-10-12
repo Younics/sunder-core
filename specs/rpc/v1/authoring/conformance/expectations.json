@@ -43,6 +43,9 @@
   "immutableArtifactEvidence": [
     {
       "inventoryFixturePath": "valid/package-public-inventory-empty.json",
+      "modelProjectionFixturePath": "valid/rpc-model-projection-empty.json",
+      "modelProjectionBytes": 105,
+      "modelProjectionSha256": "2569e02db2aba466ab66ba506aa2e8fe968206a16f966ae182b6f734087e1b5c",
       "packageId": "example.empty",
       "packageVersion": "1.0.0",
       "packageContentIdentity": "2222222222222222222222222222222222222222222222222222222222222222",
@@ -51,6 +54,9 @@
     },
     {
       "inventoryFixturePath": "valid/package-public-inventory-mixed-authority.json",
+      "modelProjectionFixturePath": "valid/rpc-model-projection-mixed-authority.json",
+      "modelProjectionBytes": 840,
+      "modelProjectionSha256": "2bfacdb1415230a81b6004e0d1cf2c2d3be9e68b6e5295c3cba83b7d418732e1",
       "packageId": "example.dependency",
       "packageVersion": "1.2.3",
       "packageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
@@ -59,6 +65,9 @@
     },
     {
       "inventoryFixturePath": "valid/package-public-inventory-nonempty.json",
+      "modelProjectionFixturePath": "valid/rpc-model-projection-nonempty.json",
+      "modelProjectionBytes": 475,
+      "modelProjectionSha256": "6547e16179e682ab249c64dfbf496d972aad6ff6e4965bc96ef662c0395e2b0a",
       "packageId": "example.dependency",
       "packageVersion": "1.2.3",
       "packageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
@@ -67,6 +76,9 @@
     },
     {
       "inventoryFixturePath": "valid/package-public-inventory-platform-only.json",
+      "modelProjectionFixturePath": "valid/rpc-model-projection-platform-only.json",
+      "modelProjectionBytes": 477,
+      "modelProjectionSha256": "def31402252acf51eac497db26791d21bf02cbb5c7bf3c0467f13f514b7a1a16",
       "packageId": "example.dependency",
       "packageVersion": "1.2.3",
       "packageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
@@ -75,6 +87,225 @@
     }
   ],
   "fixtures": [
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "valid/package-owned-baseline-optional-reference.json",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "valid/package-project-export-optional-reference.json",
+      "semanticContextFixturePaths": [
+        "valid/package-owned-baseline-optional-reference.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "valid/rpc-model-projection-optional-reference.json",
+      "semanticContextFixturePaths": [
+        "valid/package-project-export-optional-reference.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "invalid/rpc-model-projection-optional-reference-empty.json",
+      "expectedSchemaKeyword": "minProperties",
+      "expectedSchemaErrors": [
+        "minProperties|/contracts/0/modelProjection/optionalServiceReferenceMembers|#/$defs/modelProjection/properties/optionalServiceReferenceMembers/minProperties|{\"limit\":1}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.model-projection-invalid"
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "semantic-invalid/rpc-model-projection-optional-reference-nonnullable.json",
+      "semanticContextFixturePaths": [
+        "valid/package-project-export-optional-reference.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.model-projection-invalid"
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "semantic-invalid/rpc-model-projection-optional-reference-unmapped.json",
+      "semanticContextFixturePaths": [
+        "valid/package-project-export-optional-reference.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.model-projection-invalid"
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "valid/package-project-export-method-policies.json",
+      "semanticContextFixturePaths": [
+        "valid/package-owned-baseline.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "valid/rpc-model-projection-method-policies.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "invalid/rpc-model-projection-method-policy-zero.json",
+      "expectedSchemaKeyword": "minimum",
+      "expectedSchemaErrors": [
+        "minimum|/contracts/0/methodPolicies/example/ping/timeoutSeconds|#/$defs/methodPolicies/additionalProperties/additionalProperties/properties/timeoutSeconds/minimum|{\"comparison\":\">=\",\"limit\":1}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.model-projection-invalid"
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "semantic-invalid/rpc-model-projection-method-policy-unknown-method.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.model-projection-invalid"
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "valid/package-owned-baseline-service-reference.json",
+      "expectedFileSha256": "e1b2bae91e6be8409259d63decd3a575f1a6feb6e761906aa4047231f0f2b6bc",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "valid/package-project-export-service-reference.json",
+      "semanticContextFixturePaths": [
+        "valid/package-owned-baseline-service-reference.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "valid/rpc-model-projection-service-reference.json",
+      "semanticContextFixturePaths": [
+        "valid/package-project-export-service-reference.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "valid/rpc-model-projection-empty.json",
+      "expectedFileSha256": "2569e02db2aba466ab66ba506aa2e8fe968206a16f966ae182b6f734087e1b5c",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "valid/rpc-model-projection-nonempty.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "expectedFileSha256": "6547e16179e682ab249c64dfbf496d972aad6ff6e4965bc96ef662c0395e2b0a",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "valid/rpc-model-projection-mixed-authority.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-mixed-authority.json"
+      ],
+      "expectedFileSha256": "2bfacdb1415230a81b6004e0d1cf2c2d3be9e68b6e5295c3cba83b7d418732e1",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "valid/rpc-model-projection-platform-only.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-platform-only.json"
+      ],
+      "expectedFileSha256": "def31402252acf51eac497db26791d21bf02cbb5c7bf3c0467f13f514b7a1a16",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "valid/rpc-model-projection-models.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "invalid/rpc-model-projection-missing-map.json",
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.model-projection-invalid"
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "invalid/rpc-model-projection-reference-extra-field.json",
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.model-projection-invalid"
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "semantic-invalid/rpc-model-projection-case-keys.json",
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.model-projection-invalid"
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "semantic-invalid/rpc-model-projection-unknown-definition.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.model-projection-invalid"
+    },
+    {
+      "schemaPath": "../rpc-model-projection.schema.json",
+      "fixturePath": "semantic-invalid/rpc-model-projection-incomplete-locator.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.model-projection-invalid"
+    },
     {
       "schemaPath": "../authoring-receipt.schema.json",
       "fixturePath": "valid/authoring-receipt-mixed.json",
@@ -142,7 +373,7 @@
         "valid/package-public-inventory-mixed-authority.json",
         "valid/platform-catalog.json"
       ],
-      "expectedFileSha256": "4d2c20ba9591c04449ee4fe1e48fbbd1664642807e039a6984245317a9735c1d",
+      "expectedFileSha256": "6ea46e7a2e9dcfc2b04f221224cb61434dcc181bc53f540fe3b3f9527f36a93e",
       "schemaValid": true,
       "semanticValid": true,
       "expectedSemanticDiagnosticId": null
@@ -153,7 +384,7 @@
       "semanticContextFixturePaths": [
         "valid/package-public-inventory-nonempty.json"
       ],
-      "expectedFileSha256": "0cf9e01de041b7430792a2813793a64a223b780800fc90bdbce0b39014784d6f",
+      "expectedFileSha256": "c89732eb3e01fb179574808f1d4794e35a0e2cc32dbf384a7f0c498be4cf24f9",
       "schemaValid": true,
       "semanticValid": true,
       "expectedSemanticDiagnosticId": null
@@ -165,7 +396,41 @@
         "valid/package-public-inventory-mixed-authority.json",
         "valid/platform-catalog.json"
       ],
-      "expectedFileSha256": "0e6ae942272b88e8ffb91cc34aa3790652d65357b7f2dc3051ea14a8d15bfa47",
+      "expectedFileSha256": "e06b9d71283895d9c67e9f58649facf4e4df4a808ab7522867c217585ace732b",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "valid/package-api-app-contract-lock.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "valid/package-api-both-contract-lock.json",
+      "semanticContextFixturePaths": [
+        "valid/package-public-inventory-nonempty.json"
+      ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "valid/package-retired-private-baseline.json",
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "valid/package-retired-private-history-baseline.json",
       "schemaValid": true,
       "semanticValid": true,
       "expectedSemanticDiagnosticId": null
@@ -183,6 +448,13 @@
       "semanticContextFixturePaths": [
         "valid/package-owned-baseline.json"
       ],
+      "schemaValid": true,
+      "semanticValid": true,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "valid/package-project-export-private.json",
       "schemaValid": true,
       "semanticValid": true,
       "expectedSemanticDiagnosticId": null
@@ -331,6 +603,28 @@
       "expectedSemanticDiagnosticId": null
     },
     {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "invalid/contract-lock-missing-consumer-roles.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required|/packageImports/example.dependency|#/required|{\"missingProperty\":\"consumerRoles\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../contract-lock.schema.json",
+      "fixturePath": "invalid/contract-lock-reversed-consumer-roles.json",
+      "expectedSchemaKeyword": "enum",
+      "expectedSchemaErrors": [
+        "enum|/packageImports/example.dependency/consumerRoles|#/properties/consumerRoles/enum|{\"allowedValues\":[[\"app\"],[\"runtime\"],[\"app\",\"runtime\"]]}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
       "schemaPath": "../owned-contracts.schema.json",
       "fixturePath": "invalid/owned-baseline-missing-required.json",
       "expectedSchemaKeyword": "required",
@@ -349,6 +643,17 @@
         "minItems|/contracts/minimal/history|#/allOf/0/then/properties/history/minItems|{\"limit\":1}",
         "if|/contracts/minimal|#/allOf/0/if|{\"failingKeyword\":\"then\"}",
         "if||#/allOf/0/if|{\"failingKeyword\":\"then\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../owned-contracts.schema.json",
+      "fixturePath": "invalid/retired-private-public-history.json",
+      "expectedSchemaKeyword": "const",
+      "expectedSchemaErrors": [
+        "const|/retiredPrivateContracts/minimal/history/0/exposure|#/allOf/1/properties/history/items/properties/exposure/const|{\"allowedValue\":\"package\"}"
       ],
       "schemaValid": false,
       "semanticValid": false,
@@ -428,6 +733,17 @@
       "expectedSchemaKeyword": "required",
       "expectedSchemaErrors": [
         "required||#/required|{\"missingProperty\":\"packageId\"}"
+      ],
+      "schemaValid": false,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": null
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "invalid/project-export-missing-package-version.json",
+      "expectedSchemaKeyword": "required",
+      "expectedSchemaErrors": [
+        "required||#/required|{\"missingProperty\":\"packageVersion\"}"
       ],
       "schemaValid": false,
       "semanticValid": false,
@@ -538,6 +854,13 @@
       "schemaValid": true,
       "semanticValid": false,
       "expectedSemanticDiagnosticId": "rpc-authoring.mandatory-platform-contract-missing"
+    },
+    {
+      "schemaPath": "../package-project-export.schema.json",
+      "fixturePath": "semantic-invalid/project-export-private-version-mismatch.json",
+      "schemaValid": true,
+      "semanticValid": false,
+      "expectedSemanticDiagnosticId": "rpc-authoring.private-version-mismatch"
     },
     {
       "schemaPath": "../authoring-receipt.schema.json",

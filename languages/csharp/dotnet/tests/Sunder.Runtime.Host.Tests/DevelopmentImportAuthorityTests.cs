@@ -21,6 +21,89 @@ public sealed class DevelopmentImportAuthorityTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task GeneratedLocalHandoffLoadsFirstLaunchAndRebuiltManifestWithoutManualPreparation(bool platform)
+    {
+        using var fixture = new Fixture(optional: true, platform: platform) { Offline = true };
+        var prepared = await fixture.Preparation.PrepareAsync(await fixture.LocalInputs(), default);
+        var retainedPath = fixture.Store.PathFor(prepared.ManifestSha256);
+        var handoff = fixture.Folder + SunderPackageFormat.DevelopmentImportsSuffix;
+        File.Copy(retainedPath, handoff);
+        File.Delete(retainedPath);
+        var host = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance,
+            new(fixture.Policy.Paths), new(fixture.Policy.Paths), developmentImports: fixture.Store);
+        try
+        {
+            Assert.True((await host.LoadDevPackageFromRuntimeInputAsync(fixture.Folder, watch: false)).Success);
+            var active = Assert.Single(host.GetActiveRuntimePackageSources());
+            Assert.True(active.DevelopmentImports!.IsLocal);
+            Assert.Null(active.InstalledPolicy);
+            Assert.Null(active.RegistryPolicyContentIdentity);
+            Assert.Equal(File.ReadAllBytes(handoff), File.ReadAllBytes(retainedPath));
+        }
+        finally { await host.ShutdownAsync(); }
+
+        var manifest = JsonNode.Parse(File.ReadAllBytes(fixture.ManifestPath))!;
+        manifest["name"] = "Rebuilt local package";
+        File.WriteAllText(fixture.ManifestPath, manifest.ToJsonString());
+        CanonicalPackageTestBuilder.WriteContentIndex(fixture.Folder);
+        var source = fixture.Source();
+        var hash = RuntimeRpcPackageMetadata.GetManifestSha256(source.ContentIndex!);
+        await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Store.ResolveAsync(source, default));
+        Assert.False(File.Exists(fixture.Store.PathFor(hash)));
+        var next = JsonNode.Parse(File.ReadAllBytes(handoff))!;
+        next["manifestSha256"] = hash;
+        File.WriteAllText(handoff, next.ToJsonString());
+        Assert.Equal(hash, (await fixture.Store.ResolveAsync(source, default)).ManifestSha256);
+        Assert.True(File.Exists(retainedPath));
+        Assert.Equal(0, fixture.Requests);
+    }
+
+    [Theory]
+    [InlineData("registry")]
+    [InlineData("inventory")]
+    [InlineData("hash")]
+    [InlineData("catalog")]
+    [InlineData("duplicate")]
+    [InlineData("symlink")]
+    [InlineData("disabled")]
+    public async Task GeneratedHandoffRejectsUnverifiedOrNonlocalEvidenceBeforeRetention(string failure)
+    {
+        using var fixture = new Fixture(optional: true, platform: true) { Offline = true };
+        var prepared = await fixture.Preparation.PrepareAsync(await fixture.LocalInputs(), default);
+        var retainedPath = fixture.Store.PathFor(prepared.ManifestSha256);
+        var valid = File.ReadAllBytes(retainedPath);
+        File.Delete(retainedPath);
+        var handoff = fixture.Folder + SunderPackageFormat.DevelopmentImportsSuffix;
+        var value = JsonNode.Parse(valid)!;
+        switch (failure)
+        {
+            case "registry": value["sourceKind"] = "registry"; value["registryOrigin"] = ActivePolicyTestContext.Origin; break;
+            case "inventory": value["inventories"] = new JsonArray(); break;
+            case "hash": value["manifestSha256"] = new string('0', 64); break;
+            case "catalog": value["catalogs"] = new JsonArray(); break;
+        }
+        File.WriteAllText(handoff, failure switch
+        {
+            "duplicate" => value.ToJsonString().Insert(1, "\"sourceKind\":\"local\","),
+            "disabled" => "null\n",
+            _ => value.ToJsonString(),
+        });
+        if (failure == "symlink")
+        {
+            var outside = fixture.Temp.GetPath("outside.json");
+            File.WriteAllBytes(outside, valid);
+            File.Delete(handoff);
+            File.CreateSymbolicLink(handoff, outside);
+        }
+        var exception = await Record.ExceptionAsync(() => fixture.Store.ResolveAsync(fixture.Source(), default));
+        Assert.True(exception is InvalidDataException or JsonException, exception?.ToString() ?? "Invalid handoff was accepted.");
+        Assert.False(File.Exists(retainedPath));
+        Assert.Equal(0, fixture.Requests);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task LocalCandidatesPrepareAndLoadWithoutRegistryOrPublication(bool platform)
     {
         using var fixture = new Fixture(optional: true, platform: platform) { Offline = true };
@@ -35,7 +118,7 @@ public sealed class DevelopmentImportAuthorityTests
         fixture.Policy.Clock.Advance(TimeSpan.FromHours(25));
         var source = fixture.Source() with { DevelopmentImports = await fixture.Store.ResolveAsync(fixture.Source(), default) };
         var admission = new PackagePolicyAdmission(fixture.Policy.Cache);
-        admission.Require(source, null); Assert.Empty(admission.Subjects(source, null));
+        admission.Require(source); Assert.Empty(admission.Subjects(source));
 
         var host = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance,
             new(fixture.Policy.Paths), new(fixture.Policy.Paths), developmentImports: fixture.Store);
@@ -209,11 +292,11 @@ public sealed class DevelopmentImportAuthorityTests
         var evidence = await fixture.Store.ResolveAsync(source, default);
         source = source with { DevelopmentImports = evidence };
         Assert.Single(evidence.Catalogs);
-        var admission = new PackagePolicyAdmission(fixture.Policy.Cache); admission.Require(source, null);
-        var subjects = Assert.Single(admission.Subjects(source, null)); Assert.Empty(subjects.Packages); Assert.Single(subjects.Platforms);
+        var admission = new PackagePolicyAdmission(fixture.Policy.Cache); admission.Require(source);
+        var subjects = Assert.Single(admission.Subjects(source)); Assert.Empty(subjects.Packages); Assert.Single(subjects.Platforms);
         fixture.Offline = true; await fixture.Store.ResolveAsync(source, default);
         fixture.Policy.Clock.Advance(TimeSpan.FromHours(25));
-        Assert.Equal(PackagePolicyErrorCodes.PolicyExpired, Assert.Throws<PackagePolicyDeniedException>(() => admission.Require(source, null)).Code);
+        Assert.Equal(PackagePolicyErrorCodes.PolicyExpired, Assert.Throws<PackagePolicyDeniedException>(() => admission.Require(source)).Code);
         await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => fixture.Store.ResolveAsync(source, default));
     }
 
@@ -228,7 +311,7 @@ public sealed class DevelopmentImportAuthorityTests
                 PackagePolicyErrorCodes.ContractAuthorityRevoked, ActivePolicyTestContext.ObservedAt)).ToArray(),
         };
         await fixture.Policy.RefreshAsync(packages: [], platforms: DevelopmentImportAuthorityStore.Platforms(source.Manifest!));
-        Assert.Equal(PackagePolicyErrorCodes.ContractAuthorityRevoked, Assert.Throws<PackagePolicyDeniedException>(() => new PackagePolicyAdmission(fixture.Policy.Cache).Require(source, null)).Code);
+        Assert.Equal(PackagePolicyErrorCodes.ContractAuthorityRevoked, Assert.Throws<PackagePolicyDeniedException>(() => new PackagePolicyAdmission(fixture.Policy.Cache).Require(source)).Code);
     }
 
     [Theory]

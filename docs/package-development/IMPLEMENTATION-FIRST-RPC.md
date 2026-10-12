@@ -14,6 +14,18 @@
 > **Applies to:** Sunder SDK `1.1.x`, package manifest V1, RPC descriptor V1,
 > Worker protocol V1, TypeScript 6.0.3, and ES2023.
 
+**Current ordinary-service authoring:** [Ordinary C# services](ORDINARY-SERVICES.md) and the
+[shared handoff](../../specs/rpc/v1/authoring/GENERATED-SERVICE-HANDOFF.md) supersede
+the initial declaration/private-lifecycle checkpoints below. C# uses only
+`Sunder.Sdk.Services`; RPC-prefixed declaration aliases and their explicit-method
+fallback are removed. Node uses exported `defineService` definitions from one
+`services.module`, with ordinary TypeScript or checked JavaScript/JSDoc. Both
+frontends derive current private versions from the full package version without
+an independent Accept/Freeze baseline. Public history and frozen wire oracles
+retain their evolution rules. The current Node surface is documented under
+[TypeScript And JavaScript Surface](#typescript-and-javascript-surface); the
+explicitly historical checkpoint below records earlier implementation evidence.
+
 `GenerateSunderRpcBindingsTask` now integrates the descriptor-only C# import
 prepass for package authority into initial semantic analysis and final generated-
 member compilation. The passes must agree on registration output and the complete
@@ -68,6 +80,15 @@ Exported local content alone does not establish publication or admission.
 The [platform-catalog implementation boundary](../../specs/rpc/v1/authoring/platform-catalog/README.md)
 records exact bytes, pins, dependencies, and remaining integration.
 
+<details>
+<summary>Historical Node DSL checkpoint — superseded authoring and private-lifecycle observations</summary>
+
+The following checkpoint records the pre-ordinary-service implementation and its
+original test scope. Its DSL, private baseline prerequisites and generated-module
+names are not current package-author instructions. See the current
+[Node lifecycle](#node-private-and-public-lifecycle) and
+[configuration](#package-configuration-and-generated-output) instead.
+
 Node now implements the bounded owned TS/JS DSL vertical, lossless package-owned
 baseline reader/writer, conservative production classifier, closed
 `contracts check|accept|freeze`, and source-verified V3 release Pack, including
@@ -116,10 +137,12 @@ Imports/restores, platform providers/admission, optional dependencies, explicit
 publication-evidence import and V3 templates have owning implementations. New
 prerelease allocation remains unsupported. Owned source/release verification grants
 no publication or Runtime authority. See
-the [Node execution boundary](../../languages/typescript/node/packages/package-tool/README.md#owned-v3-source-and-releases).
+the [Node execution boundary](../../languages/typescript/node/packages/package-tool/README.md#private-and-public-versions).
 Descriptor files, Protocol projects, direct MSBuild RPC items, and Node schema-
 version-2 RPC config in remaining projects are pre-cutover migration inputs, not
 the final V1 authoring contract described here.
+
+</details>
 
 The wire contract does not change: canonical RPC descriptor V1 and
 `sunder.rpc.values.v1` remain the language-neutral runtime authority. This
@@ -138,8 +161,8 @@ The source-of-truth roots are:
 
 - one annotated C# service declaration or implementation in an ordinary package
   project;
-- one configured and statically analyzable `rpc.router(...)` export for a Node
-  package; and
+- one configured Node `services.module` exporting statically analyzable
+  `defineService` definitions; and
 - one tool-owned `sunder-contracts.lock.json` for reviewed package ranges, exact
   imported RPC identities, and package/platform restore provenance.
 
@@ -150,163 +173,49 @@ frontend may bypass its graph, format, size, or canonicalization checks.
 
 ## C# Authoring Surface
 
-All declarative authoring types live in `Sunder.Sdk.Rpc`. Existing
-`SunderRpcMethodIdempotency`, `SunderRpcOptional<T>`,
-`SunderRpcInvocationContext`, and RPC value types are reused. The domain-error
-attribute is named `SunderRpcDomainErrorAttribute` because `SunderRpcError` is an
-existing runtime value type.
+Declarative source metadata lives in `Sunder.Sdk.Services`. A normal package authors
+ordinary methods and injects generated interfaces. Advanced wire/runtime values,
+including `SunderRpcOptional<T>`, `SunderRpcInvocationContext` and descriptor
+idempotency, retain `Sunder.Sdk.Rpc`; they are not alternative declaration types.
 
-The frozen public names and shapes are:
+This public API example preserves deliberate identities without authoring a
+descriptor or generated registration. Public acceptance/freezing remains explicit:
 
 ```csharp
-namespace Sunder.Sdk.Rpc;
+using System.Threading;
+using System.Threading.Tasks;
+using Sunder.Sdk.Services;
 
-public enum SunderRpcExposure
+[SunderService(SunderServiceExposure.Public,
+    ContractId = "example.greeting", ServiceId = "greeting")]
+public sealed partial class GreetingService
 {
-    Package,
-    Public,
+    [SunderMethod(MethodId = "greet", Idempotency = SunderServiceIdempotency.Idempotent)]
+    public ValueTask<GreetingResult> GreetAsync(GreetingRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(new GreetingResult { Message = $"Hello, {request.Name}!" });
+    }
 }
 
-public enum SunderRpcProviderAudience
+[SunderValue("GreetingRequest")]
+public sealed record GreetingRequest
 {
-    Inferred,
-    Owner,
-    Public,
+    [SunderValueConstraints(MinLength = 1, MaxLength = 120)]
+    public required string Name { get; init; }
 }
 
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcServiceAttribute : Attribute
-{
-    public SunderRpcServiceAttribute(SunderRpcExposure exposure);
-    public SunderRpcExposure Exposure { get; }
-    public string? ContractId { get; set; }
-    public string? ServiceId { get; set; }
-    public bool IncludeSchemaDialect { get; set; }
-    public Type[] AdditionalDefinitions { get; set; }
-}
-
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcAppUseAttribute : Attribute
-{
-    public bool Required { get; set; }
-    public string[]? Actions { get; set; }
-}
-
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcRuntimeUseAttribute : Attribute
-{
-    public bool Required { get; set; }
-    public string[]? Actions { get; set; }
-}
-
-[AttributeUsage(AttributeTargets.Class,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcProviderAttribute : Attribute
-{
-    public SunderRpcProviderAttribute();
-    public SunderRpcProviderAttribute(Type serviceType);
-    public Type? ServiceType { get; }
-    public string? ProviderId { get; set; }
-    public SunderRpcProviderAudience Audience { get; set; }
-}
-
-[AttributeUsage(AttributeTargets.Method,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcMethodAttribute : Attribute
-{
-    public string? MethodId { get; set; }
-    public string? RequestDefinitionName { get; set; }
-    public string? OutputDefinitionName { get; set; }
-    public SunderRpcMethodIdempotency Idempotency { get; set; }
-    public string[] Errors { get; set; }
-}
-
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface,
-    AllowMultiple = true, Inherited = false)]
-public sealed class SunderRpcDomainErrorAttribute : Attribute
-{
-    public SunderRpcDomainErrorAttribute(string code);
-    public string Code { get; }
-    public string? Description { get; set; }
-    public Type? DetailsType { get; set; }
-}
-
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct |
-    AttributeTargets.Enum, AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcDefinitionAttribute : Attribute
-{
-    public SunderRpcDefinitionAttribute(string name);
-    public string Name { get; }
-}
-
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcTransparentAttribute : Attribute;
-
-[AttributeUsage(AttributeTargets.Enum,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcNumericEnumAttribute : Attribute
-{
-    public bool IncludeRangeBounds { get; set; } = true;
-}
-
-[AttributeUsage(AttributeTargets.Class,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcUnionAttribute : Attribute
-{
-    public SunderRpcUnionAttribute(params Type[] variants);
-    public IReadOnlyList<Type> Variants { get; }
-}
-
-[AttributeUsage(AttributeTargets.Class,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcDiscriminatorAttribute : Attribute
-{
-    public SunderRpcDiscriminatorAttribute(string propertyName);
-    public string PropertyName { get; }
-}
-
-[AttributeUsage(AttributeTargets.Class,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcVariantAttribute : Attribute
-{
-    public SunderRpcVariantAttribute(string tag);
-    public string Tag { get; }
-}
-
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct |
-    AttributeTargets.Enum | AttributeTargets.Property |
-    AttributeTargets.Parameter | AttributeTargets.ReturnValue,
-    AllowMultiple = false, Inherited = false)]
-public sealed class SunderRpcFacetAttribute : Attribute
-{
-    public long MinLength { get; set; }
-    public long MaxLength { get; set; }
-    public long MinItems { get; set; }
-    public long MaxItems { get; set; }
-    public long MinProperties { get; set; }
-    public long MaxProperties { get; set; }
-    public long MaxDecodedBytes { get; set; }
-    public long MaxDigits { get; set; }
-    public long MaxPrecision { get; set; }
-    public long MaxScale { get; set; }
-    public string? Minimum { get; set; }
-    public string? Maximum { get; set; }
-    public string? ExclusiveMinimum { get; set; }
-    public string? ExclusiveMaximum { get; set; }
-    public string? ExactNumber { get; set; }
-    public string? ConstantString { get; set; }
-    public bool JsonObjectOnly { get; set; }
-    public string[]? AllowedStrings { get; set; }
-    public string? Title { get; set; }
-    public string? Description { get; set; }
-}
+[SunderValue("GreetingResult")]
+public sealed record GreetingResult { public required string Message { get; init; } }
 ```
 
-`SunderRpcFacetAttribute` integral bounds default to `-1`, meaning absent. A
+The complete declaration surface is defined in the SDK's
+`Services/SunderServiceAttributes.cs` and public API snapshot. Ordinary private
+services can use `[SunderService]`, strings/records and implicit method discovery
+without the compatibility overrides in this public example.
+
+`SunderValueConstraintsAttribute` integral bounds default to `-1`, meaning absent. A
 source compiler rejects any other negative value. Numeric strings must already
 be canonical invariant RPC integer/decimal text. Mutually exclusive descriptor
 facets, reversed bounds, and facets incompatible with the target schema fail at
@@ -315,9 +224,10 @@ compile time.
 `JsonObjectOnly=true` narrows a raw `JsonElement` value to the exact schema
 `{"type":"object"}` without adding property-count bounds or converting it into a
 typed dictionary/closed record. It can be combined with explicit property bounds,
-and rejects non-raw-JSON targets. The Node equivalent is `rpc.schema.json({ objectOnly:
-true })`, with `JsonObject` inference. Omission/false retains arbitrary JSON, including
-arrays and scalar values. Normal wire/resource validation still applies.
+and rejects non-raw-JSON targets. Node uses the SDK's ordinary `JsonObject` type
+for this boundary and `JsonValue` for arbitrary JSON, including arrays and scalars.
+Explicit `constraints` can add property-count bounds. These are source types from
+`@sunder/sdk`, not schema constructors; normal wire/resource validation still applies.
 
 `AllowedStrings` retains a plain string's closed inline enumeration when the wire
 contract uses `{"type":"string","enum":[...]}` directly at that value. It accepts
@@ -325,7 +235,9 @@ contract uses `{"type":"string","enum":[...]}` directly at that value. It accept
 introducing an extra named enum definition. Null/empty selections, duplicate values,
 invalid Unicode and non-plain-string targets fail. Generated codecs and the normal
 descriptor validator enforce the values. Use ordinary CLR enums for named enum
-definitions; Node's inline `s.stringEnum(...)` already expresses this wire form.
+definitions. Node derives a closed string enum from a supported source literal
+union such as `"queued" | "complete"`, including the same checked JSDoc union in
+JavaScript. Exact public enum bytes remain subject to baseline comparison.
 
 ### Service And Provider Forms
 
@@ -345,18 +257,22 @@ preserves an existing named alias through source migration. The same closed valu
 compiler validates these types and their reachable graphs; external CLR types, open
 generics, null/duplicate entries and name collisions fail. The array is bounded to
 256 entries, and normal complete-descriptor limits still apply. No descriptor JSON
-or baseline schema is used as source. Node already expresses such definitions in its
-literal `definitions` map.
+or baseline schema is used as source. Node derives named record/interface
+definitions reachable from ordinary method or declared error-detail types. Its
+current `ServiceOptions` has no `definitions` map or additional-definition catalog,
+and the SDK exports no `serviceTypes` helper. An otherwise unreachable Node type
+is not retained merely because it is declared or exported; do not substitute a
+retired schema DSL for this C#-specific retention option.
 
-A concrete partial class with `SunderRpcServiceAttribute` is the single-class
+A concrete partial class with `SunderServiceAttribute` is the single-class
 shorthand: it declares one service and one local provider. The provider uses the
 default ID and inferred audience unless a parameterless
-`SunderRpcProviderAttribute` supplies an exceptional stable provider ID or
+`SunderServiceProviderAttribute` supplies an exceptional stable provider ID or
 audience.
 
 An annotated interface is declaration-only and creates no provider. One or more
 partial implementation classes bind it with
-`[SunderRpcProvider(typeof(IService))]`. Every binding is compile-time checked
+`[SunderServiceProvider(typeof(IService))]`. Every binding is compile-time checked
 for the complete service shape. If more than one implementation binds the same
 contract, every binding must set a distinct `ProviderId`. A class cannot bind two
 service declarations, and runtime scanning or reflection dispatch is forbidden.
@@ -367,7 +283,7 @@ invalid. Multiple service declarations may share one explicit `ContractId` only
 when exposure and contract-level error declarations agree exactly.
 
 An additional concrete provider may also inherit an implemented ordinary source
-service and bind it with `[SunderRpcProvider(typeof(BaseService), ProviderId = "...")]`.
+service and bind it with `[SunderServiceProvider(typeof(BaseService), ProviderId = "...")]`.
 This retains one descriptor and separate literal provider identities while reusing
 the implemented methods. When both base and derived types have generated registration
 factories, the derived factory explicitly hides the base factory; call it on the
@@ -415,22 +331,26 @@ this does not enable arbitrary generator-produced RPC declarations or models.
 
 ### Method Rules
 
-- Only instance methods carrying `SunderRpcMethodAttribute` are RPC methods.
-- Unary methods return `Task<T>` or `ValueTask<T>`. Server streams return
+- Declared public async instance methods are discovered automatically. Optional
+  `SunderMethod` metadata supplies deliberate semantics; private/object/lifecycle
+  helpers are excluded rather than exported by convention.
+- Unary methods return `Task`, `ValueTask`, `Task<T>` or `ValueTask<T>`. Server streams return
   `IAsyncEnumerable<T>`.
-- A method accepts zero or more supported wire parameters, followed by at most
-  one `SunderRpcInvocationContext` and at most one `CancellationToken`.
+- A method accepts supported wire parameters and at most one out-of-band
+  `SunderRpcInvocationContext`, before a final `CancellationToken`. Context may
+  precede wire parameters; neither context nor cancellation is serialized.
 - Multiple wire parameters synthesize one closed request definition. Zero wire
   parameters use the canonical `Unit` definition. One explicit DTO remains a
   normal request definition.
 - The source method name, after one terminal `Async` is removed, supplies the
   default method ID. `RequestDefinitionName` and `OutputDefinitionName` exist
   only for compatibility or a reported collision.
-- Overloads, generic methods, static methods, `ref`/`out`, optional CLR wire
-  parameters, synchronous streams, dynamic values, custom awaitables, and
+- Overloads, generic methods, static methods, `ref`/`out`, `params`,
+  synchronous streams, dynamic values, custom awaitables, and
   ambient cancellation are invalid.
+- CLR defaults are caller conveniences, not permission to omit wire values.
 - Method kind is inferred from the return type. Idempotency defaults to
-  `SunderRpcMethodIdempotency.None`. `Errors` defaults to an empty array and may
+  `SunderServiceIdempotency.None`. `Errors` defaults to an empty array and may
   name only contract-level domain errors.
 
 ### Value Rules
@@ -438,22 +358,24 @@ this does not enable arbitrary generator-produced RPC declarations or models.
 | C# source | RPC V1 source meaning |
 | --- | --- |
 | `required T` | Required property; `T?` permits explicit null |
+| Constructor-bound source record/value | Required concrete properties, including nullable/defaulted ones; safe outer nullable constructor inputs do not widen a nonnullable property's wire type |
 | `SunderRpcOptional<T>` | Optional property; `T?` permits a present null |
 | `string`, `bool`, `long`, `float`, `double` | String, boolean, safe integer, float32, float64 |
 | `Guid`, `DateOnly` | UUID and date formatted strings |
+| `DateTimeOffset` | Existing offset-date-time profile, preserving offset and exact representable ticks without UTC normalization |
 | `SunderRpcOffsetDateTime`, `SunderRpcDuration`, `SunderRpcUri` | Exact formatted strings |
 | `BigInteger`, `SunderRpcDecimal` | Canonical big-integer and decimal strings |
 | `byte[]`, `SunderRpcContentReference`, `JsonElement` | Base64 bytes, content reference, bounded JSON |
 | `IReadOnlyList<T>` | Array |
 | `IReadOnlyDictionary<string, T>` | String-keyed map |
 | Closed class or sealed record | Closed record schema |
-| `[SunderRpcTransparent]` wrapper with one public `Value` member | Named scalar, array, map, or formatted definition without an extra object layer |
+| `[SunderTransparentValue]` wrapper with one public `Value` member | Named scalar, array, map, or formatted definition without an extra object layer |
 | Enum with `JsonStringEnumMemberName` on every member | String enum in declaration order |
-| `[SunderRpcNumericEnum]` enum | Unique safe integers in ascending wire order; flags and aliases are invalid. `IncludeRangeBounds = false` preserves an existing closed enum without redundant minimum/maximum fields; defaults include both bounds. |
-| `[SunderRpcUnion(typeof(A), typeof(B))]` abstract record | Closed union of the named variants within the existing SDK schema profile |
+| Plain source enum or `[SunderNumericEnum]` enum | Unique safe integers in ascending wire order; flags and aliases are invalid. `IncludeRangeBounds = false` preserves an existing closed enum without redundant minimum/maximum fields; defaults include both bounds. |
+| `[SunderUnion(typeof(A), typeof(B))]` abstract record | Closed union of the named variants within the existing SDK schema profile |
 | Union plus discriminator and variant attributes | Tagged union with one synthesized constant discriminator member per variant |
 
-Plain non-required properties, fields, indexers, extension-data members, custom
+Unqualified non-required properties, fields, indexers, extension-data members, custom
 JSON converters, open records, unsupported generic shapes, unknown annotations,
 and source or wire-name collisions are rejected. Generated codecs own exact
 names, optional omission, enum representation, tagged unions, and unknown-member
@@ -463,9 +385,9 @@ The source-generated C# provider codecs now preserve required `false`, zero, and
 permitted null values; optional absence versus present values, including nullable
 values; numeric-enum integer lexical forms; exact string-enum names; transparent
 wrappers; and frozen property naming. Optional initializers are cleared before
-JSON property population so omission remains absence. Optional-member models with
-parameterized JSON constructors fail with `rpc-authoring.value-invalid`; they are
-not silently accepted.
+JSON property population so omission remains absence. Qualified source-constructor
+codecs restore explicit optional presence after construction; ambiguous, inaccessible
+or type-incompatible bindings fail with `rpc-authoring.value-invalid`.
 
 Generated union codecs support SDK-profile nullable and tagged record unions,
 including inferred authored constant tags, concrete variants used as RPC roots,
@@ -482,78 +404,236 @@ this is codec parity, not a descriptor or ABI change.
 
 ## TypeScript And JavaScript Surface
 
-`@sunder/sdk` exports one closed `rpc` object. These names are frozen:
+`@sunder/sdk` exports `defineService(methods, optionalSemanticOptions)`. Configure
+one `services.module` and export ordinary method records from it. For example,
+`src/services.ts` can contain:
 
-```typescript
-rpc.router({ contracts, providers })
-rpc.contract({ exposure, contractId?, serviceId?, includeSchemaDialect?, errors, definitions, services })
-rpc.provider({ contract, id?, audience?, handlers })
-rpc.unary({ request, response, idempotency?, errors? })
-rpc.serverStream({ request, event, idempotency?, errors? })
+```ts
+import { defineService, type ServiceContext } from "@sunder/sdk";
 
-rpc.schema.required(schema)
-rpc.schema.optional(schema)
-rpc.schema.nullable(schema)
-rpc.schema.ref(definitionName)
-rpc.schema.object(properties, facets?)
-rpc.schema.map(values, facets?)
-rpc.schema.array(items, facets?)
-rpc.schema.string(facets?)
-rpc.schema.stringEnum(values, facets?)
-rpc.schema.integer(facets?)
-rpc.schema.integerEnum(values, facets?)
-rpc.schema.float32(facets?)
-rpc.schema.float64(facets?)
-rpc.schema.boolean(facets?)
-rpc.schema.uuid(facets?)
-rpc.schema.date(facets?)
-rpc.schema.offsetDateTime(facets?)
-rpc.schema.duration(facets?)
-rpc.schema.uri(facets?)
-rpc.schema.bigInteger(facets?)
-rpc.schema.decimal(facets?)
-rpc.schema.bytes(facets?)
-rpc.schema.contentReference(facets?)
-rpc.schema.json(facets?)
-rpc.schema.literal(value)
-rpc.schema.union(variants, facets?)
-rpc.schema.taggedUnion(discriminator, variants, facets?)
+export const greeting = defineService({
+  async greet(name: string, context: ServiceContext): Promise<string> {
+    context.signal.throwIfAborted();
+    return `Hello, ${name}!`;
+  },
+}, {
+  constraints: { "greet.name": { minLength: 1, maxLength: 120 } },
+  runtimeUse: {}, // Explicitly allow this package's Worker to call through RPC.
+});
 ```
 
-Object properties must use exactly `required(...)` or `optional(...)`.
-Nullability composes only through `nullable(...)`, giving the same four
-presence/nullability states as C#. Definition-map keys name transparent schemas,
-so Node can represent named scalar and collection definitions directly.
-`integerEnum` accepts unique RPC safe integers and emits ascending values.
+Alternatively, configure `src/services.js` and author genuine checked JavaScript:
 
-`rpc.router(...)` is the one configured authoring root. A local
-`rpc.contract(...)` with no matching provider is the explicit declaration-only
-form. Local providers use `rpc.provider(...)`. Imported package/platform
-providers use `rpcImports.<localKey>.provider(...)` from the generated
-`#sunder/rpc` module and cannot redeclare schema.
+```js
+// @ts-check
+import { defineService } from "@sunder/sdk";
 
-TypeScript infers request, result, event, context, and handler types. JavaScript
-uses the same runtime constructors and validation semantics; package tooling
-emits matching `.d.ts` declarations and checks JSDoc where enabled. Unary
-handlers return a value or promise. Stream handlers return `AsyncIterable<T>`.
-Both receive the current invocation context and `AbortSignal` through that
-context.
+export const greeting = defineService({
+  /**
+   * @param {string} name
+   * @param {import("@sunder/sdk").ServiceContext} context
+   * @returns {Promise<string>}
+   */
+  async greet(name, context) {
+    context.signal.throwIfAborted();
+    return `Hello, ${name}!`;
+  },
+}, {
+  constraints: { "greet.name": { minLength: 1, maxLength: 120 } },
+  runtimeUse: {},
+});
+```
+
+These are alternative sources, not a TS implementation plus a transpiled JS
+example. The same pinned semantic frontend checks both. The package tool generates
+the descriptor, codecs, dispatch, provider registrations and Worker bootstrap;
+normal service packages do not author `runWorker` or a provider-registration list.
+An optional exported `configure(context)` returns `Omit<WorkerOptions, "providers">`
+for real Worker lifecycle callbacks, settings or other supported package APIs.
+
+### Node Source Types And Constraints
+
+Unary methods return a supported value, `Promise<T>` or `void`; async iterable
+results are streams. A final `ServiceContext` or `AbortSignal` is out-of-band
+control, never a wire parameter. Multiple arguments and scalar roots receive
+generated request/result definitions; a sole named-record argument retains its
+direct request shape. Authors maintain domain types, not wrapper DTOs for every call.
+
+| Ordinary TS type / checked JSDoc equivalent | Derived value semantics |
+| --- | --- |
+| `string`, `boolean` | String and boolean |
+| `number` | Finite binary64; explicit `format: "integer"` or `"float32"` changes the intended numeric semantics |
+| Supported string or safe-integer literal unions | Closed value sets; a literal value supplies a constant |
+| Named record/interface | Named closed record, including supported productive recursion |
+| `property?: T`, `T \| null` | Optional presence and explicit null remain distinct |
+| `T[]`, `readonly T[]`, `Record<string, T>` | Lists and string-keyed maps |
+| `bigint`, `Uint8Array` | Validated big-integer strings and base64 on the wire, ordinary values in implementations/clients |
+| SDK `JsonValue`, `JsonObject` | Arbitrary bounded JSON or object-only JSON |
+| SDK `RpcContentReference` | Existing authority-bound content reference; callers retain explicit content-scope ownership |
+
+`constraints` adds semantic facets to source-derived values. Keys identify
+`method.parameter`, `method.result`, named `Type.property` paths, or collection
+elements with `[]`. For example:
+
+```ts
+import { defineService, type JsonObject } from "@sunder/sdk";
+
+type Envelope = {
+  language: "en" | "fr";
+  items: readonly string[];
+  metadata: JsonObject;
+};
+
+export const catalog = defineService({
+  inspect(request: Envelope): Envelope { return request; },
+}, {
+  constraints: {
+    "Envelope.items": { maxItems: 50 },
+    "Envelope.items[]": { maxLength: 120 },
+    "Envelope.metadata": { maxProperties: 16 },
+  },
+});
+```
+
+The supported option/type names are defined in
+[`services.ts`](../../languages/typescript/node/packages/sdk/src/services.ts).
+Facets include string/collection/property limits, numeric bounds, byte/digit/
+precision/scale limits and the declared string formats. They do not provide a
+second schema tree. Unsupported types, facets, paths or incompatible constraints
+fail source/descriptor validation. Native classes, tuples, ambiguous `any` or
+`unknown`, generic/overloaded methods and arbitrary unions are not portable service
+boundaries. Named scalar/collection aliases are not an authored `definitions` map.
+
+### Node Semantic Options And Extensions
+
+Private exposure is the default. `exposure: "public"` opts into public evolution.
+Optional `contractId`, `serviceId`, method `name`, `providerId`, `audience` and
+`includeSchemaDialect` preserve deliberate identities/semantics. `appUse` and
+`runtimeUse` supply separate role policy, outside descriptor and ABI identity.
+
+An ordinary owned concrete public definition normalizes omitted `appUse` to
+`{ required: false, actions: <all applicable actions> }`; private App use retains
+its required default. Explicit readiness/action policy takes precedence. A public
+declaration-only definition needs explicit App intent. Implementations of local
+declarations/imported contracts add no new uses; they retain only the owning
+declaration's existing policy. This normalization comes from the concrete service
+declaration, not descriptor visibility, type references or consumer call sites.
+
+`defineServiceError<Details>({ description })` declares a source-typed error in
+`errors`; `methods.<sourceMethod>.errors` lists the allowed codes. Generated
+`Errors` exports supply validating factories. Idempotency is declared through
+`methods.<sourceMethod>.idempotency` and never enables an automatic retry.
+
+Advanced declaration-only services use an ordinary interface with
+`defineService<Interface>(null, { declarationOnly: true, exposure: "public" })`.
+JavaScript uses a checked JSDoc `ServiceDefinition<Interface>` annotation on the
+declaration instead. A local implementation binds the declaration through
+`defineService(methods, { implements: declaration })`. An explicitly selected
+package/platform provider uses `implements: Implementations.<key>` imported from
+`#sunder/api`; its `ServiceContract<M>` types come from the reviewed lock/cache.
+Multiple providers require distinct stable `providerId` values. Implementations
+cannot redeclare the imported contract or acquire consumer grants by providing it.
+
+### Managed Node And Browser Consumption
+
+`#sunder/api` exports `Self`, Pascal-case selected-package tokens such as
+`Dependency`, generated `Errors` and `Implementations`, and advanced `Catalogs`.
+Worker code uses its existing `WorkerContext`; for the greeting service above:
+
+```ts
+import type { WorkerContext } from "@sunder/sdk";
+import { Self } from "#sunder/api";
+
+export function greetFromWorker(context: WorkerContext, signal: AbortSignal) {
+  return context.api(Self).greeting.greet("Sunder", { signal });
+}
+```
+
+`Self` service properties follow normalized source definition keys, even when
+different contracts preserve the same wire service ID. A single-contract package
+selection exposes its services directly. Multiple selected contracts use full-
+contract-ID camel-case scopes. For the retained two-contract fixture with
+`example.dependency.first` and `example.dependency.second`, each declaring
+`messages.send` with an empty request object:
+
+```ts
+import type { WorkerContext } from "@sunder/sdk";
+import { Dependency } from "#sunder/api";
+
+export async function readBoth(context: WorkerContext) {
+  const dependency = context.api(Dependency);
+  const first = await dependency.exampleDependencyFirst.messages.send({});
+  const second = await dependency.exampleDependencySecond.messages.send({});
+  return [first.message, second.message];
+}
+```
+
+The lock's `localName` must be `dependency` for this token. Imported signatures
+come from descriptors: they take the request value, including explicit `{}` for
+an empty request, and return the declared result value. They do not guess the
+producer's parameter list or `void` spelling. Same service names in different
+contracts are valid; normalized collisions within one object scope fail rather
+than choosing the first contract or adding suffixes/hashes. Runtime JS and `.d.ts`
+use the same projection, and a projection change retires the old token generation.
+
+Acquiring an API performs no discovery. A call lazily selects one exact compatible
+active provider; a stream does so when enumerated. Each operation owns its
+cancellation/deadline/cleanup, and retirement cancels owned work. Wrong-owner,
+cloned or stale tokens fail closed. Dispatched work is never automatically retried
+or rebound. Tokens add no permission or readiness requirement.
+
+Framework-neutral browser code creates one `createBrowserContext(Self)` per UI
+root and disposes it when that root is removed. React roots pass that owner through
+`ApiProvider`; components call `useApi(Self)` and invoke methods from effects or
+event handlers, not during render. Each hook owns its component's child lifetime;
+the application owns the root context. See the working-shape
+[plain-browser and React examples](../SUNDER-NODE-PROCESS-PACKAGES.md#browser-and-react-lifetimes).
+The browser owner waits for the immutable `sunder:ready` bridge and follows its
+native lifetime signal; callers do not poll or create a transport singleton.
+
+Content-bearing methods are an explicit advanced exception: create a caller-owned
+scope with `context.rpc.createCallScope()`, use
+`createApiContext(context.packageId, scope, scope.signal).api(token)`, consume the
+content through `scope.content`, and close the scope afterward. Returning a value
+does not revoke content authority. The browser bridge adds no content/session API.
+
+### Node Private And Public Lifecycle
+
+Private descriptor versions equal the complete `sunder.package.json` version,
+including prerelease and case-sensitive build metadata. Private-only projects need
+no owned baseline or independent Accept/Freeze. Generation/Build/Pack still verify
+their exact source, role policies, descriptors, hashes and package payloads.
+
+Public services require explicit `contracts accept`, `contracts check` and
+`contracts freeze` before release packaging. Only genuinely new public keys default
+to `1.0.0`; a selected new key can supply a stable `--next-version`. Existing
+transitions require exact current/next versions and, for breaking/exposure/removal
+changes, `--acknowledge-breaking-change`. Public current/history evidence is checked
+before private shortcuts, including after renaming, demotion or baseline deletion.
+
+`contracts migrate-private [key]` moves eligible complete old private records into
+immutable `retiredPrivateContracts`. Their old draft/frozen/published versions and
+evidence are retained, not reused as current private versions. Publication import
+validates the exact archive and Registry evidence; a private-only import is a
+validated no-op and does not create a baseline. See the
+[current tool workflow](../../languages/typescript/node/packages/package-tool/README.md#private-and-public-versions).
 
 ### Static Analysis Boundary
 
-Package tooling parses the configured module with the pinned TypeScript compiler
-API and resolves exactly one statically exported `rpc.router(...)` binding. It
-may follow bounded local `const` references, direct aliased imports of the frozen
-RPC constructors, and direct members of the receipt-verified `#sunder/rpc`
-module.
+Package tooling uses the pinned TypeScript 6.0.3 compiler to resolve exported
+`const defineService(...)` definitions from `services.module`. It checks supported
+source types and JSDoc with the same strict ES2023 profile, including exact optional
+properties. Lock-derived generated interfaces are virtual inputs during analysis;
+stale output files do not supply current types.
 
-Metadata and schemas may contain object/array/primitive literals, bounded local
-constants, and allowlisted RPC constructor calls only. Computed keys, spreads,
-getters, setters, proxies, class instances, loops, conditionals, identity-data
-template interpolation, environment access, dynamic imports, and arbitrary
-function calls are rejected. Handler bodies are recorded by source span but are
-not traversed for metadata or executed. RPC derivation never imports or executes
-package code.
+Method inventories and semantic options must be statically bounded. Literal method
+records and acyclic `const` references are supported; computed keys, spread/getter
+inventories, dynamic metadata and mutation/escape of semantic constants fail.
+Methods contain ordinary checked implementation code, not an allowlist of schema
+constructors. Derivation does not import or execute package code. Compiler/runtime
+inputs and generated registrations are checked before one transactional output
+publication; standalone tsc/checkJs, editors and Vite use the emitted JS/declarations
+through the ordinary package-import mapping below.
 
 One canonical package-root authoring graph permits at most 4,194,304 bytes of
 normalized RPC-significant UTF-8 source, 65,536 visited syntax/type/expression
@@ -589,10 +669,13 @@ method id = <method-key>
 provider id = <contract-id>.provider
 ```
 
-For Node, the contract suffix is the contract object's canonical lower-kebab key
-with token separators rendered as dots. Node contract/service/method keys must
-already be canonical lower-kebab, definition keys Pascal, and property keys
-camel. C# generated symbols prefix `@` for the frozen C# 14 keyword set.
+For Node, the source definition name supplies the normalized service key and its
+dot-separated contract suffix. Ordinary camel/Pascal source names are normalized
+by the source-name algorithm; authors do not maintain lower-kebab schema-object
+keys. Named records supply definition names; ordinary parameter/data property
+names must be portable camel case. Imported service/method symbols use the
+descriptor generator's projection, because wire IDs have a wider grammar than
+source identifiers. C# generated symbols prefix `@` for the frozen C# 14 keyword set.
 TypeScript/JavaScript symbols prefix `_` for the frozen ES2023 module-binding
 restriction set. Escaping never changes a wire identity. No frontend resolves
 collisions with source order, namespace order, numeric suffixes, or hashes.
@@ -603,36 +686,54 @@ The normative keyword arrays live in
 `typescriptVersion: "6.0.3"`, and `ecmascriptTarget: "ES2023"`. Changing a
 dialect or array requires a reviewed versioned fixture change.
 
-Accepted identities are persisted in `sunder-contracts.owned.json`. A later
+Accepted public identities are persisted in `sunder-contracts.owned.json`. A later
 source rename cannot silently rename wire members. The author either supplies an
 explicit compatibility override or accepts the classified contract-version
 change.
 
 ## Package Configuration And Generated Output
 
-Node package config uses only this RPC shape:
+An ordinary Node service package uses this config:
 
 ```json
 {
   "schemaVersion": 3,
-  "rpc": {
-    "module": "src/rpc.ts",
-    "export": "packageRpc"
-  }
+  "id": "example.package",
+  "name": "Example package",
+  "version": "1.0.0",
+  "workerCapabilities": [],
+  "services": { "module": "src/services.ts" }
 }
 ```
 
-Schema-version-2 `contracts`, `rpcBindings`, `providers`, and `usesContracts`
-are removed at cutover. Neither Node config nor router source contains an import
-selection list.
+Use `src/services.js` for checked JavaScript. The service module replaces an
+authored Worker `entry`. The former `rpc.module/export`, schema-version-2 RPC config
+and router/schema constructors are retired authoring surfaces. Neither config nor
+service source duplicates the reviewed package selection list in the lock.
 
 Generated output is marker-owned and untracked:
 
 | Frontend | Logical output root | Required outputs |
 | --- | --- | --- |
 | C# | `$(IntermediateOutputPath)sunder-rpc/` | `authoring.g.cs`, `imports.g.cs`, `package-export.v1.json`, `authoring-receipt.v1.json` |
-| TypeScript | `.sunder/generated/rpc/` | `imports.ts`, `browser.ts`, `index.d.ts`, `authoring-receipt.v1.json` |
-| JavaScript | `.sunder/generated/rpc/` | `imports.js`, `browser.js`, `index.d.ts`, `authoring-receipt.v1.json` |
+| TypeScript / checked JavaScript | `.sunder/generated/rpc/` | `api.ts`/`.js`/`.d.ts`, `owned/` and `imported/` bindings, `catalogs`, generated `adapter`/`worker`, canonical descriptors and `authoring-receipt.v1.json`; App receipt when present |
+
+The creator supplies this `package.json` mapping for Node and browser tooling:
+
+```json
+{
+  "imports": {
+    "#sunder/api": {
+      "types": "./.sunder/generated/rpc/api.d.ts",
+      "default": "./.sunder/generated/rpc/api.js"
+    }
+  }
+}
+```
+
+Run `sunder-package generate --project .` before standalone tsc/checkJs or Vite.
+Both authoring languages emit runtime JS and browser-safe declarations; browser
+consumers do not import the service implementation or require Node ambient types.
 
 Generation is transactional. The last complete generation remains authoritative
 until source analysis, lock/cache validation, descriptor validation, language
@@ -656,7 +757,13 @@ remain stable across the passes. No provisional output or baseline is published.
 This works on a clean bootstrap and when a source change adds a method that the same
 source consumes; prior output and old descriptor snapshots are not type-shape authority.
 Facade availability adds no grants: owned Worker uses still require explicit
-`SunderRpcRuntimeUse` policy. Cross-package imports retain their exact lock boundary.
+`SunderRuntimeUse` policy. Cross-package imports retain their exact lock boundary.
+
+### Advanced Discovery And Explicit Binding
+
+The following facades serve explicit provider discovery/binding and caller-owned
+scope workflows. Ordinary consumers use generated C# service injection or Node
+`context.api(token)`/`useApi(token)` instead.
 
 For C#, one selected package local name `weather` generates the namespace-level
 class `Sunder.Generated.Rpc.WeatherPackageApi`; one imported provider intent key
@@ -736,10 +843,12 @@ package version. Zero matches fail with `rpc.provider-not-found`; multiple match
 fail with `rpc.provider-ambiguous`. There is no ranking, retry, endpoint
 replacement, install/restore operation, or Registry fallback.
 
-For Node, `#sunder/rpc` exports `packageApis` and `rpcImports`. The equivalent
-members are `list`, `get`, `watch`, `createClient`, and
-`resolveSelectedPackage`. Browser code imports generated browser-safe bindings,
-not the Worker router module.
+For Node, `#sunder/api` exports the advanced `Catalogs` facade. For example,
+`Catalogs.dependency(rpc).CExample_Dependency_First` identifies that selected
+contract; its members are `list`, `get`, `watch`, `createClient` and
+`resolveSelectedPackage`. A caller supplies and owns the explicit scope passed to
+`createClient`. Provider implementations use the separate `Implementations` export,
+not a catalog builder. Browser imports remain separate from Worker source.
 
 ## Task Loading Reliability
 
@@ -758,10 +867,11 @@ globals, and one owner snapshot per canonical input; this is not clean-checkout/
 
 ## Lock, Cache, Receipt, And Export Contracts
 
-One canonical package root owns one tracked `sunder-contracts.lock.json` and one
-tool-owned reviewed `sunder-contracts.owned.json`. An associated App shares the
-root files and owns no copy. Build is read-only and offline: it never contacts a
-Registry or rewrites either file.
+One canonical package root owns one tracked `sunder-contracts.lock.json`. Public
+evolution and retained history use its tool-owned reviewed
+`sunder-contracts.owned.json`; a new private-only package needs no baseline file.
+An associated App shares the root files and owns no copy. Build is read-only and
+offline with respect to these files: it never contacts a Registry or rewrites them.
 
 The lock has closed `packageArtifacts`, `packageImports`, `providerImports`, and
 `platformImports` maps. It records exact selected artifact/version/content,
@@ -770,6 +880,12 @@ ultimate authority provenance, descriptor byte count/hash, ABI hash, and exact
 package presence/required-contract overrides. Every package import stores
 `presence: required|optional`; that value controls package dependency installation
 and is independent from `requiredContracts`, which controls provider readiness.
+It also stores explicit `consumerRoles`: exactly `["app"]`, `["runtime"]` or
+`["app","runtime"]`. New Add defaults to both; targeted Update preserves the
+reviewed set unless explicitly overridden. Only present roles receive grants,
+with readiness coalesced independently per role. Restore does not migrate missing
+intent. `api migrate-consumer-roles` preserves old missing intent as Runtime-only;
+an explicit targeted override is required to widen it.
 Descriptor bodies, credentials, mutable URLs, local paths, and generated source
 are forbidden.
 
@@ -809,15 +925,22 @@ artifact and complete-inventory evidence, authority provenance, closed manifest
 import groups, provider/use records, and generated logical names. It contains no
 absolute path, source text, handler, credential, timestamp, or environment value.
 Project exports carry owned package contracts and their App/Runtime consumer policies.
+Their required `packageVersion` binds current private tuples to the full owning
+package version; it does not renumber public or historical private snapshots.
 Their required `lockSha256`, immediately after `inputFingerprint`,
 identifies the producer's exact deterministic lock bytes. Exact-RID builds check
 that hash as well as owned descriptors, and associated App receipts preserve it
 without inheriting external imported contracts or external use permissions.
 
-The owning service may declare `[SunderRpcAppUse]` in C# or
+The owning service may declare `[SunderAppUse]` in C# or
 `appUse: { required: false, actions: ["discover", "invoke"] }` on a TS/JS
-`rpc.contract`. With no policy, package-private contracts default to required use
-of all applicable actions; public contracts contribute no App use. Explicit policy
+`defineService` options. Package-private contracts default to required App use of
+all applicable actions. Ordinary owned concrete public services in both C# and
+Node default to optional App readiness and all applicable actions. Public
+declaration-only services require opt-in; provider implementations cannot create
+new consumer intent. The source frontend records the concrete-declaration default
+as normalized policy, so no descriptor-only helper grants all public contracts.
+Explicit policy
 defaults `required` to false and omitted actions to all applicable actions. An
 explicit action array must be nonempty, distinct, and a subset of `discover`,
 `invoke` (unary methods), and `subscribe` (streams), emitted in that order. Null,
@@ -833,9 +956,9 @@ receipts declare `role: "app"` and grant exactly the resolved policies. Generate
 DTO/client availability alone grants no permission and adds no readiness predicate.
 
 An owning Runtime opts into consuming its own contract with
-`[SunderRpcRuntimeUse(Required = true, Actions = ["discover", "invoke"])]` on the
+`[SunderRuntimeUse(Required = true, Actions = ["discover", "invoke"])]` on the
 service, or `runtimeUse: { required: true, actions: ["discover", "invoke"] }` on a
-TS/JS `rpc.contract`. There is no implicit Runtime use for either exposure, including
+TS/JS `defineService` options. There is no implicit Runtime use for either exposure, including
 when a local provider implements the service. Explicit Runtime policy has the same
 optional-readiness and applicable-action defaults and validation as explicit App
 policy. A declaration-only service can carry consumer policy too.
@@ -876,10 +999,9 @@ business rules. See the [inventory contract](../../specs/rpc/v1/authoring/README
 
 ## Package API Commands
 
-The package tools, not `Sunder.Cli`, own these exact target command families.
-The local C# and package-owned Node Check/Accept/Freeze subset below is implemented;
-Registry-backed operations, publication-evidence import, and Node import/platform
-commands remain incomplete:
+The package tools, not `Sunder.Cli`, own these command families. Node implements
+source generation, public baseline lifecycle, exact package/platform selection,
+restore, explicit migrations and publication-evidence import:
 
 ```text
 sunder-package api add <package>
@@ -888,6 +1010,7 @@ sunder-package api remove <package>
 sunder-package api list
 sunder-package api require <package> <contract>
 sunder-package api unrequire <package> <contract>
+sunder-package api migrate-consumer-roles [package]
 sunder-package api implement <package> <contract>
 sunder-package api unimplement <package> <contract>
 sunder-package platform implement <contract>
@@ -898,17 +1021,20 @@ sunder-package contracts restore
 sunder-package contracts check
 sunder-package contracts accept [contract-key]
 sunder-package contracts freeze [contract-key]
-sunder-package contracts publication import [contract-key]
+sunder-package contracts migrate-private [contract-key]
+sunder-package contracts publication import --package <archive> --registry <origin>
 ```
 
 Package selection options are `--version`, `--registry`, `--candidate`,
-`--local-name`, `--presence`, `--include-prerelease`, and `--exclude-prerelease` where the
+`--local-name`, `--presence`, `--consumer-roles`, `--include-prerelease`, and `--exclude-prerelease` where the
 operation permits them. Local selection uses `--candidate` and, when needed,
 `--platform-catalog` without a Registry. New Registry-backed selection requires
 `--registry`. Local lock records omit `registryOrigin`; present null/malformed origins
 are invalid. A targeted update can explicitly bind a local selection to a Registry,
 but cannot override an existing Registry origin. Restore retains exact pins. Global update
-rejects version, prerelease, origin, candidate, local-name, and presence overrides.
+rejects per-selection version, prerelease, origin, candidate, local-name, presence
+and consumer-role overrides. Add/targeted Update accept `--consumer-roles app`,
+`runtime` or `app,runtime`; explicit role migration uses the same values.
 
 The matching .NET targets are:
 
@@ -920,12 +1046,13 @@ The matching .NET targets are:
 | Platform implement/update/unimplement/list | `ImplementSunderPlatformApi`, `UpdateSunderPlatformApi`, `UnimplementSunderPlatformApi`, `ListSunderPlatformApis` |
 | Contract restore/check | `RestoreSunderContracts`, `CheckSunderContracts` |
 | Owned accept/freeze/publication import | `AcceptSunderContracts`, `FreezeSunderContracts`, `ImportSunderContractPublication` |
+| Explicit private/consumer-role migration | `MigratePrivateSunderContracts`, `MigrateSunderPackageApiConsumerRoles` |
 
 Their exact public properties are `SunderPackageId`, `SunderContractId`,
 `SunderContractKey`, `SunderPackageVersionRange`,
 `SunderPackageIncludePrerelease`, `SunderRegistryOrigin`,
 `SunderPackageCandidatePath`, `SunderPlatformCatalogPath`,
-`SunderPackageApiLocalName`, `SunderPackageApiPresence`, `SunderContractCurrentVersion`,
+`SunderPackageApiLocalName`, `SunderPackageApiPresence`, `SunderPackageApiConsumerRoles`, `SunderContractCurrentVersion`,
 `SunderContractNextVersion`, and `SunderAcknowledgeBreakingChange`. Omitted
 nullable properties mean absent; the prerelease property is tri-state on update
 and defaults to false only when creating a selection. Presence is the exact
@@ -1048,14 +1175,18 @@ payloads, or handler source.
 
 ## Contract Evolution
 
-`sunder-contracts.owned.json` stores each current candidate and append-only
+`sunder-contracts.owned.json` stores public-governed current candidates and append-only
 frozen/issued history with complete canonical descriptor and ABI bytes, hashes,
 wire identities, owning package, and publication evidence. Entry state is
 exactly `draft`, `release-frozen`, or `published`. The implemented internal model
 retains complete `SnapshotJson` and read-only `History`; deterministic writing
 reparses every field and never drops or repairs release/publication evidence.
+Optional `retiredPrivateContracts` retains complete migrated private records;
+these are immutable history, not current-version inputs. The evolution rules
+below govern public identities, including identities with prior public history.
+Current private source instead uses its full package version.
 
-- New local contracts default to `1.0.0`. New prerelease allocation remains
+- New public contracts default to `1.0.0`. New public prerelease allocation remains
   fail-closed until an explicit policy exists; package-selection prerelease opt-in
   is not contract allocation policy.
 - Identical canonical bytes retain the exact version.
@@ -1095,8 +1226,8 @@ or `Freeze`; generation-mode fallback is not a lifecycle operation.
 
 | Target | Accepted lifecycle input |
 | --- | --- |
-| `CheckSunderContracts` | Complete owned set only. No `SunderContractKey`, old/new version selection, or breaking acknowledgement. |
-| `AcceptSunderContracts` | Omit selection properties to accept a complete new/compatible batch, or supply `SunderContractKey` for one contract. Existing-version overrides require both `SunderContractCurrentVersion` and `SunderContractNextVersion`. Breaking/removal also requires `SunderAcknowledgeBreakingChange=true`. |
+| `CheckSunderContracts` | Complete owned set only. No `SunderContractKey`, old/new version selection, or breaking acknowledgement. Optional `SunderContractReviewOutputPath` produces an unacknowledged compiler-derived batch proposal for existing current contracts. |
+| `AcceptSunderContracts` | Omit selection properties to accept a complete new/compatible batch, supply `SunderContractKey` for one contract, or supply `SunderContractReviewPath` for an explicitly reviewed batch. Single-contract existing-version overrides require both `SunderContractCurrentVersion` and `SunderContractNextVersion`; breaking/removal also requires `SunderAcknowledgeBreakingChange=true`. |
 | `FreezeSunderContracts` | Optional `SunderContractKey`; no old/new version selection or breaking acknowledgement. Package release identity uses `$(Version)`, not `SunderContractNextVersion`. The complete active source set must match even for a targeted freeze. |
 
 `SunderContractKey` is the exact case-sensitive local baseline/source key, not
@@ -1105,7 +1236,7 @@ alphanumerics, `.`, `_`, and `-` inside. Version values are exact strict SemVer,
 including build metadata for the expected current identity, never ranges or tags.
 Omitted/empty key and version properties mean absent;
 `SunderAcknowledgeBreakingChange` defaults to `false`.
-Overrides/acknowledgement cannot apply to a batch. A genuinely new selected key
+Single-key overrides/acknowledgement cannot apply to an unqualified batch. A genuinely new selected key
 may supply only `SunderContractNextVersion` as a stable initial override; there is
 no old version to acknowledge. Targeted acceptance requires all other source keys
 and snapshots to remain unchanged. Whole-contract removal checks a reviewed next
@@ -1119,11 +1250,14 @@ and `SunderContractCacheRoot`. Defaults are root-local
 below the canonical root with safe ancestors. `SunderPackageId` is optional when
 the assembly's `[SunderPackage]` declaration supplies the identity; supplied and
 baseline/source identities must agree. First `AcceptSunderContracts` can bootstrap
-a missing baseline using an existing valid lock, without an explicit package ID.
-It will not bootstrap over an existing receipt/export or when old-version evidence
-is expected. Check and Freeze always require the existing baseline.
+a missing public baseline using an existing valid lock, without an explicit package
+ID. It must prove that no public baseline/evidence was lost; old-version or retained
+public receipt/export evidence cannot bootstrap a new history. Current private-only
+source requires no independent baseline transition. See
+[Ordinary C# services](ORDINARY-SERVICES.md#private-identity-and-public-lifecycle)
+and the [Node lifecycle](#node-private-and-public-lifecycle).
 
-From a restored canonical package root, the basic operations are:
+From a restored canonical package root with public services, the basic operations are:
 
 ```sh
 dotnet msbuild Example.Package.csproj -t:CheckSunderContracts
@@ -1147,6 +1281,55 @@ before atomic replacement. Failed or stale plans leave the prior baseline and
 RPC tree intact; identical proposals do not rewrite the file. No parallel RPC-tree
 publisher or recursively discovered source-tree cleanup is introduced.
 
+### Reviewed Shared-Model Batch Acceptance
+
+When several existing public contracts change together, generate a review from the
+complete current compilation, using the same configuration/framework/defines that
+will be accepted:
+
+```sh
+dotnet msbuild Example.Package.csproj -t:CheckSunderContracts -p:SunderContractReviewOutputPath=/existing/review-directory/proposal.json
+dotnet msbuild Example.Package.csproj -t:AcceptSunderContracts -p:SunderContractReviewPath=/existing/review-directory/proposal.json
+```
+
+The first command creates a **new** JSON file and leaves every breaking-change
+acknowledgement `false`. Review the source changes and proposed exact tuples before
+setting the applicable per-entry acknowledgements. It does not accept, freeze, or
+publish anything. An existing output file is never overwritten. The second command
+consumes the reviewed file and is mutually exclusive with all single-key/version/
+acknowledgement properties.
+
+The closed tooling document uses deterministic UTF-8 authoring JSON and has a
+1 MiB limit, depth 16, and at most 128 ordinally keyed entries. Required root members,
+in order, are `schemaVersion: 1`, `packageId`, `packageVersion`, `baselineSha256`,
+`inputFingerprint`, `lockSha256`, and `contracts`. Each changed contract key maps to
+these required members, in order:
+
+```text
+contractId
+expectedCurrentVersion
+expectedCurrentDescriptorSha256
+expectedCurrentAbiSha256
+nextVersion
+expectedNextDescriptorSha256
+expectedNextAbiSha256
+acknowledgeBreakingChange
+```
+
+The proposal hashes come from compiled descriptors at the proposed versions.
+Version allocation and acceptance reuse the existing classifier, draft rules,
+immutable-history floors and prerelease restrictions. A batch covers **all and only**
+changed existing current contracts; missing, extra, unchanged and unknown entries
+fail. Additions and removals retain their existing lifecycle review. Empty reviews
+are valid only for an unchanged complete source set.
+
+Accept validates the package/baseline/lock/input frame and every old/new tuple,
+then recompiles all contracts at their proposed versions. Source, references,
+membership, lock, baseline and the exact review bytes are rechecked under the
+existing baseline lease before the single atomic replacement. Unchanged records
+and historical snapshots are retained; a failure commits none of the batch.
+This document is an authoring review input, not a Registry DTO or release artifact.
+
 ### Freeze And Pack
 
 Freeze changes accepted drafts to `release-frozen` and records package ID/version,
@@ -1155,8 +1338,10 @@ unchanged when reused by later package releases, preserving their original evide
 independently of package version. A second clean build/reproduction remains a
 release gate, not proof supplied by the Freeze command itself.
 
-Pack re-derives the current source projection against a frozen/published baseline
-and complete lock/cache, including when packing prebuilt leaves. It requires exact
+Pack re-derives the current source projection against the complete lock/cache,
+including when packing prebuilt leaves. Public-governed entries require their
+frozen/published baseline; current private entries require the exact source-derived
+package-version projection. It requires exact
 complete bundle/provider/runtime-use/import-group agreement. An associated App
 must contribute its exact source-policy projection, including optional and narrowed
 uses; a Runtime-only artifact contributes no App uses. An App target cannot hide
@@ -1168,6 +1353,9 @@ RPC packing is denied.
 `SunderPackageUsePrebuiltLeaves=true` requires `BuildProjectReferences=false` for
 source checks; prebuilt packing still requires ordinary source and resolved
 references, without rebuilding Worker or App inputs.
+
+**Historical migration-only checkpoint:** the following describes the former
+descriptor-first migration boundary, not a normal service-authoring recipe.
 
 The temporary descriptor-first migration path requires explicit authored
 `SunderContractBundle`, `SunderUsesContract`, and `SunderRpcProvider` inputs as
@@ -1196,13 +1384,21 @@ route. A successful initially-Yanked publication is sufficient; visibility is a
 separate policy decision. HTTPS is the default; local Development requires the
 existing explicit localhost option on that invocation.
 
-Only matching `release-frozen` current/history snapshots become `published`.
+Public current/history identities are classified before private fast paths. Only
+matching public-governed `release-frozen` current/history snapshots become `published`.
 Descriptor/ABI bytes, contract versions, exposure, frozen release and immutable
 history are preserved. Draft current source stays draft; importing a historical
 artifact does not resurrect an old current version. A previously published tuple
 reused by a later package retains its original publication evidence. An absent,
 changed or conflicting publication fails with
 `rpc-authoring.publication-evidence-mismatch` and preserves the prior baseline.
+
+Current private tuples must match the exact inspected artifact and Registry bundle
+evidence, with their full owning package version. Import does not compare them to
+old retired private versions or enrich `retiredPrivateContracts`. A verified
+private-only publication needs no baseline transition, and an absent baseline stays
+absent. Missing public evidence remains an error. Node uses the canonical Sunder
+CLI inspector for C# archives as well as its own packages.
 
 The archive and baseline are fenced again at atomic commit; identical imports
 preserve bytes and mtimes. This explicit online operation uploads nothing, changes
@@ -1255,9 +1451,10 @@ is narrower, as noted under Version Publication And Classification.
 
 ### Contract-Family Authority And Identity
 
-Registry authority exists for public contract families only. A package-private
-contract remains independently versioned in its package's owned-contract
-baseline and has no Registry authority or anonymous descriptor route. Each public
+Registry authority exists for public contract families only. A current package-private
+contract uses the full owning package version and source-derived build evidence;
+it has no independent public evolution baseline, Registry authority or anonymous
+descriptor route. Retired private evidence remains immutable history. Each public
 contract ID has exactly one `ContractAuthority` with one of these authority
 kinds:
 
@@ -1546,6 +1743,9 @@ SDKs or generated descriptors. Future phases keep these owners:
 - Platform contracts are not package-authored consumer imports in V1.
 
 ## Delivery Gate
+
+**Historical delivery checkpoint:** the Workstream A observations in the next
+paragraph record their original scope, not current Node authoring prerequisites.
 
 This ADR freezes the design but does not claim implementation completion. The
 current Workstream A change set includes the keyword fixture, closed schemas,

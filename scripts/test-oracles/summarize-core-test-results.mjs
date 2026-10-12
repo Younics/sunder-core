@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { loadCoreTestModel, repositoryRoot } from "./core-test-policy.mjs";
+import { loadCoreTestModel, nodeProject, repositoryRoot } from "./core-test-policy.mjs";
 import { currentOperatingSystem } from "./test-lane-prerequisites.mjs";
 
 export function parseTrxReport(xml, source) {
@@ -77,7 +77,7 @@ export function parseJunitReport(xml, source) {
     results.push({
       report: source,
       framework,
-      project: framework === "node" ? nodeProject(testSource) : "scripts/release",
+      project: framework === "node" ? nodeProject(testSource) : "scripts/test/release",
       source: testSource,
       name,
       outcome,
@@ -380,12 +380,6 @@ function normalizeTestSource(value) {
     normalized = normalized.replace("/dist-test/test/", "/test/").replace(/\.js$/u, ".ts");
   }
   return normalized;
-}
-
-function nodeProject(source) {
-  const match = /languages\/typescript\/node\/packages\/([^/]+)\//u.exec(source);
-  if (match !== null) return match[1];
-  return source.startsWith("scripts/test-oracles/") ? "scripts/test-oracles" : "scripts/release";
 }
 
 function runtimeKey(framework, source, name) {

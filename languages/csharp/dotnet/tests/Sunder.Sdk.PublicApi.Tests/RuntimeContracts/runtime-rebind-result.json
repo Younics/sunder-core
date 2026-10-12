@@ -14,31 +14,34 @@
       "moduleAbi": "sunder.dotnet-worker-module.v1"
     },
     "runtime": {
+      "sourceId": "dotnet",
       "runtimeId": "sunder.runtime.dotnet",
-      "version": "10.0.0",
-      "packagingRevision": 1,
+      "vendorVersion": "10.0.0",
       "rid": "win-x64",
       "moduleAbi": "sunder.dotnet-worker-module.v1",
-      "manifestSha256": "runtime-manifest-10.0.0-1",
-      "artifactSha256": "runtime-artifact-10.0.0-1"
+      "vendorChecksumAlgorithm": "sha512",
+      "vendorChecksumDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     },
-    "artifactSize": 104857600,
-    "registryOrigin": "https://registry.example",
-    "acquisitionSource": "registry",
-    "signingKeyId": "sunder-runtime-release-2026-01",
-    "trustGeneration": 2,
-    "lifecycle": {
-      "state": "supported",
-      "supportedFromUtc": "2026-07-10T12:00:00+00:00",
-      "deprecatedAtUtc": null,
-      "installBlockedAtUtc": null,
-      "activationBlockedAtUtc": null,
-      "revokedAtUtc": null,
-      "policyMessage": null,
-      "runtimePolicyRevision": 42,
-      "policyObservedAtUtc": "2026-07-11T10:00:00+00:00"
+    "installedArtifact": {
+      "archiveSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "archiveSize": 104857600,
+      "contentIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "provenance": {
+        "distribution": {
+          "downloadUrl": "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.0/dotnet-runtime-10.0.0-win-x64.zip",
+          "metadataUrl": "https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json",
+          "metadataSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "checksumUrl": null,
+          "checksumDocumentSha256": null,
+          "archiveFormat": "zip",
+          "materializationProfile": "dotnet-runtime.v1",
+          "downloadSize": null
+        },
+        "finalDownloadUrl": "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.0/dotnet-runtime-10.0.0-win-x64.zip",
+        "retrievedAtUtc": "2026-10-08T10:00:00+00:00"
+      }
     },
-    "resolvedAtUtc": "2026-07-11T09:00:00+00:00"
+    "resolvedAtUtc": "2026-10-08T10:00:00+00:00"
   },
   "newBinding": {
     "role": "runtime",
@@ -49,31 +52,34 @@
       "moduleAbi": "sunder.dotnet-worker-module.v1"
     },
     "runtime": {
+      "sourceId": "dotnet",
       "runtimeId": "sunder.runtime.dotnet",
-      "version": "10.0.1",
-      "packagingRevision": 2,
+      "vendorVersion": "10.0.1",
       "rid": "win-x64",
       "moduleAbi": "sunder.dotnet-worker-module.v1",
-      "manifestSha256": "runtime-manifest-10.0.1-2",
-      "artifactSha256": "runtime-artifact-10.0.1-2"
+      "vendorChecksumAlgorithm": "sha512",
+      "vendorChecksumDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
-    "artifactSize": 104857600,
-    "registryOrigin": "https://registry.example",
-    "acquisitionSource": "registry",
-    "signingKeyId": "sunder-runtime-release-2026-01",
-    "trustGeneration": 2,
-    "lifecycle": {
-      "state": "supported",
-      "supportedFromUtc": "2026-07-10T12:00:00+00:00",
-      "deprecatedAtUtc": null,
-      "installBlockedAtUtc": null,
-      "activationBlockedAtUtc": null,
-      "revokedAtUtc": null,
-      "policyMessage": null,
-      "runtimePolicyRevision": 42,
-      "policyObservedAtUtc": "2026-07-11T10:00:00+00:00"
+    "installedArtifact": {
+      "archiveSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "archiveSize": 104857600,
+      "contentIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "provenance": {
+        "distribution": {
+          "downloadUrl": "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.1/dotnet-runtime-10.0.1-win-x64.zip",
+          "metadataUrl": "https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json",
+          "metadataSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "checksumUrl": null,
+          "checksumDocumentSha256": null,
+          "archiveFormat": "zip",
+          "materializationProfile": "dotnet-runtime.v1",
+          "downloadSize": null
+        },
+        "finalDownloadUrl": "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.1/dotnet-runtime-10.0.1-win-x64.zip",
+        "retrievedAtUtc": "2026-10-08T10:00:00+00:00"
+      }
     },
-    "resolvedAtUtc": "2026-07-11T09:00:00+00:00"
+    "resolvedAtUtc": "2026-10-08T10:00:00+00:00"
   },
   "runtimeSessionApplied": true,
   "impact": {

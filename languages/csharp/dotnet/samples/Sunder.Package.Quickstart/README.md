@@ -1,6 +1,10 @@
 # Compiled Quickstart
 
-This package family is a source-tree compilation fixture for the public package-development guides. Ordinary annotated C# methods and value types define its owner-only RPC API. Build generates the descriptor, Worker dispatcher/registration, and an independent App client/facade. It exercises a thin framework-dependent exact-RID Worker V1 module, settings, persistent state, logging, an Avalonia view, navigation, warmup, and semantic Sunder theme resources.
+This single-project sample uses `[SunderService]`, ordinary string parameters,
+`ValueTask<GreetingResult>`, `Task` completion and a lazy result stream. Build owns
+the Worker/App split and generated `IGreetingService` injection. The sample retains
+settings, persistent state, logging, cancellation, an Avalonia view, navigation,
+warmup and semantic Sunder theme resources.
 
 Build it from the Sunder Core repository:
 
@@ -20,9 +24,31 @@ isolated implementation outputs under `sunder-roles/<role>/<rid>`. Direct
 `dotnet run --project <Quickstart.csproj>` delegates to the Sunder CLI's Host-backed
 development workflow; its managed runtime must be acquired explicitly.
 
-`GreetingService` owns the implementation and value facets. The committed
-`sunder-contracts.owned.json` and canonical snapshots retain its accepted exact RPC
-`2.0.0` identity; `CheckSunderContracts`, `AcceptSunderContracts` and
-`FreezeSunderContracts` own intentional baseline changes. The view model receives
-`IGreetingService` through its constructor; generated role-local transport calls the
-Worker without authored scopes or a shared implementation/Protocol assembly.
+`GreetingService` owns meaningful validation and a result record, with no request or
+scalar wrapper types. `ResetAsync` resets the persisted count; `GreetManyAsync`
+streams ordinary results. The view model calls `IGreetingService` directly.
+The generated interface is in
+`Sunder.Generated.Packages.Docs_Sunder_Quickstart_Services`; the view model imports
+that namespace explicitly while `GreetingResult` remains authored package source.
+The record is authored once. If exposed publicly and selected by another package,
+it projects into `Sunder.Generated.Packages.Docs_Sunder_Quickstart_Models`, and the
+selected-package root is `IPackageApi` in the same `_Services` namespace. Private
+values remain private; generated type availability never grants another role access.
+
+For richer services, use `IServiceProviders<TService>` to choose an authorized
+provider, `.Service` to call it and `.Reference` to pass an exact typed reference.
+Use `SunderContent` and normal async disposal for content; generated bindings own
+RPC scopes and codecs. See [ordinary services](../../../../../docs/package-development/ORDINARY-SERVICES.md)
+for multi-contract implementations, explicit imported Runtime use, optional reference
+availability, transient member transfer and deadline/content-watch policy. Those
+opt-ins are unnecessary for this greeting sample. Its no-argument/reset completion
+uses generated empty-object metadata; authors supply no `Unit` or request record.
+Generated service JSON metadata also avoids reflection-cache retention of collectible
+model types.
+
+The current private API is the explicit **package 1.1.0 successor**. Its descriptor
+version is 1.1.0 and evolves with the package; normal Build/Pack requires no Accept
+or Freeze. The earlier release-frozen private 2.0.0 record remains losslessly under
+`retiredPrivateContracts` after the explicit `MigratePrivateSunderContracts` command.
+Historical descriptor/ABI oracle files are unchanged and are checked separately
+from the current natural-signature API. Normal builds never rewrite that archive.

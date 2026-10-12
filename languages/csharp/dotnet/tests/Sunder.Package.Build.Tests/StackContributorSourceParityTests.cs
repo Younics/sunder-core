@@ -8,6 +8,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Stacks;
 using Xunit;
 
@@ -35,7 +36,7 @@ public sealed class StackContributorSourceParityTests
         var extracted = WithDialect(contract.Descriptor);
 
         Assert.Equal(ContractKey, contract.ContractKey);
-        Assert.Equal(SunderRpcExposure.Public, contract.Exposure);
+        Assert.Equal(SunderServiceExposure.Public, contract.Exposure);
         Assert.Equal("Sunder.Sdk.Stacks.StackContributorRpcServiceAdapter", contract.ServiceType.ToDisplayString());
         Assert.Equal(Accessibility.Internal, contract.ServiceType.DeclaredAccessibility);
         Assert.Equal(48, contract.SourceTypes.Count);
@@ -104,8 +105,8 @@ public sealed class StackContributorSourceParityTests
             "requiredness" => (WireFile, "public required bool SupportsExport", "public SunderRpcOptional<bool> SupportsExport"),
             "error-code" => (ServiceFile, "stack.method.unsupported", "stack.operation.unsupported"),
             "error-description" => (ServiceFile, "The contributor does not implement the requested optional Stack operation.", "The optional operation is unavailable."),
-            "idempotency" => (ServiceFile, "MethodId = \"import\", Idempotency = SunderRpcMethodIdempotency.None", "MethodId = \"import\", Idempotency = SunderRpcMethodIdempotency.Idempotent"),
-            "alias" => (WireFile, "SunderRpcDefinition(\"Id\")", "SunderRpcDefinition(\"Identifier\")"),
+            "idempotency" => (ServiceFile, "MethodId = \"import\", Idempotency = SunderServiceIdempotency.None", "MethodId = \"import\", Idempotency = SunderServiceIdempotency.Idempotent"),
+            "alias" => (WireFile, "SunderValue(\"Id\")", "SunderValue(\"Identifier\")"),
             "numeric-enum" => ("StackContributorModels.cs", "    Secret,", "    Secret = 2,"),
             _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
         };
@@ -569,9 +570,9 @@ public sealed class StackContributorSourceParityTests
     {
         var runtime = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
         string[] names = ["System.Private.CoreLib", "System.Runtime", "System.Runtime.Extensions", "System.Collections",
-            "System.Linq", "System.ObjectModel", "System.Threading", "System.Threading.Tasks", "System.Memory", "System.Text.Json", "System.Net.Http"];
+            "System.Linq", "System.ObjectModel", "System.Threading", "System.Threading.Tasks", "System.Memory", "System.Text.Json", "System.Net.Http", "System.ComponentModel", "System.Runtime.Numerics"];
         return names.Select(name => Path.Combine(runtime, name + ".dll"))
-            .Append(typeof(SunderRpcServiceAttribute).Assembly.Location).ToArray();
+            .Append(typeof(SunderServiceAttribute).Assembly.Location).ToArray();
     }
 
     private static async Task<JsonElement> Invoke<T>(ISunderRpcServiceHandler handler, SunderRpcInvocationContext context,
@@ -693,8 +694,8 @@ public sealed class StackContributorSourceParityTests
         public List<TrackingStream> OpenedStreams { get; } = [];
         public byte[]? RegisteredBytes { get; private set; }
 
-        public SunderRpcInvocationContext Context() => Factory.Value(
-            new("owner.package", "1.0.0", "actual-provider", SunderStackContributorRpc.ContractId, SunderStackContributorRpc.ContractVersion,
+        public SunderRpcInvocationContext Context(SunderRpcProviderSnapshot? provider = null) => Factory.Value(
+            provider ?? new("owner.package", "1.0.0", "actual-provider", SunderStackContributorRpc.ContractId, SunderStackContributorRpc.ContractVersion,
                 SunderStackContributorRpc.DescriptorSha256, SunderStackContributorRpc.AbiSha256, Guid.NewGuid(), 1, 1,
                 new("endpoint"), 1, SunderRpcProviderState.Active), Register, Open);
 

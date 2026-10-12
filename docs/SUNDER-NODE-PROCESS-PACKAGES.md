@@ -1,8 +1,16 @@
-# Sunder TypeScript Worker Runtime Packages
+# Sunder TypeScript And JavaScript Service Packages
 
 > **Source channel:** This page tracks current source and may be ahead of npm. For a release, use the page from the matching `sdk/v*` tag and the README embedded in each npm tarball.
 
-`npm create sunder-package@latest` scaffolds a runtime-backed TypeScript Worker V1 package. The Worker is one bundled CommonJS module at `bin/worker.cjs`; the package does not contain Node executables or runtime distributions. The Host launches that module through an exact, separately trusted Node 24 execution runtime. The `react-node` template adds a hosted React/Vite web App target to the same universal package.
+`npm create sunder-package@latest` scaffolds a runtime-backed service package. Choose
+`--language ts` (the default) or `--language js` for independently authored checked
+JavaScript. The `node` preset supplies a Worker; `react-node` adds a hosted React/Vite
+web App to the same universal package. Service source uses `defineService`; tooling
+generates the Worker bootstrap, registrations, codecs and package-local clients.
+
+The Worker is one bundled CommonJS module at `bin/worker.cjs`; the package contains
+no Node executable or runtime distribution. The Host launches the module through an
+exact, separately trusted Node 24 execution runtime.
 
 These are authoring presets, not a closed package model. The canonical format permits future Python, Rust, Go, and other Worker toolchains, while `web` App targets are framework-agnostic. Every toolchain must emit the canonical Manifest V1, content index, payload layers, exact-RID target records, and a module ABI supported by an approved execution runtime.
 
@@ -10,11 +18,103 @@ These are authoring presets, not a closed package model. The canonical format pe
 
 | Package | Included subset |
 | --- | --- |
-| `@sunder/sdk` | Strict RPC descriptor V1 parse/validation/generation, Worker V1 data/logging/storage-migration/callback/auth/RPC APIs, and browser bridge types. |
-| `@sunder/package-tool` | Runtime-backed Node development output, thin exact-RID module leaves, optional static web leaves, managed smoke, and package aggregation. |
-| `create-sunder-package` | `node` and `react-node` scaffolds. |
+| `@sunder/sdk` | `defineService`, source-typed semantic options, managed `context.api(token)`, Worker V1 package APIs and advanced descriptor/wire APIs. Browser ownership is in `/browser`; the optional `/react` adapter supplies `ApiProvider`/`useApi`. |
+| `@sunder/package-tool` | TS/checked-JS service analysis, generated `#sunder/api` runtime/types, public lifecycle and exact imports, development output, exact-RID Worker/web leaves, managed smoke and package aggregation. |
+| `create-sunder-package` | `node` and `react-node` presets in TS or genuine JS/JSX. |
 
-The TypeScript SDK intentionally has a narrower surface than the coordinated .NET SDK family. Worker code receives Host-mediated settings, state, files, secrets, role-local workspace, storage migrations, structured logging, callbacks, auth, RPC, and staged lifecycle callbacks. It does not expose App modules, managed Stack adapters, Avalonia, Registry clients, or package install/update APIs. Browser code imports only `@sunder/sdk/browser`; the main export is for Node and build contexts.
+The Node SDK intentionally has a narrower surface than the coordinated .NET SDK family. Worker code receives Host-mediated settings, state, files, secrets, role-local workspace, storage migrations, structured logging, callbacks, auth, RPC, and staged lifecycle callbacks. It does not expose App modules, managed Stack adapters, Avalonia, Registry clients, or package install/update APIs. Browser code uses `#sunder/api` with `@sunder/sdk/browser` and, optionally, `@sunder/sdk/react`; the main export is for Node and build contexts. React is an optional peer, not a dependency of headless Workers.
+
+## Author Ordinary Services
+
+Configure the source module in `sunder.package.json`:
+
+```json
+{
+  "schemaVersion": 3,
+  "id": "example.package",
+  "name": "Example package",
+  "version": "1.0.0",
+  "workerCapabilities": [],
+  "services": { "module": "src/services.ts" }
+}
+```
+
+For TypeScript, `src/services.ts` can contain:
+
+```ts
+import { defineService } from "@sunder/sdk";
+
+export const greeting = defineService({
+  greet(name: string): string { return `Hello, ${name}!`; },
+}, {
+  constraints: { "greet.name": { minLength: 1, maxLength: 120 } },
+});
+```
+
+For JavaScript, configure `src/services.js` and write checked JSDoc directly:
+
+```js
+// @ts-check
+import { defineService } from "@sunder/sdk";
+
+export const greeting = defineService({
+  /** @param {string} name @returns {string} */
+  greet(name) { return `Hello, ${name}!`; },
+}, {
+  constraints: { "greet.name": { minLength: 1, maxLength: 120 } },
+});
+```
+
+The pinned TypeScript checker derives request/result/stream schemas from supported
+ordinary types and JSDoc. Records, lists, maps, optional/null values, literal unions,
+`bigint`, bytes and explicit SDK JSON/content types use existing validated codecs.
+`constraints` adds semantic facets; it is not a schema-constructor tree. Incomplete
+or unsupported boundaries fail with source diagnostics. Source discovery does not
+execute package code. See [source types and constraints](package-development/IMPLEMENTATION-FIRST-RPC.md#node-source-types-and-constraints)
+for the actual SDK surface and supported boundaries.
+
+Normal packages author neither a Worker `entry` nor a provider-registration list.
+Export an optional `configure(context)` for real Worker lifecycle/package hooks;
+tooling owns providers. The retired router/schema DSL and `rpc.module/export` config
+are not a second authoring mode.
+
+## Managed Package APIs And Lifecycle
+
+Generation publishes `#sunder/api` JS and `.d.ts` together. The creator supplies the
+ordinary package-import mapping used by tsc/checkJs, editors and Vite. Worker code
+uses its existing `context.api(Self)`; browser/React code uses the owners below.
+Acquisition performs no discovery. Calls and lazy streams own selection,
+cancellation/deadlines and cleanup; stale, cloned or wrong-owner tokens fail closed.
+
+`Self` uses source service keys: the example above exposes `api.greeting.greet(name)`.
+Selected packages use the lock's local name to generate a token such as `Dependency`.
+One public contract exposes its services directly; multiple contracts get full-ID
+camel-case scopes. For `example.dependency.first` and `example.dependency.second`,
+both with `messages.send`, callers use
+`api.exampleDependencyFirst.messages.send(request)` and
+`api.exampleDependencySecond.messages.send(request)`. Imported arguments/results
+come from the descriptor, including an explicit `{}` for an empty request; they do
+not reconstruct the producer's source signature.
+
+Private services default to package exposure and use the full package SemVer,
+including prerelease/build metadata. They need no owned baseline or independent
+Accept/Freeze. Public services opt in with `exposure: "public"` and require explicit
+`contracts accept`, `check` and `freeze` before release packaging. Public history
+cannot be hidden by demotion, removal or baseline deletion. Explicit
+`contracts migrate-private` preserves complete old private records in the immutable
+`retiredPrivateContracts` archive. Publication import validates exact package bytes
+and Registry evidence; a private-only import has no baseline transition.
+
+Tokens grant no authority. Private owner App use defaults to required applicable
+actions. Ordinary owned concrete public services default to optional App readiness
+and all applicable actions, so making a private service public preserves its own
+UI access without another role flag. Explicit `appUse` overrides readiness/actions.
+Public declaration-only services remain opt-in; implementations of local declarations
+or imported contracts add no consumer grants. Worker broker consumption always
+requires independent explicit `runtimeUse`. Package imports store reviewed
+`consumerRoles` for App, Runtime or both; Add defaults to both, Update preserves the
+selection, and Restore never widens or migrates it. See the
+[tool lifecycle and selection guide](../languages/typescript/node/packages/package-tool/README.md#private-and-public-versions).
 
 ## Package And Runtime Trust
 
@@ -74,7 +174,9 @@ Managed smoke requires an approved execution runtime for the current RID. Instal
 sunder runtime ensure sunder.runtime.node ">=24.18.1 <25.0.0" sunder.node-worker-module.v1
 ```
 
-The repository pins Node `24.18.1` as its current npm/build toolchain and pins `esbuild` `0.28.1` and Vite `8.2.0` for deterministic package production. Those development pins do not place a Node distribution in the package.
+The repository pins Node `24.18.1`, TypeScript `6.0.3`, `esbuild` `0.28.1` and Vite
+`8.2.0` for package tooling. Those development pins do not place a Node distribution
+in the package.
 
 ## Exact-RID Leaves And Aggregation
 
@@ -108,13 +210,106 @@ These leaves are also accepted by `AggregateSunderPackageTask`. In a primary .NE
 Create a combined package with:
 
 ```bash
-npm create sunder-package@latest my-package -- --template react-node --package-id my.company.package --package-name "My Package"
+npm create sunder-package@latest my-package -- --preset react-node --language js --package-id my.company.package --package-name "My Package"
 cd my-package
 npm install
 npm test
 npm run sunder:dev
 ```
 
-The template contains a Vite/React `web` App target and the runtime-backed TypeScript Worker target. Browser code imports only `@sunder/sdk/browser`. The Host injects exact `sunder.bridge.v1` APIs carrying opaque provider handles; web code never receives Runtime credentials, local filesystem paths, or broker endpoint references. Manifest-declared RPC actions remain default-deny outside the exact installed grant.
+Use `--language ts` for TypeScript/TSX. Both variants contain a Vite/React `web` App
+and a generated Worker. The Host injects exact `sunder.bridge.v1` APIs carrying
+opaque provider handles; web code never receives Runtime credentials, local
+filesystem paths or broker endpoint references. Manifest-declared RPC actions
+remain default-deny outside the exact installed grant.
+
+## Browser And React Lifetimes
+
+These examples consume the `greeting` service above. A plain DOM view owns one
+browser context and returns a teardown function to its UI/root owner:
+
+```ts
+import { createBrowserContext } from "@sunder/sdk/browser";
+import { Self } from "#sunder/api";
+
+export function mountGreeting(button: HTMLButtonElement, output: HTMLElement) {
+  const context = createBrowserContext(Self);
+  const api = context.api(Self);
+  async function greet() {
+    try {
+      const message = await api.greeting.greet("Sunder");
+      if (!context.signal.aborted) output.textContent = message;
+    } catch (error) {
+      if (!context.signal.aborted) {
+        output.textContent = error instanceof Error ? error.message : "Service unavailable";
+      }
+    }
+  }
+  button.addEventListener("click", greet);
+  return () => {
+    button.removeEventListener("click", greet);
+    context.dispose();
+  };
+}
+```
+
+For React, keep the root owner outside component effects, provide it once, and use
+the optional hook adapter. This JSX is ordinary JavaScript:
+
+```jsx
+// @ts-check
+import { StrictMode, useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { createBrowserContext } from "@sunder/sdk/browser";
+import { ApiProvider, useApi } from "@sunder/sdk/react";
+import { Self } from "#sunder/api";
+
+function Greeting() {
+  const api = useApi(Self);
+  const [message, setMessage] = useState("Loading…");
+  useEffect(() => {
+    const cancellation = new AbortController();
+    void api.greeting.greet("Sunder", { signal: cancellation.signal }).then(
+      value => { if (!cancellation.signal.aborted) setMessage(value); },
+      error => {
+        if (!cancellation.signal.aborted) {
+          setMessage(error instanceof Error ? error.message : "Service unavailable");
+        }
+      },
+    );
+    return () => cancellation.abort();
+  }, [api]);
+  return <p aria-live="polite">{message}</p>;
+}
+
+/** @param {HTMLElement} element */
+export function mountGreeting(element) {
+  const context = createBrowserContext(Self);
+  const root = createRoot(element);
+  root.render(<StrictMode><ApiProvider context={context}><Greeting /></ApiProvider></StrictMode>);
+  return () => {
+    root.unmount();
+    context.dispose();
+  };
+}
+```
+
+Call the returned teardown when removing the UI root. `ApiProvider` supplies the
+application-owned context; it does not dispose that root for you. `useApi` owns an
+effect-scoped child, so StrictMode cleanup/remount and multiple roots stay isolated.
+Invoke services from effects or event handlers, not during render. Neither example
+polls the bridge: `createBrowserContext` waits for `sunder:ready`, validates the
+immutable bridge and follows its native signal and document retirement.
+
+### Advanced RPC Boundaries
+
+Descriptor parsers/generators and low-level Worker RPC APIs remain available for
+tooling, protocol integration and explicitly owned discovery/content workflows.
+`Catalogs` from `#sunder/api` exposes explicit list/get/watch/provider selection;
+normal views use the managed APIs above. Content-bearing methods require an
+existing caller-owned content scope, kept open until consumption completes. See
+the [SDK content-scope guidance](../languages/typescript/node/packages/sdk/README.md#use-generated-apis).
+These advanced wire APIs do not restore schema-constructor authoring or add a
+browser content/session protocol.
 
 The Sunder CLI remains a thin Runtime/Registry client and does not scaffold packages. Node and web authoring use `npm create sunder-package@latest` and `@sunder/package-tool`; managed .NET/Avalonia authoring uses `dotnet new sunder-package`.

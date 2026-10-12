@@ -9,6 +9,7 @@ using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 
@@ -50,9 +51,12 @@ public sealed class SunderRpcOwnedContractCommandIntegrationTests
         AssertSuccess(await RunDotnet(dependency.RootPath, "build", domainProject, "--disable-build-servers", "--nologo",
             "-p:RestoreSources=" + emptyFeed, "-p:NuGetAudit=false"));
         var domainReference = dependency.GetPath("bin", "Debug", "net10.0", "OwnedLifecycleDomain.dll");
-        File.WriteAllText(source, File.ReadAllText(source).Replace("Message = request.Name", "Message = OwnedLifecycleDomain.Greet(request.Name)", StringComparison.Ordinal));
+        // This fixture owns the public Accept/Freeze lifecycle; normal private fixtures are baseline-free.
+        File.WriteAllText(source, File.ReadAllText(source)
+            .Replace("[SunderService]", "[SunderService(SunderServiceExposure.Public)]", StringComparison.Ordinal)
+            .Replace("Message = request.Name", "Message = OwnedLifecycleDomain.Greet(request.Name)", StringComparison.Ordinal));
         File.Copy(Path.Combine(repositoryRoot, "specs/rpc/v1/authoring/conformance/valid/minimal-contract-lock.json"), lockPath);
-        var references = new[] { typeof(SunderRpcServiceAttribute).Assembly.Location, typeof(SunderWorker).Assembly.Location,
+        var references = new[] { typeof(SunderServiceAttribute).Assembly.Location, typeof(SunderWorker).Assembly.Location,
             typeof(IServiceCollection).Assembly.Location, typeof(Microsoft.Extensions.Logging.ILogger).Assembly.Location, domainReference };
         var document = new XDocument(new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"),
             new XElement("Import", new XAttribute("Project", Path.Combine(buildDirectory, "Sunder.Package.Build.props"))),
@@ -151,9 +155,9 @@ public sealed class SunderRpcOwnedContractCommandIntegrationTests
         await AssertArchive("7.6.5", "1.0.0");
 
         var rpcBeforeChange = RpcSnapshot();
-        var changedSource = Encoding.UTF8.GetString(sourceBytes).Replace("    [SunderRpcMethod]",
-            "    [SunderRpcMethod]\n    public ValueTask<GreetingResult> EchoAsync(GreetingRequest request)\n"
-            + "        => ValueTask.FromResult(new GreetingResult { Message = request.Name });\n\n    [SunderRpcMethod]", StringComparison.Ordinal);
+        var changedSource = Encoding.UTF8.GetString(sourceBytes).Replace("    public ValueTask<GreetingResult> GreetAsync",
+            "    public ValueTask<GreetingResult> EchoAsync(GreetingRequest request)\n"
+            + "        => ValueTask.FromResult(new GreetingResult { Message = request.Name });\n\n    public ValueTask<GreetingResult> GreetAsync", StringComparison.Ordinal);
         Assert.NotEqual(Encoding.UTF8.GetString(sourceBytes), changedSource);
         File.WriteAllText(source, changedSource);
         sourceBytes = File.ReadAllBytes(source);

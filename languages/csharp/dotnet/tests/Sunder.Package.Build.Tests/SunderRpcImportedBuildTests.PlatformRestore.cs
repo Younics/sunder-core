@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -77,10 +78,16 @@ public sealed partial class SunderRpcImportedBuildTests
         var selected = SunderRpcAuthoringDocuments.ReadContractLock(LockPath);
         SunderRpcContractCacheStore.Publish(metadataCache, new Dictionary<string, byte[]> { [_descriptor.Sha256] = _descriptor.GetCanonicalUtf8() },
             SunderRpcContractCache.GetRequirements(selected));
-        Assert.Equal(0, await restore.RestoreAsync(LockPath, metadataCache, [], platformCatalog: fixture.Path));
+        foreach (var artifact in selected.PackageArtifacts.Values) ModelProjectionTestEvidence.Seed(metadataCache, artifact);
+        Assert.Equal(1, await restore.RestoreAsync(LockPath, metadataCache, [], platformCatalog: fixture.Path));
         Assert.Single(SunderRpcPlatformCatalogCache.Resolve(SunderRpcAuthoringDocuments.ReadContractLock(LockPath), metadataCache));
-        Assert.Equal(2, Directory.GetFiles(metadataCache, "*.json").Length);
-        Assert.False(File.Exists(SunderRpcContractCache.GetDescriptorPath(metadataCache, fixture.Requirement.Descriptor.DescriptorSha256)));
+        Assert.Equal(4, Directory.GetFiles(metadataCache, "*.json").Length);
+        Assert.True(File.Exists(SunderRpcContractCache.GetDescriptorPath(metadataCache, fixture.Requirement.Descriptor.DescriptorSha256)));
+        // Verifying the artifact's complete inventory does not materialize a
+        // platform body or grant a provider/client use.
+        Assert.DoesNotContain(fixture.Requirement.Descriptor.DescriptorSha256, SunderRpcContractCache.GetRequirements(selected).Keys);
+        Assert.DoesNotContain(SunderRpcCSharpImportPrepass.Prepare(selected, metadataCache).Contracts,
+            contract => contract.Descriptor.Sha256 == fixture.Requirement.Descriptor.DescriptorSha256);
         Assert.Equal(2, handler.Requests);
     }
 

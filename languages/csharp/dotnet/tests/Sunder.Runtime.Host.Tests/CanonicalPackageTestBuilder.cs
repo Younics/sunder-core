@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
@@ -107,6 +108,7 @@ internal static class CanonicalPackageTestBuilder
         };
         var manifestPath = Path.Combine(root, "manifest", "sunder-package.json");
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions));
+        WriteDescriptorOnlyModelProjection(root, manifest);
         WriteContentIndex(root);
         return root;
     }
@@ -186,6 +188,27 @@ internal static class CanonicalPackageTestBuilder
         return new RuntimePackageTargetSource(source, key, target!);
     }
 
+    private static void WriteDescriptorOnlyModelProjection(string root, SunderPackageManifest manifest)
+    {
+        // This builder authors transport-only test descriptors, without source models.
+        // Keep raw claims so intentionally invalid manifests still reach Format validation.
+        var contracts = new JsonArray();
+        foreach (var bundle in (manifest.ContractBundles ?? []).Where(bundle => bundle?.Exposure == SunderPackageFormat.PublicContractExposure)
+                     .OrderBy(bundle => bundle!.ContractId, StringComparer.Ordinal).ThenBy(bundle => bundle!.Version, StringComparer.Ordinal))
+            contracts.Add(new JsonObject
+            {
+                ["contractId"] = bundle!.ContractId, ["contractVersion"] = bundle.Version,
+                ["descriptorSha256"] = bundle.DescriptorSha256, ["abiSha256"] = bundle.AbiSha256,
+                ["modelProjection"] = new JsonObject { ["models"] = new JsonObject(), ["serviceReferences"] = new JsonObject() },
+            });
+        var path = Path.Combine(root, SunderPackageFormat.RpcModelProjectionPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, SunderRpcModelProjectionJson.Write(new JsonObject
+        {
+            ["schemaVersion"] = 1, ["packageId"] = manifest.Id, ["packageVersion"] = manifest.Version, ["contracts"] = contracts,
+        }));
+    }
+
     public static void WriteContentIndex(string root)
     {
         var indexPath = Path.Combine(root, "manifest", "content-index.json");
@@ -226,7 +249,6 @@ internal static class CanonicalPackageTestBuilder
     private static IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> CreateExecutionRuntimeBindings(
         SunderPackageManifest manifest)
     {
-        var policyObservedAtUtc = DateTimeOffset.Parse("2026-07-11T10:00:00Z");
         var resolvedAtUtc = DateTimeOffset.Parse("2026-07-11T10:01:00Z");
         return (manifest.Targets ?? [])
             .Where(target => target is
@@ -235,24 +257,41 @@ internal static class CanonicalPackageTestBuilder
                 Kind: SunderPackageFormat.WorkerTargetKind,
                 ExecutionRuntime: not null,
             })
-            .Select(target => new InstalledPackageExecutionRuntimeBindingRecord(
-                target!.Role!,
-                target.Rid!,
-                target.ExecutionRuntime!.Id!,
-                "10.0.1",
-                1,
-                target.ExecutionRuntime.ModuleAbi!,
-                new string('a', 64),
-                new string('b', 64),
-                104857600,
-                "https://registry.example/",
-                RuntimeExecutionRuntimeAcquisitionSources.Registry,
-                "sunder-runtime-release-2026-01",
-                1,
-                1,
-                "supported",
-                policyObservedAtUtc,
-                resolvedAtUtc))
+            .Select(target =>
+            {
+                var requirement = new RuntimeExecutionRuntimeRequirement(
+                    target!.ExecutionRuntime!.Id!,
+                    target.ExecutionRuntime.VersionRange!,
+                    target.ExecutionRuntime.ModuleAbi!);
+                var identity = new RuntimeExecutionRuntimeIdentity(
+                    ConfiguredOfficialSourceId.DotNet,
+                    requirement.RuntimeId,
+                    "10.0.1",
+                    target.Rid!,
+                    requirement.ModuleAbi,
+                    RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
+                    new string('a', 128));
+                var distribution = new RuntimeExecutionRuntimeDistribution(
+                    "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.1/dotnet-runtime-10.0.1-" + target.Rid + ".tar.gz",
+                    OfficialRuntimeSourcePolicy.DotNetMetadata,
+                    new string('b', 64),
+                    null,
+                    null,
+                    RuntimeExecutionRuntimeArchiveFormat.TarGzip,
+                    OfficialRuntimeSourcePolicy.Profile(ConfiguredOfficialSourceId.DotNet),
+                    104857600);
+                return new InstalledPackageExecutionRuntimeBindingRecord(
+                    target.Role!,
+                    target.Rid!,
+                    requirement,
+                    identity,
+                    new RuntimeExecutionRuntimeInstalledArtifact(
+                        new string('c', 64),
+                        104857600,
+                        new string('d', 64),
+                        new RuntimeExecutionRuntimeProvenance(distribution, distribution.DownloadUrl, resolvedAtUtc)),
+                    resolvedAtUtc);
+            })
             .ToArray();
     }
 

@@ -10,9 +10,9 @@ public sealed class PackageCapabilityConsentViewModel
         PackageDownloadText = RegistryPackageChangePreflight.FormatBytes(preflight.PackageDownloadBytes);
         SharedRuntimeDownloadText = RegistryPackageChangePreflight.FormatBytes(preflight.SharedRuntimeDownloadBytes);
         TotalDownloadText = RegistryPackageChangePreflight.FormatBytes(preflight.TotalDownloadBytes);
-        SharedRuntimeReuseText = preflight.ReusedSharedRuntimeBytes == 0
-            ? "No installed runtime bytes will be reused."
-            : $"{RegistryPackageChangePreflight.FormatBytes(preflight.ReusedSharedRuntimeBytes)} already installed; 0 bytes for those exact runtimes.";
+        SharedRuntimeReuseText = preflight.ExecutionRuntimes.Any(item => !item.AlreadyInstalled)
+            ? "Missing runtimes install first; packages wait in the queue."
+            : preflight.ExecutionRuntimes.Count > 0 ? "Verified installed runtimes will be reused." : "No package runtime downloads are required.";
         RegistryPlans = preflight.ExpectedPlans
             .Select(static plan => new RegistryPlanConfirmationItemViewModel(
                 plan.RegistryOrigin,
@@ -28,19 +28,15 @@ public sealed class PackageCapabilityConsentViewModel
             .ToArray();
         ExecutionRuntimes = preflight.ExecutionRuntimes
             .Select(static runtime => new ExecutionRuntimeDownloadItemViewModel(
-                $"{runtime.Artifact.Identity.RuntimeId} {runtime.Artifact.Identity.Version} r{runtime.Artifact.Identity.PackagingRevision}",
-                $"{runtime.Artifact.Identity.Rid} / {runtime.Artifact.Identity.ModuleAbi}",
-                FormatLifecycle(runtime.Artifact.Lifecycle.State),
+                RuntimeManagementUi.Identity(runtime.Identity),
+                $"{runtime.Identity.Rid} / {runtime.Identity.ModuleAbi}",
+                runtime.SourceText,
                 runtime.AlreadyInstalled
                     ? $"Already installed; 0 bytes"
-                    : $"{RegistryPackageChangePreflight.FormatBytes(runtime.Artifact.ArtifactSize)} download",
-                runtime.Artifact.Lifecycle.Message ?? string.Empty))
+                    : $"{RegistryPackageChangePreflight.FormatBytes(runtime.DownloadSize)} download",
+                string.Empty))
             .ToArray();
         Warnings = preflight.Plan.Warnings
-            .Concat(preflight.ExecutionRuntimes
-                .Where(static runtime => runtime.Artifact.Lifecycle.State == ExecutionRuntimeLifecycleStates.Deprecated)
-                .Select(static runtime => runtime.Artifact.Lifecycle.Message
-                    ?? $"Execution runtime '{runtime.Artifact.Identity.RuntimeId}' {runtime.Artifact.Identity.Version} is deprecated."))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         Items = preflight.Plan.RequiredCapabilityConsents
@@ -91,14 +87,9 @@ public sealed class PackageCapabilityConsentViewModel
             RegistryPackageActionKinds.PackageInstall => "Install",
             RegistryPackageActionKinds.PackageUpdate => "Update",
             RegistryPackageActionKinds.PackageRemove => "Remove",
-            RegistryPackageActionKinds.RuntimeOnlyRebind => "Rebind runtime",
             _ => action,
         };
 
-    private static string FormatLifecycle(string state)
-        => string.IsNullOrWhiteSpace(state)
-            ? "Unknown lifecycle"
-            : $"{char.ToUpperInvariant(state[0])}{state[1..]}";
 }
 
 public sealed record RegistryPlanConfirmationItemViewModel(
@@ -114,9 +105,9 @@ public sealed record PackageChangeConfirmationItemViewModel(
 public sealed record ExecutionRuntimeDownloadItemViewModel(
     string IdentityText,
     string TargetText,
-    string LifecycleText,
+    string SourceText,
     string DownloadText,
-    string LifecycleMessage);
+    string DetailText);
 
 public sealed record PackageCapabilityConsentItemViewModel(
     string PackageId,

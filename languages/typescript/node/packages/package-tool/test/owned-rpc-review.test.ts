@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +11,7 @@ import { contractsCommand } from "../src/rpc-contracts";
 import { aggregateAndPack } from "../src/package";
 import { parseBaseline } from "../src/rpc-baseline";
 import { constructorSource, sharedSource } from "./owned-rpc-review-fixtures";
+import { fixtureSource, generatedProviders, invocation, writeSourceFile as writeFile } from "./service-fixtures";
 
 const exec = promisify(execFile);
 const cli = resolve(__dirname, "../../dist/cli.js");
@@ -18,9 +19,8 @@ const emptyLock = `${JSON.stringify({ lockVersion: 1, packageArtifacts: {}, pack
 async function project(extension: string, source: string): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-owned-review-")); await mkdir(resolve(root, "src"));
   await writeFile(resolve(root, `src/rpc.${extension}`), source);
-  await writeFile(resolve(root, `src/worker.${extension}`), 'export {packageRpc} from "./rpc.js";');
   await writeFile(resolve(root, "sunder-contracts.lock.json"), emptyLock);
-  await writeFile(resolve(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.review", name: "Review", version: "7.6.5", entry: `src/worker.${extension}`, workerCapabilities: [], rpc: { module: `src/rpc.${extension}`, export: "packageRpc" } }));
+  await writeFile(resolve(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.review", name: "Review", version: "7.6.5", workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
   return root;
 }
 const run = (root: string, ...args: string[]) => exec(process.execPath, [cli, ...args, "--project", root]);
@@ -69,13 +69,12 @@ for (const extension of ["ts", "js"]) for (const typed of [false, true]) test(`s
     const before = await readFile(resolve(root, "sunder-contracts.owned.json"));
     for (const reverse of [false, true]) {
       const source = sharedSource(extension, reverse, true, typed); await writeFile(resolve(root, `src/rpc.${extension}`), source);
-      const loaded = await loadProject(root); assert.equal(loaded.ownedRpc!.source, source);
-      assert.equal(loaded.contracts.length, 2); assert.equal(loaded.contracts.find((contract) => contract.contractKey === "z-object")!.descriptor.$defs.Output!.type, "object");
+      const loaded = await loadProject(root); assert.equal(loaded.ownedRpc!.source, fixtureSource(source, extension));
+      assert.equal(loaded.contracts.length, 2); assert.equal(loaded.contracts.find((contract) => contract.contractKey === "z-object")!.descriptor.$defs.ZObjectCallResult!.type, "object");
       await contractsCommand("check", root); await contractsCommand("accept", root);
       await run(root, "build");
-      const worker = resolve(root, "dist/targets", currentRid(), "payload/runtime", currentRid(), "bin/worker.cjs");
-      const result = await exec(process.execPath, ["-e", `const {packageRpc}=require(process.argv[1]); Promise.all(packageRpc.providerRegistrations.map(provider=>provider.handler.invokeUnary({signal:new AbortController().signal},"main","call",{value:"ok"}))).then(values=>console.log(JSON.stringify(values)));`, worker]);
-      assert.deepEqual(JSON.parse(result.stdout), [{ value: "OK" }, { value: "OK" }]);
+      const providers = await generatedProviders(root);
+      assert.deepEqual(await Promise.all(providers.map(provider=>provider.handler.invokeUnary(invocation(),"main","call",{request:{value:"ok"}}))), [{ value: "OK" }, { value: "OK" }]);
       assert.deepEqual(await readFile(resolve(root, "sunder-contracts.owned.json")), before);
     }
   } finally { await rm(root, { recursive: true, force: true }); }

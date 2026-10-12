@@ -249,6 +249,7 @@ public sealed class RuntimeAppWebRpcClientTests
                 var features = new List<string>
                 {
                     RuntimeProtocolFeatures.VersionedApiV1,
+                    RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1,
                     RuntimeProtocolFeatures.AppWebRpcV1,
                 };
                 RuntimeResourceProfileDescriptor? profile = null;

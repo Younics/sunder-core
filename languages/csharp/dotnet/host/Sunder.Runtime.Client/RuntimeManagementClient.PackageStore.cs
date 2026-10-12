@@ -17,16 +17,6 @@ public sealed partial class RuntimeManagementClient
         CancellationToken token = default)
         => UploadAsync(filePath, "uploads/stack-media", contentType, token);
 
-    public Task<ContentUploadDescriptor> UploadExecutionRuntimeAsync(
-        string filePath,
-        CancellationToken token = default)
-        => UploadAsync(
-            filePath,
-            "uploads/execution-runtimes",
-            "application/vnd.sunder.execution-runtime",
-            token,
-            RuntimeProtocolFeatures.ExecutionRuntimeManagementV1);
-
     public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(
         string packageId,
         CancellationToken token = default)
@@ -60,6 +50,9 @@ public sealed partial class RuntimeManagementClient
         PackageStoreStageRequest request,
         CancellationToken token = default)
     {
+        if (request.Mutations.Any(mutation => mutation.UploadRetention is not null))
+            return await PostAsync<PackageStoreStageRequest, PackageStoreStageResult>(
+                "packages/store/stage", request, RuntimeProtocolFeatures.PackageInstallResumptionV1, token).ConfigureAwait(false);
         using var response = await _transport.PostAsJsonAsync(CreateUri("packages/store/stage"), request, token).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<PackageStoreStageResult>(response, token).ConfigureAwait(false);
     }

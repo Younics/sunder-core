@@ -196,12 +196,12 @@ public sealed class RuntimeAndPackageStatusCommandTests
         Assert.Equal(4, data.GetProperty("runtime").GetProperty("sessionGeneration").GetInt64());
         var executionRuntime = Assert.Single(data.GetProperty("executionRuntimes").EnumerateArray());
         Assert.Equal("sunder.runtime.dotnet", executionRuntime.GetProperty("binding").GetProperty("runtimeId").GetString());
-        Assert.Equal("10.0.1", executionRuntime.GetProperty("binding").GetProperty("version").GetString());
-        Assert.Equal(2, executionRuntime.GetProperty("binding").GetProperty("packagingRevision").GetInt32());
+        Assert.Equal("10.0.1", executionRuntime.GetProperty("binding").GetProperty("vendorVersion").GetString());
+        Assert.Equal("dotnet", executionRuntime.GetProperty("binding").GetProperty("sourceId").GetString());
         Assert.Equal("win-x64", executionRuntime.GetProperty("binding").GetProperty("rid").GetString());
         Assert.Equal("sunder.dotnet-worker-module.v1", executionRuntime.GetProperty("binding").GetProperty("moduleAbi").GetString());
         Assert.Equal("ready", executionRuntime.GetProperty("health").GetProperty("status").GetString());
-        Assert.Equal("supported", executionRuntime.GetProperty("lifecycle").GetProperty("state").GetString());
+        Assert.Equal("Supported", executionRuntime.GetProperty("support").GetProperty("state").GetString());
         Assert.False(executionRuntime.GetProperty("actions").GetProperty("repairRequired").GetBoolean());
         Assert.False(executionRuntime.GetProperty("actions").GetProperty("rebindRequired").GetBoolean());
     }
@@ -234,7 +234,7 @@ public sealed class RuntimeAndPackageStatusCommandTests
         Assert.Equal(
             new[] { "demo", "dependent" },
             actions.GetProperty("impactedPackageIds").EnumerateArray().Select(item => item.GetString()!).ToArray());
-        Assert.Equal("package-binding", status.GetProperty("lifecycle").GetProperty("source").GetString());
+        Assert.Equal(JsonValueKind.Null, status.GetProperty("support").ValueKind);
         Assert.Contains("Package impact: demo, dependent", text.Output, StringComparison.Ordinal);
         Assert.Contains("sunder package update demo --dry-run", text.Output, StringComparison.Ordinal);
     }
@@ -269,7 +269,7 @@ public sealed class RuntimeAndPackageStatusCommandTests
             .GetProperty("actions");
         Assert.True(actions.GetProperty("repairRequired").GetBoolean());
         Assert.Equal(
-            "sunder runtime repair sunder.runtime.dotnet 10.0.1 2 win-x64 sunder.dotnet-worker-module.v1 --yes",
+            "sunder runtime repair dotnet sunder.runtime.dotnet 10.0.1 win-x64 sunder.dotnet-worker-module.v1 sha512 " + new string('b', 128) + " --yes",
             actions.GetProperty("repairCommand").GetString());
         Assert.Contains("2 package(s)", actions.GetProperty("message").GetString(), StringComparison.Ordinal);
     }
@@ -309,28 +309,14 @@ public sealed class RuntimeAndPackageStatusCommandTests
                 ">=10.0.0 <11.0.0",
                 "sunder.dotnet-worker-module.v1"),
             new RuntimeExecutionRuntimeIdentity(
+                ConfiguredOfficialSourceId.DotNet,
                 "sunder.runtime.dotnet",
                 "10.0.1",
-                2,
                 "win-x64",
                 "sunder.dotnet-worker-module.v1",
-                new string('a', 64),
-                new string('b', 64)),
-            32L * 1024L * 1024L,
-            "https://registry.test/",
-            RuntimeExecutionRuntimeAcquisitionSources.Registry,
-            "release-key",
-            1,
-            new RuntimeExecutionRuntimeLifecycle(
-                ExecutionRuntimeLifecycleStates.Supported,
-                now,
-                null,
-                null,
-                null,
-                null,
-                null,
-                1,
-                now),
+                RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
+                new string('b', 128)),
+            InstalledArtifact(),
             now);
     }
 
@@ -339,18 +325,39 @@ public sealed class RuntimeAndPackageStatusCommandTests
         => new(
             binding.Runtime,
             RuntimeExecutionRuntimeStatuses.Ready,
-            binding.ArtifactSize,
+            32L * 1024L * 1024L,
             1,
-            binding.AcquisitionSource,
-            binding.SigningKeyId,
-            binding.TrustGeneration,
+            binding.InstalledArtifact,
             new RuntimeExecutionRuntimeHealth(
                 RuntimeExecutionRuntimeStatuses.Ready,
                 DateTimeOffset.UnixEpoch,
                 false,
                 null),
-            binding.Lifecycle,
+            new RuntimeExecutionRuntimeSupportStatus(
+                RuntimeExecutionRuntimeSupportState.Supported,
+                "10.0",
+                DateTimeOffset.UnixEpoch,
+                null,
+                null),
             DateTimeOffset.UnixEpoch);
+
+    private static RuntimeExecutionRuntimeInstalledArtifact InstalledArtifact()
+        => new(
+            new string('c', 64),
+            32L * 1024L * 1024L,
+            new string('d', 64),
+            new RuntimeExecutionRuntimeProvenance(
+                new RuntimeExecutionRuntimeDistribution(
+                    "https://download.example/dotnet.tar.gz",
+                    "https://metadata.example/dotnet.json",
+                    new string('e', 64),
+                    null,
+                    null,
+                    RuntimeExecutionRuntimeArchiveFormat.TarGzip,
+                    "dotnet-runtime-v1",
+                    32L * 1024L * 1024L),
+                "https://download.example/dotnet.tar.gz",
+                DateTimeOffset.UnixEpoch));
 
     private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
     {

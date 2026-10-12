@@ -1016,6 +1016,7 @@ public sealed class RuntimeClientTransportTests
             SupportedFeatures =
             [
                 RuntimeProtocolFeatures.VersionedApiV1,
+                RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1,
                 RuntimeProtocolFeatures.TargetAwarePackageSnapshotsV1,
             ],
         };
@@ -1094,6 +1095,7 @@ public sealed class RuntimeClientTransportTests
             SupportedFeatures =
             [
                 RuntimeProtocolFeatures.VersionedApiV1,
+                RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1,
                 RuntimeProtocolFeatures.SchemaFirstRpcV1,
                 RuntimeProtocolFeatures.RpcPermissionsV1,
             ],
@@ -1148,6 +1150,7 @@ public sealed class RuntimeClientTransportTests
             SupportedFeatures =
             [
                 RuntimeProtocolFeatures.VersionedApiV1,
+                RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1,
                 RuntimeProtocolFeatures.AppWebRpcV1,
             ],
         };
@@ -1431,6 +1434,7 @@ public sealed class RuntimeClientTransportTests
             Guid.NewGuid(),
             [
                 RuntimeProtocolFeatures.VersionedApiV1,
+                RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1,
                 RuntimeProtocolFeatures.AppWebRpcV1,
                 RuntimeProtocolFeatures.RuntimeResourcePolicyV1,
             ],
@@ -1455,7 +1459,7 @@ public sealed class RuntimeClientTransportTests
             minimum,
             maximum,
             Guid.NewGuid(),
-            [RuntimeProtocolFeatures.VersionedApiV1],
+            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1],
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"));
 
     private sealed class RecordingHandler(

@@ -7,6 +7,7 @@ using Sunder.Core.TestSupport;
 using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 
@@ -20,7 +21,7 @@ public sealed class SunderRpcPlatformBaselineTests
     private const string Release = "9.8.7";
     private static readonly Lazy<SunderRpcCSharpCompiledContract> Original = new(() => Compile(Source));
     private static readonly Lazy<SunderRpcCSharpCompiledContract> Added = new(() => Compile(Source.Replace(
-        "[SunderRpcMethod]", "[SunderRpcMethod]\n    public ValueTask<Response> SearchAsync(Request request) => throw new System.NotImplementedException();\n    [SunderRpcMethod]", StringComparison.Ordinal)));
+        "[SunderMethod]", "[SunderMethod]\n    public ValueTask<Response> SearchAsync(Request request) => throw new System.NotImplementedException();\n    [SunderMethod]", StringComparison.Ordinal)));
     private static readonly Lazy<SunderRpcCSharpCompiledContract> Breaking = new(() => Compile(Source.Replace("ReadAsync", "FetchAsync", StringComparison.Ordinal)));
     private static readonly Lazy<SunderRpcCSharpCompiledContract> Other = new(() => Compile(Source
         .Replace("StackContributorService", "OtherService", StringComparison.Ordinal).Replace(ContractId, "sunder.core.other", StringComparison.Ordinal)));
@@ -793,8 +794,8 @@ public sealed class SunderRpcPlatformBaselineTests
         var otherId = Change(Other.Value, root => root["contractId"] = "sunder.core.changed");
         foreach (var candidates in new SunderRpcCSharpCompiledContract[][]
         {
-            [Original.Value, Other.Value with { Exposure = SunderRpcExposure.Package }],
-            [Original.Value, Other.Value with { Exposure = (SunderRpcExposure)99 }],
+            [Original.Value, Other.Value with { Exposure = SunderServiceExposure.Package }],
+            [Original.Value, Other.Value with { Exposure = (SunderServiceExposure)99 }],
             [Original.Value, Other.Value with { ContractKey = "renamed" }],
             [Original.Value, otherId],
             [Original.Value, Other.Value, Other.Value],
@@ -989,7 +990,7 @@ public sealed class SunderRpcPlatformBaselineTests
         var references = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")
             ?? throw new InvalidOperationException("Trusted platform assemblies are unavailable."))
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Append(typeof(SunderRpcServiceAttribute).Assembly.Location).Append(typeof(SunderWorkerProviderRegistration).Assembly.Location)
+            .Append(typeof(SunderServiceAttribute).Assembly.Location).Append(typeof(SunderWorkerProviderRegistration).Assembly.Location)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var result = new SunderRpcCSharpSourceCompiler().Compile(new(Authority, Release, [new("Source.cs", source)], references,
             OwnedContractsByContractKey: baseline is null ? null : SunderRpcAuthoringDocuments.CompilerIdentities(baseline)));
@@ -1036,12 +1037,12 @@ public sealed class SunderRpcPlatformBaselineTests
 
     private const string Source = """
         using System.Threading.Tasks;
-        using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         namespace Example.PlatformBaseline;
-        [SunderRpcService(SunderRpcExposure.Public, ContractId = "sunder.stack.contributor")]
+        [SunderService(SunderServiceExposure.Public, ContractId = "sunder.stack.contributor")]
         public sealed partial class StackContributorService
         {
-            [SunderRpcMethod]
+            [SunderMethod]
             public ValueTask<Response> ReadAsync(Request request) => throw new System.NotImplementedException();
         }
         public sealed record Request

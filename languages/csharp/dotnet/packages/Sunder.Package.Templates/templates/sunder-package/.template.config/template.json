@@ -45,6 +45,44 @@
       "valueTransform": "csharpString",
       "replaces": "SUNDER_PACKAGE_ID_CSHARP"
     },
+    "packageNamespace": {
+      "type": "generated",
+      "generator": "regex",
+      "replaces": "SUNDER_PACKAGE_NAMESPACE",
+      "parameters": {
+        "source": "packageId",
+        "steps": [
+          { "regex": "(^|\\.)a", "replacement": "${1}A" },
+          { "regex": "(^|\\.)b", "replacement": "${1}B" },
+          { "regex": "(^|\\.)c", "replacement": "${1}C" },
+          { "regex": "(^|\\.)d", "replacement": "${1}D" },
+          { "regex": "(^|\\.)e", "replacement": "${1}E" },
+          { "regex": "(^|\\.)f", "replacement": "${1}F" },
+          { "regex": "(^|\\.)g", "replacement": "${1}G" },
+          { "regex": "(^|\\.)h", "replacement": "${1}H" },
+          { "regex": "(^|\\.)i", "replacement": "${1}I" },
+          { "regex": "(^|\\.)j", "replacement": "${1}J" },
+          { "regex": "(^|\\.)k", "replacement": "${1}K" },
+          { "regex": "(^|\\.)l", "replacement": "${1}L" },
+          { "regex": "(^|\\.)m", "replacement": "${1}M" },
+          { "regex": "(^|\\.)n", "replacement": "${1}N" },
+          { "regex": "(^|\\.)o", "replacement": "${1}O" },
+          { "regex": "(^|\\.)p", "replacement": "${1}P" },
+          { "regex": "(^|\\.)q", "replacement": "${1}Q" },
+          { "regex": "(^|\\.)r", "replacement": "${1}R" },
+          { "regex": "(^|\\.)s", "replacement": "${1}S" },
+          { "regex": "(^|\\.)t", "replacement": "${1}T" },
+          { "regex": "(^|\\.)u", "replacement": "${1}U" },
+          { "regex": "(^|\\.)v", "replacement": "${1}V" },
+          { "regex": "(^|\\.)w", "replacement": "${1}W" },
+          { "regex": "(^|\\.)x", "replacement": "${1}X" },
+          { "regex": "(^|\\.)y", "replacement": "${1}Y" },
+          { "regex": "(^|\\.)z", "replacement": "${1}Z" },
+          { "regex": "^([0-9])", "replacement": "_$1" },
+          { "regex": "\\.", "replacement": "_" }
+        ]
+      }
+    },
     "packageNameCSharp": {
       "type": "derived",
       "valueSource": "packageName",
@@ -67,7 +105,7 @@
       "type": "parameter",
       "datatype": "bool",
       "defaultValue": false,
-      "description": "Add the Stack contributor example; building requires explicit signed platform-contract selection."
+      "description": "Add the Stack contributor example; building requires explicit local or Registry platform-contract selection."
     },
     "withHostDependency": {
       "type": "parameter",

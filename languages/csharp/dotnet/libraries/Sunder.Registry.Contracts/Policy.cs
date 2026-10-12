@@ -6,7 +6,6 @@ public static class RegistryPolicyLimits
 {
     public const int MaximumPackageSubjects = 128;
     public const int MaximumPlatformSubjects = 128;
-    public const int MaximumRuntimeSubjects = 128;
     public const int MaximumCohortVersions = 64;
     public const int MaximumCohortTagChanges = 64;
     public const int NonceBytes = 16;
@@ -60,29 +59,19 @@ public sealed record RegistryPlatformCatalogIdentity(
     [property: JsonRequired] string ReleaseVersion,
     [property: JsonRequired] string CatalogSha256);
 
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record RegistryRuntimePolicySubject(
-    [property: JsonRequired] RegistryExecutionRuntimeIdentity Runtime,
-    [property: JsonRequired] string ManifestSha256,
-    [property: JsonRequired] string ArtifactSha256);
-
 /// <summary>Exact requested subjects and client rollback floors. Nonce is fresh 128-bit lowercase hexadecimal.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryPolicySynchronizationRequest(
     [property: JsonRequired] string Nonce,
     IReadOnlyList<RegistryPackageVersionIdentity> Packages,
     IReadOnlyList<RegistryPlatformCatalogIdentity> PlatformCatalogs,
-    IReadOnlyList<RegistryRuntimePolicySubject> Runtimes,
     [property: JsonRequired] RegistryPolicyIdentity? MinimumPackagePolicy,
-    [property: JsonRequired] long MinimumRuntimePolicyRevision,
     [property: JsonRequired] RegistryPolicyCheckpointIdentity? MinimumCheckpoint)
 {
-    private IReadOnlyList<RegistryPackageVersionIdentity> _packages = PolicyCollections.Freeze(Packages);
-    private IReadOnlyList<RegistryPlatformCatalogIdentity> _platformCatalogs = PolicyCollections.Freeze(PlatformCatalogs);
-    private IReadOnlyList<RegistryRuntimePolicySubject> _runtimes = PolicyCollections.Freeze(Runtimes);
-    [JsonRequired] public IReadOnlyList<RegistryPackageVersionIdentity> Packages { get => _packages; init => _packages = PolicyCollections.Freeze(value); }
-    [JsonRequired] public IReadOnlyList<RegistryPlatformCatalogIdentity> PlatformCatalogs { get => _platformCatalogs; init => _platformCatalogs = PolicyCollections.Freeze(value); }
-    [JsonRequired] public IReadOnlyList<RegistryRuntimePolicySubject> Runtimes { get => _runtimes; init => _runtimes = PolicyCollections.Freeze(value); }
+    private IReadOnlyList<RegistryPackageVersionIdentity> _packages = PolicyCollections.FreezeBounded(Packages, RegistryPolicyLimits.MaximumPackageSubjects);
+    private IReadOnlyList<RegistryPlatformCatalogIdentity> _platformCatalogs = PolicyCollections.FreezeBounded(PlatformCatalogs, RegistryPolicyLimits.MaximumPlatformSubjects);
+    [JsonRequired] public IReadOnlyList<RegistryPackageVersionIdentity> Packages { get => _packages; init => _packages = PolicyCollections.FreezeBounded(value, RegistryPolicyLimits.MaximumPackageSubjects); }
+    [JsonRequired] public IReadOnlyList<RegistryPlatformCatalogIdentity> PlatformCatalogs { get => _platformCatalogs; init => _platformCatalogs = PolicyCollections.FreezeBounded(value, RegistryPolicyLimits.MaximumPlatformSubjects); }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -107,39 +96,36 @@ public sealed record RegistryPlatformPolicyDecision(
     [property: JsonRequired] string? ErrorCode,
     [property: JsonRequired] DateTimeOffset? RevokedAtUtc);
 
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record RegistryRuntimePolicyDecision(
-    [property: JsonRequired] RegistryRuntimePolicySubject Subject,
-    [property: JsonRequired] string LifecycleState,
-    [property: JsonRequired] string Disposition,
-    [property: JsonRequired] string? ErrorCode,
-    [property: JsonRequired] DateTimeOffset? ActivationBlockedAtUtc,
-    [property: JsonRequired] DateTimeOffset? RevokedAtUtc);
-
-/// <summary>Complete atomic policy snapshot. ValidUntilUtc is exactly ObservedAtUtc plus 24 hours; failure cannot renew it.</summary>
+/// <summary>Atomic package/platform policy snapshot. ValidUntilUtc is ObservedAtUtc plus 24 hours; failure cannot renew it.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryPolicySynchronizationResponse(
     [property: JsonRequired] string Nonce,
     [property: JsonRequired] string RegistryOrigin,
     [property: JsonRequired] RegistryPolicyIdentity PackagePolicy,
-    [property: JsonRequired] long RuntimePolicyRevision,
     [property: JsonRequired] RegistryPolicyCheckpointIdentity Checkpoint,
     [property: JsonRequired] DateTimeOffset ObservedAtUtc,
     [property: JsonRequired] DateTimeOffset ValidUntilUtc,
     IReadOnlyList<RegistryPackagePolicyDecision> Packages,
-    IReadOnlyList<RegistryPlatformPolicyDecision> PlatformCatalogs,
-    IReadOnlyList<RegistryRuntimePolicyDecision> Runtimes)
+    IReadOnlyList<RegistryPlatformPolicyDecision> PlatformCatalogs)
 {
-    private IReadOnlyList<RegistryPackagePolicyDecision> _packages = PolicyCollections.Freeze(Packages);
-    private IReadOnlyList<RegistryPlatformPolicyDecision> _platformCatalogs = PolicyCollections.Freeze(PlatformCatalogs);
-    private IReadOnlyList<RegistryRuntimePolicyDecision> _runtimes = PolicyCollections.Freeze(Runtimes);
-    [JsonRequired] public IReadOnlyList<RegistryPackagePolicyDecision> Packages { get => _packages; init => _packages = PolicyCollections.Freeze(value); }
-    [JsonRequired] public IReadOnlyList<RegistryPlatformPolicyDecision> PlatformCatalogs { get => _platformCatalogs; init => _platformCatalogs = PolicyCollections.Freeze(value); }
-    [JsonRequired] public IReadOnlyList<RegistryRuntimePolicyDecision> Runtimes { get => _runtimes; init => _runtimes = PolicyCollections.Freeze(value); }
+    private IReadOnlyList<RegistryPackagePolicyDecision> _packages = PolicyCollections.FreezeBounded(Packages, RegistryPolicyLimits.MaximumPackageSubjects);
+    private IReadOnlyList<RegistryPlatformPolicyDecision> _platformCatalogs = PolicyCollections.FreezeBounded(PlatformCatalogs, RegistryPolicyLimits.MaximumPlatformSubjects);
+    [JsonRequired] public IReadOnlyList<RegistryPackagePolicyDecision> Packages { get => _packages; init => _packages = PolicyCollections.FreezeBounded(value, RegistryPolicyLimits.MaximumPackageSubjects); }
+    [JsonRequired] public IReadOnlyList<RegistryPlatformPolicyDecision> PlatformCatalogs { get => _platformCatalogs; init => _platformCatalogs = PolicyCollections.FreezeBounded(value, RegistryPolicyLimits.MaximumPlatformSubjects); }
 }
 
 internal static class PolicyCollections
 {
+    internal static IReadOnlyList<T> FreezeBounded<T>(IReadOnlyList<T> values, int maximumCount = RegistryPackagePlanLimits.MaximumItems)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        if (values.Count > maximumCount) throw new ArgumentException($"The collection exceeds its {maximumCount}-item bound.", nameof(values));
+        var snapshot = values.Take(maximumCount + 1).ToArray();
+        if (snapshot.Length > maximumCount || snapshot.Any(static value => value is null))
+            throw new ArgumentException("The collection exceeds its bound or contains a null item.", nameof(values));
+        return Array.AsReadOnly(snapshot);
+    }
+
     internal static IReadOnlyList<T> Freeze<T>(IReadOnlyList<T> values)
     {
         ArgumentNullException.ThrowIfNull(values);

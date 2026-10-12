@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "packageId": "example.owner",
+  "packageVersion": "1.0.0",
+  "contracts": [
+    {
+      "contractId": "example.rpc.v1.servicereference",
+      "contractVersion": "2.0.0",
+      "descriptorSha256": "d57b0bc9b7f4c3bb9446813ee700589b65cdf92e5c3a453b416f6264e04c1bcb",
+      "abiSha256": "3523858ff9d050290a2bca0f32d69af85cdff75cfe632dedbfe98ceece1b0c60",
+      "modelProjection": {
+        "models": {},
+        "serviceReferences": {
+          "Locator": {
+            "contractId": "example.rpc.v1.servicereference",
+            "serviceId": "example"
+          }
+        }
+      }
+    }
+  ]
+}

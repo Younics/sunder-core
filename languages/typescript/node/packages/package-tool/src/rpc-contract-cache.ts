@@ -103,6 +103,15 @@ export async function readContractCache(root: string, requirements: ReadonlyMap<
     return result;
   }, 30_000);
 }
+/** Full public inventories may include non-materialized bundles. Keep the
+ * existing 128-entry transaction/read bound while verifying their exact bytes. */
+export async function readContractVerificationCache(root: string, requirements: ReadonlyMap<string, CacheRequirement>): Promise<ReadonlyMap<string, ResolvedCacheEntry>> {
+  if (requirements.size > 128 * 128 + 128) corrupt("Verification requirements exceed the lock inventory bound.");
+  const entries = [...requirements].sort(([a],[b])=>a<b?-1:a>b?1:0); const result = new Map<string,ResolvedCacheEntry>();
+  for (let offset=0;offset<entries.length;offset+=128)
+    for (const [hash,entry] of await readContractCache(root,new Map(entries.slice(offset,offset+128)))) result.set(hash,entry);
+  return result;
+}
 export async function publishContractCache(root: string, entries: ReadonlyMap<string, Buffer>, requirements: ReadonlyMap<string, CacheRequirement>, options: PublicationOptions = {}): Promise<void> {
   if (entries.size < 1 || entries.size > 128) corrupt("Publication requires 1..128 entries.");
   for (const [hash, bytes] of entries) {

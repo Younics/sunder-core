@@ -11,7 +11,7 @@ export interface OwnedSnapshot {
   readonly json: OuterObject;
 }
 export interface OwnedContract { readonly contractId: string; readonly current?: OwnedSnapshot; readonly history: readonly OwnedSnapshot[] }
-export interface OwnedBaseline { readonly packageId: string; readonly contracts: ReadonlyMap<string, OwnedContract>; readonly bytes: Buffer; readonly sha256: string }
+export interface OwnedBaseline { readonly packageId: string; readonly contracts: ReadonlyMap<string, OwnedContract>; readonly retiredPrivateContracts?: ReadonlyMap<string, OwnedContract>; readonly bytes: Buffer; readonly sha256: string }
 const snapshotFields = ["state", "exposure", "contractVersion", "descriptorBytes", "canonicalDescriptor", "descriptorSha256", "abiProjectionBytes", "canonicalAbiProjection", "abiSha256"];
 export const sha256 = (bytes: string | Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 const abiHash = (bytes: Uint8Array): string => createHash("sha256").update(SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, "utf8").update(bytes).digest("hex");
@@ -46,10 +46,13 @@ function snapshot(value: Outer, id: string, owner: string, allowDraft: boolean):
   return Object.freeze({ state: state as OwnedSnapshot["state"], exposure, descriptor, json });
 }
 export function parseBaseline(bytes: Buffer): OwnedBaseline {
-  const root = fields(parseOuter(bytes), ["schemaVersion", "authorityKind", "authorityId", "packageId", "contracts"]);
+  const root = fields(parseOuter(bytes), ["schemaVersion", "authorityKind", "authorityId", "packageId", "contracts"], ["retiredPrivateContracts"]);
   if (root.schemaVersion !== 1 || root.authorityKind !== "package") invalid("requires package authority (platform baselines are unsupported)");
   const owner = packageId(root.packageId); if (packageId(root.authorityId) !== owner) invalid("authority/package mismatch");
-  const map = object(root.contracts); const keys = outerKeys(map);
+  if (outerKeys(object(root.contracts)).length + (Object.hasOwn(root, "retiredPrivateContracts") ? outerKeys(object(root.retiredPrivateContracts)).length : 0) > 128)
+    throw new Error("rpc-authoring.baseline-combined-limit: Active and retired records together exceed 128 entries.");
+  const readMap = (input: Outer | undefined, retired: boolean): ReadonlyMap<string, OwnedContract> => {
+  const map = object(input); const keys = outerKeys(map);
   if (keys.length > 128 || JSON.stringify(keys) !== JSON.stringify([...keys].sort(ordinal))) invalid("contract map exceeds 128 entries or is not ordinally ordered");
   const contracts = new Map<string, OwnedContract>(); const ids = new Set<string>();
   for (const key of keys) {
@@ -60,22 +63,29 @@ export function parseBaseline(bytes: Buffer): OwnedBaseline {
     const history = value.history.map((item) => snapshot(item, id, owner, false));
     const current = value.current === undefined ? undefined : snapshot(value.current, id, owner, true);
     const all = current ? [...history, current] : history;
+    if (retired && all.some(item => item.exposure !== "package")) throw new Error(`rpc-authoring.private-retirement-public-evidence: ${key} contains public evidence; use the public lifecycle.`);
     if (!all.length) invalid("removed contract must retain nonempty immutable history");
     for (let i = 1; i < all.length; i++) if (compareVersions(all[i]!.descriptor.version, all[i - 1]!.descriptor.version) <= 0) invalid("current/history versions must be in strictly increasing SemVer precedence order");
     contracts.set(key, Object.freeze({ contractId: id, ...(current ? { current } : {}), history: Object.freeze(history) }));
   }
-  return { packageId: owner, contracts, bytes: Buffer.from(bytes), sha256: sha256(bytes) };
+  return contracts;
+  };
+  const contracts = readMap(root.contracts, false);
+  const retiredPrivateContracts = Object.hasOwn(root, "retiredPrivateContracts") ? readMap(root.retiredPrivateContracts, true) : undefined;
+  if (contracts.size + (retiredPrivateContracts?.size ?? 0) > 128) throw new Error("rpc-authoring.baseline-combined-limit: Active and retired records together exceed 128 entries.");
+  return { packageId: owner, contracts, ...(retiredPrivateContracts === undefined ? {} : { retiredPrivateContracts }), bytes: Buffer.from(bytes), sha256: sha256(bytes) };
 }
-export function writeBaseline(owner: string, contracts: ReadonlyMap<string, OwnedContract>): Buffer {
+export function writeBaseline(owner: string, contracts: ReadonlyMap<string, OwnedContract>, retiredPrivateContracts?: ReadonlyMap<string, OwnedContract>): Buffer {
+  const records = (values: ReadonlyMap<string, OwnedContract>): OuterObject => ordered([...values].sort(([a], [b]) => ordinal(a, b)).map(([key, contract]) => [key, ordered([
+    ["contractId", contract.contractId], ...(contract.current ? [["current", contract.current.json] as const] : []), ["history", contract.history.map(entry => entry.json)],
+  ])]));
   const bytes = outerBytes(ordered([
     ["schemaVersion", 1], ["authorityKind", "package"], ["authorityId", owner], ["packageId", owner],
-    ["contracts", ordered([...contracts].sort(([a], [b]) => ordinal(a, b)).map(([key, contract]) => [key, ordered([
-      ["contractId", contract.contractId], ...(contract.current ? [["current", contract.current.json] as const] : []), ["history", contract.history.map((entry) => entry.json)],
-    ])]))],
+    ["contracts", records(contracts)], ...(retiredPrivateContracts === undefined ? [] : [["retiredPrivateContracts", records(retiredPrivateContracts)] as const]),
   ]));
   const parsed = parseBaseline(bytes);
-  for (const [key, contract] of contracts) {
-    const actual = parsed.contracts.get(key)!;
+  for (const [map, parsedMap] of [[contracts, parsed.contracts], [retiredPrivateContracts ?? new Map<string, OwnedContract>(), parsed.retiredPrivateContracts ?? new Map<string, OwnedContract>()]] as const) for (const [key, contract] of map) {
+    const actual = parsedMap.get(key)!;
     const matches = (a: OwnedSnapshot | undefined, b: OwnedSnapshot | undefined): boolean => !a ? !b : !!b && a.state === b.state && a.exposure === b.exposure
       && Buffer.from(canonicalRpcDescriptorBytes(a.descriptor)).equals(Buffer.from(canonicalRpcDescriptorBytes(b.descriptor)))
       && Buffer.from(canonicalRpcAbiProjectionBytes(a.descriptor)).equals(Buffer.from(canonicalRpcAbiProjectionBytes(b.descriptor)));
@@ -128,7 +138,9 @@ export function validateLifecycleHistory(candidate: RpcContractDescriptor, expos
   for (const item of comparisons) if (item.exposure !== exposure && compareVersions(candidate.version, minimumOwnedVersion(item.descriptor.version, "Major")) < 0) invalid("exposure change is Major relative to immutable history");
 }
 export function validateBaselineSource(baseline: OwnedBaseline, candidates: readonly LoadedContract[], release = false): void {
-  const source = candidatesByKey(baseline, candidates);
+  const source = candidatesByKey(baseline, publicLifecycleCandidates(baseline, candidates));
+  for (const [key, entry] of baseline.contracts) if (entry.current && !hasPublicEvidence(entry))
+    throw new Error(`rpc-authoring.private-baseline-migration-required: ${key}: run sunder-package contracts migrate-private --project <root>. Build/Check/Pack never rewrites the baseline.`);
   const active = [...baseline.contracts].filter(([, entry]) => entry.current);
   if (active.length !== source.size || active.some(([key, entry]) => !source.has(key) || !sourceMatches(entry.current!, source.get(key)!))) invalid("source keys, exposure and exact descriptor/ABI must match the complete current baseline; run contracts accept");
   for (const [, entry] of active) {
@@ -140,9 +152,9 @@ export function validateBaselineSource(baseline: OwnedBaseline, candidates: read
 }
 export interface AcceptOptions { readonly key?: string; readonly currentVersion?: string; readonly nextVersion?: string; readonly acknowledgeBreakingChange?: boolean }
 export function planAcceptance(baseline: OwnedBaseline, candidates: readonly LoadedContract[], options: AcceptOptions = {}): Buffer {
-  writeBaseline(baseline.packageId, baseline.contracts);
+  writeBaseline(baseline.packageId, baseline.contracts, baseline.retiredPrivateContracts);
   const { key, currentVersion, nextVersion, acknowledgeBreakingChange = false } = options;
-  const source = candidatesByKey(baseline, candidates, key);
+  const source = candidatesByKey(baseline, publicLifecycleCandidates(baseline, candidates), key);
   if (currentVersion !== undefined) version(currentVersion); if (nextVersion !== undefined) version(nextVersion);
   if (key === undefined && (currentVersion !== undefined || nextVersion !== undefined || acknowledgeBreakingChange)
     || acknowledgeBreakingChange && (currentVersion === undefined || nextVersion === undefined)) invalid("version selection requires one exact key; breaking acknowledgement requires a current/next version pair");
@@ -188,7 +200,7 @@ export function planAcceptance(baseline: OwnedBaseline, candidates: readonly Loa
     validateLifecycleHistory(descriptor, candidate.exposure, history);
     contracts.set(name, { contractId: descriptor.contractId, current: draft(candidate.exposure, descriptor), history });
   }
-  return writeBaseline(baseline.packageId, contracts);
+  return writeBaseline(baseline.packageId, contracts, baseline.retiredPrivateContracts);
 }
 export function planFreeze(baseline: OwnedBaseline, candidates: readonly LoadedContract[], packageVersion: string, key?: string): Buffer {
   version(packageVersion); candidatesByKey(baseline, candidates, key); validateBaselineSource(baseline, candidates);
@@ -201,7 +213,34 @@ export function planFreeze(baseline: OwnedBaseline, candidates: readonly LoadedC
     const json = ordered([...outerKeys(current.json).map((field): [string, Outer] => [field, field === "state" ? "release-frozen" : current.json[field]!]), ["packageRelease", ordered([["packageId", baseline.packageId], ["packageVersion", packageVersion]])]]);
     contracts.set(name, { ...entry, current: { ...current, state: "release-frozen", json } });
   }
-  return writeBaseline(baseline.packageId, contracts);
+  return writeBaseline(baseline.packageId, contracts, baseline.retiredPrivateContracts);
+}
+export function hasPublicEvidence(entry: OwnedContract): boolean {
+  return entry.current?.exposure === "public" || entry.history.some(item => item.exposure === "public");
+}
+/** Public identity matching happens before the baseline-free private fast path. */
+export function publicLifecycleCandidates(baseline: OwnedBaseline, candidates: readonly LoadedContract[]): readonly LoadedContract[] {
+  return candidates.filter(candidate => candidate.exposure === "public" || [...baseline.contracts].some(([key, entry]) =>
+    hasPublicEvidence(entry) && (key === candidate.contractKey || entry.contractId === candidate.descriptor.contractId)));
+}
+export function planPrivateRetirement(baseline: OwnedBaseline, candidates: readonly LoadedContract[], key?: string): Buffer {
+  const contracts = new Map(baseline.contracts); const retired = new Map(baseline.retiredPrivateContracts);
+  if (key !== undefined && !contracts.has(key) && !retired.has(key)) invalid("selected contract key is absent");
+  for (const [name, entry] of contracts) {
+    if (key !== undefined && key !== name) continue;
+    if (hasPublicEvidence(entry)) {
+      if (key === name) throw new Error(`rpc-authoring.private-retirement-public-evidence: ${name} contains public current/history; use contracts accept.`);
+      continue;
+    }
+    if (candidates.some(candidate => candidate.exposure === "public" && (candidate.contractKey === name || candidate.descriptor.contractId === entry.contractId)))
+      throw new Error(`rpc-authoring.private-retirement-public-evidence: ${name} identifies current public source; use contracts accept.`);
+    if (retired.has(name) || [...retired.values()].some(value => value.contractId === entry.contractId))
+      throw new Error(`rpc-authoring.private-retirement-conflict: ${name}: destination key/identity already exists; no overwrite is allowed.`);
+    retired.set(name, entry); contracts.delete(name);
+  }
+  validateBaselineSource({ ...baseline, contracts: new Map([...baseline.contracts].filter(([, entry]) => hasPublicEvidence(entry))) }, candidates);
+  if (contracts.size === baseline.contracts.size) return baseline.bytes;
+  return writeBaseline(baseline.packageId, contracts, retired);
 }
 function stableTransition(previous: string | undefined, next: string): void {
   if (versionParts(next).prerelease || previous && versionParts(previous).prerelease) invalid("cannot allocate a changed prerelease baseline; explicit prerelease progression policy is not defined");

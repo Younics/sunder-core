@@ -17,11 +17,18 @@ public sealed record PackageStoreMutationRequest(
     bool Reinstall = false,
     bool AllowCascade = false,
     string? ConfirmationToken = null,
-    PackageCapabilityConsent? CapabilityConsent = null);
+    PackageCapabilityConsent? CapabilityConsent = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimePackageUploadRetentionHandle? UploadRetention { get; init; }
+}
 
 public sealed record PackageStoreStageRequest(
     IReadOnlyList<PackageStoreMutationRequest> Mutations)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimePackageRuntimePrerequisiteExpectation? RuntimePrerequisiteExpectation { get; init; }
+
     public IReadOnlyList<PackageStoreMutationRequest> Mutations { get; }
         = RuntimeContractCollections.Freeze(Mutations);
 }

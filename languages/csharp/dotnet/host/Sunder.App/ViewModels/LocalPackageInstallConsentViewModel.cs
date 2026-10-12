@@ -1,5 +1,7 @@
 using Sunder.Package.Format;
 using Sunder.Sdk.Compatibility;
+using Sunder.Runtime.Contracts;
+using Sunder.App.Services;
 
 namespace Sunder.App.ViewModels;
 
@@ -32,6 +34,7 @@ public sealed class LocalPackageInstallConsentViewModel
     public string FileName { get; }
     public string PackageName { get; }
     public string PackageIdentity { get; }
+    public string PackageId => PackageIdentity.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
     public string Summary { get; }
     public string TargetText { get; }
     public bool HasDockerEnvironmentAccess { get; }
@@ -44,6 +47,22 @@ public sealed class LocalPackageInstallConsentViewModel
     public bool IsValid { get; }
     public bool IsInvalid => !IsValid;
     public string DismissButtonText => IsValid ? "Cancel" : "Close";
+    public IReadOnlyList<ExecutionRuntimeDownloadItemViewModel> RuntimeDownloads { get; private init; } = [];
+    public bool HasRuntimeDownloads => RuntimeDownloads.Count != 0;
+
+    internal LocalPackageInstallConsentViewModel WithRuntimes(RuntimePackageRuntimePrerequisitePlan plan)
+        => new(FileName, PackageName, PackageIdentity, Summary, TargetText, HasDockerEnvironmentAccess,
+            SensitiveCapabilityManifestSha256, RpcContractUses, ValidationMessage, IsValid)
+        {
+            RuntimeDownloads = plan.Requirements.Select(item =>
+            {
+                var identity = item.Installation?.Resolution?.Artifact.Identity ?? item.InstalledRuntime;
+                return identity is null ? null : new ExecutionRuntimeDownloadItemViewModel(RuntimeManagementUi.Identity(identity),
+                    $"{identity.Rid} / {identity.ModuleAbi}", RuntimeManagementUi.Source(identity),
+                    item.Satisfied ? "Already installed; 0 bytes" : RegistryPackageChangePreflight.FormatBytes(item.Installation?.Resolution?.DownloadSize),
+                     item.Satisfied ? "The verified installed runtime will be reused." : "Runtime installation runs first; this package waits in the queue.");
+            }).OfType<ExecutionRuntimeDownloadItemViewModel>().Distinct().ToArray(),
+        };
 
     internal static LocalPackageInstallConsentViewModel Valid(
         string fileName,

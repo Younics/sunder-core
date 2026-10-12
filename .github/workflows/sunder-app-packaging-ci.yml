@@ -12,6 +12,7 @@ on:
       - ".github/workflows/sunder-host-validation.yml"
       - "scripts/install/**"
       - "scripts/release/**"
+      - "scripts/test/**"
       - "scripts/test-oracles/**"
       - "eng/test-oracles/**"
       - "languages/csharp/dotnet/Directory.Build.props"
@@ -34,6 +35,7 @@ on:
       - ".github/workflows/sunder-host-validation.yml"
       - "scripts/install/**"
       - "scripts/release/**"
+      - "scripts/test/**"
       - "scripts/test-oracles/**"
       - "eng/test-oracles/**"
       - "languages/csharp/dotnet/Directory.Build.props"
@@ -177,21 +179,21 @@ jobs:
           bash -n scripts/release/generate-release-evidence.sh
           bash -n scripts/release/preflight-npm-trusted-publishing.sh
           bash -n scripts/release/resolve-github-release.sh
-          bash -n scripts/release/resolve-github-release.fixture.sh
+          bash -n scripts/test/release/resolve-github-release.fixture.sh
           bash -n scripts/release/upload-github-release-assets.sh
-          bash -n scripts/release/upload-github-release-assets.fixture.sh
+          bash -n scripts/test/release/upload-github-release-assets.fixture.sh
           bash -n scripts/release/upload-production-acceptance.sh
-          bash -n scripts/release/upload-production-acceptance.fixture.sh
+          bash -n scripts/test/release/upload-production-acceptance.fixture.sh
           bash -n scripts/release/verify-github-release-assets.sh
-          bash -n scripts/release/verify-github-release-assets.fixture.sh
+          bash -n scripts/test/release/verify-github-release-assets.fixture.sh
           bash -n scripts/release/verify-nuget-package.sh
           bash -n scripts/release/verify-nuget-source.sh
           bash -n scripts/release/verify-production-acceptance.sh
-          bash -n scripts/release/verify-production-acceptance.fixture.sh
+          bash -n scripts/test/release/verify-production-acceptance.fixture.sh
           bash -n scripts/release/verify-release-tag.sh
-          bash -n scripts/release/verify-release-tag.fixture.sh
+          bash -n scripts/test/release/verify-release-tag.fixture.sh
           bash -n scripts/release/verify-release-promotion.sh
-          bash -n scripts/release/verify-release-promotion.fixture.sh
+          bash -n scripts/test/release/verify-release-promotion.fixture.sh
           bash -n scripts/release/macos/create-sunder-dmg.sh
 
           fixture="$RUNNER_TEMP/release-evidence-fixture"
@@ -229,16 +231,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/release/resolve-github-release.fixture.sh
-          bash scripts/release/upload-github-release-assets.fixture.sh
-          bash scripts/release/upload-production-acceptance.fixture.sh
-          bash scripts/release/verify-github-release-assets.fixture.sh
-          bash scripts/release/verify-release-tag.fixture.sh
-          bash scripts/release/verify-release-promotion.fixture.sh
-          bash scripts/release/verify-production-acceptance.fixture.sh
+          bash scripts/test/release/resolve-github-release.fixture.sh
+          bash scripts/test/release/upload-github-release-assets.fixture.sh
+          bash scripts/test/release/upload-production-acceptance.fixture.sh
+          bash scripts/test/release/verify-github-release-assets.fixture.sh
+          bash scripts/test/release/verify-release-tag.fixture.sh
+          bash scripts/test/release/verify-release-promotion.fixture.sh
+          bash scripts/test/release/verify-production-acceptance.fixture.sh
 
       - name: Run release workflow policy tests
-        run: node --test scripts/release/*.test.mjs
+        run: node --test scripts/test/release/*.test.mjs
 
   powershell-script-validation:
     name: PowerShell release script syntax

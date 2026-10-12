@@ -21,7 +21,8 @@ internal sealed class RuntimeProtocolDescriptor
         RuntimeProtocolFeatures.AppWebRpcV1,
         RuntimeProtocolFeatures.RuntimeResourcePolicyV1,
         RuntimeProtocolFeatures.PackageRuntimeRecoveryV1,
-        RuntimeProtocolFeatures.ExecutionRuntimeManagementV1,
+        RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1,
+        RuntimeProtocolFeatures.PackageInstallResumptionV1,
     });
 
     public RuntimeProtocolDescriptor(RuntimeResourcePolicy? resourcePolicy = null)

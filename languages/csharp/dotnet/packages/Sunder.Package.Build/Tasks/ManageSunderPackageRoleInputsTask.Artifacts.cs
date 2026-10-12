@@ -3,6 +3,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Package.Build.Authoring;
 using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Format;
@@ -29,19 +31,25 @@ public sealed partial class ManageSunderPackageRoleInputsTask
             var planBytes = SunderRpcDescriptorFileReader.ReadStableBytes(RolePlanPath, 32 * 1024 * 1024, "native role plan");
             if (Hash(planBytes) != RolePlanSha256) throw Invalid("Native role plan changed.");
             using var document = JsonDocument.Parse(planBytes); var plan = document.RootElement;
+            input = BindPrivatePackageIdentity(input, plan.GetProperty("packageId").GetString()!); frame = Frame(input);
             // Qualification includes the reviewed tree's discovery envelope. Bind
             // it here to actual compiled inputs, rather than putting unrelated
             // tree membership into the role snapshot's compilation identity.
             var compiledPaths = plan.GetProperty("sourceFiles").EnumerateArray()
                 .Select(source => Full(Path.GetFullPath(source.GetProperty("path").GetString()!, ProjectDirectory))).ToHashSet(StringComparer.Ordinal);
-            if (frame.Items.Where(item => item.Kind == "compile").Any(item => !compiledPaths.Contains(Child(input.GetMetadata("SourceRoot"), item.Identity))))
-                throw Invalid("Compiled source membership omits a captured authored input.");
+            var sdkUsings = string.IsNullOrWhiteSpace(GeneratedGlobalUsingsFile) ? null : Full(Path.GetFullPath(GeneratedGlobalUsingsFile, ProjectDirectory));
+            if (sdkUsings is not null && compiledPaths.Contains(sdkUsings))
+            {
+                ValidateSdkGlobalUsings(sdkUsings, frame);
+                compiledPaths.Remove(sdkUsings);
+            }
+            if (!compiledPaths.SetEquals(frame.Items.Where(item => item.Kind == "compile").Select(item => Child(input.GetMetadata("SourceRoot"), item.Identity))))
+                throw Invalid("Compiled source membership differs from the captured authored inputs.");
             foreach (var source in plan.GetProperty("sourceFiles").EnumerateArray())
             {
                 var path = Path.GetFullPath(source.GetProperty("path").GetString()!, ProjectDirectory);
                 var sourceBytes = SunderRpcDescriptorFileReader.ReadStableBytes(path, 4 * 1024 * 1024, "compiled authored source");
-                var start = sourceBytes.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf }) ? 3 : 0;
-                if (Hash(sourceBytes[start..]) != source.GetProperty("sha256").GetString()) throw Invalid("Compiled source differs from the captured reviewed source.");
+                if (Hash(sourceBytes) != source.GetProperty("sha256").GetString()) throw Invalid("Compiled source differs from the captured reviewed source.");
             }
             foreach (var resource in plan.GetProperty("resources").EnumerateArray())
                 if (File(resource.GetProperty("sourcePath").GetString()!, "resource", 64 * 1024 * 1024, _cancellation.Token).Sha256 != resource.GetProperty("sha256").GetString())
@@ -65,7 +73,11 @@ public sealed partial class ManageSunderPackageRoleInputsTask
                         var hashes = group.Select(value => value.GetProperty("sha256").GetString()!).Distinct(StringComparer.Ordinal).ToArray();
                         if (hashes.Length != 1) throw Invalid("Conflicting native generated-input hashes.");
                         return NativeFile(Child(planRoot, group.Key), group.Key, hashes[0]);
-                    }).ToArray();
+                     }).ToArray();
+                var publicProjectionPath = Path.Combine(planRoot, SunderRpcAuthoringDocuments.ModelProjectionLogicalPath);
+                var publicProjectionBytes = SunderRpcDescriptorFileReader.ReadStableBytes(publicProjectionPath, 4_194_304, "native model projection input");
+                generated = generated.Append(NativeFile(publicProjectionPath, SunderRpcAuthoringDocuments.ModelProjectionLogicalPath, Hash(publicProjectionBytes)))
+                    .OrderBy(file => file.Path, StringComparer.Ordinal).ToArray();
                 var receipt = System.IO.File.ReadAllText(reader.AuthoringReceipts.Single().ItemSpec, Encoding.UTF8);
                 roles.Add(new(role, dependencies.ValueKind == JsonValueKind.Null ? [] : dependencies.GetProperty("libraries").EnumerateArray().Select(value => value.GetString()!).ToArray(),
                     generated, References(role + "References"), References(role + "RuntimeReferences"), receipt));
@@ -108,6 +120,27 @@ public sealed partial class ManageSunderPackageRoleInputsTask
             var release = new ManageSunderRpcGeneratedOutputLockTask { BuildEngine = BuildEngine, Action = "Release", ProjectDirectory = ProjectDirectory, LeaseId = planLease.LeaseId };
             if (!release.Execute()) throw Invalid("Could not release the native role-plan lease.");
         }
+    }
+
+    private static void ValidateSdkGlobalUsings(string path, SunderPrebuiltFrame frame)
+    {
+        var bytes = SunderRpcDescriptorFileReader.ReadStableBytes(path, 4 * 1024 * 1024, "SDK global usings");
+        var tree = CSharpSyntaxTree.ParseText(new UTF8Encoding(false, true).GetString(bytes));
+        var root = tree.GetCompilationUnitRoot();
+        if (tree.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            || root.Members.Count != 0 || root.AttributeLists.Count != 0 || root.Externs.Count != 0 || root.ContainsDirectives
+            || root.Usings.Any(value => value.GlobalKeyword.IsKind(SyntaxKind.None)))
+            throw Invalid("The SDK global-using input contains non-using source.");
+        var expected = frame.Items.Where(item => item.Kind == "using").Select(item =>
+        {
+            var isStatic = item.Metadata.TryGetValue("Static", out var flag) && string.Equals(flag, "true", StringComparison.OrdinalIgnoreCase);
+            var alias = item.Metadata.GetValueOrDefault("Alias");
+            var text = "global using " + (isStatic ? "static " : "") + (string.IsNullOrEmpty(alias) ? "" : alias + " = ") + item.Identity + ";";
+            return CSharpSyntaxTree.ParseText(text).GetCompilationUnitRoot().Usings.Single().WithoutTrivia().NormalizeWhitespace().ToFullString();
+        }).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
+        var actual = root.Usings.Select(value => value.WithoutTrivia().NormalizeWhitespace().ToFullString()).Order(StringComparer.Ordinal);
+        if (!actual.SequenceEqual(expected, StringComparer.Ordinal)) throw Invalid("SDK global usings differ from the captured evaluated Using items. Expected: "
+            + string.Join(" | ", expected.Take(16)) + "; actual: " + string.Join(" | ", actual.Take(16)));
     }
 
     private ITaskItem Validate()
@@ -153,7 +186,10 @@ public sealed partial class ManageSunderPackageRoleInputsTask
             var leaves = leafPaths.Select(path => { var item = new TaskItem(path); item.SetMetadata("DiscoveryRoot", Path.GetDirectoryName(path)!); return (ITaskItem)item; }).ToArray();
             var aggregate = new AggregateSunderPackageTask { BuildEngine = BuildEngine, TargetLeaves = leaves,
                 OutputPath = Path.Combine(stage, "sunder-dev"), OutputDiscoveryRoot = stage, TargetDirectory = stage,
-                ProjectDirectory = ProjectDirectory, ExpectedPackageVersion = PackageVersion, InputsAlreadyLeased = true, CancellationToken = _cancellation.Token };
+                // Archive fan-in uses qualified native evidence, never the source
+                // compiler's cache or a development-loading handoff.
+                ProjectDirectory = ProjectDirectory, ExpectedPackageVersion = PackageVersion, InputsAlreadyLeased = true,
+                EmitDevelopmentImports = false, CancellationToken = _cancellation.Token };
             if (!aggregate.Execute()) throw Invalid("Prebuilt composition failed; the prior archive was retained.");
             var pack = new PackSunderPackageTask { BuildEngine = BuildEngine, DevPackagePath = aggregate.NormalizedOutputPath,
                 DevPackageDiscoveryRoot = stage, PackageOutputPath = PackageOutputPath, ProjectDirectory = ProjectDirectory,
@@ -187,6 +223,7 @@ public sealed partial class ManageSunderPackageRoleInputsTask
     {
         if (evidence.SchemaVersion != 1 || evidence.Leaf != "sunder-dev" || evidence.RolePlan is null || evidence.Inputs is null
             || evidence.Files is null || evidence.Files.Length is < 1 or > MaximumFiles) throw Invalid("Unsupported or incomplete role-input evidence.");
+        input = BindPrivatePackageIdentity(input, evidence.Inputs.PackageId);
         var frame = Frame(input);
         var missingInputs = evidence.Inputs.ExternalInputs.Select(file => file.Path).Except(frame.ExternalInputs.Select(file => file.Path), StringComparer.Ordinal).ToArray();
         var extraInputs = frame.ExternalInputs.Select(file => file.Path).Except(evidence.Inputs.ExternalInputs.Select(file => file.Path), StringComparer.Ordinal).ToArray();
@@ -205,8 +242,14 @@ public sealed partial class ManageSunderPackageRoleInputsTask
             || manifest.Targets!.Any(target => target!.Rid != frame.RuntimeIdentifier || target.TargetFramework != frame.TargetFramework)
             || !manifest.Targets!.Select(target => target!.Role!).Order(StringComparer.Ordinal).SequenceEqual((evidence.RolePlan.HasApp ? new[] { "app", "runtime" } : ["runtime"])))
             throw Invalid("The native package/version/framework/RID/role closure differs from its source frame.");
-        var baseline = SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(Child(input.GetMetadata("SourceRoot"), frame.OwnedBaseline));
+        var baselinePath = Child(input.GetMetadata("SourceRoot"), frame.OwnedBaseline);
+        var baseline = GeneratedOutputPathSafety.PathExists(baselinePath) ? SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(baselinePath)
+            : new SunderRpcOwnedPackageBaseline(frame.PackageId, new Dictionary<string, SunderRpcOwnedContractBaseline>(), [], Hash([]));
         if (baseline.Sha256 != frame.OwnedBaselineSha256 || baseline.PackageId != frame.PackageId) throw Invalid("Owned baseline changed.");
+        foreach (var entry in baseline.Contracts.Where(entry => entry.Value.Current is not null && !SunderRpcAuthoringDocuments.HasPublicEvidence(entry.Value)))
+            throw Invalid($"rpc-authoring.private-baseline-migration-required: '{entry.Key}' requires MigratePrivateSunderContracts.");
+        var currentLock = SunderRpcAuthoringDocuments.ReadContractLock(Child(input.GetMetadata("SourceRoot"), frame.ContractLock), AllowDevelopmentRegistryOrigin);
+        var presentRoles = new HashSet<string>(evidence.RolePlan.HasApp ? new[] { "app", "runtime" } : ["runtime"], StringComparer.Ordinal);
         var projections = evidence.RolePlan.Roles.Select(role =>
         {
             ValidateFiles(role.GeneratedInputs, MaximumFiles, requireNonempty: true);
@@ -218,33 +261,40 @@ public sealed partial class ManageSunderPackageRoleInputsTask
             var appReceipt = receipt.RootElement.TryGetProperty("role", out var receiptRole);
             if ((role.Role == "app") != appReceipt || appReceipt && receiptRole.GetString() != "app") throw Invalid("Mixed Worker/App receipt roles.");
             if (receipt.RootElement.GetProperty("inputFingerprint").GetString() != evidence.RolePlan.InputFingerprint) throw Invalid("Mixed role-plan/receipt source frames.");
-            return SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(Encoding.UTF8.GetBytes(role.Receipt), frame.ContractLockSha256, frame.PackageId, frame.PackageVersion);
+            var projected = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(Encoding.UTF8.GetBytes(role.Receipt), frame.ContractLockSha256, frame.PackageId, frame.PackageVersion);
+            SunderRpcAuthoringDocuments.ValidateReceiptConsumerRoles(currentLock, projected.Manifest, role.Role == "worker" ? "runtime" : "app", presentRoles, projected.RoleUses);
+            return projected;
         }).ToArray();
-        var owned = projections[0].Manifest.ContractBundles!.Where(bundle => bundle!.Source == "owned").Select(bundle => bundle!.ContractId!).Order(StringComparer.Ordinal);
-        if (!owned.SequenceEqual(baseline.Contracts.Values.Where(contract => contract.Current is not null).Select(contract => contract.ContractId).Order(StringComparer.Ordinal))) throw Invalid("Owned API membership differs from the reviewed baseline.");
-        foreach (var (key, contract) in baseline.Contracts.Where(pair => pair.Value.Current is not null))
+        var expected = SunderRpcAuthoringDocuments.MergeReceiptProjections(projections);
+        var owned = expected.Manifest.ContractBundles!.Where(bundle => bundle!.Source == "owned" && (bundle.Exposure == "public"
+            || baseline.Contracts.Values.Any(contract => SunderRpcAuthoringDocuments.HasPublicEvidence(contract) && contract.ContractId == bundle.ContractId))).Select(bundle => bundle!.ContractId!).Order(StringComparer.Ordinal);
+        if (!owned.SequenceEqual(baseline.Contracts.Values.Where(contract => contract.Current is not null && SunderRpcAuthoringDocuments.HasPublicEvidence(contract)).Select(contract => contract.ContractId).Order(StringComparer.Ordinal))) throw Invalid("Public API membership differs from the reviewed baseline.");
+        foreach (var (key, contract) in baseline.Contracts.Where(pair => pair.Value.Current is not null && SunderRpcAuthoringDocuments.HasPublicEvidence(pair.Value)))
         {
             if (requireFrozen && contract.Current!.State is not ("release-frozen" or "published")) throw Invalid("Prebuilt packing requires frozen/published owned APIs.");
-            if (!projections[0].Contracts.TryGetValue(key, out var descriptor) || !descriptor.GetCanonicalUtf8().AsSpan().SequenceEqual(contract.Current!.Descriptor.GetCanonicalUtf8())) throw Invalid("Owned descriptor/ABI identity differs from the reviewed baseline.");
-            var bundle = projections[0].Manifest.ContractBundles!.Single(value => value!.ContractId == descriptor.ContractId)!;
+            if (!expected.Contracts.TryGetValue(key, out var descriptor) || !descriptor.GetCanonicalUtf8().AsSpan().SequenceEqual(contract.Current!.Descriptor.GetCanonicalUtf8())) throw Invalid("Owned descriptor/ABI identity differs from the reviewed baseline.");
+            var bundle = expected.Manifest.ContractBundles!.Single(value => value!.ContractId == descriptor.ContractId)!;
             if (bundle.Exposure != contract.Current!.Exposure.ToString().ToLowerInvariant()) throw Invalid("Owned API exposure differs from the reviewed baseline.");
         }
         if (evidence.RolePlan.HasApp)
         {
             var workerReceipt = JsonNode.Parse(evidence.RolePlan.Roles[0].Receipt)!;
             var appReceipt = JsonNode.Parse(evidence.RolePlan.Roles[1].Receipt)!;
-            var appContracts = new JsonArray(workerReceipt["contracts"]!.AsArray()
-                .Where(contract => baseline.Contracts.TryGetValue(contract!["contractKey"]!.GetValue<string>(), out var ownedContract) && ownedContract.Current is not null)
-                .Select(contract => { var copy = contract!.DeepClone().AsObject(); copy.Remove("runtimeUse"); return (JsonNode)copy; }).ToArray());
-            if (!JsonNode.DeepEquals(appContracts, appReceipt["contracts"])) throw Invalid("App receipt does not project the Worker's complete owned API and App-use policy.");
+            var appContracts = workerReceipt["contracts"]!.AsArray()
+                .Where(contract => projections[0].Manifest.ContractBundles!.Any(bundle => bundle!.Source == "owned" && bundle.ContractId == contract!["contractId"]!.GetValue<string>()))
+                .Select(contract => { var copy = contract!.DeepClone().AsObject(); copy.Remove("runtimeUse"); return copy; })
+                .ToDictionary(contract => contract["contractId"]!.GetValue<string>(), StringComparer.Ordinal);
+            foreach (var contract in appReceipt["contracts"]!.AsArray().Where(contract => projections[1].Manifest.ContractBundles!.Any(bundle =>
+                bundle!.Source == "owned" && bundle.ContractId == contract!["contractId"]!.GetValue<string>())))
+                if (appContracts.TryGetValue(contract!["contractId"]!.GetValue<string>(), out var worker) && !JsonNode.DeepEquals(worker, contract))
+                    throw Invalid("App and Worker receipts disagree on shared owned API/model projection or App-use policy.");
         }
-        var worker = projections[0].Manifest;
-        var expected = new SunderPackageManifest { Id = worker.Id, Version = worker.Version, ContractBundles = worker.ContractBundles,
-            Provides = worker.Provides, UsesContracts = projections.SelectMany(projection => projection.Manifest.UsesContracts ?? []).ToArray(),
-            PackageArtifactImports = worker.PackageArtifactImports, PackageApiImports = worker.PackageApiImports,
-            ProviderImports = worker.ProviderImports, PlatformImports = worker.PlatformImports };
-        PackSunderPackageTask.RequireMatchingProjection(expected, manifest);
-        return expected;
+        PackSunderPackageTask.RequireMatchingProjection(expected.Manifest, manifest);
+        var projectionPath = ArchiveRelativePath.Parse(SunderRpcAuthoringDocuments.ModelProjectionArchivePath).ToPlatformPath(leaf);
+        if (!SunderRpcDescriptorFileReader.ReadStableBytes(projectionPath, 4_194_304, "qualified public model projection").AsSpan()
+            .SequenceEqual(SunderRpcAuthoringDocuments.PublicModelProjectionBytes(expected)))
+            throw Invalid("Qualified role payload model projection differs from its original role receipts; requalify the changed source inputs.");
+        return expected.Manifest;
 
         static void ValidateFiles(SunderPrebuiltFile[] files, int maximum, bool requireNonempty)
         {

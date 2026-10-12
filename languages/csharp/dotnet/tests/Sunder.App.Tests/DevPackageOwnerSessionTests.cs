@@ -26,7 +26,7 @@ public sealed class DevPackageOwnerSessionTests
                         RuntimeProtocol.MinimumSupportedRevision,
                         RuntimeProtocol.MaximumSupportedRevision,
                         runtimeId,
-                        [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.DevPackageOwnerLeasesV1],
+                        [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1, RuntimeProtocolFeatures.DevPackageOwnerLeasesV1],
                         new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "1.0.0", "test")));
                 case var path when path.StartsWith("/api/v1/dev-package-owners/", StringComparison.Ordinal)
                                    && !path.EndsWith("/release", StringComparison.Ordinal):

@@ -23,24 +23,24 @@ internal static class CoreStackTransportGeneration
         CancellationToken cancellationToken = default, Action<string>? beforePublication = null, Action<string>? beforeMove = null, bool hostClient = false)
     {
         var project = RequestPath(coreRoot, requestFile.Path);
-        SigningFileOperations.FileStamp? ownedRequest = null;
+        EngineeringFileOperations.FileStamp? ownedRequest = null;
         try
         {
             return GenerateOwnedRequest();
         }
         finally
         {
-            SigningFileOperations.TryDeleteOwnedFile(requestFile.Path, ownedRequest, requestFile.Sha256);
+            EngineeringFileOperations.TryDeleteOwnedFile(requestFile.Path, ownedRequest, requestFile.Sha256);
         }
 
         string GenerateOwnedRequest()
         {
             var requestInputs = new SunderRpcInputSnapshot();
-            var observed = SigningFileOperations.ObserveFile(requestFile.Path);
+            var observed = EngineeringFileOperations.ObserveFile(requestFile.Path);
             var bytes = requestInputs.Read(requestFile.Path, 1_048_576, "evaluated Core transport request");
             if (requestFile.Sha256 != Convert.ToHexStringLower(SHA256.HashData(bytes))
                 || requestFile.Stamp != FormattableString.Invariant($"{observed.Length}:{observed.CreatedUtc.Ticks}:{observed.WrittenUtc.Ticks}")
-                || SigningFileOperations.ObserveFile(requestFile.Path) != observed)
+                || EngineeringFileOperations.ObserveFile(requestFile.Path) != observed)
                 throw new IOException("Core transport request no longer matches the private writer's ownership proof.");
             ownedRequest = observed;
             cancellationToken.ThrowIfCancellationRequested();
@@ -96,21 +96,21 @@ internal static class CoreStackTransportGeneration
             var staged = new SunderRpcInputSnapshot();
             var stageRecorded = false;
             DateTime stageCreated = default;
-            SigningFileOperations.FileStamp? sourceStamp = null, markerStamp = null;
+            EngineeringFileOperations.FileStamp? sourceStamp = null, markerStamp = null;
             try
             {
                 stage = Path.Combine(parent, ".stage-" + Guid.NewGuid().ToString("N"));
-                SigningFileOperations.EnsureAbsent(stage);
+                EngineeringFileOperations.EnsureAbsent(stage);
                 Directory.CreateDirectory(stage);
                 stageCreated = Directory.GetCreationTimeUtc(stage);
                 WriteNew(Path.Combine(stage, sourceName), generated);
                 WriteNew(Path.Combine(stage, MarkerName), marker);
                 ReadTree(stage, staged, generated, marker, sourceName);
-                sourceStamp = SigningFileOperations.ObserveFile(Path.Combine(stage, sourceName));
-                markerStamp = SigningFileOperations.ObserveFile(Path.Combine(stage, MarkerName));
+                sourceStamp = EngineeringFileOperations.ObserveFile(Path.Combine(stage, sourceName));
+                markerStamp = EngineeringFileOperations.ObserveFile(Path.Combine(stage, MarkerName));
                 stageRecorded = true;
                 beforePublication?.Invoke(Path.Combine(stage, sourceName));
-                SigningFileOperations.EnsureAbsent(output);
+                EngineeringFileOperations.EnsureAbsent(output);
                 beforeMove?.Invoke(output);
                 VerifyInputs();
                 GeneratedOutputPathSafety.EnsureRegularDirectory(parent, "Core transport configuration directory");
@@ -130,8 +130,8 @@ internal static class CoreStackTransportGeneration
                     try
                     {
                         VerifyStage();
-                        SigningFileOperations.TryDeleteOwnedFile(Path.Combine(stage, sourceName), sourceStamp, sha256);
-                        SigningFileOperations.TryDeleteOwnedFile(Path.Combine(stage, MarkerName), markerStamp, Convert.ToHexStringLower(SHA256.HashData(marker)));
+                        EngineeringFileOperations.TryDeleteOwnedFile(Path.Combine(stage, sourceName), sourceStamp, sha256);
+                        EngineeringFileOperations.TryDeleteOwnedFile(Path.Combine(stage, MarkerName), markerStamp, Convert.ToHexStringLower(SHA256.HashData(marker)));
                         GeneratedOutputPathSafety.EnsureRegularDirectory(stage, "Core transport stage cleanup");
                         if (Directory.GetCreationTimeUtc(stage) == stageCreated) Directory.Delete(stage);
                     }
@@ -153,7 +153,7 @@ internal static class CoreStackTransportGeneration
             void VerifyInputs()
             {
                 requestInputs.Verify();
-                if (SigningFileOperations.ObserveFile(requestFile.Path) != ownedRequest)
+                if (EngineeringFileOperations.ObserveFile(requestFile.Path) != ownedRequest)
                     throw new IOException("Core transport request was replaced after planning.");
                 operation.VerifyInputs();
             }
@@ -172,8 +172,8 @@ internal static class CoreStackTransportGeneration
                     throw new IOException("Core transport stage changed during generation.");
                 CheckMembers(stage, sourceName);
                 staged.Verify();
-                if (SigningFileOperations.ObserveFile(Path.Combine(stage, sourceName)) != sourceStamp
-                    || SigningFileOperations.ObserveFile(Path.Combine(stage, MarkerName)) != markerStamp)
+                if (EngineeringFileOperations.ObserveFile(Path.Combine(stage, sourceName)) != sourceStamp
+                    || EngineeringFileOperations.ObserveFile(Path.Combine(stage, MarkerName)) != markerStamp)
                     throw new IOException("Core transport stage members were replaced.");
             }
         }

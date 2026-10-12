@@ -926,6 +926,32 @@ public sealed class RuntimeEventSubscriptionServiceTests
     }
 
     [Fact]
+    public async Task RuntimeStatusChangesAndReconnectInvalidateSettingsWithoutRebuildingPackageViews()
+    {
+        var instance = Guid.NewGuid();
+        var initial = CreateSnapshot(instance, 1);
+        var factory = new StreamingRuntimeClientFactory(initial);
+        factory.Client.DisconnectStreamsRemaining = 1;
+        factory.Client.HistoryGap = true;
+        var notifications = 0;
+        var presentations = 0;
+        await using var service = new RuntimeEventSubscriptionService(factory, new DeveloperLogService());
+        service.ExecutionRuntimesChanged += () => Interlocked.Increment(ref notifications);
+        await service.StartAsync(initial, [], (_, _, _, _) => { presentations++; return Task.CompletedTask; });
+        service.ReleasePresentation();
+        await WaitUntilAsync(() => factory.Client.StreamStartCount >= 2);
+        var reconnected = Volatile.Read(ref notifications);
+        Assert.True(reconnected >= 2);
+        var changed = new RuntimeEventDescriptor(instance, 2, DateTimeOffset.UtcNow, RuntimeEventKind.ExecutionRuntimesChanged,
+            1, RuntimeOperationPhase.Idle, RuntimeBootstrapState.Ready, []);
+        factory.Client.PublishEvent(changed);
+        factory.Client.PublishEvent(changed);
+        await WaitUntilAsync(() => Volatile.Read(ref notifications) == reconnected + 1);
+        Assert.Equal(0, factory.Client.SnapshotRequestCount);
+        Assert.Equal(0, presentations);
+    }
+
+    [Fact]
     public async Task WaitUntilAppliedAsync_ResetsGenerationOnRuntimeInstanceReplacement()
     {
         var firstRuntime = Guid.NewGuid();

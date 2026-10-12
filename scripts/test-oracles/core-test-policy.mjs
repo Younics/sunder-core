@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { csharpTestDeclarations } from "./csharp-test-declarations.mjs";
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const policyRelativePath = "eng/test-oracles/core-test-policy.json";
@@ -182,25 +183,15 @@ function validateExpectedSkipPolicy(declarations, policy) {
   }
 }
 
-function discoverDotnetTests(source, content, policy) {
-  const namespace = /\bnamespace\s+([A-Za-z_][A-Za-z0-9_.]*)\s*;/u.exec(content)?.[1];
-  if (namespace === undefined) return [];
-  const classes = [...content.matchAll(/^[ \t]*(?:public|internal)\s+(?:sealed\s+|abstract\s+|static\s+|partial\s+)*(?:partial\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)/gmu)]
-    .map((match) => ({ index: match.index, name: match[1] }));
+export function discoverDotnetTests(source, content, policy) {
   const output = [];
-  for (const match of content.matchAll(dotnetTestMethodPattern())) {
-    const attributes = match[1];
-    if (!/(?:Fact|Theory)(?:Attribute)?\b/u.test(attributes)) continue;
-    const containingClass = classes.filter((candidate) => candidate.index < match.index).at(-1)?.name;
-    if (containingClass === undefined) continue;
-    const name = match[2];
+  for (const { id, name, attributes, policyAttributes, attributeNames, externalAttribute } of csharpTestDeclarations(content)) {
     const project = source.split("/")[4];
-    const externalArguments = [...(/ExternalArtifact(?:Fact|Theory)\(([^)]*)\)/u.exec(attributes)?.[1] ?? "")
-      .matchAll(/"([^"]+)"/gu)]
+    const externalArguments = [...(externalAttribute ?? "").matchAll(/"([^"]+)"/gu)]
       .map((argument) => argument[1]);
-    const operatingSystems = operatingSystemsFor(attributes, name, source);
+    const operatingSystems = operatingSystemsFor(attributeNames.join(" "), name, source);
     const declaration = {
-      id: `${namespace}.${containingClass}.${name}`,
+      id,
       framework: "dotnet",
       project,
       source,
@@ -210,7 +201,7 @@ function discoverDotnetTests(source, content, policy) {
       externalEnvironment: externalArguments[0],
       externalPrerequisites: dotnetPrerequisites(name, source, externalArguments),
     };
-    output.push({ ...declaration, primaryLane: dotnetLaneFor(declaration, policy) });
+    output.push({ ...declaration, primaryLane: dotnetLaneFor({ ...declaration, attributes: policyAttributes }, policy) });
   }
   return output;
 }
@@ -256,7 +247,7 @@ function discoverPythonTests(source, content) {
     output.push({
       id: `python:${source}:${testMatch[1]}`,
       framework: "python",
-      project: "scripts/release",
+      project: "scripts/test/release",
       source,
       name: testMatch[1],
       runnerSelector: `${className}.${testMatch[1]}`,
@@ -273,7 +264,7 @@ function discoverShellFixture(source) {
   return {
     id: `shell:${source}`,
     framework: "shell",
-    project: "scripts/release",
+    project: "scripts/test/release",
     source,
     name,
     operatingSystems: ["Windows", "Linux", "MacOS"],
@@ -365,18 +356,10 @@ function walk(directory, include, output, root) {
   }
 }
 
-function dotnetTestMethodPattern() {
-  const attribute = String.raw`\[(?:[^\]"']|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')*\]`;
-  return new RegExp(
-    `((?:\\s*${attribute}\\s*)+)\\s*public\\s+(?:async\\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\\.)*(?:void|Task(?:<[^>]+>)?|ValueTask(?:<[^>]+>)?)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(`,
-    "gu",
-  );
-}
-
-function nodeProject(source) {
+export function nodeProject(source) {
   const match = /languages\/typescript\/node\/packages\/([^/]+)\//u.exec(source);
   if (match !== null) return match[1];
-  return source.startsWith("scripts/test-oracles/") ? "scripts/test-oracles" : "scripts/release";
+  return source.startsWith("scripts/test-oracles/") ? "scripts/test-oracles" : "scripts/test/release";
 }
 
 function ordinal(left, right) {

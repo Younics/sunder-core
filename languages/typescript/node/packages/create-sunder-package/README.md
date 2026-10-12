@@ -2,19 +2,19 @@
 
 > **Release/source channel:** The npm tarball README describes that published version. The repository copy tracks current source and may be ahead of npm; use the matching `sdk/v*` tag when auditing a release.
 
-Run `npm create sunder-package@latest` to scaffold a runtime-backed TypeScript Node Worker package. Add `-- --template react-node` for a combined hosted web App and Node Worker package.
+Run `npm create sunder-package@latest` for a TypeScript Node service package. Add `-- --preset react-node` for React plus Node, and `--language js` for genuine checked JavaScript (including JSX in the React preset).
 
-The shipped presets are `node` and `react-node`. Both author schema V3 through one configured `src/rpc.ts` router, emit Package Manifest V1, use Worker Protocol V1 and generated RPC descriptor V1, and bundle a thin CommonJS Worker module for the fixed managed Node 24 profile. The React preset adds a Vite web target, a generated same-package browser client resolver, and a separate automatic owned App-use projection.
+Both presets configure one `src/services.ts` or `.js` module exporting `defineService` definitions. Sunder generates Worker bootstrap, registrations, descriptors and `#sunder/api` tokens/clients. React uses `ApiProvider` and `useApi(Self)`. TypeScript types and checked JS JSDoc use the same semantic compiler; JS sources are independently authored rather than transpiled TS samples.
 
-After `npm install`, run `npm run contracts:accept` **before** `npm test`, generation or development. Review and commit the resulting `sunder-contracts.owned.json` and the scaffolded canonical empty `sunder-contracts.lock.json`. The fresh package-qualified contract defaults to `1.0.0`; contract versions evolve independently of package versions. Run `npm run contracts:check` after review and `npm run contracts:freeze` before release packaging. Normal builds change neither tracked file.
+After `npm install`, run `npm test`, `npm run sunder:dev`, or `npm run build`. Private services follow the complete package version and require no Accept/Freeze or owned baseline. Commit the canonical empty contract lock and keep generated `.sunder/` output untracked. Public exposure is explicit and retains reviewed Accept/Freeze history. Normal builds never write tracked locks/baselines.
 
-If the new package needs imports, select them before first Accept with
+If the new package needs imports, select them with
 `sunder-package api add|implement --candidate ...` or `platform implement --platform-catalog ...`,
 then bind any imported providers. Local unpublished authoring needs no Registry.
-The reviewed lock may therefore be nonempty when first Accept runs.
+Add stores App+Runtime consumer intent by default; only present roles receive grants. Existing narrowed roles require explicit reviewed migration/update before widening.
 
 The generated `package` command builds all six exact-RID target records and emits a deterministic universal archive with adjacent ownership evidence. Package-owned native assets may be declared by exact RID; execution-runtime and toolchain files are rejected.
 
-`sunder-package generate` writes typed bindings under `.sunder/generated/rpc/`. Typechecking, development, and production builds refresh bindings before bundling. Keep `.sunder/` untracked. Templates contain no maintained descriptor JSON, duplicated provider/use/version metadata, manual client, or protocol dependency. External package imports remain a separate, currently gated workflow.
+`sunder-package generate` writes runtime JS, browser-safe declarations, codecs and receipts atomically under `.sunder/generated/rpc/`. The scaffolded ordinary package-import mapping makes `#sunder/api` work in tsc/checkJs, editors and Vite. Templates contain no router/schema trees, authored Worker bootstrap, descriptor JSON or manual client construction.
 
 Smoke runs through the Sunder Host and requires a trusted `sunder.runtime.node` release for the current RID. Use `sunder runtime ensure sunder.runtime.node ">=24.18.1 <25.0.0" sunder.node-worker-module.v1` when it is not already installed.

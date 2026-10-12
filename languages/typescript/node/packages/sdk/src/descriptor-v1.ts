@@ -632,7 +632,8 @@ function logicalInstanceError(logicalType: string, value: unknown, path: string)
   return `${path} uses unsupported logical type '${logicalType}'.`;
 }
 
-function contentReferenceError(value: unknown, path: string): string | undefined {
+/** @internal Shared validation for natural-resource adapters. */
+export function contentReferenceError(value: unknown, path: string): string | undefined {
   if (!isObject(value)) return `${path} must be a content-reference object.`;
   const required = ["id", "length", "sha256", "mediaType", "fileName", "expiresAtUtc", "repeatability"] as const;
   const names = Object.keys(value);

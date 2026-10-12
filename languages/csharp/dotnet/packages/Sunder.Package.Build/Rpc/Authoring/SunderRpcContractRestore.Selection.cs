@@ -20,27 +20,22 @@ internal sealed partial class SunderRpcContractRestore
         try { if (registryOrigin is not null) SunderRpcAuthoringDocuments.RequireCanonicalRegistryOrigin(registryOrigin, "package selection", AllowDevelopmentRegistryOrigin); }
         catch (InvalidDataException) { throw Error("package-api.registry-origin-invalid", "New selection requires canonical HTTPS, or explicit Development mode for http://localhost/."); }
 
-        SunderPackagePublicApiInventory inventory;
+        SunderPackagePublicApiSnapshot snapshot;
         if (candidate is not null)
         {
-            var extracted = Path.Combine(Path.GetTempPath(), "sunder-contract-candidate-" + Guid.NewGuid().ToString("N"));
-            try
-            {
-                var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(candidate, extracted, token);
-                if (!validation.Success || validation.Manifest is not { } manifest || manifest.Id != packageId)
-                    throw Error("package-api.public-inventory-invalid", "Candidate must be a complete canonical archive for the selected package.");
-                inventory = CandidateInventory(extracted, manifest);
-            }
-            finally { if (Directory.Exists(extracted)) Directory.Delete(extracted, recursive: true); }
+            snapshot = await ReadCandidateAsync(candidate, token);
         }
         else
         {
             var origin = new Uri(registryOrigin!);
             var version = await ResolvePackageVersionAsync(origin, packageId, parsedRange, includePrerelease, token);
-            inventory = await ReadInventoryAsync(origin, packageId, version, token);
+            snapshot = await ReadCanonicalCandidateAsync(origin, packageId, version, token);
         }
 
+        var inventory = snapshot.Inventory;
         var value = inventory.Payload;
+        if (value.GetProperty("packageId").GetString() != packageId)
+            throw Error("package-api.public-inventory-invalid", "Canonical candidate differs from the selected package identity.");
         var selectedVersion = value.GetProperty("packageVersion").GetString()!;
         if (!parsedRange.IsSatisfiedBy(SemanticVersion.Parse(selectedVersion))
             || !includePrerelease && SemanticVersion.Parse(selectedVersion).Prerelease is not null)
@@ -64,7 +59,10 @@ internal sealed partial class SunderRpcContractRestore
             ["requestedVersionRange"] = range, ["includePrerelease"] = includePrerelease,
             ["selectedPackageVersion"] = selectedVersion, ["selectedPackageContentIdentity"] = value.GetProperty("packageContentIdentity").GetString(),
             ["registryOrigin"] = registryOrigin, ["publicContractCount"] = contracts.Count,
-            ["publicInventorySha256"] = inventory.PublicInventorySha256, ["contracts"] = contracts,
+            ["publicInventorySha256"] = inventory.PublicInventorySha256,
+            ["modelProjectionBytes"] = snapshot.ModelProjectionBytes,
+            ["modelProjectionSha256"] = snapshot.ModelProjectionSha256,
+            ["contracts"] = contracts,
         };
         if (registryOrigin is null) selected.Remove("registryOrigin");
         return selected;

@@ -6,6 +6,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 
@@ -19,18 +20,18 @@ public sealed class SunderRpcCSharpProviderDeclarationTests
         using System.Threading;
         using System.Threading.Tasks;
         using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         using Sunder.Sdk.Worker;
         using ServiceAlias = Example.GreetingService;
         namespace Example;
-        [SunderRpcService(SunderRpcExposure.Public)]
-        [SunderRpcDomainError("example.expected")]
+        [SunderService(SunderServiceExposure.Public)]
+        [SunderServiceError("example.expected")]
         public sealed partial class GreetingService
         {
             public static int Constructed;
             public GreetingService() { Constructed++; throw new InvalidOperationException("Storage is unavailable before activation."); }
-            [SunderRpcMethod(Errors = new[] { "example.expected" })]
+            [SunderMethod(Errors = new[] { "example.expected" })]
             public ValueTask<Value> ReadAsync(Value request) => throw new NotImplementedException();
-            [SunderRpcMethod]
             public IAsyncEnumerable<Value> WatchAsync(Value request) => throw new NotImplementedException();
         }
         public sealed record Value { public required string Text { get; init; } }
@@ -116,7 +117,7 @@ public sealed class SunderRpcCSharpProviderDeclarationTests
 
     private static SunderRpcCSharpCompilerInput Input(string source) => new("example.owner", "1.0.0", [new("Source.cs", source)],
         ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
-            .Concat([typeof(SunderRpcServiceAttribute).Assembly.Location, typeof(SunderWorker).Assembly.Location]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+            .Concat([typeof(SunderServiceAttribute).Assembly.Location, typeof(SunderWorker).Assembly.Location]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
 
     private sealed class Probe : ISunderRpcServiceHandler, ISunderRpcDeclaredErrorMetadata
     {

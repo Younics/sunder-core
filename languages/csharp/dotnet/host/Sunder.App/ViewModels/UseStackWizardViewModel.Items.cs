@@ -36,7 +36,6 @@ public sealed partial class UseStackPackageReviewViewModel(SunderStackPackageReq
                     RegistryPackageActionKinds.PackageInstall => $"Will install {item.Version}",
                     RegistryPackageActionKinds.PackageUpdate => $"Will update {item.CurrentVersion} -> {item.Version}",
                     RegistryPackageActionKinds.PackageRemove => $"Will remove {item.CurrentVersion}",
-                    RegistryPackageActionKinds.RuntimeOnlyRebind => $"Will update runtime for {item.Version}",
                     _ => $"Installed {item.Version}",
                 };
     }

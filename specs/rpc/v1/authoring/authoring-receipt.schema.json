@@ -5,7 +5,7 @@
   "description": "Validated internal package-build metadata joining canonical contract snapshots, lock evidence, manifest import groups, providers, uses, and generated logical names.",
   "type": "object",
   "additionalProperties": false,
-  "maxProperties": 18,
+  "maxProperties": 19,
   "required": [
     "schemaVersion",
     "producer",
@@ -26,6 +26,16 @@
     "generatedBindings"
   ],
   "properties": {
+    "roleUses": {
+      "description": "Explicit typed imported service-use intent derived from canonical source; not a package API selection.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/roleUse"
+      }
+    },
     "schemaVersion": {
       "const": 1
     },
@@ -148,6 +158,64 @@
     }
   },
   "$defs": {
+    "roleUse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "contractId",
+        "contractVersion",
+        "descriptorSha256",
+        "abiSha256",
+        "serviceId",
+        "serviceType",
+        "required",
+        "actions"
+      ],
+      "properties": {
+        "role": {
+          "const": "runtime"
+        },
+        "contractId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "descriptorSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "abiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "serviceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "serviceType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "discover",
+              "invoke",
+              "subscribe"
+            ]
+          }
+        }
+      }
+    },
     "packageId": {
       "type": "string",
       "minLength": 1,
@@ -284,7 +352,7 @@
     "receiptContract": {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 10,
+      "maxProperties": 12,
       "required": [
         "contractKey",
         "contractId",
@@ -293,7 +361,8 @@
         "descriptorBytes",
         "canonicalDescriptor",
         "descriptorSha256",
-        "abiSha256"
+        "abiSha256",
+        "modelProjection"
       ],
       "properties": {
         "contractKey": {
@@ -324,6 +393,12 @@
         },
         "abiSha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "modelProjection": {
+          "$ref": "rpc-model-projection.schema.json#/$defs/modelProjection"
+        },
+        "methodPolicies": {
+          "$ref": "rpc-model-projection.schema.json#/$defs/methodPolicies"
         },
         "appUse": {
           "$ref": "#/$defs/ownedUsePolicy"
@@ -363,7 +438,7 @@
     "packageArtifact": {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 9,
+      "maxProperties": 11,
       "required": [
         "packageId",
         "requestedVersionRange",
@@ -372,6 +447,8 @@
         "selectedPackageContentIdentity",
         "publicContractCount",
         "publicInventorySha256",
+        "modelProjectionBytes",
+        "modelProjectionSha256",
         "contracts"
       ],
       "properties": {
@@ -399,6 +476,14 @@
           "maximum": 128
         },
         "publicInventorySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "modelProjectionBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "modelProjectionSha256": {
           "$ref": "#/$defs/sha256"
         },
         "contracts": {

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Package.Build.Rpc.Authoring;
 
@@ -8,8 +9,8 @@ internal sealed record SunderRpcOwnedUsePolicy(bool Required, IReadOnlyList<stri
 
 internal static partial class SunderRpcAuthoringDocuments
 {
-    internal static SunderRpcOwnedUsePolicy? ResolveAppUse(SunderRpcExposure exposure, SunderRpcContractDescriptor descriptor, SunderRpcOwnedUsePolicy? policy)
-        => policy ?? (exposure == SunderRpcExposure.Package ? new(true, ReceiptActions(descriptor).ToArray()) : null);
+    internal static SunderRpcOwnedUsePolicy? ResolveAppUse(SunderServiceExposure exposure, SunderRpcContractDescriptor descriptor, SunderRpcOwnedUsePolicy? policy)
+        => policy ?? (exposure == SunderServiceExposure.Package ? new(true, ReceiptActions(descriptor).ToArray()) : null);
 
     internal static SunderRpcOwnedUsePolicy ValidateUsePolicy(SunderRpcContractDescriptor descriptor, bool required, IReadOnlyList<string>? actions, string role)
     {

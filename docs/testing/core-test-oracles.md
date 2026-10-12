@@ -56,7 +56,8 @@ node scripts/test-oracles/run-dotnet-tests-with-results.mjs --project Sunder.Pac
 changes. When source has not changed since compilation, omit `--build` to reuse those
 test binaries. Project-scoped reports go under `artifacts/test-results/local/` by
 default and do not remove other lanes' reports. Full runs have a bounded 60-minute
-project watchdog; individual hang watchdogs remain unchanged.
+project watchdog; `--timeout-ms 5400000` selects a bounded 90-minute project run when
+needed for a shared-generator checkpoint. Individual hang watchdogs remain unchanged.
 
 | Change | Validation to select |
 | --- | --- |

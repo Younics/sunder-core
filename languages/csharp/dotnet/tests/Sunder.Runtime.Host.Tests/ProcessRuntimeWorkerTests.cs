@@ -2002,7 +2002,7 @@ public sealed class ProcessRuntimeWorkerTests
         Assert.True(Path.IsPathFullyQualified(startInfo.FileName));
         Assert.NotEqual(Path.GetFullPath(fixture.Prepared.EntryAssemblyPath!), startInfo.FileName);
         Assert.Equal(
-            [SunderExecutionRuntimeFormat.DotNetExecArgument, Path.GetFullPath(fixture.Prepared.EntryAssemblyPath!)],
+            ["exec", Path.GetFullPath(fixture.Prepared.EntryAssemblyPath!)],
             startInfo.ArgumentList);
         Assert.DoesNotContain("PATH", startInfo.Environment.Keys);
         Assert.DoesNotContain("DOTNET_ROOT", startInfo.Environment.Keys);
@@ -2473,9 +2473,9 @@ public sealed class ProcessRuntimeWorkerTests
                     : ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"],
                 ExecutionRuntime = new SunderPackageExecutionRuntimeManifest
                 {
-                    Id = SunderExecutionRuntimeFormat.DotNetRuntimeId,
+                    Id = SunderPackageFormat.DotNetExecutionRuntimeId,
                     VersionRange = ">=10.0.0 <11.0.0",
-                    ModuleAbi = SunderExecutionRuntimeFormat.DotNetModuleAbi,
+                    ModuleAbi = SunderPackageFormat.DotNetWorkerModuleAbi,
                 },
             };
             var manifest = new SunderPackageManifest
@@ -2576,7 +2576,7 @@ public sealed class ProcessRuntimeWorkerTests
                 : new ResolvedExecutionRuntimeLaunch(
                     TestExecutionRuntimeLaunchResolver.Instance.RuntimeRootPath,
                     TestExecutionRuntimeLaunchResolver.Instance.LauncherPath,
-                    [SunderExecutionRuntimeFormat.DotNetExecArgument, Path.GetFullPath(prepared.EntryAssemblyPath!)],
+                    ["exec", Path.GetFullPath(prepared.EntryAssemblyPath!)],
                     executionRuntimeLease,
                     prepared.ExecutionRuntimeBinding?.Identity);
             var worker = new ProcessRuntimeWorker(

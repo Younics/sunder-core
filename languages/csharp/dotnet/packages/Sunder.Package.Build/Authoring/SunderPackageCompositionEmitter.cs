@@ -25,12 +25,15 @@ internal static class SunderPackageCompositionEmitter
                 {
             """);
         output.AppendLine();
-        foreach (var contract in analysis.Compilation.Contracts.Where(value => value.ServiceType.TypeKind == TypeKind.Class))
+        EmitBindingLifetime(output);
+        EmitImportedApis(output, analysis, "app");
+        foreach (var contract in analysis.Compilation.Contracts)
         {
             if (SunderRpcAuthoringDocuments.ResolveAppUse(contract.Exposure, contract.Descriptor, contract.AppUse) is null) continue;
             var api = SunderRpcCSharpServiceApiEmitter.ApiType(contract);
             var client = SunderRpcCSharpServiceApiEmitter.RemoteType(contract);
             output.Append("        services.TryAddSingleton<").Append(api).Append(", ").Append(client).AppendLine(">();");
+            EmitCatalogRegistration(output, api, SunderRpcCSharpServiceApiEmitter.CatalogType(contract));
         }
         foreach (var entry in analysis.Composition!.App)
         {
@@ -77,17 +80,21 @@ internal static class SunderPackageCompositionEmitter
                     services.AddSingleton<global::Sunder.Sdk.Rpc.ISunderRpcClient>(rpc);
             """);
         output.AppendLine();
+        EmitBindingLifetime(output);
         var providers = analysis.Compilation.Contracts.SelectMany(contract => contract.Providers)
             .Concat(analysis.Compilation.ImportedProviders.Select(value => value.Provider))
             .OrderBy(value => value.ProviderId, StringComparer.Ordinal).ToArray();
+        EmitImportedApis(output, analysis, "runtime");
         foreach (var entry in analysis.Composition!.Worker)
             output.Append("        services.TryAddSingleton<").Append(Type(entry.Type)).Append(">(dependencies => ").Append(Construct(entry)).AppendLine(");");
-        foreach (var contract in analysis.Compilation.Contracts.Where(contract => contract.ServiceType.TypeKind == TypeKind.Class))
+        foreach (var contract in analysis.Compilation.Contracts)
         {
-            var remote = SunderRpcCSharpServiceApiEmitter.RequiresContext(contract);
+            if (contract.RuntimeUse is not null)
+                EmitCatalogRegistration(output, SunderRpcCSharpServiceApiEmitter.ApiType(contract), SunderRpcCSharpServiceApiEmitter.CatalogType(contract));
+            var remote = contract.ServiceType.TypeKind == TypeKind.Interface || SunderRpcCSharpServiceApiEmitter.RequiresContext(contract);
             if (remote && contract.RuntimeUse is null) continue;
             var api = SunderRpcCSharpServiceApiEmitter.ApiType(contract);
-            var local = SunderRpcCSharpServiceApiEmitter.HasLocalMethods(contract);
+            var local = contract.ServiceType.TypeKind == TypeKind.Class && SunderRpcCSharpServiceApiEmitter.HasLocalMethods(contract);
             if (!local)
                 output.Append("        services.TryAddSingleton<").Append(api).Append(", ").Append(SunderRpcCSharpServiceApiEmitter.RemoteType(contract)).AppendLine(">();");
             else
@@ -103,8 +110,8 @@ internal static class SunderPackageCompositionEmitter
             .AppendLine("        try {")
             .AppendLine("        var registrations = new global::System.Collections.Generic.List<global::Sunder.Sdk.Worker.SunderWorkerProviderRegistration>();");
         foreach (var item in providers)
-            output.Append("        registrations.Add(").Append(Type(item.SourceType)).Append(".DeclareSunderRpcProvider(new DeferredHandler(() => provider.GetRequiredService<")
-                .Append(Type(item.SourceType)).AppendLine(">().CreateSunderRpcProviderRegistration().Handler)));");
+            output.Append("        registrations.Add(").Append(Type(item.SourceType)).Append('.').Append(item.DeclarationFactory).Append("(new DeferredHandler(() => provider.GetRequiredService<")
+                .Append(Type(item.SourceType)).Append(">().").Append(item.ServicesFactory).AppendLine("(rpc, provider).Handler)));");
         output.AppendLine("        return new(registrations) {");
         var settings = analysis.Composition.Worker.SingleOrDefault(entry => SunderPackageDependencyDiscovery.IsSettingsSchemaProvider(entry.Type));
         if (settings is not null)
@@ -220,10 +227,32 @@ internal static class SunderPackageCompositionEmitter
     internal static IReadOnlyList<SunderRpcCSharpSourceFile> EmitWorkerClients(SunderPackageAuthoringAnalysis analysis, string packageId, string packageVersion)
     {
         RequireValid(analysis);
-        var contracts = analysis.Compilation.Contracts.Where(contract => contract.ServiceType.TypeKind == TypeKind.Class
-            && SunderRpcCSharpServiceApiEmitter.RequiresContext(contract) && contract.RuntimeUse is not null).ToArray();
+        var contracts = analysis.Compilation.Contracts.Where(contract => contract.RuntimeUse is not null).ToArray();
         return contracts.Length == 0 ? [] : SunderRpcCSharpServiceApiEmitter.EmitAppClients(contracts, packageId, packageVersion, providerSchemasPresent: true);
     }
+
+    private static void EmitImportedApis(StringBuilder output, SunderPackageAuthoringAnalysis analysis, string role)
+    {
+        foreach (var api in analysis.Compilation.ImportedPackageApis.Where(api => api.ConsumerRoles.Contains(role, StringComparer.Ordinal)))
+            output.Append("        services.TryAddSingleton<global::").Append(api.InterfaceMetadataName).Append(", global::")
+                .Append(api.ImplementationMetadataName).AppendLine(">();");
+        foreach (var service in analysis.Compilation.ImportedPackageApis.Where(api => api.ConsumerRoles.Contains(role, StringComparer.Ordinal))
+                     .SelectMany(api => api.Services).Concat(role == "runtime" ? analysis.Compilation.ImportedUses.Select(use => use.Service) : [])
+                     .DistinctBy(service => service.InterfaceMetadataName).OrderBy(service => service.InterfaceMetadataName, StringComparer.Ordinal))
+            EmitCatalogRegistration(output, "global::" + service.InterfaceMetadataName, "global::" + service.CatalogMetadataName);
+    }
+
+    private static void EmitCatalogRegistration(StringBuilder output, string api, string implementation)
+    {
+        var catalog = SunderRpcCSharpServiceApiEmitter.CatalogApiType(api);
+        var factory = SunderRpcCSharpServiceApiEmitter.ReferenceFactoryApiType(api);
+        output.Append("        services.TryAddSingleton<").Append(catalog).Append(", ").Append(implementation).AppendLine(">();")
+            .Append("        services.TryAddSingleton<").Append(factory).Append(">(dependencies => ((").Append(implementation)
+            .Append(")dependencies.GetRequiredService<").Append(catalog).AppendLine(">()).BindExact);");
+    }
+
+    private static void EmitBindingLifetime(StringBuilder output)
+        => output.AppendLine("        services.TryAddSingleton<global::Sunder.Sdk.Rpc.SunderRpcServiceBindingLifetime>();");
 
     private static string Construct(SunderPackageServiceConstruction entry, string? viewModelType = null)
         => "new " + Type(entry.Type) + "(" + string.Join(", ", entry.Constructor.Parameters.Select(parameter =>

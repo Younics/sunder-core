@@ -20,12 +20,14 @@ internal sealed record ShowExecutionRuntimeCommand(CliExecutionRuntimeIdentity I
 internal sealed record EnsureExecutionRuntimeCommand(
     string RuntimeId,
     string VersionRange,
-    string ModuleAbi,
-    string? RegistryOrigin) : CliCommand;
-internal sealed record ImportExecutionRuntimeCommand(string File) : CliCommand;
+    string ModuleAbi) : CliCommand;
 internal sealed record VerifyExecutionRuntimeCommand(CliExecutionRuntimeIdentity Identity) : CliCommand;
 internal sealed record RepairExecutionRuntimeCommand(CliExecutionRuntimeIdentity Identity) : CliCommand;
 internal sealed record GarbageCollectExecutionRuntimesCommand : CliCommand;
+internal sealed record ExecutionRuntimeSettingsCommand(bool? AutomaticUpdates) : CliCommand;
+internal sealed record UpdateExecutionRuntimesCommand(bool Yes, bool Restart) : CliCommand;
+internal sealed record RemoveExecutionRuntimeCommand(CliExecutionRuntimeIdentity Identity) : CliCommand;
+internal sealed record InstallExecutionRuntimeCommand(string RuntimeId, string VersionRange, string ModuleAbi, bool Yes) : CliCommand;
 internal sealed record AuthLoginCommand : CliCommand;
 internal sealed record AuthStatusCommand : CliCommand;
 internal sealed record AuthLogoutCommand : CliCommand;
@@ -121,11 +123,13 @@ internal enum PackageSecretSource
 }
 
 internal sealed record CliExecutionRuntimeIdentity(
+    Sunder.Runtime.Contracts.ConfiguredOfficialSourceId SourceId,
     string RuntimeId,
-    string Version,
-    int PackagingRevision,
+    string VendorVersion,
     string Rid,
-    string ModuleAbi);
+    string ModuleAbi,
+    Sunder.Runtime.Contracts.RuntimeExecutionRuntimeChecksumAlgorithm VendorChecksumAlgorithm,
+    string VendorChecksumDigest);
 
 [Flags]
 internal enum CliConfigurationRequirements
@@ -175,8 +179,9 @@ internal sealed record CliCommandPlan(
             CliConfigurationRequirements.Runtime,
             CliClientRequirements.Host),
         RuntimeResetCommand or ListExecutionRuntimesCommand or ShowExecutionRuntimeCommand
-            or ImportExecutionRuntimeCommand or VerifyExecutionRuntimeCommand or RepairExecutionRuntimeCommand
-            or GarbageCollectExecutionRuntimesCommand
+            or VerifyExecutionRuntimeCommand or RepairExecutionRuntimeCommand
+             or GarbageCollectExecutionRuntimesCommand
+             or ExecutionRuntimeSettingsCommand or UpdateExecutionRuntimesCommand or RemoveExecutionRuntimeCommand
             or ListInstalledCommand or PackageStatusCommand or InstallLocalPackageCommand
             or UpdatePackagesCommand or AdoptPackageSourceCommand
             or SetPackageEnabledCommand or UninstallPackageCommand
@@ -187,8 +192,8 @@ internal sealed record CliCommandPlan(
             or ImportStackCommand or ExportStackCommand => new(
             CliConfigurationRequirements.Runtime,
             CliClientRequirements.Runtime),
-        EnsureExecutionRuntimeCommand => new(
-            CliConfigurationRequirements.RegistryApi | CliConfigurationRequirements.Runtime,
+        EnsureExecutionRuntimeCommand or InstallExecutionRuntimeCommand => new(
+            CliConfigurationRequirements.Runtime,
             CliClientRequirements.Runtime),
         InstallRegistryPackageCommand => new(
             CliConfigurationRequirements.RegistryApi | CliConfigurationRequirements.Runtime,

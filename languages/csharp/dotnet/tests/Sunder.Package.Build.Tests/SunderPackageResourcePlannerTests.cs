@@ -75,12 +75,12 @@ public sealed class SunderPackageResourcePlannerTests
     private static SunderPackageAuthoringAnalysis Analyze() => SunderPackageCompositionPlannerTests.Analyze("""
         using System.Threading.Tasks;
         using Sunder.Sdk.Packaging;
-        using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         namespace Example;
-        [SunderRpcService]
+        [SunderService]
         public sealed partial class DataService
         {
-            [SunderRpcMethod] public Task<Reply> ReadAsync()
+            public Task<Reply> ReadAsync()
             {
                 using var stream = typeof(DataService).Assembly.GetManifestResourceStream("backend.data");
                 return Task.FromResult(new Reply { Number = stream!.Length });

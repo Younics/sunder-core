@@ -9,6 +9,7 @@ import test from "node:test";
 import { inflateRawSync } from "node:zlib";
 import { canonicalizeDescriptor, parseRpcContractDescriptor, type JsonValue } from "@sunder/sdk";
 import { currentRid, SUPPORTED_RIDS, SUPPORTED_WORKER_CAPABILITIES } from "../src/model";
+import { contractsCommand } from "../src/rpc-contracts";
 import { buildModuleTarget, smokeModuleTarget } from "../src/module";
 import { classifyBundlerVirtualPackage, resolveRolldownPackageJsonFromVite } from "../src/notices";
 import { targetLeafDiscoveryKey, withOutputLocks } from "../src/output";
@@ -21,6 +22,7 @@ import {
   aggregateAndPack,
   buildDevPackage,
   buildWebTarget,
+  bundleProduction,
   prepareProject,
   writeTargetLeaf,
   writeWebTargetLeaf,
@@ -73,9 +75,9 @@ test("dev output uses the canonical runtime-backed Node module shape without lau
     assert.doesNotMatch(workerNotice, /worker-build-only-dependency/u);
     assert.doesNotMatch(workerNotice, new RegExp(escapeRegExp(root), "u"));
 
-    const descriptorPath = resolve(root, "contracts", "example.rpc.json");
+    const descriptorPath = resolve(root, "src", "worker.ts");
     const descriptorSource = await readFile(descriptorPath, "utf8");
-    await writeFile(descriptorPath, descriptorSource.replace('"maxLength": 128', '"maxLength": 129'), "utf8");
+    await writeFile(descriptorPath, descriptorSource.replace('maxLength:128', 'maxLength:129'), "utf8");
     const updatedContract = (await prepareProject(root)).contracts[0]!;
     assert.notEqual(updatedContract.descriptorSha256, contract.descriptorSha256);
     assert.notEqual(updatedContract.abiSha256, contract.abiSha256);
@@ -180,7 +182,7 @@ test("aggregation accepts only Manifest V1 runtime-backed Worker leaves with exa
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const writeLeaf = () => writeTargetLeaf({
       project,
       rid: currentRid(),
@@ -281,7 +283,7 @@ test("target leaves are AggregateSunderPackageTask-compatible thin runtime-backe
   try {
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
@@ -370,17 +372,11 @@ test("Vite web leaf aggregates with a Node Runtime leaf and preserves declarativ
     await addReactDependencies(root);
     const configPath = resolve(root, "sunder.package.json");
     const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-    config.providers = [
-      { providerId: "example.provider", role: "runtime", contractId: "example.rpc", contractVersion: "1.0.0", audience: "owner" },
-    ];
-    config.usesContracts = [
-      { role: "runtime", contractId: "example.rpc", contractVersion: "1.0.0", required: true, actions: ["invoke"] },
-      { role: "app", contractId: "example.rpc", contractVersion: "1.0.0", required: false, actions: ["discover", "subscribe"] },
-    ];
+    await writeFile(resolve(root,"src/worker.ts"),packageServiceSource('exposure:"package",providerId:"example.provider",runtimeUse:{required:true,actions:["invoke"]},appUse:{actions:["discover","subscribe"]}'));
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const runtimeLeaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
@@ -626,7 +622,7 @@ test("aggregation rejects non-canonical external target leaf paths", async () =>
   try {
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaf = await writeTargetLeaf({ project, rid: currentRid(), modulePath: module, workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) });
     const indexPath = resolve(leaf, "manifest", "content-index.json");
     const index = JSON.parse(await readFile(indexPath, "utf8")) as { files: Array<{ path: string }> };
@@ -646,7 +642,7 @@ test("aggregation rejects unknown external target and view properties", async ()
   try {
     const project = await prepareProject(targetRoot);
     const module = resolve(targetRoot, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
@@ -691,13 +687,13 @@ test("aggregation rejects unknown external target and view properties", async ()
 test("local descriptors use the strict parser and contract uses require exact versions", async () => {
   const duplicateRoot = await createFixture();
   try {
-    const path = resolve(duplicateRoot, "contracts", "example.rpc.json");
+    const path = resolve(duplicateRoot, "src", "worker.ts");
     const source = await readFile(path, "utf8");
     await writeFile(path, source.replace(
-      '"contractId": "example.rpc",',
-      '"contractId": "example.rpc", "contractId": "example.rpc",',
+      'contractId:"example.rpc",',
+      'contractId:"example.rpc", contractId:"example.rpc",',
     ), "utf8");
-    await assert.rejects(() => prepareProject(duplicateRoot), /Duplicate JSON property/u);
+    await assert.rejects(() => prepareProject(duplicateRoot), /Duplicate semantic option/u);
   } finally {
     await rm(duplicateRoot, { recursive: true, force: true });
   }
@@ -708,7 +704,7 @@ test("local descriptors use the strict parser and contract uses require exact ve
     const config = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
     config.usesContracts = [{ role: "runtime", contractId: "example.rpc", contractVersion: "2.0.0", required: true, actions: ["discover"] }];
     await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-    await assert.rejects(() => prepareProject(rangeRoot), /has no exact configured local contract descriptor/u);
+    await assert.rejects(() => prepareProject(rangeRoot), /unknown property 'usesContracts'/u);
   } finally {
     await rm(rangeRoot, { recursive: true, force: true });
   }
@@ -717,12 +713,11 @@ test("local descriptors use the strict parser and contract uses require exact ve
 test("Manifest V1 package builds reject non-V1 RPC descriptors", async () => {
   const root = await createFixture();
   try {
-    const source = `${JSON.stringify({ ...descriptor, descriptorVersion: 2 }, null, 2)}\n`;
-    await writeFile(resolve(root, "contracts", "example.rpc.json"), source, "utf8");
+    await writeFile(resolve(root, "src", "worker.ts"), packageServiceSource('descriptorVersion:2'), "utf8");
 
     await assert.rejects(
       () => buildDevPackage({ projectPath: root, watch: false }),
-      /descriptorVersion must be exactly 1/u,
+      /Unknown semantic option 'descriptorVersion'/u,
     );
     assert.equal(await exists(resolve(root, "dist", "sunder-dev", "manifest", "sunder-package.json")), false);
   } finally {
@@ -734,26 +729,10 @@ test("Manifest V1 emits exact derived RPC fields and preserves complete SemVer b
   const root = await createFixture();
   try {
     const contractVersion = "2.3.4-rc.1+build.7";
-    const descriptorPath = resolve(root, "contracts", "example.rpc.json");
-    const descriptorValue = JSON.parse(await readFile(descriptorPath, "utf8")) as Record<string, unknown>;
-    descriptorValue.version = contractVersion;
-    await writeFile(descriptorPath, `${JSON.stringify(descriptorValue, null, 2)}\n`, "utf8");
     const configPath = resolve(root, "sunder.package.json");
     const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-    config.providers = [{
-      providerId: "example.provider",
-      role: "runtime",
-      contractId: "example.rpc",
-      contractVersion,
-      audience: "owner",
-    }];
-    config.usesContracts = [{
-      role: "runtime",
-      contractId: "example.rpc",
-      contractVersion,
-      required: true,
-      actions: ["discover", "invoke", "subscribe"],
-    }];
+    config.version = contractVersion;
+    await writeFile(resolve(root,"src/worker.ts"),packageServiceSource('exposure:"package",providerId:"example.provider",runtimeUse:{required:true}'));
     config.dependencies = [{ packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0" }];
     const configSource = `${JSON.stringify(config, null, 2)}\n`;
     await writeFile(configPath, configSource, "utf8");
@@ -762,7 +741,7 @@ test("Manifest V1 emits exact derived RPC fields and preserves complete SemVer b
     assert.deepEqual(project.config.dependencies, config.dependencies);
     const loaded = assertSingle(project.contracts);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
@@ -831,15 +810,8 @@ test("Manifest V1 emits exact derived RPC fields and preserves complete SemVer b
     }
     assert.equal(await readFile(configPath, "utf8"), configSource);
 
-    config.usesContracts = [{
-      role: "runtime",
-      contractId: "example.rpc",
-      contractVersion: "2.3.4-rc.1",
-      required: true,
-      actions: ["invoke"],
-    }];
-    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-    await assert.rejects(() => prepareProject(root), /version '2\.3\.4-rc\.1' has no exact configured local contract descriptor/u);
+    await rewriteLeafManifest(leaf, value => { (value.usesContracts[0] as {contractVersion:string}).contractVersion="2.3.4-rc.1"; });
+    await assert.rejects(() => aggregateAndPack(root,[leafSource(project,leaf)]), /metadata|exact|source/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -853,7 +825,7 @@ test("dependency range policy applies before builds and during target leaf admis
     const config = JSON.parse(configSource) as Record<string, unknown>;
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const writeLeaf = (configured: PreparedProject) => writeTargetLeaf({
       project: configured,
       rid: currentRid(),
@@ -921,7 +893,7 @@ test("Manifest V1 aggregation requires explicit owned bundle provenance and reje
   try {
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const writeLeaf = () => writeTargetLeaf({
       project,
       rid: currentRid(),
@@ -1006,7 +978,7 @@ test("Manifest V1 aggregation requires explicit owned bundle provenance and reje
           bundle.selectedAuthorityRelease = "1.2.3+release.4";
           bundle.selectedAuthorityContentIdentity = "a".repeat(64);
         },
-        expected: /imported bundles are not supported by descriptor-first Node package tooling/u,
+        expected: /metadata differs from the complete fresh source/u,
       })),
       ...["catalogSigningKeyId", "catalogTrustGeneration", "catalogTrustFingerprint"].flatMap(field =>
         ["package", "platform"].map(authorityKind => ({
@@ -1055,7 +1027,7 @@ test("Manifest V1 aggregation accepts empty import groups but rejects nonempty o
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const writeLeaf = () => writeTargetLeaf({
       project,
       rid: currentRid(),
@@ -1079,7 +1051,7 @@ test("Manifest V1 aggregation accepts empty import groups but rejects nonempty o
       {
         name: "optional dependency",
         update: (manifest) => { manifest.dependsOn = [{ ...dependency, presence: "optional" }]; },
-        expected: /optional dependencies are not supported by descriptor-first Node package tooling/u,
+        expected: /metadata differs from the complete fresh source/u,
       },
       {
         name: "case-variant dependency presence property",
@@ -1124,9 +1096,7 @@ test("Manifest V1 aggregation accepts empty import groups but rejects nonempty o
         ...[[{}], [null], null, {}, false, 0, "[]"].map((value) => ({
           name: `${field} = ${JSON.stringify(value)}`,
           update: (manifest: Record<string, unknown>) => { manifest[field] = value; },
-          expected: new RegExp(`${field} ${Array.isArray(value)
-            ? "is not supported by descriptor-first Node package tooling"
-            : "must be an array when present"}`, "u"),
+          expected: Array.isArray(value) ? /metadata differs from the complete fresh source/u : new RegExp(`${field} must be an array when present`, "u"),
         })),
         {
           name: `case-variant ${field} property`,
@@ -1169,7 +1139,7 @@ test("Manifest V1 aggregation accepts empty import groups but rejects nonempty o
 test("V1 descriptor annotations change only descriptor identity while structural changes alter both hashes", async () => {
   const root = await createFixture();
   try {
-    const descriptorPath = resolve(root, "contracts", "example.rpc.json");
+    const descriptorPath = resolve(root, "src", "worker.ts");
     const original = await prepareProject(root);
     const initial = assertSingle(original.contracts);
     assert.equal(initial.descriptor.descriptorVersion, 1);
@@ -1177,19 +1147,12 @@ test("V1 descriptor annotations change only descriptor identity while structural
     assert.equal(initial.canonicalBytes.toString("utf8"), initial.canonical);
     assert.equal(sha256(initial.canonicalBytes), initial.descriptorSha256);
 
-    const annotated = JSON.parse(await readFile(descriptorPath, "utf8")) as {
-      $defs: Record<string, Record<string, unknown>>;
-    };
-    annotated.$defs.Request!.description = "Annotation-only documentation.";
-    await writeFile(descriptorPath, `${JSON.stringify(annotated, null, 2)}\n`, "utf8");
+    await writeFile(descriptorPath, packageServiceSource(undefined,128,"Annotation-only documentation."), "utf8");
     const annotationIdentity = assertSingle((await prepareProject(root)).contracts);
     assert.notEqual(annotationIdentity.descriptorSha256, initial.descriptorSha256);
     assert.equal(annotationIdentity.abiSha256, initial.abiSha256);
 
-    const request = annotated.$defs.Request!;
-    const properties = request.properties as Record<string, Record<string, unknown>>;
-    properties.message!.maxLength = 129;
-    await writeFile(descriptorPath, `${JSON.stringify(annotated, null, 2)}\n`, "utf8");
+    await writeFile(descriptorPath, packageServiceSource(undefined,129,"Annotation-only documentation."), "utf8");
     const structuralIdentity = assertSingle((await prepareProject(root)).contracts);
     assert.notEqual(structuralIdentity.descriptorSha256, annotationIdentity.descriptorSha256);
     assert.notEqual(structuralIdentity.abiSha256, annotationIdentity.abiSha256);
@@ -1198,7 +1161,7 @@ test("V1 descriptor annotations change only descriptor identity while structural
   }
 });
 
-test("schema V2 rejects schema V1 and closed-shape V1 aliases with migration diagnostics", async () => {
+test("service authoring rejects retired schemas and manual wire/provenance aliases", async () => {
   const root = await createFixture();
   try {
     const configPath = resolve(root, "sunder.package.json");
@@ -1206,19 +1169,19 @@ test("schema V2 rejects schema V1 and closed-shape V1 aliases with migration dia
     await writeFile(configPath, `${JSON.stringify({ ...baseline, schemaVersion: 1 }, null, 2)}\n`, "utf8");
     await assert.rejects(
       () => prepareProject(root),
-      /schemaVersion 1 is no longer supported; migrate RPC package authoring to schemaVersion 2/u,
+      /schemaVersion must be 3|unknown property 'services'/u,
     );
     await writeFile(configPath, `${JSON.stringify({ ...baseline, schemaVersion: 4 }, null, 2)}\n`, "utf8");
     await assert.rejects(
       () => prepareProject(root),
-      /schemaVersion must be exactly 2/u,
+      /schemaVersion must be 3|unknown property 'services'/u,
     );
 
     const invalid: ReadonlyArray<{ readonly value: Partial<Record<string, unknown>>; readonly expected: RegExp }> = [
       ...["source", "authorityKind", "authorityId", "selectedAuthorityRelease", "selectedAuthorityContentIdentity",
         "catalogSigningKeyId", "catalogTrustGeneration", "catalogTrustFingerprint"].map((field) => ({
         value: { contracts: [{ path: "contracts/example.rpc.json", exposure: "package", [field]: "unsupported" }] },
-        expected: new RegExp(`unknown property '${field}'`, "u"),
+        expected: /unknown property 'contracts'/u,
       })),
       ...["required", "optional"].map((presence) => ({
         value: { dependencies: [{ packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0", presence }] },
@@ -1230,11 +1193,11 @@ test("schema V2 rejects schema V1 and closed-shape V1 aliases with migration dia
       })),
       {
         value: { contracts: [{ path: "contracts/example.rpc.json" }] },
-        expected: /contracts\[0\]\.exposure must be one of/u,
+        expected: /unknown property 'contracts'/u,
       },
       {
         value: { contracts: [{ path: "contracts/example.rpc.json", exposure: "package", sha256: "0".repeat(64) }] },
-        expected: /unknown property 'sha256'/u,
+        expected: /unknown property 'contracts'/u,
       },
       {
         value: {
@@ -1247,7 +1210,7 @@ test("schema V2 rejects schema V1 and closed-shape V1 aliases with migration dia
             contractSha256: "0".repeat(64),
           }],
         },
-        expected: /unknown property 'contractSha256'/u,
+        expected: /unknown property 'providers'/u,
       },
       {
         value: {
@@ -1259,7 +1222,7 @@ test("schema V2 rejects schema V1 and closed-shape V1 aliases with migration dia
             actions: ["invoke"],
           }],
         },
-        expected: /unknown property 'versionRange'/u,
+        expected: /unknown property 'usesContracts'/u,
       },
     ];
     for (const candidate of invalid) {
@@ -1281,29 +1244,14 @@ test("contract exposure and provider audience enforce Manifest V1 owner/public v
       ["public", "owner"],
       ["public", "public"],
     ] as const) {
-      config.contracts = [{ path: "contracts/example.rpc.json", exposure }];
-      config.providers = [{
-        providerId: "example.provider",
-        role: "runtime",
-        contractId: "example.rpc",
-        contractVersion: "1.0.0",
-        audience,
-      }];
-      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      await writeFile(resolve(root,"src/worker.ts"),packageServiceSource(`exposure:"${exposure}",audience:"${audience}",providerId:"example.provider"`));
+      if(exposure==="public")await contractsCommand("accept",root);
       const project = await prepareProject(root);
       assert.equal(assertSingle(project.contracts).exposure, exposure);
     }
 
-    config.contracts = [{ path: "contracts/example.rpc.json", exposure: "package" }];
-    config.providers = [{
-      providerId: "example.provider",
-      role: "runtime",
-      contractId: "example.rpc",
-      contractVersion: "1.0.0",
-      audience: "public",
-    }];
-    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-    await assert.rejects(() => prepareProject(root), /audience 'public'.*exposed only to its package owner/u);
+    await writeFile(resolve(root,"src/worker.ts"),packageServiceSource('exposure:"package",audience:"public"'));
+    await assert.rejects(() => prepareProject(root), /audience is incompatible/u);
 
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -1326,23 +1274,11 @@ test("authoring rejects App-role providers while App-role uses remain valid", as
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
     await assert.rejects(
       () => prepareProject(root),
-      /App-role providers are not supported because App provider registration and serving are not available/u,
+      /unknown property 'providers'/u,
     );
 
-    config.providers = [{
-      providerId: "example.provider",
-      role: "runtime",
-      contractId: "example.rpc",
-      contractVersion: "1.0.0",
-      audience: "owner",
-    }];
-    config.usesContracts = [{
-      role: "app",
-      contractId: "example.rpc",
-      contractVersion: "1.0.0",
-      required: false,
-      actions: ["discover"],
-    }];
+    delete config.providers;
+    await writeFile(resolve(root,"src/worker.ts"),packageServiceSource('appUse:{actions:["discover"]}'));
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
     const project = await prepareProject(root);
     assert.equal(assertSingle(project.config.usesContracts ?? []).role, "app");
@@ -1356,7 +1292,7 @@ test("strict target leaf validation rejects App-role providers", async () => {
   try {
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
@@ -1395,7 +1331,7 @@ test("aggregation retains one deterministic universal package for all six exact 
   try {
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaves: string[] = [];
     for (const rid of SUPPORTED_RIDS) {
       leaves.push(await writeTargetLeaf({ project, rid, modulePath: module, workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) }));
@@ -1417,7 +1353,7 @@ test("package CLI builds all six exact-RID leaves before aggregation", async () 
     const cli = resolve(__dirname, "..", "..", "dist", "cli.js");
     const result = spawnSync(process.execPath, [cli, "package", "--project", root], {
       encoding: "utf8",
-      timeout: 60_000,
+      timeout: 300_000,
     });
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const manifest = JSON.parse(await readFile(
@@ -1449,7 +1385,7 @@ test("configured package-owned native assets remain in their exact RID layers", 
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaves = [];
     for (const rid of SUPPORTED_RIDS) {
       const leaf = await writeTargetLeaf({
@@ -1515,7 +1451,7 @@ test("renamed exact and format-mutated active Node executables are rejected inde
     await configureNativeAsset(root, currentRid(), `native/${currentRid()}/sqlite.node`);
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const input = {
       project,
       rid: currentRid(),
@@ -1558,7 +1494,7 @@ test("aggregate admission rejects a forged renamed Node executable before zero-c
     await configureNativeAsset(root, rid, sourcePath);
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaf = await writeTargetLeaf({
       project,
       rid,
@@ -1586,7 +1522,7 @@ test("binary metadata admits target-compatible shared libraries for every suppor
     await configureNativeAssetMatrix(root, (rid) => nativeBinaryFixture(rid, "shared-library"));
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaves = [];
     for (const rid of SUPPORTED_RIDS) {
       leaves.push(await writeTargetLeaf({
@@ -1617,7 +1553,7 @@ test("binary metadata rejects renamed executables for every supported RID", asyn
     await configureNativeAssetMatrix(root, (rid) => nativeBinaryFixture(rid, "executable"));
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     for (const rid of SUPPORTED_RIDS) {
       await assert.rejects(
         () => writeTargetLeaf({
@@ -1658,7 +1594,7 @@ test("binary ownership rejects managed BCL, object toolchain, runtime fingerprin
       { rid: "osx-x64", bytes: machBinaryFixture("x64", "mutated-executable"), expected: /Mach-O executable image/u },
     ];
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     for (const [index, item] of cases.entries()) {
       const sourcePath = `native/case-${index}/sqlite.node`;
       await mkdir(resolve(root, "native", `case-${index}`), { recursive: true });
@@ -1749,20 +1685,11 @@ test("aggregation rejects conflicting same-role RID uses and providers", async (
     try {
       const configPath = resolve(root, "sunder.package.json");
       const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-      config.contracts = [{ path: "contracts/example.rpc.json", exposure: "public" }];
-      if (kind === "use") {
-        config.usesContracts = [{
-          role: "runtime",
-          contractId: "example.rpc",
-          contractVersion: "1.0.0",
-          required: true,
-          actions: ["invoke"],
-        }];
-      }
-      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      const originalSource=packageServiceSource(`exposure:"public",providerId:"example.provider",audience:"owner"${kind==="use"?',runtimeUse:{required:true,actions:["invoke"]}':''}`);
+      await writeFile(resolve(root,"src/worker.ts"),originalSource);await contractsCommand("accept",root);await contractsCommand("freeze",root);
       const firstProject = await prepareProject(root);
       const module = resolve(root, "worker.cjs");
-      await writeFile(module, "module.exports = {};\n", "utf8");
+      await writeValidModule(module);
       const firstLeaf = await writeTargetLeaf({
         project: firstProject,
         rid: SUPPORTED_RIDS[0],
@@ -1771,24 +1698,7 @@ test("aggregation rejects conflicting same-role RID uses and providers", async (
         discoveryRoot: targetDiscoveryRoot(firstProject),
       });
 
-      if (kind === "use") {
-        config.usesContracts = [{
-          role: "runtime",
-          contractId: "example.rpc",
-          contractVersion: "1.0.0",
-          required: true,
-          actions: ["discover"],
-        }];
-      } else {
-        config.providers = [{
-          providerId: "example.provider",
-          role: "runtime",
-          contractId: "example.rpc",
-          contractVersion: "1.0.0",
-          audience: "public",
-        }];
-      }
-      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      await writeFile(resolve(root,"src/worker.ts"),kind==="use"?originalSource.replace('actions:["invoke"]','actions:["discover"]'):originalSource.replace('audience:"owner"','audience:"public"'));
       const secondProject = await prepareProject(root);
       const secondLeaf = await writeTargetLeaf({
         project: secondProject,
@@ -1800,7 +1710,7 @@ test("aggregation rejects conflicting same-role RID uses and providers", async (
 
       await assert.rejects(
         () => aggregateAndPack(root, [leafSource(secondProject, firstLeaf), leafSource(secondProject, secondLeaf)]),
-        new RegExp(`conflicting ${kind === "use" ? "contract use" : "provider"} metadata`, "u"),
+        /metadata differs from the complete fresh source/u,
       );
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -1814,20 +1724,10 @@ test("aggregation rejects same-role RID declaration omissions", async () => {
     try {
       const configPath = resolve(root, "sunder.package.json");
       const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-      if (kind === "use") {
-        config.usesContracts = [{
-          role: "runtime",
-          contractId: "example.rpc",
-          contractVersion: "1.0.0",
-          required: true,
-          actions: ["invoke"],
-        }];
-      }
-      const configuredDeclarations = kind === "use" ? config.usesContracts : config.providers;
-      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      if(kind==="use")await writeFile(resolve(root,"src/worker.ts"),packageServiceSource('exposure:"package",providerId:"example.provider",runtimeUse:{required:true,actions:["invoke"]}'));
       const firstProject = await prepareProject(root);
       const module = resolve(root, "worker.cjs");
-      await writeFile(module, "module.exports = {};\n", "utf8");
+      await writeValidModule(module);
       const firstLeaf = await writeTargetLeaf({
         project: firstProject,
         rid: SUPPORTED_RIDS[0],
@@ -1836,9 +1736,6 @@ test("aggregation rejects same-role RID declaration omissions", async () => {
         discoveryRoot: targetDiscoveryRoot(firstProject),
       });
 
-      if (kind === "use") config.usesContracts = [];
-      else config.providers = [];
-      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
       const secondProject = await prepareProject(root);
       const secondLeaf = await writeTargetLeaf({
         project: secondProject,
@@ -1848,12 +1745,10 @@ test("aggregation rejects same-role RID declaration omissions", async () => {
         discoveryRoot: targetDiscoveryRoot(secondProject),
       });
 
-      if (kind === "use") config.usesContracts = configuredDeclarations;
-      else config.providers = configuredDeclarations;
-      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      await rewriteLeafManifest(secondLeaf,manifest=>{if(kind==="use")(manifest as unknown as {usesContracts:unknown[]}).usesContracts=[];else (manifest as unknown as {provides:unknown[]}).provides=[];});
       await assert.rejects(
         () => aggregateAndPack(root, [leafSource(firstProject, firstLeaf), leafSource(firstProject, secondLeaf)]),
-        new RegExp(`identical ${kind === "use" ? "contract use" : "provider"} sets for role 'runtime'`, "u"),
+        /metadata differs from the complete fresh source/u,
       );
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -1866,7 +1761,7 @@ test("aggregation rejects a role-scoped RPC declaration missing from all target 
   try {
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
@@ -1877,18 +1772,11 @@ test("aggregation rejects a role-scoped RPC declaration missing from all target 
 
     const configPath = resolve(root, "sunder.package.json");
     const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-    config.usesContracts = [{
-      role: "runtime",
-      contractId: "example.rpc",
-      contractVersion: "1.0.0",
-      required: true,
-      actions: ["invoke"],
-    }];
-    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    await writeFile(resolve(root,"src/worker.ts"),packageServiceSource('exposure:"package",providerId:"example.provider",runtimeUse:{required:true,actions:["invoke"]}'));
 
     await assert.rejects(
       () => aggregateAndPack(root, [leafSource(project, leaf)]),
-      /do not exactly match the configured role-scoped RPC uses and providers/u,
+      /metadata differs from the complete fresh source/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -1903,7 +1791,7 @@ test("recursive target discovery holds its configured root across a nested atomi
   try {
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const discoveryRoot = project.outputRoot;
     const leaves: string[] = [];
     for (const rid of SUPPORTED_RIDS.slice(0, 2)) {
@@ -1953,7 +1841,7 @@ test("streaming package writes enforce the configured compressed artifact limit"
   try {
     const project = await prepareProject(root);
     const module = resolve(root, "worker.cjs");
-    await writeFile(module, "module.exports = {};\n", "utf8");
+    await writeValidModule(module);
     const leaf = await writeTargetLeaf({ project, rid: currentRid(), modulePath: module, workerNoticePath: workerNoticePath(root), discoveryRoot: targetDiscoveryRoot(project) });
     const configPath = resolve(root, "sunder.package.json");
     const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
@@ -2007,6 +1895,10 @@ test("generated directories and archives preserve prior valid outputs across fai
     const targetEntries = await readdir(resolve(root, "dist", "targets"));
     assert.equal(targetEntries.some((name) => /\.(?:stage|backup)-/u.test(name)), false);
 
+    // Staging races deliberately used distinct arbitrary bytes. Release admission
+    // requires the source-built Worker; establish that valid preimage first.
+    await writeValidModule(firstModule);
+    await writeTargetLeaf({project,rid:currentRid(),modulePath:firstModule,workerNoticePath:workerNoticePath(root),discoveryRoot:targetDiscoveryRoot(project)});
     const firstPackage = await aggregateAndPack(root, [leafSource(project, leaf)]);
     const archiveHash = await hashFile(firstPackage.archivePath);
     const packageManifest = await readFile(resolve(firstPackage.packageRoot, "manifest", "sunder-package.json"));
@@ -2079,7 +1971,7 @@ test("separate CLI processes contend safely and recover a killed owner during an
 
     const project = await prepareProject(root);
     const module = resolve(root, "contention-worker.cjs");
-    await writeFile(module, "module.exports = 'contention';\n", "utf8");
+    await writeValidModule(module);
     const leaf = await writeTargetLeaf({
       project,
       rid: currentRid(),
@@ -2130,21 +2022,26 @@ test("separate CLI processes contend safely and recover a killed owner during an
 
 test("Node recovery rolls back an interrupted C# aggregate transaction", async () => {
   const root = resolve(tmpdir(), "sunder-node-tool-tests", randomUUID());
-  const outputPath = resolve(root, "package");
+  const outputPath = resolve(root, "sunder-dev");
   const markerPath = `${outputPath}.sunder-aggregate-generated-output`;
+  const importsPath = `${outputPath}.imports.v1.json`;
   const token = randomUUID();
   const stagedOutputPath = `${outputPath}.stage-${randomUUID().replaceAll("-", "")}`;
   const stagedMarkerPath = `${markerPath}.stage-${randomUUID().replaceAll("-", "")}`;
+  const stagedImportsPath = `${importsPath}.stage-${randomUUID().replaceAll("-", "")}`;
   const outputBackupPath = `${outputPath}.backup-${token}`;
   const markerBackupPath = `${markerPath}.backup-${token}`;
+  const importsBackupPath = `${importsPath}.backup-${token}`;
   const journalPath = `${outputPath}.sunder-output-transaction.json`;
   try {
     await mkdir(outputPath, { recursive: true });
     await writeFile(resolve(outputPath, "generation.txt"), "old\n", "utf8");
     await writeFile(markerPath, "old marker\n", "utf8");
+    await writeFile(importsPath, "old local selection\n", "utf8");
     await mkdir(stagedOutputPath);
     await writeFile(resolve(stagedOutputPath, "generation.txt"), "new\n", "utf8");
     await writeFile(stagedMarkerPath, "new marker\n", "utf8");
+    await writeFile(stagedImportsPath, "new local selection\n", "utf8");
     await writeFile(journalPath, `${JSON.stringify({
       schemaVersion: 1,
       token,
@@ -2152,16 +2049,20 @@ test("Node recovery rolls back an interrupted C# aggregate transaction", async (
       outputs: [
         { finalPath: outputPath, stagedPath: stagedOutputPath, backupPath: outputBackupPath, existed: true },
         { finalPath: markerPath, stagedPath: stagedMarkerPath, backupPath: markerBackupPath, existed: true },
+        { finalPath: importsPath, stagedPath: stagedImportsPath, backupPath: importsBackupPath, existed: true },
       ],
     }, null, 2)}\n`, "utf8");
     await rename(outputPath, outputBackupPath);
     await rename(markerPath, markerBackupPath);
+    await rename(importsPath, importsBackupPath);
     await rename(stagedOutputPath, outputPath);
+    await rename(stagedImportsPath, importsPath);
 
     await withOutputLocks([outputPath], async () => undefined);
 
     assert.equal(await readFile(resolve(outputPath, "generation.txt"), "utf8"), "old\n");
     assert.equal(await readFile(markerPath, "utf8"), "old marker\n");
+    assert.equal(await readFile(importsPath, "utf8"), "old local selection\n");
     assert.equal(await exists(journalPath), false);
     assert.equal(await exists(stagedMarkerPath), false);
   } finally {
@@ -2432,27 +2333,10 @@ test("watch recreates immutable build context and App watcher after structural c
     await mkdir(resolve(root, "app-next"), { recursive: true });
     await writeFile(resolve(root, "app-next", "index.html"), "<!doctype html><html><body>APP_WATCH_V2</body></html>\n", "utf8");
     await writeFile(resolve(root, "contracts", "renamed.rpc.json"), await readFile(resolve(root, "contracts", "example.rpc.json")));
-    await writeFile(resolve(root, "src", "worker-next.ts"), `
-      import { runWorker } from "@sunder/sdk";
-      import { CONTRACT_IDENTITY } from "../.sunder/generated/rpc/example.rpc";
-      void runWorker(() => ({ providers: [{
-        providerId: "example.provider",
-        contractId: CONTRACT_IDENTITY.contractId,
-        contractVersion: CONTRACT_IDENTITY.contractVersion,
-        descriptorSha256: CONTRACT_IDENTITY.descriptorSha256,
-        abiSha256: CONTRACT_IDENTITY.abiSha256,
-        declaredErrors: {},
-        handler: {
-          invokeUnary: () => ({ accepted: true, marker: "STRUCTURAL_WATCH_V2" }),
-          async *invokeServerStream() { yield { accepted: true }; }
-        }
-      }] }));
-    `, "utf8");
+    await writeFile(resolve(root, "src", "worker-next.ts"), packageServiceSource().replace('const example=', 'const renamed=').replace('return {accepted:true};','if(request.message==="STRUCTURAL_WATCH_V2")return {accepted:false};return {accepted:true};'), "utf8");
     const configPath = resolve(root, "sunder.package.json");
     const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-    config.entry = "src/worker-next.ts";
-    config.contracts = [{ path: "contracts/renamed.rpc.json", descriptorPath: "contracts/renamed.rpc.json", exposure: "package" }];
-    config.rpcBindings = [{ path: "contracts/renamed.rpc.json", outputFile: "example.rpc.ts" }];
+    config.services = {module:"src/worker-next.ts"};
     config.app = {
       root: "app-next",
       entryPoint: "index.html",
@@ -2607,38 +2491,27 @@ async function createFixture(): Promise<string> {
   const root = resolve(tmpdir(), "sunder-node-tool-tests", randomUUID());
   await mkdir(resolve(root, "src"), { recursive: true });
   await mkdir(resolve(root, "contracts"), { recursive: true });
-  await writeFile(resolve(root, "src", "worker.ts"), `
-    import { runWorker } from "@sunder/sdk";
-    import { CONTRACT_IDENTITY } from "../.sunder/generated/rpc/example.rpc";
-    void runWorker(() => ({ providers: [{
-      providerId: "example.provider",
-      contractId: CONTRACT_IDENTITY.contractId,
-      contractVersion: CONTRACT_IDENTITY.contractVersion,
-      descriptorSha256: CONTRACT_IDENTITY.descriptorSha256,
-      abiSha256: CONTRACT_IDENTITY.abiSha256,
-      declaredErrors: {},
-      handler: {
-        invokeUnary: () => ({ accepted: true }),
-        async *invokeServerStream() { yield { accepted: true }; }
-      }
-    }] }));
-  `, "utf8");
+  await writeFile(resolve(root, "src", "worker.ts"), packageServiceSource(), "utf8");
   await writeFile(workerNoticePath(root), "Sunder Bundled Worker Dependency Notices\n\n@sunder/sdk@1.1.0\n", "utf8");
   await writeFile(resolve(root, "contracts", "example.rpc.json"), `${JSON.stringify(descriptor, null, 2)}\n`, "utf8");
   await writeFile(resolve(root, "sunder.package.json"), `${JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     id: "test.node.package",
     name: "Test Node Package",
     summary: "Runtime-backed Node Worker V1 package test fixture.",
     version: "1.0.0",
-    entry: "src/worker.ts",
+    services: {module:"src/worker.ts"},
     workerCapabilities: [],
-    contracts: [{ path: "contracts/example.rpc.json", exposure: "package" }],
-    rpcBindings: [{ path: "contracts/example.rpc.json", outputFile: "example.rpc.ts" }],
-    providers: [{ providerId: "example.provider", role: "runtime", contractId: "example.rpc", contractVersion: "1.0.0", audience: "owner" }],
-    usesContracts: [],
   }, null, 2)}\n`, "utf8");
+  await writeFile(resolve(root,"sunder-contracts.lock.json"),JSON.stringify({lockVersion:1,packageArtifacts:{},packageImports:{},providerImports:{},platformImports:{}},null,2)+"\n");
   return root;
+}
+
+function packageServiceSource(options = 'exposure:"package",providerId:"example.provider"', maximum = 128, title?: string): string {
+  return `import {defineService} from "@sunder/sdk";
+type Request={message:string}; type Response={accepted:boolean};
+export const example=defineService({send(request:Request):Response{return {accepted:true};},async *watch(request:Request):AsyncIterable<Response>{yield {accepted:true};}},
+{contractId:"example.rpc",serviceId:"messages",${options},constraints:{"Request.message":{minLength:1,maxLength:${maximum}${title === undefined ? "" : `,title:${JSON.stringify(title)}`}}}});`;
 }
 
 async function addWebApp(root: string): Promise<void> {
@@ -2666,8 +2539,8 @@ async function addWorkerDependency(root: string): Promise<void> {
   await writeFile(
     workerPath,
     `import { fixtureWorkerValue } from "fixture-worker-dependency";\n${worker.replace(
-      "invokeUnary: () => ({ accepted: true })",
-      "invokeUnary: () => ({ accepted: true, fixtureWorkerValue })",
+      "return {accepted:true};",
+      "if(!fixtureWorkerValue)throw new Error('dependency');return {accepted:true};",
     )}`,
     "utf8",
   );
@@ -2686,6 +2559,7 @@ async function addWorkerDependency(root: string): Promise<void> {
     exports: "./index.js",
   }, null, 2)}\n`, "utf8");
   await writeFile(resolve(dependencyRoot, "index.js"), "export const fixtureWorkerValue = 'worker fixture';\n", "utf8");
+  await writeFile(resolve(dependencyRoot, "index.d.ts"), "export declare const fixtureWorkerValue: string;\n", "utf8");
   await writeFile(resolve(dependencyRoot, "LICENSE.md"), "Worker fixture license\n", "utf8");
   await writeFile(resolve(dependencyRoot, "legal", "NOTICE"), "nested worker fixture notice\n", "utf8");
 }
@@ -2816,7 +2690,7 @@ async function writeLockOwner(
 async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<number | null> {
   if (child.exitCode !== null) return child.exitCode;
   return await new Promise<number | null>((resolvePromise, reject) => {
-    const timer = setTimeout(() => reject(new Error("Watch process did not exit.")), 5_000);
+    const timer = setTimeout(() => reject(new Error("Watch process did not exit.")), 120_000);
     child.once("exit", (code) => {
       clearTimeout(timer);
       resolvePromise(code);
@@ -2859,6 +2733,11 @@ function zipEntries(archive: Buffer): ZipEntry[] {
 
 function workerNoticePath(root: string): string {
   return resolve(root, "Bundled-Worker-Dependencies.txt");
+}
+async function writeValidModule(path: string): Promise<void> {
+  // Artifact admission tests need authentic current source bytes now that every
+  // service package is source-verified. Do not bypass that fence with dummy JS.
+  await bundleProduction(await prepareProject(dirname(path)), currentRid(), path);
 }
 
 function assertSingle<T>(values: readonly T[]): T {

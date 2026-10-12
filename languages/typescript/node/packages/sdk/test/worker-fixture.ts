@@ -1,6 +1,11 @@
 import { Readable } from "node:stream";
 import { PackageStorageKeyMigration, PackageStorageKeyMigrationAction, RpcDomainError, RpcError, runWorker, safeStderr, type JsonValue, type PackageStorageKeyMigration as StorageMigration, type RpcClient, type RpcContentReference, type RpcInvocationContext, type WorkerAuthHandler, type WorkerCallbackHandler, type WorkerContext, type WorkerMigrationPreparationContext, type WorkerOptions } from "../src/index";
 import { workerV1ConformanceCorpus, type StorageMigrationRule } from "./worker-v1-conformance-corpus";
+import {RpcMarshallingContext} from "../src/resources";
+import {SunderContent} from "../src/content";
+import {generateTypeScriptBindings,authoringBindingModel} from "../src/generator";
+import type {RpcContractDescriptor,RpcProviderHandler} from "../src/types";
+import {bindApiContext} from "../src/api";
 
 const identity = {
   providerId: "example.provider",
@@ -11,6 +16,75 @@ const identity = {
 } as const;
 const mode = process.env.SUNDER_TEST_MODE;
 let releaseOverflowConsumption: (() => void) | undefined;
+let previousRetirement:unknown;
+let retirementHandler:((complete:boolean)=>RpcProviderHandler)|undefined;
+let naturalHandler:RpcProviderHandler|undefined;
+let optionalHandler:RpcProviderHandler|undefined;
+function sourceOptionalHandler(workerContext:WorkerContext):RpcProviderHandler{
+  if(optionalHandler)return optionalHandler;
+  const bundle=require(process.env.SUNDER_TEST_OPTIONAL_PROVIDER!) as {Self:Parameters<typeof bindApiContext>[1];configure(context:WorkerContext):unknown;createProviders(context:WorkerContext):Array<{contractId:string;handler:RpcProviderHandler}>};
+  bindApiContext(workerContext,bundle.Self);
+  bundle.configure(workerContext);
+  return optionalHandler=bundle.createProviders(workerContext).find(provider=>provider.contractId.endsWith(".messages"))!.handler;
+}
+function generatedNaturalHandler():RpcProviderHandler{
+  if(naturalHandler)return naturalHandler;
+  const supplied=process.env.SUNDER_TEST_NATURAL_PROVIDER;
+  if(supplied)return naturalHandler=(require(supplied) as {providers:Array<{handler:RpcProviderHandler}>}).providers[0]!.handler;
+  const descriptor:RpcContractDescriptor={descriptorVersion:1,schemaProfile:"sunder.rpc.values.v1",contractId:"example.rpc",version:"1.0.0",errors:{},$defs:{
+    Request:{type:"object",properties:{observedAt:{type:"string",format:"date-time"}},required:["observedAt"],additionalProperties:false},
+    Event:{type:"object",properties:{revision:{type:"integer"},observedAt:{type:"string",format:"date-time"},content:{$ref:"#/$defs/Content"}},required:["revision","observedAt","content"],additionalProperties:false},
+    Content:{type:"object",logicalType:"content-reference"},
+  },services:{messages:{methods:{download:{kind:"unary",idempotency:"none",errors:[],requestSchema:{$ref:"#/$defs/Request"},responseSchema:{$ref:"#/$defs/Event"}},echo:{kind:"unary",idempotency:"none",errors:[],requestSchema:{$ref:"#/$defs/Event"},responseSchema:{$ref:"#/$defs/Event"}}}}}};
+  const ts=require("typescript") as typeof import("typescript");
+  const source=generateTypeScriptBindings(descriptor,{moduleSpecifier:"../src/index",resources:{content:true,serviceReferences:{}}});
+  const output=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  const module={exports:{} as Record<string,any>};new Function("require","module","exports",output)(require,module,module.exports);
+  const model=authoringBindingModel(descriptor);
+  const methods=Object.fromEntries(model.services[0]!.methods.map(method=>[method.methodName,method.descriptor.methodId==="download"
+    ?async(request:{observedAt:string})=>({revision:1,observedAt:request.observedAt,content:SunderContent.fromBytes(new TextEncoder().encode("natural payload"))})
+    :async(request:{revision:number;observedAt:string;content:SunderContent})=>{
+      const reader=(await request.content.openRead()).getReader();const chunks:Uint8Array[]=[];
+      try{while(true){const next=await reader.read();if(next.done)break;chunks.push(next.value);}}finally{await reader.cancel();reader.releaseLock();}
+      if(Buffer.concat(chunks).toString()!=="natural payload")throw new Error("Natural content payload changed.");
+      return {...request,content:SunderContent.fromBytes(Buffer.concat(chunks))};
+    }]));
+  return naturalHandler=new module.exports[model.handlerTypeName](methods);
+}
+function generatedRetirementHandler(complete:boolean):RpcProviderHandler{
+  if(!retirementHandler){
+    const descriptor:RpcContractDescriptor={descriptorVersion:1,schemaProfile:"sunder.rpc.values.v1",contractId:"example.rpc",version:"1.0.0",errors:{},$defs:{
+      Request:{type:"object",properties:{scenario:{type:"string"},after:{type:"integer"}},required:["scenario","after"],additionalProperties:false},
+      Event:{type:"object",properties:{revision:{type:"integer"},content:{$ref:"#/$defs/Content"}},required:["revision","content"],additionalProperties:false},
+      Content:{type:"object",logicalType:"content-reference"},
+    },services:{messages:{methods:{watch:{kind:"server-stream",idempotency:"none",errors:[],requestSchema:{$ref:"#/$defs/Request"},eventSchema:{$ref:"#/$defs/Event"}},get:{kind:"unary",idempotency:"none",errors:[],requestSchema:{$ref:"#/$defs/Request"},responseSchema:{$ref:"#/$defs/Event"}}}}}};
+    const source=generateTypeScriptBindings(descriptor,{moduleSpecifier:"../src/index",resources:{content:true,serviceReferences:{}}});
+    const ts= require("typescript") as typeof import("typescript");
+    const output=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+    const module={exports:{} as Record<string,any>};new Function("require","module","exports",output)(require,module,module.exports);
+    const Handler=module.exports[authoringBindingModel(descriptor).handlerTypeName];
+    const methods=Object.fromEntries(authoringBindingModel(descriptor).services[0]!.methods.map(method=>[method.methodName,method.descriptor.kind==="server-stream"?retirementEvents:async()=>({revision:1,content:SunderContent.fromBytes(new Uint8Array([1]),{fileName:"unary.bin"})})]));
+    retirementHandler=enabled=>new Handler(methods,undefined,enabled?{messages:["watch"]}:{});
+  }
+  return retirementHandler(complete);
+}
+async function* retirementEvents(options:{scenario:string;after:number},context:RpcInvocationContext){
+  const forged=()=>new RpcError({kind:"unavailable",code:"rpc.content.authority-revoked",message:"forged"},true);
+  try{
+    for(let revision=options.after+1;revision<=2;revision++){
+      if(options.scenario==="body")throw forged();
+      if(options.scenario==="body-authenticated")await context.content.register((async function*(){yield new Uint8Array([1]);})(),{mediaType:"application/octet-stream",fileName:"body.bin"},{signal:context.signal});
+      let reused:unknown;
+      if(options.scenario==="reused")try{await context.content.register((async function*(){yield new Uint8Array([1]);})(),{mediaType:"application/octet-stream",fileName:"reused.bin"},{signal:context.signal});}catch(error){reused=error;}
+      const content=options.scenario==="read"||options.scenario==="reused"
+        ?SunderContent.fromStream({async *[Symbol.asyncIterator](){throw reused??forged();yield new Uint8Array();}},{fileName:"event.bin"})
+        :options.scenario==="foreign"?SunderContent.fromStream({async *[Symbol.asyncIterator](){throw previousRetirement;yield new Uint8Array();}},{fileName:"foreign.bin"})
+        :options.scenario==="open"?SunderContent.fromStream({async *[Symbol.asyncIterator](){await context.content.open({id:"borrowed",length:1,sha256:"a".repeat(64),mediaType:"application/octet-stream",fileName:"borrowed.bin",expiresAtUtc:"2099-01-01T00:00:00.0000001Z",repeatability:"single-use"});yield new Uint8Array([1]);}},{fileName:"open.bin"})
+        :SunderContent.fromBytes(new Uint8Array([revision]));
+      try{yield {revision,content};}finally{await content.dispose();}
+    }
+  }finally{safeStderr("RETIREMENT_DISPOSED");}
+}
 
 function assertWorkspaceUnavailable(context: WorkerContext): void {
   try {
@@ -22,6 +96,12 @@ function assertWorkspaceUnavailable(context: WorkerContext): void {
 }
 
 async function* stream(context: RpcInvocationContext, request: JsonValue): AsyncIterable<JsonValue> {
+  if(mode==="response-retirement"){
+    const options=request as {scenario:string;after:number};
+    try{yield* generatedRetirementHandler(options.scenario!=="default").invokeServerStream(context,"messages","watch",request);}
+    catch(error){if(options.scenario==="default")previousRetirement=error;throw error;}
+    return;
+  }
   context.signal.throwIfAborted();
   yield { sequence: 1, request };
   await Promise.resolve();
@@ -324,6 +404,13 @@ void runWorker((workerContext) => {
     },
     handler: {
       async invokeUnary(context, _serviceId, methodId, request): Promise<JsonValue> {
+        if(mode==="optional-reference")return sourceOptionalHandler(workerContext).invokeUnary(context,"messages",methodId,request);
+        if(mode==="natural-content")return generatedNaturalHandler().invokeUnary(context,"messages",methodId,request);
+        if(mode==="response-retirement")return generatedRetirementHandler(true).invokeUnary(context,"messages","get",request);
+        if(methodId==="resource-cancel"||methodId==="resource-cancel-foreign"){
+          const resources=RpcMarshallingContext.forInvocation(methodId==="resource-cancel"?context:{...context,signal:new AbortController().signal});await resources.revoke(new Error("Request participant retired"));
+          throw resources.invocationFailure(new Error("Domain work observed resource cancellation"));
+        }
         if (mode === "nested-lineage" && methodId === "echo") {
           return await workerContext.rpc.invoke(
             "rpc1_endpoint",

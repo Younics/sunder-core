@@ -1,24 +1,22 @@
-import { RpcError, runWorker, type WorkerContext } from "@sunder/sdk";
-import { Messages } from "#sunder/rpc";
-import { initializePackageState, packageRpc } from "./rpc.js";
+import { RpcError, type WorkerContext, type WorkerOptions } from "@sunder/sdk";
+// This is the advanced native interoperability fixture, not normal client bootstrap.
+import * as Messages from "../.sunder/generated/rpc/owned/messages.js";
+import { initializePackageState } from "./services.js";
 
 const NODE_CALLER_PACKAGE_ID = "sunder.interop.node.caller";
 const DOTNET_PROVIDER_PACKAGE_ID = "test.worker.interop";
 const NODE_TO_DOTNET_STATE_KEY = "interop.node-to-dotnet";
 const PACKAGE_DATA_VALUE = "shared Worker V1 package data";
 
-void runWorker((workerContext) => {
+export function configure(workerContext: WorkerContext): Omit<WorkerOptions, "providers"> {
   initializePackageState(workerContext);
   return {
-    providers: workerContext.packageId === NODE_CALLER_PACKAGE_ID ? [] : packageRpc.providerRegistrations,
     async onActivated(context, signal) {
       if (context.packageId !== NODE_CALLER_PACKAGE_ID) return;
       await runNodeToDotNetInterop(context, signal);
     },
   };
-}).catch(() => {
-  process.exitCode = 70;
-});
+}
 
 async function runNodeToDotNetInterop(context: WorkerContext, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();

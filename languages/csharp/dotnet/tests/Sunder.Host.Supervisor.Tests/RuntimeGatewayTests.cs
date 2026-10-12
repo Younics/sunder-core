@@ -18,6 +18,8 @@ public sealed partial class HostSupervisorFoundationTests
     [InlineData("POST", "/API/V1/UPLOADS/STACK-MEDIA", RuntimeRequestSizeLimits.StackMediaUploadMaxRequestBodyBytes)]
     [InlineData("PUT", "/api/v1/uploads/packages", RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes)]
     [InlineData("POST", "/api/v1/packages/demo/settings/values", RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes)]
+    [InlineData("POST", "/api/v1/uploads/execution-runtimes", RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes)]
+    [InlineData("POST", "/api/v1/uploads/packages/retention", RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes)]
     public void Gateway_ResolvesCanonicalRequestLimitForExactTransferRoutes(
         string method,
         string path,
@@ -172,6 +174,7 @@ public sealed partial class HostSupervisorFoundationTests
     [InlineData("/api/v1/uploads/packages", RuntimeRequestSizeLimits.PackageUploadMaxRequestBodyBytes)]
     [InlineData("/api/v1/uploads/stacks", RuntimeRequestSizeLimits.StackUploadMaxRequestBodyBytes)]
     [InlineData("/api/v1/uploads/stack-media", RuntimeRequestSizeLimits.StackMediaUploadMaxRequestBodyBytes)]
+    [InlineData("/api/v1/uploads/execution-runtimes", RuntimeRequestSizeLimits.DefaultMaxRequestBodyBytes)]
     public async Task Gateway_RejectsDeclaredTransferOverflowWithoutForwarding(
         string path,
         long maximumBytes)

@@ -16,58 +16,6 @@ namespace Sunder.Cli.Tests;
 public sealed class RuntimeApiClientTransferTests
 {
     [Fact]
-    public async Task Execution_runtime_import_uploads_bytes_then_submits_only_the_opaque_upload_id()
-    {
-        var paths = new List<string>();
-        RuntimeExecutionRuntimeImportRequest? import = null;
-        byte[]? uploaded = null;
-        var handler = new DelegateHandler(async request =>
-        {
-            paths.Add(request.RequestUri!.AbsolutePath);
-            switch (request.RequestUri.AbsolutePath)
-            {
-                case "/api/handshake":
-                    return Json(CreateHandshake());
-                case "/api/v1/uploads/execution-runtimes":
-                    uploaded = await request.Content!.ReadAsByteArrayAsync();
-                    Assert.Equal("application/vnd.sunder.execution-runtime", request.Content.Headers.ContentType?.MediaType);
-                    return Json(new ContentUploadDescriptor(
-                        "0123456789abcdef0123456789abcdef",
-                        new string('a', 64),
-                        uploaded.Length,
-                        "runtime.sunderruntime",
-                        "application/vnd.sunder.execution-runtime"));
-                case "/api/v1/execution-runtimes/import":
-                    import = await request.Content!.ReadFromJsonAsync<RuntimeExecutionRuntimeImportRequest>();
-                    return Json(OperationSuccess(RuntimeExecutionRuntimeOperationActions.Import));
-                default:
-                    return new HttpResponseMessage(HttpStatusCode.NotFound);
-            }
-        });
-        var path = Path.Combine(Path.GetTempPath(), $"runtime-{Guid.NewGuid():N}.sunderruntime");
-        await File.WriteAllTextAsync(path, "trusted runtime archive");
-        try
-        {
-            using var client = new RuntimeManagementClient(
-                () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "runtime-secret"),
-                handler);
-
-            var result = await client.ImportExecutionRuntimeAsync(path);
-
-            Assert.True(result.Success);
-            Assert.Equal(
-                ["/api/handshake", "/api/v1/uploads/execution-runtimes", "/api/v1/execution-runtimes/import"],
-                paths);
-            Assert.Equal("trusted runtime archive", Encoding.UTF8.GetString(uploaded!));
-            Assert.Equal("0123456789abcdef0123456789abcdef", import?.UploadId);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
     public async Task Execution_runtime_client_escapes_exact_identity_routes()
     {
         var paths = new List<string>();
@@ -100,19 +48,19 @@ public sealed class RuntimeApiClientTransferTests
             () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "runtime-secret"),
             handler);
         var identity = new RuntimeExecutionRuntimeIdentity(
+            ConfiguredOfficialSourceId.DotNet,
             "runtime id",
             "1.2.3",
-            4,
             "linux x64",
             "module/abi",
-            new string('a', 64),
-            new string('b', 64));
+            RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
+            new string('b', 128));
 
         await client.GetExecutionRuntimeReferencesAsync(identity);
         await client.VerifyExecutionRuntimeAsync(identity);
         await client.RepairExecutionRuntimeAsync(identity);
 
-        var root = "/api/v1/execution-runtimes/runtime%20id/versions/1.2.3/revisions/4/linux%20x64/abis/module%2Fabi";
+        var root = "/api/v1/execution-runtimes/sources/dotnet/runtime%20id/versions/1.2.3/linux%20x64/abis/module%2Fabi/checksums/sha512/" + new string('b', 128);
         Assert.Equal(
             ["/api/handshake", root + "/references", root + "/verify", root + "/impact", root + "/repair"],
             paths);
@@ -690,7 +638,7 @@ public sealed class RuntimeApiClientTransferTests
                 RuntimeProtocolFeatures.VersionedApiV1,
                 RuntimeProtocolFeatures.AtomicPackageSnapshotV1,
                 RuntimeProtocolFeatures.PackageStageStatusV1,
-                RuntimeProtocolFeatures.ExecutionRuntimeManagementV1,
+                RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1,
             ],
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"));
 

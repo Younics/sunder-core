@@ -37,8 +37,12 @@ export async function captureOwnedRuntimeInputs(
     for (const base of generatedRoots) if (normalized.startsWith(`${base}/`) || normalized.startsWith(`${base}\\`)) return normalized.slice(base.length + 1).replaceAll("\\", "/");
     return undefined;
   };
-  const key = (args: OnResolveArgs): string => JSON.stringify([args.path, args.importer, args.namespace, args.resolveDir, args.kind]);
+  // esbuild may canonicalize the OS-owned /var alias after a generated parent is
+  // materialized. Both spellings identify the already captured root, not new input.
+  const canonicalPath = (path: string): string => path === root || path.startsWith(root + "/") || path.startsWith(root + "\\") ? realRoot + path.slice(root.length) : path;
+  const key = (args: OnResolveArgs): string => JSON.stringify([canonicalPath(args.path), canonicalPath(args.importer), args.namespace || "file", canonicalPath(args.resolveDir), args.kind]);
   const configParents = async (path: string): Promise<void> => {
+    path = canonicalPath(path);
     let directory = dirname(path);
     for (let depth = 0; ; depth++) {
       if (depth > 64 || configs.size > 4096) throw new Error("rpc-authoring.source-limit-exceeded: Runtime resolution configuration budget exceeded.");
@@ -67,7 +71,7 @@ export async function captureOwnedRuntimeInputs(
   const generatedResolution = (args: OnResolveArgs): OnResolveResult | undefined => {
     let name: string | undefined;
     if (args.path === "sunder-owned-rpc:adapter") name = "adapter.js";
-    else if (args.path === "#sunder/rpc") name = "imports";
+    else if (args.path === "#sunder/api") name = "api";
     else if (args.path.startsWith(".") || isAbsolute(args.path)) name = logicalPath(resolve(args.resolveDir, args.path));
     if (name === undefined) return undefined;
     const candidates = name.endsWith(".js") ? [name, name.replace(/\.js$/u, ".ts")] : [name, `${name}.ts`, `${name}.js`];
@@ -76,16 +80,24 @@ export async function captureOwnedRuntimeInputs(
     return { path: selected, namespace: "sunder-owned-rpc" };
   };
   const generatedImportAlias = async (args: OnResolveArgs, capture: boolean): Promise<OnResolveResult | undefined> => {
-    if (!args.path.startsWith("#") || args.path === "#" || args.path.startsWith("#/")) return undefined;
+    if (args.path.startsWith(".") || isAbsolute(args.path) || args.path.startsWith("node:") || args.path === "#" || args.path.startsWith("#/")) return undefined;
     if (capture) await configParents(resolve(args.resolveDir, "__rpc_import_scope__"));
     let directory = resolve(args.resolveDir);
     while (basename(directory) !== "node_modules") {
       const bytes = configs.get(resolve(directory, "package.json"));
       if (bytes !== undefined) {
-        const imports: unknown = (JSON.parse(bytes.toString("utf8")) as { imports?: unknown }).imports;
+        const metadata = JSON.parse(bytes.toString("utf8")) as { name?: string; imports?: unknown; exports?: unknown };
+        let imports: unknown = metadata.imports; let requested = args.path;
+        if (!args.path.startsWith("#")) {
+          if (!metadata.name || args.path !== metadata.name && !args.path.startsWith(metadata.name + "/")) return undefined;
+          requested = args.path === metadata.name ? "." : "./" + args.path.slice(metadata.name.length + 1);
+          const exports = metadata.exports;
+          imports = exports && typeof exports === "object" && !Array.isArray(exports) && Object.keys(exports).some(key => key.startsWith("."))
+            ? exports : { ".": exports };
+        }
         if (!imports || typeof imports !== "object" || Array.isArray(imports)) return undefined;
         const conditions = new Set(["node", "default", args.kind === "require-call" || args.kind === "require-resolve" ? "require" : "import"]);
-        const target = packageImportTarget(args.path, imports as Record<string, unknown>, conditions);
+        const target = packageImportTarget(requested, imports as Record<string, unknown>, conditions);
         if (typeof target !== "string" || !target.startsWith("./")) return undefined;
         const path = resolve(directory, target);
         if (logicalPath(path) === undefined) return undefined;
@@ -113,8 +125,10 @@ export async function captureOwnedRuntimeInputs(
             if (!edge) throw new Error("RPC bundle requested an uncaptured runtime resolution.");
             return edge;
           }
-          const virtual = generatedResolution(args) ?? await generatedImportAlias(args, mode === "capture");
-          let resolved = virtual ?? await build.resolve(args.path, { importer: args.importer, namespace: args.namespace,
+          const sourceEntry: OnResolveResult | undefined = args.namespace === "sunder-owned-rpc" && args.path === modulePath.replace(/\.[jt]s$/u, ".js")
+            ? { path: modulePath, namespace: "file" } : undefined;
+          const virtual = sourceEntry ?? generatedResolution(args) ?? await generatedImportAlias(args, mode === "capture");
+          let resolved = virtual ?? await build.resolve(args.path, { importer: args.namespace === "sunder-owned-rpc" ? resolve(args.resolveDir, basename(args.importer)) : args.importer, namespace: args.namespace === "sunder-owned-rpc" ? "file" : args.namespace,
             resolveDir: args.resolveDir, kind: args.kind, pluginData: bypass });
           if (resolved.errors?.length) return resolved;
           // Aliases, package exports and native resolution may enter an owned
@@ -123,12 +137,12 @@ export async function captureOwnedRuntimeInputs(
             const owned = generatedResolution({ ...args, path: resolved.path });
             if (owned) resolved = { ...resolved, ...owned };
           }
-          const edge: OnResolveResult = { path: resolved.path, namespace: resolved.namespace ?? "file", external: resolved.external ?? false,
+          const edge: OnResolveResult = { path: resolved.path ? canonicalPath(resolved.path) : resolved.path, namespace: resolved.namespace ?? "file", external: resolved.external ?? false,
             suffix: resolved.suffix ?? "", sideEffects: resolved.sideEffects ?? true };
           if (edge.external && !builtin.has(edge.path!)) throw new Error(`rpc-authoring.unsupported-source: Unbundled non-builtin runtime import '${args.path}'.`);
           if (edges.size >= 8192 && !edges.has(identity)) throw new Error("rpc-authoring.source-limit-exceeded: Runtime graph exceeds 8192 import edges.");
           if (mode === "capture") edges.set(identity, edge);
-          else if (JSON.stringify(edges.get(identity)) !== JSON.stringify(edge)) throw new Error("rpc-authoring.unsupported-source: RPC runtime resolution input set changed; retry generation.");
+          else if (JSON.stringify(edges.get(identity)) !== JSON.stringify(edge)) throw new Error(`rpc-authoring.unsupported-source: RPC runtime resolution input set changed; retry generation (${identity}).`);
           if (mode === "capture") {
             if (args.importer && args.namespace !== "sunder-owned-rpc") await configParents(args.importer);
             if (!edge.external && edge.namespace === "file") await configParents(edge.path!);
@@ -151,7 +165,7 @@ export async function captureOwnedRuntimeInputs(
             if (inputs.size > 512) throw new Error("rpc-authoring.source-limit-exceeded: Runtime graph exceeds 512 files.");
           }
           if (!input) throw new Error("RPC bundle requested an uncaptured runtime file.");
-          return { contents: input.real === realModule
+          return { contents: exportName && input.real === realModule
             ? `${source}\nimport { bind as $sunderOwnedRpcBind } from "sunder-owned-rpc:adapter";\n$sunderOwnedRpcBind(${exportName});\n`
             : input.bytes, loader: input.loader, resolveDir: dirname(args.path) };
         });

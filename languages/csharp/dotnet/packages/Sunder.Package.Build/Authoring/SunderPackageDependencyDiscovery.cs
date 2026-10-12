@@ -52,7 +52,7 @@ internal static class SunderPackageDependencyDiscovery
             && value.ContainingAssembly.Identity.Version == typeof(Sunder.Sdk.Abstractions.IPackageContext).Assembly.GetName().Version);
 
     internal static bool IsRpcDeclaration(INamedTypeSymbol type)
-        => type.GetAttributes().Any(attribute => attribute.AttributeClass?.ToDisplayString() == "Sunder.Sdk.Rpc.SunderRpcServiceAttribute"
+        => type.GetAttributes().Any(attribute => attribute.AttributeClass?.ToDisplayString() == "Sunder.Sdk.Services.SunderServiceAttribute"
             && attribute.AttributeClass.ContainingAssembly.Identity.Name == "Sunder.Sdk"
-            && attribute.AttributeClass.ContainingAssembly.Identity.Version == typeof(Sunder.Sdk.Rpc.SunderRpcServiceAttribute).Assembly.GetName().Version);
+            && attribute.AttributeClass.ContainingAssembly.Identity.Version == typeof(Sunder.Sdk.Services.SunderServiceAttribute).Assembly.GetName().Version);
 }

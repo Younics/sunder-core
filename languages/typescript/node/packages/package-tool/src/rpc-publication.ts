@@ -1,9 +1,12 @@
-import { inspectContractCandidate } from "./rpc-contract-candidate";
+import { isSemanticVersion } from "@sunder/sdk";
+import { resolve } from "node:path";
+import { inspectContractCandidate, type InspectedOwnedContract } from "./rpc-contract-candidate";
 import { parseContractWireJson, registryOrigin, type RegistryOriginOptions } from "./rpc-contract-lock";
 import { readResponse } from "./rpc-contract-restore";
-import { captureBaseline, commitBaseline } from "./rpc-baseline-store";
-import { writeBaseline, type OwnedBaseline, type OwnedSnapshot } from "./rpc-baseline";
+import { assertBaselineFreeEvidence, captureBaseline, commitBaseline, exists, verifyFreshOwnedSource, withBaselineLease } from "./rpc-baseline-store";
+import { hasPublicEvidence, writeBaseline, type OwnedBaseline, type OwnedSnapshot } from "./rpc-baseline";
 import { ordered, outerKeys, type Outer, type OuterObject } from "./rpc-baseline-json";
+import { readProjectDescriptorFile } from "./descriptor-files";
 
 export interface PublicationImportOptions extends RegistryOriginOptions {
   readonly packagePath: string;
@@ -11,7 +14,7 @@ export interface PublicationImportOptions extends RegistryOriginOptions {
   readonly fetchImplementation?: typeof fetch;
   readonly signal?: AbortSignal;
 }
-interface PublishedContract { readonly contractId: string; readonly version: string; readonly descriptorSha256: string; readonly abiSha256: string; readonly exposure: string }
+type PublishedContract = InspectedOwnedContract;
 interface Publication { readonly registryOrigin: string; readonly packageId: string; readonly packageVersion: string; readonly contentIdentity: string; readonly publishedAtUtc: string; readonly ownedContracts: readonly PublishedContract[] }
 function invalid(message: string): never { throw new Error("rpc-authoring.publication-evidence-mismatch: " + message); }
 function record(value: unknown): Record<string, unknown> {
@@ -25,10 +28,20 @@ export async function importContractPublication(project: string, options: Public
   const origin = registryOrigin(options.registryOrigin, options.allowDevelopmentRegistryOrigin);
   if (!options.packagePath?.trim()) invalid("A retained package archive is required.");
   const input = await captureBaseline(project); const baseline = input.baseline;
-  if (!baseline) invalid("Publication import requires an existing frozen owned baseline.");
-  const candidate = await inspectContractCandidate(options.packagePath, options.signal);
+  const verifyAbsence = async (): Promise<void> => {
+    if (baseline) return;
+    await verifyFreshOwnedSource(project, input);
+    // Check every retained role/export independently; one private receipt cannot
+    // conceal a public export or a deleted-baseline marker from another role.
+    for (const name of ["authoring-receipt.v1.json", "app-authoring-receipt.v1.json", "package-export.v1.json"]) {
+      const path = resolve(project, ".sunder/generated/rpc", name);
+      if (await exists(path)) assertBaselineFreeEvidence(await readProjectDescriptorFile(project, path, "Publication generation evidence", 67_108_864), path, undefined, name === "package-export.v1.json" ? "export" : "receipt");
+    }
+  };
+  await verifyAbsence();
+  const candidate = await inspectContractCandidate(options.packagePath, options.signal, true);
   const expected = candidate.inventory; const id = text(expected.packageId); const version = text(expected.packageVersion);
-  if (id !== baseline.packageId) invalid("The retained archive belongs to another baseline owner.");
+  if (baseline && id !== baseline.packageId) invalid("The retained archive belongs to another baseline owner.");
   const request = options.fetchImplementation ?? fetch;
   const read = async (route: string): Promise<Record<string, unknown>> => record(parseContractWireJson(await readResponse(new URL(route, origin),
     "application/json", 1_048_576, undefined, request, options.signal, undefined, undefined, options.allowDevelopmentRegistryOrigin), 1_048_576));
@@ -57,20 +70,35 @@ export async function importContractPublication(project: string, options: Public
     ownedContracts.push({ contractId, version: contractVersion, descriptorSha256: text(bundle.descriptorSha256), abiSha256: text(bundle.abiSha256), exposure });
   }
   if ([...publicContracts.keys()].some(key => !identities.has(key))) invalid("Registry omitted a public bundle.");
+  const tuples = (values: readonly PublishedContract[]): string => JSON.stringify(values.map(value => [value.contractId, value.version, value.descriptorSha256, value.abiSha256, value.exposure])
+    .sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0));
+  if (!candidate.ownedContracts || tuples(ownedContracts) !== tuples(candidate.ownedContracts)) invalid("Registry owned bundle evidence differs from the canonical inspected archive.");
   const proposal = planPublication(baseline, { registryOrigin: origin, packageId: id, packageVersion: version,
     contentIdentity: text(expected.packageContentIdentity), publishedAtUtc: text(details.publishedAtUtc), ownedContracts });
-  return commitBaseline(input, proposal, async () => { options.signal?.throwIfAborted(); await candidate.revalidate(); });
+  const verify = async (): Promise<void> => { options.signal?.throwIfAborted(); await candidate.revalidate(); await verifyAbsence(); };
+  if (proposal === undefined) return withBaselineLease(input, async () => { await verify(); await input.revalidate(); return false; });
+  return commitBaseline(input, proposal, verify);
 }
 
-export function planPublication(baseline: OwnedBaseline, publication: Publication): Buffer {
-  if (publication.packageId !== baseline.packageId) invalid("Publication names a different owner.");
+export function planPublication(baseline: OwnedBaseline, publication: Publication): Buffer;
+export function planPublication(baseline: undefined, publication: Publication): undefined;
+export function planPublication(baseline: OwnedBaseline | undefined, publication: Publication): Buffer | undefined;
+export function planPublication(baseline: OwnedBaseline | undefined, publication: Publication): Buffer | undefined {
+  if (baseline && publication.packageId !== baseline.packageId) invalid("Publication names a different owner.");
+  if (!isSemanticVersion(publication.packageVersion)) invalid("Publication requires the full owning package SemVer.");
   const key = (id: string, version: string): string => id + "\0" + version;
   const bundles = new Map(publication.ownedContracts.map(value => [key(value.contractId, value.version), value]));
   if (bundles.size !== publication.ownedContracts.length) invalid("Owned publication identities are duplicated.");
-  const snapshots = [...baseline.contracts.values()].flatMap(value => [...value.history, ...(value.current ? [value.current] : [])]);
+  const entries = [...baseline?.contracts.values() ?? []];
+  const governed = new Set(entries.filter(hasPublicEvidence).map(entry => entry.contractId));
+  const snapshots = entries.flatMap(value => [...value.history, ...(value.current ? [value.current] : [])]);
   const matches = (snapshot: OwnedSnapshot, bundle: PublishedContract): boolean => snapshot.exposure === bundle.exposure
     && snapshot.json.descriptorSha256 === bundle.descriptorSha256 && snapshot.json.abiSha256 === bundle.abiSha256;
   for (const bundle of bundles.values()) {
+    if (bundle.exposure === "package" && !governed.has(bundle.contractId)) {
+      if (bundle.version !== publication.packageVersion) invalid("Current private bundles must use the exact full owning package version.");
+      continue; // The canonical inspector and Registry bind these bytes, not retired evolution snapshots.
+    }
     const snapshot = snapshots.find(value => value.descriptor.contractId === bundle.contractId && value.descriptor.version === bundle.version);
     if (!snapshot || snapshot.state === "draft" || !matches(snapshot, bundle)) invalid("Published owned contracts must match retained immutable baseline snapshots.");
     if (snapshot.state !== "published" && record(snapshot.json.packageRelease).packageVersion !== publication.packageVersion)
@@ -78,9 +106,12 @@ export function planPublication(baseline: OwnedBaseline, publication: Publicatio
   }
   const utc = publication.publishedAtUtc.replace(/\+00:00$/u, "Z");
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.[0-9]{1,9})?Z$/u.test(utc)) invalid("Registry publication time must be UTC.");
+  const date = Date.parse(utc.slice(0, 19) + "Z");
+  if (utc.startsWith("0000-") || !Number.isFinite(date) || new Date(date).toISOString().slice(0, 19) !== utc.slice(0, 19)) invalid("Registry publication time has an invalid calendar value.");
   const timestamp = utc.replace(/\.([0-9]*?)0+Z$/u, (_, fraction: string) => (fraction ? "." + fraction : "") + "Z");
+  if (!baseline) return undefined;
   const confirm = (snapshot: OwnedSnapshot): OwnedSnapshot => {
-    if (snapshot.state === "draft" || record(snapshot.json.packageRelease).packageVersion !== publication.packageVersion) return snapshot;
+    if (!governed.has(snapshot.descriptor.contractId) || snapshot.state === "draft" || record(snapshot.json.packageRelease).packageVersion !== publication.packageVersion) return snapshot;
     const bundle = bundles.get(key(snapshot.descriptor.contractId, snapshot.descriptor.version));
     if (!bundle || !matches(snapshot, bundle)) invalid("A frozen snapshot is absent or differs from the published archive.");
     const evidence: OuterObject = ordered([["registryOrigin", publication.registryOrigin], ["packageId", publication.packageId], ["packageVersion", publication.packageVersion],
@@ -92,5 +123,5 @@ export function planPublication(baseline: OwnedBaseline, publication: Publicatio
     return { ...snapshot, state: "published", json: ordered([...outerKeys(snapshot.json).map((field): [string, Outer] => [field, field === "state" ? "published" : snapshot.json[field]!]), ["publication", evidence]]) };
   };
   return writeBaseline(baseline.packageId, new Map([...baseline.contracts].map(([name, value]) => [name,
-    { ...value, ...(value.current ? { current: confirm(value.current) } : {}), history: value.history.map(confirm) }])));
+    { ...value, ...(value.current ? { current: confirm(value.current) } : {}), history: value.history.map(confirm) }])), baseline.retiredPrivateContracts);
 }

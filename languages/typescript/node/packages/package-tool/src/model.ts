@@ -43,19 +43,18 @@ const MAXIMUM_PROVIDERS = 128;
 const MAXIMUM_RPC_BINDINGS = 128;
 
 export type SunderNodePackageConfig =
-  | (Omit<ResolvedNodePackageConfig, "schemaVersion" | "rpc"> & { readonly schemaVersion: 2 })
-  | (Omit<ResolvedNodePackageConfig, "schemaVersion" | "contracts" | "providers" | "usesContracts" | "rpcBindings"> & {
+  Omit<ResolvedNodePackageConfig, "schemaVersion" | "entry" | "services" | "contracts" | "providers" | "usesContracts" | "rpcBindings"> & {
     readonly schemaVersion: 3;
     readonly contracts?: never;
     readonly providers?: never;
     readonly usesContracts?: never;
     readonly rpcBindings?: never;
-  });
+  } & ({ readonly services: { readonly module: string }; readonly entry?: never } | { readonly services?: never; readonly entry: string });
 
 /** Validated build projection; V3 RPC declarations are derived, never authored. */
 export interface ResolvedNodePackageConfig {
   readonly schemaVersion: 2 | 3;
-  readonly rpc?: { readonly module: string; readonly export: string };
+  readonly services?: { readonly module: string };
   readonly id: string;
   readonly name: string;
   readonly summary?: string;
@@ -128,6 +127,9 @@ export interface PackageDependencyConfig {
 }
 
 export interface LoadedContract {
+  readonly modelProjection: import("./rpc-model-projection").RpcModelProjection;
+  readonly methodPolicies?: import("./rpc-model-projection").RpcMethodPolicies;
+  readonly naturalContent?:boolean;
   readonly appUse?: Readonly<{ required: boolean; actions: readonly ("discover" | "invoke" | "subscribe")[] }>;
   readonly runtimeUse?: Readonly<{ required: boolean; actions: readonly ("discover" | "invoke" | "subscribe")[] }>;
   readonly imported?: import("./rpc-contract-lock").ArtifactContract;
@@ -160,7 +162,7 @@ export async function loadProject(projectPath: string, options: import("./rpc-co
 export async function loadProjectWithOwnedFrame(projectPath: string, analysisOptions: OwnedAnalysisOptions = {}): Promise<LoadedProject> {
   const { project, configBytes } = await loadProjectConfiguration(projectPath);
   const { root, config } = project;
-  if (config.rpc === undefined) {
+  if (config.services === undefined) {
     for (const name of [BASELINE_FILE, `${BASELINE_FILE}.sunder-output.lock`, "sunder-contracts.lock.json",
       ".sunder/generated/rpc/authoring-receipt.v1.json", ".sunder/generated/rpc/package-export.v1.json", ".sunder/generated/rpc/owned-baseline.sha256"]) {
       if (await exists(resolve(root, name))) throw new Error("Existing V3 authoring source/baseline/lock evidence cannot be consumed through descriptor-first or non-RPC fallback.");
@@ -169,7 +171,9 @@ export async function loadProjectWithOwnedFrame(projectPath: string, analysisOpt
     return project;
   }
   const ownedRpc = await analyzeOwnedRpc(project, configBytes, analysisOptions);
-  return { ...project, ownedRpc, contracts: [...ownedRpc.contracts, ...ownedRpc.imports.contracts], config: { ...config, providers: ownedRpc.providers, usesContracts: [...ownedRpc.appUses, ...ownedRpc.runtimeUses, ...ownedRpc.imports.uses] } };
+  const contracts=[...ownedRpc.contracts,...ownedRpc.imports.contracts];
+  const workerCapabilities=[...new Set([...config.workerCapabilities,...(contracts.some(contract=>contract.methodPolicies!==undefined)?["rpc.extended-deadline.v1" as const]:[])])].sort();
+  return { ...project, ownedRpc, contracts, config: { ...config, workerCapabilities, providers: ownedRpc.providers, usesContracts: [...ownedRpc.appUses, ...ownedRpc.runtimeUses, ...ownedRpc.imports.uses] } };
 }
 
 /** Tool-private configuration reader shared by initial dependency selection and source analysis. */
@@ -205,8 +209,7 @@ export async function loadProjectConfiguration(projectPath: string): Promise<{ p
     }
   }
   const outputRoot = resolveInside(root, outputDirectory, "outputDirectory");
-  if (config.rpc !== undefined && (portablePathsContainOneAnother(outputDirectory, config.rpc.module)
-    || portablePathsContainOneAnother(outputDirectory, config.entry))) throw new Error("V3 RPC source and Worker entry must remain outside generated outputDirectory.");
+  if (config.services !== undefined && portablePathsContainOneAnother(outputDirectory, config.services.module)) throw new Error("Service source must remain outside generated outputDirectory.");
   const project = { root, configPath, config, outputRoot, contracts: [] };
   return { project, configBytes };
 }
@@ -229,28 +232,25 @@ export function currentRid(): SunderRid {
 
 function validateConfig(value: unknown): ResolvedNodePackageConfig {
   const config = record(value, "sunder.package.json");
+  if (config.schemaVersion !== 3) throw new Error("sunder.package.json schemaVersion must be 3. Migrate descriptor/router authoring to defineService and services.module; legacy authoring modes are retired.");
   const allowed = new Set(["schemaVersion", "id", "name", "summary", "version", "entry", "workerCapabilities", "contracts", "providers", "usesContracts", "dependencies", "outputDirectory", "maximumPackageBytes", "app", "rpcBindings", "nativeAssets"]);
   if (config.schemaVersion === 3) {
     for (const key of ["contracts", "providers", "usesContracts", "rpcBindings"]) allowed.delete(key);
-    allowed.add("rpc");
+    allowed.add("services");
   }
   for (const key of Object.keys(config)) if (!allowed.has(key)) throw new Error(`sunder.package.json contains unknown property '${key}'.`);
-  if (config.schemaVersion === 1) {
-    throw new Error("sunder.package.json schemaVersion 1 is no longer supported; migrate RPC package authoring to schemaVersion 2.");
-  }
-  if (config.schemaVersion !== 2 && config.schemaVersion !== 3) throw new Error("sunder.package.json schemaVersion must be exactly 2 (migration) or 3 (source authoring).");
-  let rpc: ResolvedNodePackageConfig["rpc"];
-  if (config.schemaVersion === 3 && config.rpc !== undefined) {
-    const input = record(config.rpc, "rpc"); only(input, "module", "export");
-    const module = projectPath(input.module, "rpc.module", 240, 32);
-    if (!/\.(ts|js)$/u.test(module) || module.toLowerCase().endsWith(".d.ts") || module.toLowerCase().startsWith(".sunder/") || module.toLowerCase().startsWith("node_modules/")) throw new Error("rpc.module must be authored .ts or .js source outside generated output.");
-    const exportName = text(input.export, "rpc.export", 128);
-    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(exportName)) throw new Error("rpc.export must be an identifier.");
-    rpc = { module, export: exportName };
+  let services: ResolvedNodePackageConfig["services"];
+  if (config.schemaVersion === 3 && config.services !== undefined) {
+    const input = record(config.services, "services"); only(input, "module");
+    const module = projectPath(input.module, "services.module", 240, 32);
+    if (!/\.(ts|js)$/u.test(module) || module.toLowerCase().endsWith(".d.ts") || module.toLowerCase().startsWith(".sunder/") || module.toLowerCase().startsWith("node_modules/")) throw new Error("services.module must be authored .ts or .js source outside generated output.");
+    if (config.entry !== undefined) throw new Error("Service Worker bootstrap is generated; remove entry and export configure from the service module for lifecycle hooks.");
+    services = { module };
   }
   const id = text(config.id, "id", 128);
   if (!isPackageId(id)) throw new Error("Package id must be lowercase dot-separated ASCII.");
   const name = displayText(config.name, "name", 256);
+  if (services && (typeof config.version !== "string" || !isSemanticVersion(config.version))) throw new Error(`rpc-authoring.private-package-version-invalid: ${String(config.id)}: owning package version '${String(config.version)}' must be strict full SemVer of at most 256 characters.`);
   const version = text(config.version, "version", 256);
   if (!isSemanticVersion(version)) throw new Error("Package version must be strict SemVer 2.0.");
   const workerCapabilities = boundedArray(
@@ -351,11 +351,11 @@ function validateConfig(value: unknown): ResolvedNodePackageConfig {
   validateRpcBindingOutputPaths(rpcBindings ?? []);
   const result: ResolvedNodePackageConfig = {
     schemaVersion: config.schemaVersion,
-    ...(rpc === undefined ? {} : { rpc }),
+    ...(services === undefined ? {} : { services }),
     id,
     name,
     version,
-    entry: projectPath(config.entry, "entry", 240, 32),
+    entry: services ? ".sunder/generated/rpc/worker.ts" : projectPath(config.entry, "entry", 240, 32),
     workerCapabilities,
     contracts,
     providers,
@@ -417,6 +417,7 @@ function validateNativeAssetTargetPaths(
   contracts: readonly ContractConfig[],
 ): void {
   const paths = [
+    { path: "contracts/rpc-model-projection.v1.json", label: "generated model projection" },
     { path: "bin/worker.cjs", label: "generated Worker entry point" },
     { path: "THIRD-PARTY-NOTICES/Bundled-Worker-Dependencies.txt", label: "generated Worker notice" },
     ...contracts.map((contract) => ({

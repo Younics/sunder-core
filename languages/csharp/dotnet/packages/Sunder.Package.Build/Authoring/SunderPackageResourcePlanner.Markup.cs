@@ -34,7 +34,8 @@ internal static partial class SunderPackageResourcePlanner
                             ?? throw Invalid("xaml-type-invalid", $"'{resource.SourcePath}' names missing ordinary x:Class '{attribute.Value}'.");
                         Record(type, attribute);
                     }
-                    else if (attribute.Name.LocalName is "DataType" or "TargetType") Qualified(attribute.Value, element, attribute, required: true);
+                    else if (attribute.Name.LocalName is "DataType" or "TargetType") Qualified(attribute.Value, element, attribute, required: true,
+                        bindingDataType: attribute.Name == XName.Get("DataType", xaml));
                     else if (attribute.Value.StartsWith("{x:Type ", StringComparison.Ordinal)) Qualified(attribute.Value, element, attribute, required: true);
                     else if (attribute.Value.StartsWith("{x:Static ", StringComparison.Ordinal) && attribute.Value.EndsWith('}'))
                     {
@@ -49,16 +50,16 @@ internal static partial class SunderPackageResourcePlanner
                 }
             }
 
-            void Qualified(string value, XElement element, XObject location, bool required)
+            void Qualified(string value, XElement element, XObject location, bool required, bool bindingDataType = false)
             {
                 if (value.StartsWith("{x:Type ", StringComparison.Ordinal) && value.EndsWith('}')) value = value[8..^1].Trim();
                 if (value.StartsWith('{')) throw Invalid("xaml-type-unsupported", $"'{resource.SourcePath}' has a nonliteral XAML type '{value}'.");
                 var parts = value.Split(':');
                 var ns = parts.Length == 2 ? element.GetNamespaceOfPrefix(parts[0]) : element.GetDefaultNamespace();
                 if (ns is null || parts.Length > 2) throw Invalid("xaml-type-invalid", $"'{resource.SourcePath}' has an unresolved XAML type '{value}'.");
-                Resolve(ns.NamespaceName, parts[^1], location, required);
+                Resolve(ns.NamespaceName, parts[^1], location, required, bindingDataType);
             }
-            void Resolve(string xmlns, string name, XObject location, bool required)
+            void Resolve(string xmlns, string name, XObject location, bool required, bool bindingDataType = false)
             {
                 if (xmlns == xaml || xmlns is "http://schemas.microsoft.com/expression/blend/2008" or "http://schemas.openxmlformats.org/markup-compatibility/2006") return;
                 IEnumerable<(string Namespace, IAssemblySymbol? Assembly)> scopes;
@@ -75,15 +76,15 @@ internal static partial class SunderPackageResourcePlanner
                 var candidates = scopes.Select(scope => scope.Assembly?.GetTypeByMetadataName(scope.Namespace + "." + name)
                     ?? (scope.Assembly is null ? compilation.GetTypeByMetadataName(scope.Namespace + "." + name) : null))
                     .OfType<INamedTypeSymbol>().Distinct<INamedTypeSymbol>(SymbolEqualityComparer.Default).ToArray();
-                if (candidates.Length == 1) Record(candidates[0], location);
+                if (candidates.Length == 1) Record(candidates[0], location, bindingDataType);
                 else if (required || candidates.Length > 1)
                     throw Invalid("xaml-type-invalid", $"'{resource.SourcePath}' has no unique type '{xmlns}:{name}'.");
             }
-            void Record(INamedTypeSymbol type, XObject location)
+            void Record(INamedTypeSymbol type, XObject location, bool bindingDataType = false)
             {
                 var line = (IXmlLineInfo)location;
                 if (SymbolEqualityComparer.Default.Equals(type.ContainingAssembly, compilation.Assembly))
-                    types.Add(new(type.ToDisplayString(), null, resource.SourcePath, line.LineNumber, line.LinePosition));
+                    types.Add(new(type.ToDisplayString(), null, resource.SourcePath, line.LineNumber, line.LinePosition) { IsBindingDataType = bindingDataType });
                 else assemblies.Add(type.ContainingAssembly.Name);
             }
         }

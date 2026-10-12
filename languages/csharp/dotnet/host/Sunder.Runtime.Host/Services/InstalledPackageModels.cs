@@ -62,23 +62,12 @@ internal sealed record InstalledPackageTargetRecord(
 }
 
 internal sealed record InstalledPackageExecutionRuntimeBindingRecord(
-    [property: JsonPropertyName("role")] string Role,
-    [property: JsonPropertyName("rid")] string Rid,
-    [property: JsonPropertyName("runtimeId")] string RuntimeId,
-    [property: JsonPropertyName("runtimeVersion")] string RuntimeVersion,
-    [property: JsonPropertyName("runtimePackagingRevision")] int RuntimePackagingRevision,
-    [property: JsonPropertyName("moduleAbi")] string ModuleAbi,
-    [property: JsonPropertyName("runtimeManifestSha256")] string RuntimeManifestSha256,
-    [property: JsonPropertyName("runtimeArtifactSha256")] string RuntimeArtifactSha256,
-    [property: JsonPropertyName("runtimeArtifactSize")] long RuntimeArtifactSize,
-    [property: JsonPropertyName("registryOrigin")] string RegistryOrigin,
-    [property: JsonPropertyName("acquisitionSource")] string AcquisitionSource,
-    [property: JsonPropertyName("signingKeyId")] string SigningKeyId,
-    [property: JsonPropertyName("trustStoreGeneration")] long TrustStoreGeneration,
-    [property: JsonPropertyName("runtimePolicyRevision")] long RuntimePolicyRevision,
-    [property: JsonPropertyName("runtimeLifecycleState")] string RuntimeLifecycleState,
-    [property: JsonPropertyName("policyObservedAtUtc")] DateTimeOffset PolicyObservedAtUtc,
-    [property: JsonPropertyName("resolvedAtUtc")] DateTimeOffset ResolvedAtUtc);
+    [property: JsonPropertyName("role"), JsonRequired] string Role,
+    [property: JsonPropertyName("rid"), JsonRequired] string Rid,
+    [property: JsonPropertyName("requirement"), JsonRequired] RuntimeExecutionRuntimeRequirement Requirement,
+    [property: JsonPropertyName("runtime"), JsonRequired] RuntimeExecutionRuntimeIdentity Runtime,
+    [property: JsonPropertyName("installedArtifact"), JsonRequired] RuntimeExecutionRuntimeInstalledArtifact InstalledArtifact,
+    [property: JsonPropertyName("resolvedAtUtc"), JsonRequired] DateTimeOffset ResolvedAtUtc);
 
 internal sealed record InstalledPackageCapabilityGrant(
     [property: JsonPropertyName("capability")] string Capability,

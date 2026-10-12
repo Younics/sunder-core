@@ -116,7 +116,8 @@ internal static class PackageTargetBuilder
     public static IReadOnlyList<SunderPackageTargetManifest>? StampRpcCapabilities(
         IReadOnlyList<SunderPackageTargetManifest> targets,
         IReadOnlySet<string> roles,
-        TaskLoggingHelper log)
+        TaskLoggingHelper log,
+        IReadOnlySet<string>? extendedDeadlineRoles = null)
     {
         var result = new List<SunderPackageTargetManifest>(targets.Count);
         foreach (var target in targets)
@@ -130,6 +131,8 @@ internal static class PackageTargetBuilder
             {
                 capabilities.Add(SunderPackageFormat.RpcV1Capability);
             }
+            if (extendedDeadlineRoles?.Contains(target.Role!) == true)
+                capabilities.Add(Sunder.Sdk.Compatibility.SunderSdkCapabilities.RpcExtendedDeadlineV1);
             if (capabilities.Count > SunderPackageFormat.MaxHostCapabilities)
             {
                 log.LogError(

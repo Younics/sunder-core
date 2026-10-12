@@ -88,8 +88,6 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
         = (_, _) => Task.FromResult<IReadOnlyList<RuntimeExecutionRuntimePackageReference>>([]);
     public Func<RuntimeExecutionRuntimeEnsureRequest, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>> EnsureExecutionRuntime { get; set; }
         = (_, _) => throw new NotSupportedException();
-    public Func<string, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>> ImportExecutionRuntime { get; set; }
-        = (_, _) => throw new NotSupportedException();
     public Func<RuntimeExecutionRuntimeIdentity, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>> VerifyExecutionRuntime { get; set; }
         = (_, _) => throw new NotSupportedException();
     public Func<RuntimeExecutionRuntimeIdentity, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>> RepairExecutionRuntime { get; set; }
@@ -192,10 +190,27 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
         CancellationToken token) => StartupCacheReset(challenge, token);
     public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken token) => Installed(token);
     public Task<IReadOnlyList<InstalledExecutionRuntimeSummary>> GetExecutionRuntimesAsync(CancellationToken token) => ExecutionRuntimes(token);
+    public Func<CancellationToken, Task<RuntimeExecutionRuntimeSettings>> RuntimeSettings { get; set; } = _ => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimeSettingsUpdateRequest, CancellationToken, Task<RuntimeExecutionRuntimeSettings>> SaveRuntimeSettings { get; set; } = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimeInstallPreviewRequest, CancellationToken, Task<RuntimeExecutionRuntimeInstallPlan>> RuntimeInstallPreview { get; set; } = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimePlanConfirmation, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>> RuntimeInstallApply { get; set; } = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimeUpdatePreviewRequest, CancellationToken, Task<RuntimeExecutionRuntimeUpdatePlan>> RuntimeUpdatePreview { get; set; } = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimePlanConfirmation, CancellationToken, Task<RuntimeExecutionRuntimeUpdateResult>> RuntimeUpdatePrepare { get; set; } = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimeUpdateApplyRequest, CancellationToken, Task<RuntimeExecutionRuntimeUpdateResult>> RuntimeUpdateApply { get; set; } = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimeUninstallPreviewRequest, CancellationToken, Task<RuntimeExecutionRuntimeUninstallPlan>> RuntimeRemovePreview { get; set; } = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeExecutionRuntimePlanConfirmation, CancellationToken, Task<RuntimeExecutionRuntimeUninstallResult>> RuntimeRemoveApply { get; set; } = (_, _) => throw new NotSupportedException();
+    public Task<RuntimeExecutionRuntimeSettings> GetExecutionRuntimeSettingsAsync(CancellationToken token) => RuntimeSettings(token);
+    public Task<RuntimeExecutionRuntimeSettings> UpdateExecutionRuntimeSettingsAsync(RuntimeExecutionRuntimeSettingsUpdateRequest request, CancellationToken token) => SaveRuntimeSettings(request, token);
+    public Task<RuntimeExecutionRuntimeInstallPlan> PreviewExecutionRuntimeInstallAsync(RuntimeExecutionRuntimeInstallPreviewRequest request, CancellationToken token) => RuntimeInstallPreview(request, token);
+    public Task<RuntimeExecutionRuntimeOperationResult> ApplyExecutionRuntimeInstallAsync(RuntimeExecutionRuntimePlanConfirmation request, CancellationToken token) => RuntimeInstallApply(request, token);
+    public Task<RuntimeExecutionRuntimeUpdatePlan> PreviewExecutionRuntimeUpdateAsync(RuntimeExecutionRuntimeUpdatePreviewRequest request, CancellationToken token) => RuntimeUpdatePreview(request, token);
+    public Task<RuntimeExecutionRuntimeUpdateResult> PrepareExecutionRuntimeUpdateAsync(RuntimeExecutionRuntimePlanConfirmation request, CancellationToken token) => RuntimeUpdatePrepare(request, token);
+    public Task<RuntimeExecutionRuntimeUpdateResult> ApplyExecutionRuntimeUpdateAsync(RuntimeExecutionRuntimeUpdateApplyRequest request, CancellationToken token) => RuntimeUpdateApply(request, token);
+    public Task<RuntimeExecutionRuntimeUninstallPlan> PreviewExecutionRuntimeUninstallAsync(RuntimeExecutionRuntimeUninstallPreviewRequest request, CancellationToken token) => RuntimeRemovePreview(request, token);
+    public Task<RuntimeExecutionRuntimeUninstallResult> ApplyExecutionRuntimeUninstallAsync(RuntimeExecutionRuntimePlanConfirmation request, CancellationToken token) => RuntimeRemoveApply(request, token);
     public Task<InstalledExecutionRuntimeSummary> GetExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => ExecutionRuntime(identity, token);
     public Task<IReadOnlyList<RuntimeExecutionRuntimePackageReference>> GetExecutionRuntimeReferencesAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => ExecutionRuntimeReferences(identity, token);
     public Task<RuntimeExecutionRuntimeOperationResult> EnsureExecutionRuntimeAsync(RuntimeExecutionRuntimeEnsureRequest request, CancellationToken token) => EnsureExecutionRuntime(request, token);
-    public Task<RuntimeExecutionRuntimeOperationResult> ImportExecutionRuntimeAsync(string filePath, CancellationToken token) => ImportExecutionRuntime(filePath, token);
     public Task<RuntimeExecutionRuntimeOperationResult> VerifyExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => VerifyExecutionRuntime(identity, token);
     public Task<RuntimeExecutionRuntimeOperationResult> RepairExecutionRuntimeAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token) => RepairExecutionRuntime(identity, token);
     public Task<RuntimeExecutionRuntimeOperationResult> CollectExecutionRuntimeGarbageAsync(CancellationToken token) => GarbageCollectExecutionRuntimes(token);

@@ -33,15 +33,15 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var descriptor = SunderRpcContractDescriptor.Parse(await File.ReadAllBytesAsync(Path.Combine(rpcFixtures, "conformance/valid/minimal.rpc.json")));
         await File.WriteAllBytesAsync(SunderRpcContractCache.GetDescriptorPath(cache, descriptor.Sha256), descriptor.GetCanonicalUtf8());
         File.Copy(Path.Combine(rpcFixtures, "authoring/conformance/valid/cache-entry-receipt.json"), SunderRpcContractCache.GetReceiptPath(cache, descriptor.Sha256));
+        ModelProjectionTestEvidence.Seed(cache, SunderRpcAuthoringDocuments.ReadContractLock(Path.Combine(native, "sunder-contracts.lock.json")).PackageArtifacts["example.dependency"]);
         await File.WriteAllTextAsync(Path.Combine(native, "ImportedProvider.cs"), """
             using Sunder.Sdk.Rpc;
-            using Sunder.Generated.Rpc;
-            using Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal;
-            [SunderRpcProvider(typeof(IMinimalProviderService), ProviderId = "example.generated.imported")]
+            using Sunder.Sdk.Services;
+            using Sunder.Generated.Packages.Example_Dependency_Services;
+            [SunderServiceProvider(typeof(IMinimalProviderService), ProviderId = "example.generated.imported")]
             public sealed partial class ImportedProvider : IMinimalProviderService
             {
-                public ValueTask<Empty> PingAsync(SunderRpcInvocationContext context, Empty request, CancellationToken cancellationToken)
-                    => ValueTask.FromResult(request);
+                public ValueTask PingAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
             }
             """);
         Directory.CreateDirectory(Path.Combine(native, "helper"));
@@ -75,7 +75,6 @@ public sealed partial class ImplementationFirstRpcBuildTests
         await File.WriteAllBytesAsync(Path.Combine(native, "Assets/image.bin"), [1, 2, 3, 4]);
         foreach (var rid in new[] { first, second }) await File.WriteAllTextAsync(Path.Combine(native, "native", rid + ".txt"), "native bytes for " + rid);
         AssertSuccess(await RunDotnetAsync(native, ["restore", project, "--disable-parallel", "--nologo", "-v:quiet"]));
-        AssertSuccess(await RunDotnetAsync(native, ["msbuild", project, "-t:FreezeSunderContracts", "-nodeReuse:false", "-nologo", "-v:quiet"]));
         var handoff = ResolvePhysicalTemporaryPath(scope.CreateDirectory("native-artifacts"));
         var selections = new JsonArray();
         foreach (var rid in new[] { first, second })
@@ -244,7 +243,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
             await File.WriteAllBytesAsync(manifestPath, originalManifest); await File.WriteAllBytesAsync(indexPath, originalIndex);
             File.Delete(Path.Combine(handoff, first, "sunder-dev/payload/shared/unindexed.txt"));
         }
-        foreach (var name in new[] { "sunder-contracts.owned.json", "sunder-contracts.lock.json" })
+        var unexpectedBaseline = Path.Combine(relocated, "sunder-contracts.owned.json");
+        await File.WriteAllTextAsync(unexpectedBaseline, "{}"); await Reject(); File.Delete(unexpectedBaseline);
+        foreach (var name in new[] { "sunder-contracts.lock.json" })
         {
             var path = Path.Combine(relocated, name); var bytes = await File.ReadAllBytesAsync(path);
             await File.AppendAllTextAsync(path, " "); await Reject(); await File.WriteAllBytesAsync(path, bytes);

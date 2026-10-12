@@ -188,7 +188,7 @@ public sealed class AppWebBridgeTests
                 _ => { });
             var origin = server.Origin.GetLeftPart(UriPartial.Authority);
 
-            bridge.NavigationStarting();
+            await bridge.NavigationStartingAsync();
             var firstNonce = bridge.SessionNonce;
             await bridge.HandleMessageAsync(Request(firstNonce, origin, "b_0", "rpc.discover", new { contractId = "example.rpc" }));
             Assert.Equal(0, rpc.DiscoverCalls);
@@ -199,7 +199,7 @@ public sealed class AppWebBridgeTests
                 Request(firstNonce, origin, "b_1", "rpc.discover", new { contractId = "example.rpc" }));
             await rpc.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            bridge.NavigationStarting();
+            await bridge.NavigationStartingAsync();
             var secondNonce = bridge.SessionNonce;
             Assert.NotEqual(firstNonce, secondNonce);
             await bridge.EstablishAsync(server.GetRouteUri("/workspace"));
@@ -208,14 +208,19 @@ public sealed class AppWebBridgeTests
                 Request(secondNonce, origin, "b_1", "rpc.discover", new { contractId = "example.rpc" }));
             await rpc.SecondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
+            await bridge.HandleMessageAsync(Request(firstNonce, origin, "b_1", "rpc.discover", new { contractId = "example.rpc" }));
+            await bridge.HandleMessageAsync($$"""{"nonce":"{{firstNonce}}","requestId":"b_1","broken":""");
+            Assert.Empty(webView.Scripts); // Old authentication/parse failures cannot reject the new b_1.
             rpc.FirstRelease.TrySetResult();
             await firstRequest.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(1, bridge.PendingRequestCount);
+            Assert.Equal(0, bridge.ProviderHandleCount); // Late discovery must not repopulate the new document's handles.
             Assert.Empty(webView.Scripts);
 
             rpc.SecondRelease.TrySetResult();
             await secondRequest.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(0, bridge.PendingRequestCount);
+            Assert.Equal(1, bridge.ProviderHandleCount);
             Assert.Single(webView.Scripts);
             Assert.Contains("b_1", webView.Scripts[0], StringComparison.Ordinal);
             Assert.Contains("providerHandle", webView.Scripts[0], StringComparison.Ordinal);
@@ -272,7 +277,7 @@ public sealed class AppWebBridgeTests
 
             Assert.Equal(0, rpc.DiscoverCalls);
             Assert.Equal(0, bridge.PendingRequestCount);
-            Assert.Equal(2, webView.Scripts.Count);
+            Assert.Single(webView.Scripts); // A foreign nonce never receives a current-document response.
             Assert.All(webView.Scripts, script => Assert.Equal(
                 "rpc.bridge.authentication",
                 ReadResponse(script).GetProperty("error").GetProperty("code").GetString()));
@@ -417,7 +422,7 @@ public sealed class AppWebBridgeTests
             webView.ClearScripts();
 
             var malformed = $$"""
-                {"requestId":"b_malformed","protocol":"{{AppWebBridge.Protocol}}","broken":
+                {"requestId":"b_malformed","nonce":"{{bridge.SessionNonce}}","protocol":"{{AppWebBridge.Protocol}}","broken":
                 """;
             await bridge.HandleMessageAsync(malformed);
 
@@ -603,6 +608,173 @@ public sealed class AppWebBridgeTests
         }
     }
 
+    [Theory]
+    [InlineData("false")]
+    [InlineData(null)]
+    public async Task Establish_RequiresPositiveBootstrapAcknowledgementAndRetiresFailedDocument(string? result)
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var webView = new TestWebView { EvaluateScript = _ => Task.FromResult(result) };
+            await using var bridge = new AppWebBridge(webView, server, UnavailableAppWebRpcClient.Instance,
+                EmptyCatalog(root), new ExternalBrowserService(), _ => { });
+            await Assert.ThrowsAsync<InvalidOperationException>(() => bridge.EstablishAsync(server.BaseUri));
+            Assert.Equal(2, webView.Scripts.Count);
+            var retired = ReadResponse(webView.Scripts[1]);
+            Assert.Equal("retired", retired.GetProperty("type").GetString());
+            Assert.Equal(bridge.SessionNonce, retired.GetProperty("nonce").GetString());
+            webView.ClearScripts();
+            await bridge.HandleMessageAsync(Request(bridge.SessionNonce, server.Origin.GetLeftPart(UriPartial.Authority),
+                "b_after_failed_bootstrap", "navigation.getState", new { }));
+            Assert.Empty(webView.Scripts);
+            Assert.Equal(0, bridge.PendingRequestCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("true")]
+    [InlineData("false")]
+    public async Task Establish_LateCompletionCannotRetireReplacementDocument(string oldResult)
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            var oldEvaluation = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var webView = new TestWebView { EvaluateScript = _ => oldEvaluation.Task };
+            await using var bridge = new AppWebBridge(webView, server, UnavailableAppWebRpcClient.Instance,
+                EmptyCatalog(root), new ExternalBrowserService(), _ => { });
+            var oldNonce = bridge.SessionNonce;
+            var oldEstablishment = bridge.EstablishAsync(server.BaseUri);
+            webView.EvaluateScript = null;
+            await bridge.NavigationStartingAsync();
+            await bridge.EstablishAsync(server.GetRouteUri("/workspace"));
+            var currentNonce = bridge.SessionNonce;
+            webView.ClearScripts();
+            oldEvaluation.SetResult(oldResult);
+            if (oldResult == "true") await oldEstablishment;
+            else await Assert.ThrowsAsync<InvalidOperationException>(() => oldEstablishment);
+            var retirement = ReadResponse(Assert.Single(webView.Scripts));
+            Assert.Equal("retired", retirement.GetProperty("type").GetString());
+            Assert.Equal(oldNonce, retirement.GetProperty("nonce").GetString());
+            webView.ClearScripts();
+            await bridge.HandleMessageAsync(Request(currentNonce, server.Origin.GetLeftPart(UriPartial.Authority),
+                "b_1", "navigation.getState", new { }));
+            var response = ReadResponse(Assert.Single(webView.Scripts));
+            Assert.Equal(currentNonce, response.GetProperty("nonce").GetString());
+            Assert.Equal("/workspace", response.GetProperty("value").GetProperty("route").GetString());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ViewRetirement_CancelsOnlyItsRequestsAndPreservesSharedActivationClient()
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var firstView = new TestWebView();
+            using var secondView = new TestWebView();
+            var rpc = new BlockingRpcClient();
+            await using var first = new AppWebBridge(firstView, server, new NonDisposingAppWebRpcClient(rpc),
+                EmptyCatalog(root), new ExternalBrowserService(), _ => { });
+            await using var second = new AppWebBridge(secondView, server, new NonDisposingAppWebRpcClient(rpc),
+                EmptyCatalog(root), new ExternalBrowserService(), _ => { });
+            await first.EstablishAsync(server.BaseUri);
+            await second.EstablishAsync(server.BaseUri);
+            firstView.ClearScripts();
+            secondView.ClearScripts();
+            var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+            var firstCall = first.HandleMessageAsync(Request(first.SessionNonce, origin, "b_1", "rpc.discover", new { contractId = "example.rpc" }));
+            var secondCall = second.HandleMessageAsync(Request(second.SessionNonce, origin, "b_1", "rpc.discover", new { contractId = "example.rpc" }));
+            await Task.WhenAll(rpc.FirstStarted.Task, rpc.SecondStarted.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            await first.DisposeAsync();
+            Assert.True(rpc.FirstToken.IsCancellationRequested);
+            Assert.False(rpc.SecondToken.IsCancellationRequested);
+            Assert.Equal(0, rpc.DisposeCalls);
+            Assert.Equal(0, first.PendingRequestCount);
+            Assert.Equal(1, second.PendingRequestCount);
+            Assert.Equal("retired", ReadResponse(Assert.Single(firstView.Scripts)).GetProperty("type").GetString());
+            Assert.Empty(secondView.Scripts);
+            rpc.FirstRelease.SetResult();
+            rpc.SecondRelease.SetResult();
+            await Task.WhenAll(firstCall, secondCall).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("result", ReadResponse(Assert.Single(secondView.Scripts)).GetProperty("type").GetString());
+            await second.DisposeAsync();
+            Assert.Equal(0, rpc.DisposeCalls);
+            await rpc.DisposeAsync();
+            Assert.Equal(1, rpc.DisposeCalls);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ViewDisposal_NotifiesDocumentBeforeDetachingOrDisposingWebView()
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            // Preserve control-thread affinity across the deliberately asynchronous cleanup.
+            // Do not borrow Dispatcher.UIThread: another parallel test may own that singleton.
+            var previousContext = SynchronizationContext.Current;
+            using var context = new TestSupport.SingleThreadSynchronizationContext();
+            try
+            {
+                SynchronizationContext.SetSynchronizationContext(context);
+                var verification = VerifyDisposalAsync();
+                context.RunUntilCompleted(verification);
+                await verification;
+            }
+            finally { SynchronizationContext.SetSynchronizationContext(previousContext); }
+
+            async Task VerifyDisposalAsync()
+            {
+                using var webView = new TestWebView();
+                using var view = new AppWebPackageViewControl(server.BaseUri, root, server, new TestWebViewFactory(webView),
+                    UnavailableAppWebRpcClient.Instance, EmptyCatalog(root), new ExternalBrowserService());
+                await view.Bridge.EstablishAsync(server.BaseUri);
+                var notification = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                webView.ClearScripts();
+                webView.EvaluateScript = script =>
+                {
+                    Assert.False(webView.Disposed.Task.IsCompleted);
+                    Assert.Same(webView.Control, view.Content);
+                    Assert.Equal("retired", ReadResponse(script).GetProperty("type").GetString());
+                    return notification.Task;
+                };
+                webView.OnDispose = () => Assert.Null(view.Content);
+                view.Dispose();
+                view.Dispose();
+                Assert.Single(webView.Scripts);
+                Assert.False(webView.Disposed.Task.IsCompleted);
+                notification.SetResult("true");
+                await webView.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [ExternalArtifactFact("SUNDER_REQUIRE_APP_WEB_BRIDGE_VM")]
     [Trait("Category", "Conformance")]
     [Trait("Capability", "Process")]
@@ -671,7 +843,9 @@ public sealed class AppWebBridgeTests
                 webView,
                 Request(firstNonce, origin, "b_4", "navigation.getState", new { }));
 
-            bridge.NavigationStarting();
+            await bridge.NavigationStartingAsync();
+            var firstRetirement = new BridgeVmResponse(Assert.Single(webView.Scripts), ReadResponse(Assert.Single(webView.Scripts)));
+            webView.ClearScripts();
             var secondNonce = bridge.SessionNonce;
             Assert.NotEqual(firstNonce, secondNonce);
             await bridge.EstablishAsync(server.GetRouteUri("/workspace"));
@@ -693,6 +867,7 @@ public sealed class AppWebBridgeTests
                 secondNonce,
                 firstBootstrap,
                 secondBootstrap,
+                firstRetirement,
                 responses = new
                 {
                     firstResult,
@@ -737,7 +912,12 @@ public sealed class AppWebBridgeTests
                 new VmExpectedRequest("first", Request(firstNonce, origin, "b_2", "navigation.navigate", new { route = "not-a-route" })),
                 new VmExpectedRequest("first", Request(firstNonce, origin, "b_3", "navigation.getState", new { })),
                 new VmExpectedRequest("first", Request(firstNonce, origin, "b_4", "navigation.getState", new { })),
+                new VmExpectedRequest("first", Request(firstNonce, origin, "b_5", "navigation.getState", new { })),
+                new VmExpectedRequest("first", Request(firstNonce, origin, "b_6", "rpc.watch", new { afterRevision = 0, afterSequence = 0 })),
+                new VmExpectedRequest("first", Request(firstNonce, origin, "b_7", "rpc.watch", new { afterRevision = 0, afterSequence = 0 })),
                 new VmExpectedRequest("second", Request(secondNonce, origin, "b_1", "navigation.getState", new { })),
+                new VmExpectedRequest("second", Request(secondNonce, origin, "b_2", "navigation.getState", new { })),
+                new VmExpectedRequest("second", Request(secondNonce, origin, "b_2", "bridge.cancel", new { targetRequestId = "b_2" })),
             };
             var actualRequests = result.GetProperty("requests").EnumerateArray().ToArray();
             Assert.Equal(expectedRequests.Length, actualRequests.Length);
@@ -800,6 +980,7 @@ public sealed class AppWebBridgeTests
 
         const configuration = JSON.parse(await readFile(process.argv[2], "utf8"));
         const requests = [];
+        const documents = [];
 
         function invariant(condition, message) {
           if (!condition) throw new Error(message);
@@ -811,8 +992,28 @@ public sealed class AppWebBridgeTests
           invariant(isDeepStrictEqual(actual, [...expected].sort()), `${label} keys were ${JSON.stringify(actual)}.`);
         }
 
-        function createDocument(label, script, origin) {
-          const sandbox = { TextEncoder, AbortController, setTimeout, clearTimeout, queueMicrotask };
+        function createDocument(label, script, origin, initialize = true) {
+          const timers = new Map();
+          const maps = [];
+          const events = new EventTarget();
+          let timerAllocations = 0;
+          class ObservedMap extends Map {
+            sets = 0;
+            constructor() { super(); maps.push(this); }
+            set(key, value) { this.sets++; return super.set(key, value); }
+          }
+          const sandbox = { TextEncoder, AbortController, Event, CustomEvent, queueMicrotask, Map: ObservedMap,
+            addEventListener: events.addEventListener.bind(events),
+            removeEventListener: events.removeEventListener.bind(events),
+            dispatchEvent: events.dispatchEvent.bind(events),
+            setTimeout(callback, delay) {
+              timerAllocations++;
+              const timer = setTimeout(() => { timers.delete(timer); callback(); }, delay);
+              timers.set(timer, true);
+              return timer;
+            },
+            clearTimeout(timer) { timers.delete(timer); clearTimeout(timer); },
+          };
           sandbox.window = sandbox;
           sandbox.location = Object.freeze({ origin });
           sandbox.invokeCSharpAction = (raw) => {
@@ -830,8 +1031,87 @@ public sealed class AppWebBridgeTests
           };
           const context = vm.createContext(sandbox, { name: `app-web-bridge-${label}` });
           const compiled = new vm.Script(script, { filename: `app-web-bridge-${label}.js` });
-          const initialized = compiled.runInContext(context);
-          return { label, context, window: sandbox, compiled, initialized };
+          const document = { label, context, window: sandbox, compiled, initialized: false, maps, timers,
+            get timerAllocations() { return timerAllocations; } };
+          documents.push(document);
+          if (initialize) document.initialized = compiled.runInContext(context);
+          return document;
+        }
+
+        // The SDK handoff algorithm: subscribe first, then inspect the immutable API.
+        // This is deliberately not a polling loop or a second transport implementation.
+        function waitForReady(document) {
+          return new Promise((resolve, reject) => {
+            const cleanup = () => {
+              document.window.removeEventListener("sunder:ready", onReady);
+              document.window.removeEventListener("pagehide", onHidden);
+            };
+            const accept = (candidate) => {
+              if (candidate === undefined) return;
+              cleanup();
+              if (candidate !== document.window.sunder || candidate.protocol !== "sunder.bridge.v1"
+                  || candidate.version !== 1 || candidate.signal?.aborted !== false) {
+                reject(new Error("Bridge is incompatible or retired."));
+              } else resolve(candidate);
+            };
+            const onReady = (event) => accept(event.detail);
+            const onHidden = () => { cleanup(); reject(new Error("Document retired before readiness.")); };
+            document.window.addEventListener("sunder:ready", onReady);
+            document.window.addEventListener("pagehide", onHidden, { once: true });
+            accept(document.window.sunder);
+          });
+        }
+
+        function observedSignal() {
+          const controller = new AbortController();
+          const signal = controller.signal;
+          const listeners = new Set();
+          const add = signal.addEventListener.bind(signal);
+          const remove = signal.removeEventListener.bind(signal);
+          let registrations = 0;
+          signal.addEventListener = (type, callback, options) => {
+            registrations++;
+            listeners.add(callback);
+            add(type, callback, options);
+          };
+          signal.removeEventListener = (type, callback, options) => {
+            listeners.delete(callback);
+            remove(type, callback, options);
+          };
+          return { controller, signal, listeners, get registrations() { return registrations; } };
+        }
+
+        async function preAbortedCallsAllocateNothing(document) {
+          const api = document.window.sunder;
+          const observed = observedSignal();
+          observed.controller.abort();
+          const options = { signal: observed.signal, get deadline() { throw new Error("Pre-aborted call serialized options."); } };
+          const payload = { toJSON() { throw new Error("Pre-aborted call serialized its payload."); } };
+          const beforeRequests = requests.length;
+          const beforeTimers = document.timerAllocations;
+          const beforeSets = document.maps.reduce((sum, map) => sum + map.sets, 0);
+          const calls = [
+            () => api.rpc.discover("example.rpc", options),
+            () => api.rpc.invoke("opaque", "service", "method", payload, options),
+            () => api.getNavigationState(options),
+            () => api.navigate("/workspace", options),
+            () => api.openExternal("https://example.test", options),
+            () => api.rpc.watch(0, 0, options)[Symbol.asyncIterator]().next(),
+            () => api.rpc.subscribe("opaque", "service", "method", payload, options)[Symbol.asyncIterator]().next(),
+          ];
+          for (const call of calls) {
+            const tracked = track(call());
+            await tracked.completion.catch(() => {});
+            invariant(tracked.state.status === "rejected", "Pre-aborted operation did not reject.");
+            const error = tracked.state.error;
+            invariant(error.name === "SunderRpcError" && error.error.kind === "cancelled"
+              && error.error.code === "rpc.bridge.cancelled" && error.error.dispatchState === "not-dispatched"
+              && error.error.retrySafety === "safe", "Pre-aborted failure lost its non-dispatch guarantee.");
+          }
+          invariant(requests.length === beforeRequests, "Pre-aborted call dispatched native work or cancellation.");
+          invariant(document.timerAllocations === beforeTimers, "Pre-aborted call allocated a timer.");
+          invariant(document.maps.reduce((sum, map) => sum + map.sets, 0) === beforeSets, "Pre-aborted call allocated pending state.");
+          invariant(observed.registrations === 0, "Pre-aborted call registered an abort listener.");
         }
 
         function validateResponse(response, label) {
@@ -887,14 +1167,39 @@ public sealed class AppWebBridgeTests
           invariant(wrongOrigin.initialized === false, "Bootstrap admitted the wrong origin.");
           invariant(!Object.prototype.hasOwnProperty.call(wrongOrigin.window, "sunder"), "Wrong-origin bootstrap exposed the API.");
 
-          const first = createDocument("first", configuration.firstBootstrap, configuration.origin);
+          const missingNative = createDocument("missing-native", configuration.firstBootstrap, configuration.origin, false);
+          delete missingNative.window.invokeCSharpAction;
+          let missingReady = 0;
+          missingNative.window.addEventListener("sunder:ready", () => missingReady++);
+          invariant(missingNative.compiled.runInContext(missingNative.context) === false, "Bootstrap admitted a missing native callback.");
+          invariant(missingReady === 0 && missingNative.window.sunder === undefined, "Failed bootstrap announced readiness.");
+          const abandoned = createDocument("abandoned", configuration.firstBootstrap, configuration.origin, false);
+          const abandonedReady = track(waitForReady(abandoned));
+          abandoned.window.dispatchEvent(new Event("pagehide"));
+          await abandonedReady.completion.catch(() => {});
+          invariant(abandonedReady.state.status === "rejected", "Readiness outlived its document.");
+
+          const first = createDocument("first", configuration.firstBootstrap, configuration.origin, false);
+          const earlyReady = track(waitForReady(first));
+          let readyEvents = 0;
+          first.window.addEventListener("sunder:ready", (event) => {
+            readyEvents++;
+            invariant(event.detail === first.window.sunder && Object.isFrozen(event.detail)
+              && event.detail.signal.aborted === false, "Ready event ran before immutable live API installation.");
+          });
+          invariant(earlyReady.state.status === "pending", "Readiness completed before bootstrap.");
+          first.initialized = first.compiled.runInContext(first.context);
           invariant(first.initialized === true, "First bootstrap did not initialize.");
           const firstApi = first.window.sunder;
+          invariant(await earlyReady.completion === firstApi, "Early readiness returned a different API.");
+          invariant(await waitForReady(first) === firstApi, "Late readiness missed the installed API.");
           invariant(first.compiled.runInContext(first.context) === true, "Idempotent bootstrap did not report success.");
+          invariant(readyEvents === 1, "Idempotent bootstrap repeated the ready event.");
           invariant(first.window.sunder === firstApi, "Idempotent bootstrap replaced the API object.");
           invariant(Object.isFrozen(firstApi), "Bridge API is mutable.");
           invariant(Object.isFrozen(firstApi.resourceProfile), "Resource profile is mutable.");
           invariant(Object.isFrozen(firstApi.resourceProfile.effectivePolicy), "Effective resource policy is mutable.");
+          await preAbortedCallsAllocateNothing(first);
 
           const firstCall = begin(first, () => firstApi.getNavigationState(), "first result");
           invariant(firstCall.state.status === "pending", "Unary request did not remain pending before native response.");
@@ -934,6 +1239,41 @@ public sealed class AppWebBridgeTests
           feed(first, configuration.responses.firstLateTarget, "late response target result");
           await lateIsolation.completion;
 
+          const ownedSignal = observedSignal();
+          const retiringCall = begin(first, () => firstApi.getNavigationState({ signal: ownedSignal.signal }), "retiring unary");
+          const retiringStream = firstApi.rpc.watch(0, 0, { signal: ownedSignal.signal })[Symbol.asyncIterator]();
+          const retiringNext = track(retiringStream.next());
+          const queuedStream = firstApi.rpc.watch(0, 0, { signal: ownedSignal.signal })[Symbol.asyncIterator]();
+          first.window.__sunderReceive(JSON.stringify({ protocol: "sunder.bridge.v1", version: 1, nonce: configuration.firstNonce,
+            requestId: "b_7", type: "event", value: { sequence: 1 }, error: null }));
+          let lifetimeAborts = 0;
+          firstApi.signal.addEventListener("abort", () => {
+            lifetimeAborts++;
+            invariant(first.timers.size === 0 && first.maps.every(map => map.size === 0)
+              && ownedSignal.listeners.size === 0, "Lifetime abort preceded pending-work cleanup.");
+          });
+          feed(first, configuration.firstRetirement, "native retirement");
+          feed(first, configuration.firstRetirement, "duplicate native retirement");
+          await Promise.all([retiringCall.completion.catch(() => {}), retiringNext.completion.catch(() => {})]);
+          invariant(firstApi.signal.aborted && lifetimeAborts === 1, "Native retirement did not abort exactly once.");
+          invariant(firstApi.signal.reason.error.code === "rpc.bridge.retired", "Retirement reason lost its structured code.");
+          for (const tracked of [retiringCall, retiringNext]) {
+            invariant(tracked.state.status === "rejected" && tracked.state.error.error.code === "rpc.bridge.retired"
+              && tracked.state.error.error.dispatchState === "possibly-dispatched", "Retirement did not terminate dispatched work.");
+          }
+          const queuedNext = track(queuedStream.next());
+          await queuedNext.completion.catch(() => {});
+          invariant(queuedNext.state.status === "rejected", "Retirement delivered a queued old-document event.");
+          invariant(first.compiled.runInContext(first.context) === false && readyEvents === 1, "Retired bootstrap became ready again.");
+          const lateReady = track(waitForReady(first));
+          await lateReady.completion.catch(() => {});
+          invariant(lateReady.state.status === "rejected", "Late readiness accepted a retired API.");
+          const beforeRetiredCalls = requests.length;
+          const afterRetirement = track(firstApi.getNavigationState());
+          await afterRetirement.completion.catch(() => {});
+          invariant(afterRetirement.state.error?.error.dispatchState === "not-dispatched"
+            && requests.length === beforeRetiredCalls && first.timers.size === 0, "Retired API dispatched or retained a new request.");
+
           const second = createDocument("second", configuration.secondBootstrap, configuration.origin);
           invariant(second.initialized === true, "Rotated bootstrap did not initialize.");
           invariant(configuration.firstNonce !== configuration.secondNonce, "Navigation did not rotate the nonce.");
@@ -944,9 +1284,19 @@ public sealed class AppWebBridgeTests
             rotated.state.status === "pending",
             "The current document accepted a prior-document response with the same request id.",
           );
+          feed(second, configuration.firstRetirement, "late prior-document retirement");
+          invariant(!second.window.sunder.signal.aborted, "Prior-document retirement aborted the current document.");
           feed(second, configuration.responses.secondResult, "rotated request result");
           const secondValue = await rotated.completion;
           invariant(secondValue?.route === "/workspace", "Rotated native result shape drifted.");
+
+          const pageHideCall = begin(second, () => second.window.sunder.getNavigationState(), "pagehide request");
+          second.window.dispatchEvent(new Event("pagehide"));
+          second.window.dispatchEvent(new Event("pagehide"));
+          await pageHideCall.completion.catch(() => {});
+          invariant(second.window.sunder.signal.aborted && pageHideCall.state.error?.error.code === "rpc.bridge.retired",
+            "pagehide did not retire the browser lifetime.");
+          invariant(second.timers.size === 0 && second.maps.every(map => map.size === 0), "pagehide retained pending call state.");
 
           process.stdout.write(JSON.stringify({
             requests,
@@ -961,6 +1311,8 @@ public sealed class AppWebBridgeTests
         } catch (error) {
           console.error(`APP_WEB_BRIDGE_VM_ORACLE: ${error?.stack ?? error}`);
           process.exitCode = 1;
+        } finally {
+          for (const document of documents) for (const timer of document.timers.keys()) clearTimeout(timer);
         }
         """;
 
@@ -1186,6 +1538,10 @@ public sealed class AppWebBridgeTests
         private readonly object _gate = new();
         private readonly List<string> _scripts = [];
 
+        public Func<string, Task<string?>>? EvaluateScript { get; set; }
+        public Action? OnDispose { get; set; }
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Control Control { get; } = new Border();
 
         public IReadOnlyList<string> Scripts
@@ -1233,7 +1589,7 @@ public sealed class AppWebBridgeTests
         public Task<string?> InvokeScriptAsync(string script)
         {
             lock (_gate) _scripts.Add(script);
-            return Task.FromResult<string?>(null);
+            return EvaluateScript?.Invoke(script) ?? Task.FromResult<string?>("true");
         }
 
         public void Stop()
@@ -1247,15 +1603,28 @@ public sealed class AppWebBridgeTests
 
         public void Dispose()
         {
+            var onDispose = OnDispose;
+            OnDispose = null;
+            onDispose?.Invoke();
+            Disposed.TrySetResult();
         }
+    }
+
+    private sealed class TestWebViewFactory(IAppWebView view) : IAppWebViewFactory
+    {
+        public IAppWebView Create(string userDataDirectory) => view;
     }
 
     private sealed class BlockingRpcClient : IAppWebRpcClient
     {
         public const string SecretEndpoint = "rpc1_secret_endpoint_value";
         private int _discoverCalls;
+        private int _disposeCalls;
 
         public int DiscoverCalls => Volatile.Read(ref _discoverCalls);
+        public int DisposeCalls => Volatile.Read(ref _disposeCalls);
+        public CancellationToken FirstToken { get; private set; }
+        public CancellationToken SecondToken { get; private set; }
         public TaskCompletionSource FirstStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource FirstRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource SecondStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1268,11 +1637,13 @@ public sealed class AppWebBridgeTests
             var call = Interlocked.Increment(ref _discoverCalls);
             if (call == 1)
             {
+                FirstToken = cancellationToken;
                 FirstStarted.TrySetResult();
                 await FirstRelease.Task.ConfigureAwait(false);
             }
             else
             {
+                SecondToken = cancellationToken;
                 SecondStarted.TrySetResult();
                 await SecondRelease.Task.ConfigureAwait(false);
             }
@@ -1325,7 +1696,11 @@ public sealed class AppWebBridgeTests
             yield break;
         }
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref _disposeCalls);
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class InvocationRpcClient(SunderRpcContractDescriptor providerDescriptor) : IAppWebRpcClient

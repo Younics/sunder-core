@@ -42,6 +42,8 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
 
 
     public string ProjectIdentity { get; set; } = string.Empty;
+    public string ProjectFile { get; set; } = string.Empty;
+    public ITaskItem[] ProjectImports { get; set; } = [];
 
     public string AssemblyName { get; set; } = "Sunder.Rpc.Authoring";
 
@@ -145,6 +147,7 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                 var contractPlan = QualifiedPrebuiltValidation is null ? ValidateSourceContracts(stagingValidation.Manifest!)
                     : new ContractPackPlan(stagingValidation.Manifest!, new SunderRpcInputSnapshot(), null, null);
                 if (Log.HasLoggedErrors) return false;
+                ValidateModelProjection(contractPlan, devPackagePath);
 
                 var packageOutputDirectory = Path.GetDirectoryName(packageOutputPath);
                 if (!string.IsNullOrWhiteSpace(packageOutputDirectory))
@@ -167,6 +170,7 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                 if (contractPlan.BaselinePath is not null)
                     GenerateSunderRpcBindingsTask.VerifyExpectedBaseline(ProjectDirectory, contractPlan.BaselinePath, contractPlan.BaselineBytes);
                 ValidateProjection(contractPlan, archiveValidation.Manifest!);
+                ValidateModelProjection(contractPlan, archiveValidationPath);
                 QualifiedPrebuiltValidation?.Invoke(archiveValidation.Manifest!);
                 BeforeArchivePublication?.Invoke();
                 contractPlan.Inputs.Verify();
@@ -213,6 +217,7 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
             ProjectDirectory = projectDirectory, IntermediateOutputPath = IntermediateOutputPath,
             SourceFiles = SourceFiles, ReferencePaths = ReferencePaths, PackageId = manifest.Id!, PackageVersion = manifest.Version!,
             ProjectIdentity = ProjectIdentity, Configuration = Configuration, TargetFramework = TargetFramework, AssemblyName = AssemblyName,
+            ProjectFile = ProjectFile, ProjectImports = ProjectImports,
             DefineConstants = DefineConstants, OutputType = OutputType, NullableEnabled = NullableEnabled,
             GeneratePackageRoles = GeneratePackageRoles,
             ResourceItems = ResourceItems, GeneratorAnalyzers = GeneratorAnalyzers, GeneratorProperties = GeneratorProperties, RootNamespace = RootNamespace,
@@ -262,23 +267,27 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
 
         baselinePath = GenerateSunderRpcBindingsTask.ResolveOwnedBaselinePath(projectDirectory, baselinePath);
         if (!GeneratedOutputPathSafety.PathExists(baselinePath))
-            throw new InvalidDataException("Source-authored RPC packaging requires its owned-contract baseline; deleting the baseline does not disable the pack gate.");
+        {
+            if (manifest.ContractBundles?.Any(bundle => bundle is { Source: "owned", Exposure: "public" }) == true)
+                throw new InvalidDataException("Public source contracts cannot be packed by deleting the baseline. Restore the existing owned-contract baseline before packing.");
+            GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(projectDirectory, generatedDirectory);
+        }
         if (SourceFiles.Length == 0)
             throw new InvalidDataException("Source-authored RPC packaging requires ordinary SourceFiles and resolved ReferencePaths, including when packing prebuilt leaves.");
-        var baseline = SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(baselinePath);
-        inputs.Record(baselinePath, baseline.ExactBytes);
-        if (baseline.PackageId != manifest.Id)
+        var baseline = GeneratedOutputPathSafety.PathExists(baselinePath) ? SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(baselinePath) : null;
+        if (baseline is null) inputs.ExpectAbsent(baselinePath); else inputs.Record(baselinePath, baseline.ExactBytes);
+        if (baseline is not null && baseline.PackageId != manifest.Id)
             throw new InvalidDataException("The source owned-contract baseline belongs to a different package than the pack input.");
-        foreach (var (key, contract) in baseline.Contracts)
+        foreach (var (key, contract) in baseline?.Contracts ?? new Dictionary<string, SunderRpcOwnedContractBaseline>())
         {
-            if (contract.Current is { State: not ("release-frozen" or "published") })
+            if (SunderRpcAuthoringDocuments.HasPublicEvidence(contract) && contract.Current is { State: not ("release-frozen" or "published") })
                 throw new InvalidDataException($"Owned contract '{key}' is draft. Run FreezeSunderContracts explicitly before PackSunderPackage.");
         }
         var candidate = generation.PrepareOwnedContractCandidate(baseline);
         if (candidate is null)
             throw new InvalidDataException("Pack requires unchanged source and owned contracts, with a complete offline lock/cache and valid generated bindings.");
         inputs.Merge(candidate.Inputs);
-        var automaticAppUses = candidate.Contracts.Select(contract => (Contract: contract,
+        var automaticAppUses = GeneratePackageRoles ? null : candidate.Contracts.Select(contract => (Contract: contract,
             Policy: SunderRpcAuthoringDocuments.ResolveAppUse(contract.Exposure, contract.Descriptor, contract.AppUse)))
             .Where(item => item.Policy is not null).Select(item => new SunderPackageContractUseManifest
         {
@@ -286,7 +295,8 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
             AbiSha256 = item.Contract.Descriptor.AbiSha256, Required = item.Policy!.Required,
             Actions = item.Policy.Actions.ToArray(),
         }).ToArray();
-        var plan = new ContractPackPlan(candidate.Projection.Manifest, inputs, baselinePath, automaticAppUses, baseline.ExactBytes);
+        var plan = new ContractPackPlan(candidate.Projection.Manifest, inputs, baselinePath, automaticAppUses, baseline?.ExactBytes,
+            SunderRpcAuthoringDocuments.PublicModelProjectionBytes(candidate.Projection));
         ValidateProjection(plan, manifest);
         foreach (var receipt in AuthoringReceipts)
         {
@@ -298,6 +308,11 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
             var projection = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(bytes,
                 candidate.LockSha256, manifest.Id!, manifest.Version!);
             ValidateProjection(plan, projection.Manifest);
+            foreach (var (key, modelProjection) in projection.ModelProjections)
+                if (!candidate.Projection.ModelProjections.TryGetValue(key, out var sourceProjection)
+                    || !SunderRpcAuthoringDocuments.SameModelProjection(sourceProjection, modelProjection)
+                    || !SunderRpcAuthoringDocuments.SameMethodPolicies(candidate.Projection.MethodPolicies[key], projection.MethodPolicies[key]))
+                    throw new InvalidDataException("The pack receipt model projection differs from the current compiled source/import selection.");
         }
         inputs.Verify();
         return plan;
@@ -310,6 +325,15 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
 
     private static void ValidateProjection(ContractPackPlan plan, SunderPackageManifest actual)
         => RequireMatchingProjection(plan.Manifest, actual, plan.AutomaticAppUses);
+
+    private static void ValidateModelProjection(ContractPackPlan plan, string root)
+    {
+        if (plan.ModelProjectionUtf8 is null) return;
+        var path = ArchiveRelativePath.Parse(SunderRpcAuthoringDocuments.ModelProjectionArchivePath).ToPlatformPath(root);
+        var actual = SunderRpcDescriptorFileReader.ReadStableBytes(path, 4_194_304, "pack model projection");
+        if (!actual.AsSpan().SequenceEqual(plan.ModelProjectionUtf8))
+            throw new InvalidDataException("The pack input public model projection does not match current source/import evidence. Rebuild the stale leaves.");
+    }
 
     internal static void RequireMatchingProjection(SunderPackageManifest expected, SunderPackageManifest actual,
         IReadOnlyList<SunderPackageContractUseManifest?>? automaticAppUses = null)
@@ -346,7 +370,8 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
         SunderRpcInputSnapshot Inputs,
         string? BaselinePath,
         IReadOnlyList<SunderPackageContractUseManifest?>? AutomaticAppUses,
-        byte[]? BaselineBytes = null);
+        byte[]? BaselineBytes = null,
+        byte[]? ModelProjectionUtf8 = null);
 
     private bool LogValidation(SunderPackageArchiveValidationResult validation, bool logWarnings = true)
     {

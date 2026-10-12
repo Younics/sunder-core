@@ -1,5 +1,8 @@
 {
   "success": false,
+  "resolutionFingerprint": "",
+  "expiresAtUtc": "0001-01-01T00:00:00+00:00",
+  "compatibilityConflicts": [],
   "items": [],
   "warnings": [],
   "errors": [],
@@ -13,11 +16,5 @@
       "message": "Selected package version does not satisfy the Stack requirement."
     }
   ],
-  "trustedArtifactOrigins": [],
-  "resolutionFingerprint": "",
-  "runtimePolicyRevision": 0,
-  "expiresAtUtc": "0001-01-01T00:00:00+00:00",
-  "compatibilityConflicts": [],
-  "runtimeArtifacts": [],
-  "runtimeConflicts": []
+  "trustedArtifactOrigins": []
 }

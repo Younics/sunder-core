@@ -123,7 +123,7 @@ public sealed class AppPackageCallbackClientTests
                         RuntimeProtocol.MinimumSupportedRevision,
                         RuntimeProtocol.MaximumSupportedRevision,
                         Guid.NewGuid(),
-                        [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
+                        [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
                         new RuntimeProductVersionDiagnostics(
                             "Sunder.Runtime.Host",
                             "Development",
@@ -167,7 +167,7 @@ public sealed class AppPackageCallbackClientTests
                         RuntimeProtocol.MinimumSupportedRevision,
                         RuntimeProtocol.MaximumSupportedRevision,
                         Guid.NewGuid(),
-                        [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
+                        [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
                         new RuntimeProductVersionDiagnostics(
                             "Sunder.Runtime.Host",
                             "Development",

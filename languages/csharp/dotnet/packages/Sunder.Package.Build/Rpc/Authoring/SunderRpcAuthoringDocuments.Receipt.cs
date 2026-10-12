@@ -1,8 +1,11 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Sunder.Package.Build.Editor;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
+using Sunder.Package.Format;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Package.Build.Rpc.Authoring;
 
@@ -15,7 +18,9 @@ internal static partial class SunderRpcAuthoringDocuments
         string packageId,
         string packageVersion,
         SunderRpcCSharpCompilationResult compilation,
-        SunderRpcCSharpImportPrepassResult imports)
+        SunderRpcCSharpImportPrepassResult imports,
+        string role = "runtime",
+        IReadOnlySet<string>? presentRoles = null)
     {
         var parsedLock = ParseContractLock(contractLock.ExactBytes.ToArray(), allowDevelopmentRegistryOrigin: true);
         if (parsedLock.Sha256 != contractLock.Sha256)
@@ -23,10 +28,29 @@ internal static partial class SunderRpcAuthoringDocuments
             throw new InvalidDataException("rpc-authoring.evidence-mismatch: Contract lock bytes changed after validation.");
         }
         contractLock = parsedLock;
+        if (role is not ("runtime" or "app")) throw new InvalidDataException("rpc-authoring.receipt-invalid: Unsupported consumer role.");
+        presentRoles ??= new HashSet<string>(StringComparer.Ordinal) { role };
+        foreach (var import in contractLock.PackageImports.Values)
+            if (!import.ConsumerRoles.Any(presentRoles.Contains))
+                throw new InvalidDataException($"package-api.consumer-roles-unavailable: '{import.PackageId}' selects [{string.Join(',', import.ConsumerRoles)}], but present roles are [{string.Join(',', presentRoles.Order(StringComparer.Ordinal))}]. Add a matching role or explicitly review the selection.");
+        var consumers = contractLock.PackageImports.Values.Where(import => import.ConsumerRoles.Contains(role, StringComparer.Ordinal)).ToArray();
+        var providerImports = role == "runtime" ? contractLock.ProviderImports.Values.ToArray() : [];
+        var platformImports = role == "runtime" ? contractLock.PlatformImports.Values.ToArray() : [];
+        var artifactIds = consumers.Select(import => import.PackageId).Concat(providerImports.Select(import => import.PackageId)).ToHashSet(StringComparer.Ordinal);
+        var pendingArtifacts = new Queue<string>(artifactIds);
+        while (pendingArtifacts.TryDequeue(out var id))
+            foreach (var authority in contractLock.PackageArtifacts[id].Contracts.Values.Where(contract => contract.AuthorityKind == "package" && contract.AuthorityId != id))
+                if (contractLock.PackageArtifacts.ContainsKey(authority.AuthorityId) && artifactIds.Add(authority.AuthorityId)) pendingArtifacts.Enqueue(authority.AuthorityId);
+        var artifacts = contractLock.PackageArtifacts.Values.Where(artifact => artifactIds.Contains(artifact.PackageId)).ToArray();
         if (!compilation.Success)
         {
             throw new InvalidDataException("rpc-authoring.receipt-invalid: Cannot publish a failed compilation.");
         }
+        if (role == "runtime") ValidateImportedProviderReferenceUses(contractLock, compilation);
+        ValidatePrivatePackageVersion(packageVersion);
+        foreach (var contract in compilation.Contracts.Where(contract => contract.Exposure == SunderServiceExposure.Package))
+            if (contract.Descriptor.Version != packageVersion)
+                throw new InvalidDataException($"rpc-authoring.private-version-mismatch: Receipt '{contract.ContractKey}' is '{contract.Descriptor.Version}', owning package is '{packageVersion}'.");
         foreach (var requirement in SunderRpcPlatformCatalogCache.Requirements(contractLock))
         {
             if (!imports.PlatformCatalogs.TryGetValue(requirement.ContentIdentity, out var catalog))
@@ -53,27 +77,26 @@ internal static partial class SunderRpcAuthoringDocuments
         _ = RequireSha256(identity, "inputFingerprint", "authoring receipt");
         _ = RequireSha256(identity, "lockSha256", "authoring receipt");
 
-        var requiredImports = contractLock.PackageImports.Values
-            .SelectMany(import => contractLock.PackageArtifacts[import.PackageId].Contracts.Values
-                .Where(static contract => contract.AuthorityKind == "package"))
-            .Concat(contractLock.ProviderImports.Values.Select(import =>
-                contractLock.PackageArtifacts[import.PackageId].Contracts[import.ContractId]))
-            .Concat(contractLock.PlatformImports.Values.Select(SunderRpcPlatformCatalogCache.AsArtifactContract))
-            .GroupBy(static contract => contract.ContractId, StringComparer.Ordinal)
-            .ToDictionary(static group => group.Key, static group =>
-            {
-                var first = group.First();
-                if (group.Any(contract => contract.ResolvedContractVersion != first.ResolvedContractVersion))
-                {
-                    throw new InvalidDataException($"rpc-authoring.identity-collision: Imported contract '{group.Key}' selects more than one version.");
-                }
-                return first;
-            }, StringComparer.Ordinal);
-        var importedByKey = imports.Contracts.ToDictionary(static contract => contract.ContractKey, StringComparer.Ordinal);
-        if (importedByKey.Count != requiredImports.Count || imports.Contracts.Any(contract =>
+        var requiredImports = MaterializedImports(contractLock with
+        {
+            PackageImports = consumers.ToDictionary(import => import.PackageId, StringComparer.Ordinal),
+            ProviderImports = providerImports.ToDictionary(import => import.Key, StringComparer.Ordinal),
+            PlatformImports = platformImports.ToDictionary(import => import.Key, StringComparer.Ordinal),
+        }, imports);
+        var completeImports = MaterializedImports(contractLock, imports);
+        if (imports.Contracts.Count != completeImports.Count || imports.Contracts.Any(contract => !completeImports.TryGetValue(contract.ContractKey, out var selected)
+                || contract.ContractKey != contract.Descriptor.ContractId
+                || contract.GeneratedLogicalName != GeneratedBindingLogicalName(selected.AuthorityKind, selected.AuthorityId, contract.ContractKey)
+                || selected.ResolvedContractVersion != contract.Descriptor.Version || selected.DescriptorSha256 != contract.Descriptor.Sha256
+                || selected.AbiSha256 != contract.Descriptor.AbiSha256 || selected.DescriptorBytes != contract.Descriptor.GetCanonicalUtf8().Length
+                || !SunderRpcCSharpImportPrepass.HasExpectedNaturalProjection(contract, selected, imports.Contracts, completeImports)))
+            throw new InvalidDataException("rpc-authoring.evidence-mismatch: The complete imported descriptor set differs from the canonical project lock.");
+        var roleContracts = imports.Contracts.Where(contract => requiredImports.ContainsKey(contract.ContractKey)).ToArray();
+        var importedByKey = roleContracts.ToDictionary(static contract => contract.ContractKey, StringComparer.Ordinal);
+        if (importedByKey.Count != requiredImports.Count || roleContracts.Any(contract =>
                 contract.ContractKey != contract.Descriptor.ContractId
-                || contract.GeneratedLogicalName != "Sunder.Generated.Rpc.Imports." + SunderRpcCSharpImportPrepass.ContractName(contract.ContractKey)
                 || !requiredImports.TryGetValue(contract.ContractKey, out var evidence)
+                || contract.GeneratedLogicalName != GeneratedBindingLogicalName(evidence.AuthorityKind, evidence.AuthorityId, contract.ContractKey)
                 || evidence.ResolvedContractVersion != contract.Descriptor.Version
                 || evidence.DescriptorSha256 != contract.Descriptor.Sha256
                 || evidence.AbiSha256 != contract.Descriptor.AbiSha256
@@ -83,9 +106,9 @@ internal static partial class SunderRpcAuthoringDocuments
         }
 
         var allContracts = compilation.Contracts.Select(contract => new ReceiptContract(
-                contract.ContractKey, contract.Exposure, contract.GeneratedLogicalName, contract.Descriptor, contract.AppUse, contract.RuntimeUse))
-            .Concat(imports.Contracts.Select(contract => new ReceiptContract(
-                contract.ContractKey, SunderRpcExposure.Public, contract.GeneratedLogicalName, contract.Descriptor)))
+                contract.ContractKey, contract.Exposure, contract.GeneratedLogicalName, contract.Descriptor, contract.ModelProjection, contract.MethodPolicies, contract.AppUse, role == "runtime" ? contract.RuntimeUse : null))
+            .Concat(roleContracts.Select(contract => new ReceiptContract(
+                contract.ContractKey, SunderServiceExposure.Public, contract.GeneratedLogicalName, contract.Descriptor, contract.ModelProjection, contract.MethodPolicies)))
             .OrderBy(static contract => contract.Key, StringComparer.Ordinal).ToArray();
         if (allContracts.Length > 128)
         {
@@ -98,9 +121,9 @@ internal static partial class SunderRpcAuthoringDocuments
             throw new InvalidDataException("rpc-authoring.identity-collision: Owned and imported contract identities/names overlap.");
         }
 
-        var providers = compilation.Contracts.SelectMany(contract => contract.Providers.Select(provider =>
+        var providers = (role == "runtime" ? compilation.Contracts : []).SelectMany(contract => contract.Providers.Select(provider =>
                 (ContractKey: contract.ContractKey, Provider: provider)))
-            .Concat(compilation.ImportedProviders.Select(provider => (provider.Surface.Contract.ContractKey, provider.Provider)))
+            .Concat((role == "runtime" ? compilation.ImportedProviders : []).Select(provider => (provider.Surface.Contract.ContractKey, provider.Provider)))
             .OrderBy(static item => item.Provider.ProviderId, StringComparer.Ordinal).ToArray();
         if (providers.Length > 128)
         {
@@ -110,15 +133,19 @@ internal static partial class SunderRpcAuthoringDocuments
         {
             throw new InvalidDataException("rpc-authoring.identity-collision: Receipt provider identities overlap.");
         }
-        var surfaces = imports.ProviderSurfaces.ToDictionary(static surface => surface.Key, StringComparer.Ordinal);
-        var intents = contractLock.ProviderImports.Values.Select(import => (import.Key, import.ContractId))
-            .Concat(contractLock.PlatformImports.Values.Select(import => (import.Key, import.ContractId))).ToDictionary(import => import.Key, import => import.ContractId, StringComparer.Ordinal);
+        var surfaces = (role == "runtime" ? imports.ProviderSurfaces : []).ToDictionary(static surface => surface.Key, StringComparer.Ordinal);
+        var intents = providerImports.Select(import => (import.Key, import.ContractId))
+            .Concat(platformImports.Select(import => (import.Key, import.ContractId))).ToDictionary(import => import.Key, import => import.ContractId, StringComparer.Ordinal);
         if (surfaces.Count != intents.Count || surfaces.Any(pair =>
                 !intents.TryGetValue(pair.Key, out var contractId)
                 || !importedByKey.TryGetValue(contractId, out var contract)
                 || pair.Value.Contract != contract
-                || pair.Value.InterfaceMetadataName != "Sunder.Generated.Rpc.I" + char.ToUpperInvariant(pair.Key[0]) + pair.Key[1..] + "Service")
-            || compilation.ImportedProviders.Any(provider =>
+                || pair.Value.IsPlatform != contractLock.PlatformImports.ContainsKey(pair.Key)
+                || !pair.Value.IsPlatform && !pair.Value.IsNatural
+                || pair.Value.InterfaceMetadataName != (pair.Value.IsPlatform
+                    ? "Sunder.Generated.Rpc.I" + char.ToUpperInvariant(pair.Key[0]) + pair.Key[1..] + "Service"
+                    : SunderRpcCSharpImportPrepass.NaturalProviderImportInterface(contractLock.ProviderImports[pair.Key].PackageId, pair.Key)))
+            || role == "runtime" && compilation.ImportedProviders.Any(provider =>
                 !surfaces.TryGetValue(provider.Surface.Key, out var surface) || provider.Surface != surface))
         {
             throw new InvalidDataException("rpc-authoring.evidence-mismatch: Imported provider surfaces do not exactly project the lock.");
@@ -136,7 +163,10 @@ internal static partial class SunderRpcAuthoringDocuments
                 ["canonicalDescriptor"] = Utf8NoBom.GetString(contract.Descriptor.GetCanonicalUtf8()),
                 ["descriptorSha256"] = contract.Descriptor.Sha256,
                 ["abiSha256"] = contract.Descriptor.AbiSha256,
+                ["modelProjection"] = contract.ModelProjection.ToJson(),
             };
+            contract.MethodPolicies.Validate(contract.Descriptor);
+            if (!contract.MethodPolicies.IsEmpty) record["methodPolicies"] = contract.MethodPolicies.ToJson();
             if (contract.AppUse is { } policy)
                 record["appUse"] = ReceiptUsePolicy(policy);
             if (contract.RuntimeUse is { } runtimePolicy)
@@ -146,7 +176,7 @@ internal static partial class SunderRpcAuthoringDocuments
 
         // Keep the complete artifact inventory, including metadata-only platform members.
         using var lockDocument = JsonDocument.Parse(contractLock.ExactBytes);
-        root["packageArtifacts"] = ReceiptArray(lockDocument.RootElement.GetProperty("packageArtifacts").EnumerateObject().Select(artifact =>
+        root["packageArtifacts"] = ReceiptArray(lockDocument.RootElement.GetProperty("packageArtifacts").EnumerateObject().Where(artifact => artifactIds.Contains(artifact.Name)).Select(artifact =>
         {
             var record = new JsonObject { ["packageId"] = artifact.Name };
             foreach (var member in artifact.Value.EnumerateObject())
@@ -180,7 +210,7 @@ internal static partial class SunderRpcAuthoringDocuments
             }
             return bundle;
         }));
-        root["packageArtifactImports"] = ReceiptArray(contractLock.PackageArtifacts.Values
+        root["packageArtifactImports"] = ReceiptArray(artifacts
             .OrderBy(static artifact => artifact.PackageId, StringComparer.Ordinal).Select(artifact => new JsonObject
             {
                 ["packageId"] = artifact.PackageId,
@@ -195,7 +225,7 @@ internal static partial class SunderRpcAuthoringDocuments
                     .OrderBy(static contract => contract.AuthorityKind, StringComparer.Ordinal)
                     .ThenBy(static contract => contract.AuthorityId, StringComparer.Ordinal).Select(ReceiptAuthority)),
             }));
-        root["packageApiImports"] = ReceiptArray(contractLock.PackageImports.Values
+        root["packageApiImports"] = ReceiptArray(consumers
             .OrderBy(static import => import.PackageId, StringComparer.Ordinal).Select(import =>
             {
                 var contracts = contractLock.PackageArtifacts[import.PackageId].Contracts.Values
@@ -206,10 +236,10 @@ internal static partial class SunderRpcAuthoringDocuments
                     ["packageId"] = import.PackageId,
                     ["presence"] = import.Presence,
                     ["bundleRefs"] = ReceiptArray(contracts.Select(contract => ReceiptReference(contract.ContractId, contract.ResolvedContractVersion))),
-                    ["useRefs"] = ReceiptArray(contracts.Select(contract => ReceiptReference(contract.ContractId, contract.ResolvedContractVersion, "runtime"))),
+                    ["useRefs"] = ReceiptArray(contracts.Select(contract => ReceiptReference(contract.ContractId, contract.ResolvedContractVersion, role))),
                 };
             }));
-        root["providerImports"] = ReceiptArray(contractLock.ProviderImports.Values.OrderBy(static import => import.Key, StringComparer.Ordinal).Select(import =>
+        root["providerImports"] = ReceiptArray(providerImports.OrderBy(static import => import.Key, StringComparer.Ordinal).Select(import =>
         {
             var contract = importedByKey[import.ContractId];
             if (!compilation.ImportedProviders.Any(provider => provider.Surface.Key == import.Key))
@@ -234,7 +264,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 })),
             };
         }));
-        root["platformImports"] = ReceiptArray(contractLock.PlatformImports.Values.OrderBy(import => import.Key, StringComparer.Ordinal).Select(import =>
+        root["platformImports"] = ReceiptArray(platformImports.OrderBy(import => import.Key, StringComparer.Ordinal).Select(import =>
         {
             var refs = compilation.ImportedProviders.Where(provider => provider.Surface.Key == import.Key)
                 .OrderBy(provider => provider.Provider.ProviderId, StringComparer.Ordinal).ToArray();
@@ -260,7 +290,7 @@ internal static partial class SunderRpcAuthoringDocuments
             ["audience"] = Audience(item.Provider.Audience),
             ["contractKey"] = item.ContractKey,
         }));
-        var uses = contractLock.PackageImports.Values.SelectMany(import =>
+        var uses = consumers.SelectMany(import =>
                 contractLock.PackageArtifacts[import.PackageId].Contracts.Values
                     .Where(static contract => contract.AuthorityKind == "package")
                     .Select(contract => (contract.ContractId, Required: import.RequiredContracts.Contains(contract.ContractId, StringComparer.Ordinal))))
@@ -268,31 +298,42 @@ internal static partial class SunderRpcAuthoringDocuments
             .OrderBy(static group => group.Key, StringComparer.Ordinal);
         var importedUses = uses.Select(group => new JsonObject
         {
-            ["role"] = "runtime",
+            ["role"] = role,
             ["required"] = group.Any(static use => use.Required),
             ["actions"] = new JsonArray(ReceiptActions(importedByKey[group.Key].Descriptor).Select(static action => (JsonNode?)JsonValue.Create(action)).ToArray()),
             ["contractKey"] = group.Key,
         });
-        var ownedUses = compilation.Contracts.Where(contract => contract.RuntimeUse is not null).Select(contract => new JsonObject
+        var ownedUses = compilation.Contracts.Select(contract => (Contract: contract, Policy: role == "runtime" ? contract.RuntimeUse : ResolveAppUse(contract.Exposure, contract.Descriptor, contract.AppUse)))
+            .Where(value => value.Policy is not null).Select(value => new JsonObject
         {
-            ["role"] = "runtime",
-            ["required"] = contract.RuntimeUse!.Required,
-            ["actions"] = new JsonArray(contract.RuntimeUse.Actions.Select(action => JsonValue.Create(action)).ToArray()),
-            ["contractKey"] = contract.ContractKey,
+            ["role"] = role,
+            ["required"] = value.Policy!.Required,
+            ["actions"] = new JsonArray(value.Policy.Actions.Select(action => JsonValue.Create(action)).ToArray()),
+            ["contractKey"] = value.Contract.ContractKey,
         });
-        root["uses"] = ReceiptArray(importedUses.Concat(ownedUses).OrderBy(use => use["contractKey"]!.GetValue<string>(), StringComparer.Ordinal));
-        root["generatedPackageFacades"] = ReceiptArray(contractLock.PackageImports.Values
+        var typedUses = role == "runtime" ? compilation.ImportedUses : [];
+        var consumerIds = uses.Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+        var explicitUses = typedUses.Where(use => !consumerIds.Contains(use.Contract.ContractKey)).DistinctBy(use => use.Contract.ContractKey).Select(use => new JsonObject
+        {
+            ["role"] = role, ["required"] = use.Policy.Required,
+            ["actions"] = new JsonArray(use.Policy.Actions.Select(action => (JsonNode?)JsonValue.Create(action)).ToArray()),
+            ["contractKey"] = use.Contract.ContractKey,
+        });
+        root["uses"] = ReceiptArray(importedUses.Concat(ownedUses).Concat(explicitUses).OrderBy(use => use["contractKey"]!.GetValue<string>(), StringComparer.Ordinal));
+        root["generatedPackageFacades"] = ReceiptArray(consumers
             .OrderBy(static import => import.PackageId, StringComparer.Ordinal).Select(import => new JsonObject
             {
                 ["packageId"] = import.PackageId,
                 ["localName"] = import.LocalName,
-                ["logicalName"] = "Sunder.Generated.Rpc." + char.ToUpperInvariant(import.LocalName[0]) + import.LocalName[1..] + "PackageApi",
+                ["logicalName"] = GeneratedPackageFacadeLogicalName(import.PackageId, import.LocalName),
             }));
         root["generatedBindings"] = ReceiptArray(allContracts.Select(contract => new JsonObject
         {
             ["contractKey"] = contract.Key,
             ["logicalName"] = contract.LogicalName,
         }));
+        if (role == "app") root["role"] = "app";
+        if (typedUses.Count != 0) root["roleUses"] = RoleUsesJson(typedUses.Select(use => use.Evidence));
 
         var bytes = WriteDeterministicDocument(JsonSerializer.SerializeToElement(root));
         if (bytes.Length > MaximumGeneratedDocumentBytes)
@@ -351,6 +392,20 @@ internal static partial class SunderRpcAuthoringDocuments
         ["actions"] = new JsonArray(policy.Actions.Select(action => JsonValue.Create(action)).ToArray()),
     };
 
-    private sealed record ReceiptContract(string Key, SunderRpcExposure Exposure, string LogicalName, SunderRpcContractDescriptor Descriptor,
-        SunderRpcOwnedUsePolicy? AppUse = null, SunderRpcOwnedUsePolicy? RuntimeUse = null);
+    private sealed record ReceiptContract(string Key, SunderServiceExposure Exposure, string LogicalName, SunderRpcContractDescriptor Descriptor,
+        SunderRpcModelProjection ModelProjection, SunderRpcMethodPolicies MethodPolicies, SunderRpcOwnedUsePolicy? AppUse = null, SunderRpcOwnedUsePolicy? RuntimeUse = null);
+
+    // Package transport uses the validated ultimate authority, whereas a selected
+    // package facade belongs to the selected package. Platform bindings retain
+    // their explicit descriptor-only tooling namespace and have no package facade.
+    private static string GeneratedBindingLogicalName(string authorityKind, string authorityId, string contractId)
+        => authorityKind switch
+        {
+            "package" => GeneratedPackageNames.Transport(authorityId, contractId),
+            "platform" when authorityId == "sunder.core" => "Sunder.Generated.Rpc.Imports." + SunderRpcCSharpImportPrepass.ContractName(contractId),
+            _ => throw new InvalidDataException("rpc-authoring.authority-mismatch: Generated bindings require validated package or Core platform authority."),
+        };
+
+    private static string GeneratedPackageFacadeLogicalName(string packageId, string localName)
+        => GeneratedPackageNames.Internal(packageId) + "." + char.ToUpperInvariant(localName[0]) + localName[1..] + "PackageApi";
 }

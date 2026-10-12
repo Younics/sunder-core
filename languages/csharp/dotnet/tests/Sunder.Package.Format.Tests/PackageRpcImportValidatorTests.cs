@@ -308,12 +308,21 @@ public sealed class PackageRpcImportValidatorTests
     }
 
     [Fact]
-    public void ProviderOnlyImports_DoNotCreateOrAuthorizeConsumerUses()
+    public void ProviderOnlyImports_RequireExplicitRuntimeUsesAndExactAuthority()
     {
         var json = ProviderManifest();
         Assert.Empty(Validate(json));
+        Assert.Empty(Read(json).UsesContracts!);
+        Assert.Empty(Read(json).PackageApiImports!);
         json["usesContracts"] = ApiManifest()["usesContracts"]!.DeepClone();
+        Set(json, "usesContracts/0/actions", new JsonArray("discover"));
+        Assert.Empty(Validate(json));
+        Assert.Equal(["discover"], Assert.Single(Read(json).UsesContracts!)!.Actions);
+        Set(json, "usesContracts/0/role", JsonValue.Create("app"));
         Assert.Contains(Validate(json), static error => error.Contains("do not grant consumer uses", StringComparison.Ordinal));
+        Set(json, "usesContracts/0/role", JsonValue.Create("runtime"));
+        Set(json, "contractBundles/0/selectedAuthorityContentIdentity", JsonValue.Create(new string('e', 64)));
+        Assert.Contains(Validate(json), static error => error.Contains("authority", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -458,14 +467,19 @@ public sealed class PackageRpcImportValidatorTests
             Assert.Single(Validate(json)));
     }
 
-    [Fact]
-    public void OwnedOnlyBundles_MayRetainMultipleDescriptorFirstVersions()
+    [Theory]
+    [InlineData("public")]
+    [InlineData("package")]
+    public void OwnedOnlyBundles_MayRetainMultipleHistoricalVersions(string exposure)
     {
         var json = OwnedManifest();
+        json["version"] = "7.6.5-beta.1+build.7";
+        Set(json, "contractBundles/0/exposure", JsonValue.Create(exposure));
         var second = At(json, "contractBundles/0").DeepClone();
         second["version"] = "2.0.0";
         second["descriptorPath"] = "contracts/second.json";
         json["contractBundles"]!.AsArray().Add(second);
+        // New private source-authoring equality must not invalidate old archive metadata.
         Assert.Empty(Validate(json));
     }
 
@@ -749,6 +763,78 @@ public sealed class PackageRpcImportValidatorTests
     }
 
     [Theory]
+    [InlineData("app", "runtime")]
+    [InlineData("runtime", "app")]
+    [InlineData("app", "app,runtime")]
+    [InlineData("app,runtime", "runtime")]
+    [InlineData("app,runtime", "app,runtime")]
+    public void OwnerAndReexport_GrantTheirOwnCompleteRoleSubset(string ownerRoles, string reexportRoles)
+    {
+        var json = ReexportRoleManifest(ownerRoles, reexportRoles);
+        Assert.Empty(Validate(json));
+        var manifest = Read(json);
+        Assert.Equal(2, manifest.ContractBundles!.Count);
+        Assert.Equal(4, manifest.UsesContracts!.Count);
+        Assert.Equal(ownerRoles.Split(','), manifest.PackageApiImports![0]!.UseRefs!
+            .Select(static reference => reference!.Role).Distinct());
+        Assert.Equal(reexportRoles.Split(','), manifest.PackageApiImports![1]!.UseRefs!
+            .Select(static reference => reference!.Role).Distinct());
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(0, 2)]
+    [InlineData(1, 0)]
+    [InlineData(1, 2)]
+    public void OverlappingRoleGroups_CannotBorrowMissingBundleCoverageFromAnotherGroup(int group, int reference)
+    {
+        var json = ReexportRoleManifest("app,runtime", "app,runtime");
+        At(json, $"packageApiImports/{group}/useRefs").AsArray().RemoveAt(reference);
+        Assert.Equal($"Package API import '{(group == 0 ? "example.dependency" : "example.reexport")}' useRefs must cover every bundle for each consumer role.",
+            Assert.Single(Validate(json)));
+    }
+
+    [Theory]
+    [InlineData("app", "runtime")]
+    [InlineData("runtime", "app")]
+    public void RoleScopedGroups_RejectEveryOrphanUseEvenWhenTheBundleIsCovered(string grantedRole, string orphanRole)
+    {
+        var json = ReexportRoleManifest(grantedRole, grantedRole);
+        var use = At(json, "usesContracts/0").DeepClone();
+        use["role"] = orphanRole;
+        json["usesContracts"]!.AsArray().Add(use);
+        Assert.Equal("Imported contract use 'example.rpc.api' is orphaned: provider imports do not grant consumer uses.",
+            Assert.Single(Validate(json)));
+    }
+
+    [Theory]
+    [InlineData("packageApiImports/0/useRefs/0/contractVersion", "1.0.1", "exact matching bundleRefs and local uses")]
+    [InlineData("usesContracts/0/abiSha256", "hash", "ABI")]
+    [InlineData("packageArtifactImports/1/authorityConstraints/0/selectedAuthorityContentIdentity", "hash", "conflicting selected authority snapshots")]
+    public void DifferingRoleGroups_PreserveExactContractAndAuthorityChecks(string path, string value, string diagnostic)
+    {
+        var json = ReexportRoleManifest("app", "runtime");
+        Assert.Empty(Validate(json));
+        Set(json, path, JsonValue.Create(value == "hash" ? new string('f', 64) : value));
+        Assert.Contains(Validate(json), error => error.Contains(diagnostic, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void AppConsumerGrant_DoesNotAuthorizeAnAppProviderEvenWithAnAppTarget()
+    {
+        var json = ReexportRoleManifest("app", "runtime");
+        var provider = ProviderManifest();
+        json["provides"] = provider["provides"]!.DeepClone();
+        json["providerImports"] = provider["providerImports"]!.DeepClone();
+        // A provider makes the dependency required independently of the optional APIs.
+        Set(json, "dependsOn/0/presence", JsonValue.Create("required"));
+        Assert.Empty(Validate(json));
+        Set(json, "provides/0/role", JsonValue.Create("app"));
+        Set(json, "providerImports/0/providerRefs/0/role", JsonValue.Create("app"));
+        Assert.Contains(Validate(json), static error => error.Contains("providerRefs require runtime role", StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData("packageArtifactImports/0/selectedPackageVersion", "1.2.4")]
     [InlineData("packageArtifactImports/0/selectedPackageContentIdentity", "hash")]
     [InlineData("packageArtifactImports/1/authorityConstraints/0/selectedAuthorityRelease", "1.2.4")]
@@ -854,6 +940,8 @@ public sealed class PackageRpcImportValidatorTests
         PackageContractValidator.Validate(Read(json), new Dictionary<string, string>
         {
             [SunderPackageFormat.SharedPayloadRoot + "contracts/api.json"] = path,
+            [SunderPackageFormat.RpcModelProjectionPath] = directory.WriteAllText("projection.json",
+                Encoding.UTF8.GetString(ModelProjectionFixture.EmptyDocument(Read(json)))),
         }, errors);
         Assert.Equal(valid, errors.Count == 0);
         if (!valid) Assert.Contains(errors, static error => error.Contains("actions", StringComparison.Ordinal));
@@ -905,6 +993,48 @@ public sealed class PackageRpcImportValidatorTests
         }
         json["contractBundles"] = bundles;
         Assert.Equal(valid, Validate(json).Count == 0);
+    }
+
+    [Theory]
+    [InlineData(64, true)]
+    [InlineData(65, false)]
+    public void BothConsumerRoles_CountSeparatelyAgainstUseLimit(int contractCount, bool valid)
+    {
+        var json = ApiManifest();
+        AddAppTarget(json);
+        var bundleTemplate = At(json, "contractBundles/0").DeepClone();
+        var useTemplate = At(json, "usesContracts/0").DeepClone();
+        var bundles = new JsonArray();
+        var bundleRefs = new JsonArray();
+        var uses = new JsonArray();
+        var useRefs = new JsonArray();
+        for (var index = 0; index < contractCount; index++)
+        {
+            var id = $"example.rpc.c{index:D3}";
+            var bundle = bundleTemplate.DeepClone();
+            bundle["contractId"] = id;
+            bundle["descriptorPath"] = $"contracts/c{index:D3}.json";
+            bundles.Add(bundle);
+            bundleRefs.Add(Reference(id));
+        }
+        foreach (var role in new[] { "app", "runtime" })
+            foreach (var reference in bundleRefs)
+            {
+                var id = reference!["contractId"]!.GetValue<string>();
+                var use = useTemplate.DeepClone();
+                use["role"] = role;
+                use["contractId"] = id;
+                uses.Add(use);
+                useRefs.Add(Reference(id, role));
+            }
+        json["contractBundles"] = bundles;
+        json["usesContracts"] = uses;
+        Set(json, "packageApiImports/0/bundleRefs", bundleRefs);
+        Set(json, "packageApiImports/0/useRefs", useRefs);
+        Set(json, "packageArtifactImports/0/publicContractCount", JsonValue.Create(contractCount));
+        var errors = Validate(json);
+        Assert.Equal(valid, errors.Count == 0);
+        if (!valid) Assert.Contains(errors, static error => error.Contains("limit", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -1113,6 +1243,41 @@ public sealed class PackageRpcImportValidatorTests
         json["providerImports"] = new JsonArray(ownerImport, reexportImport);
         return json;
     }
+
+    private static JsonObject ReexportRoleManifest(string ownerRoles, string reexportRoles)
+    {
+        var json = ReexportManifest("optional");
+        AddSecondReexportContract(json);
+        AddAppTarget(json);
+        var ownerApi = At(json, "packageApiImports/0").DeepClone();
+        ownerApi["packageId"] = "example.dependency";
+        json["packageApiImports"]!.AsArray().Insert(0, ownerApi);
+        for (var group = 0; group < 2; group++)
+        {
+            var references = new JsonArray();
+            foreach (var role in (group == 0 ? ownerRoles : reexportRoles).Split(','))
+                foreach (var id in new[] { "example.rpc.api", "example.rpc.second" })
+                    references.Add(Reference(id, role));
+            Set(json, $"packageApiImports/{group}/useRefs", references);
+        }
+        var template = At(json, "usesContracts/0").DeepClone();
+        var uses = new JsonArray();
+        foreach (var role in (ownerRoles + "," + reexportRoles).Split(',').Distinct().Order(StringComparer.Ordinal))
+            foreach (var id in new[] { "example.rpc.api", "example.rpc.second" })
+            {
+                var use = template.DeepClone();
+                use["role"] = role;
+                use["contractId"] = id;
+                // Required readiness is independently coalesced within each role.
+                use["required"] = role == "app";
+                uses.Add(use);
+            }
+        json["usesContracts"] = uses;
+        return json;
+    }
+
+    private static void AddAppTarget(JsonObject json)
+        => json["targets"]!.AsArray().Insert(0, new JsonObject { ["role"] = "app", ["rid"] = "linux-x64" });
 
     private static void AddSecondReexportContract(JsonObject json)
     {

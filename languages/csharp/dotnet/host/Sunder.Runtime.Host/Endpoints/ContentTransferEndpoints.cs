@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Mvc;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 
 namespace Sunder.Runtime.Host.Endpoints;
@@ -9,6 +10,10 @@ internal static class ContentTransferEndpoints
     public static IEndpointRouteBuilder MapContentTransferEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var uploads = endpoints.MapGroup("/uploads");
+        uploads.MapPost("packages/retention", (RuntimePackageUploadRetentionRequest request, RuntimeContentTransferService transfers) => Results.Ok(transfers.RetainPackageUpload(request)));
+        uploads.MapPost("packages/retention/renew", (RuntimePackageUploadRetentionHandle request, RuntimeContentTransferService transfers) => Results.Ok(transfers.RenewPackageUploadRetention(request)));
+        uploads.MapPost("packages/retention/status", (RuntimePackageUploadRetentionHandle request, RuntimeContentTransferService transfers) => Results.Ok(transfers.GetPackageUploadRetention(request)));
+        uploads.MapPost("packages/retention/release", (RuntimePackageUploadRetentionHandle request, RuntimeContentTransferService transfers) => Results.Ok(transfers.ReleasePackageUploadRetention(request)));
         uploads.MapPost("packages", (HttpRequest request, RuntimeContentTransferService transfers, CancellationToken cancellationToken)
                 => UploadAsync(request, transfers, RuntimeUploadKind.Package, cancellationToken))
             .WithMetadata(new RequestSizeLimitAttribute(RuntimeContentTransferStore.MaxPackageUploadBytes));
@@ -18,10 +23,6 @@ internal static class ContentTransferEndpoints
         uploads.MapPost("stack-media", (HttpRequest request, RuntimeContentTransferService transfers, CancellationToken cancellationToken)
                 => UploadAsync(request, transfers, RuntimeUploadKind.StackMedia, cancellationToken))
             .WithMetadata(new RequestSizeLimitAttribute(RuntimeContentTransferStore.MaxMediaUploadBytes));
-        uploads.MapPost("execution-runtimes", (HttpRequest request, RuntimeContentTransferService transfers, CancellationToken cancellationToken)
-                => UploadAsync(request, transfers, RuntimeUploadKind.ExecutionRuntime, cancellationToken))
-            .WithMetadata(new RequestSizeLimitAttribute(RuntimeContentTransferStore.MaxExecutionRuntimeUploadBytes));
-
         endpoints.MapGet("/downloads/{downloadId}", async (
             string downloadId,
             HttpResponse response,

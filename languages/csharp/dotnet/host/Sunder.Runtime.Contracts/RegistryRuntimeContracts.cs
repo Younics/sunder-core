@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Sunder.Runtime.Contracts;
 
 public enum RuntimeRegistryAuthSessionState
@@ -23,6 +25,7 @@ public enum RuntimeRegistryErrorCode
     InternalError,
     ConsentRequired,
     StalePlan,
+    RuntimePrerequisitesRequired,
 }
 
 public sealed record RuntimeRegistryUser(
@@ -75,7 +78,11 @@ public sealed record RuntimeRegistryPackageRequest(
     bool Required = true,
     IReadOnlyList<RuntimeRegistryPackageTargetRequest>? DesiredTargets = null,
     IReadOnlyList<PackageCapabilityConsent>? CapabilityConsents = null,
-    string? ExpectedResolutionFingerprint = null);
+    string? ExpectedResolutionFingerprint = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimePackageRuntimePrerequisiteExpectation? RuntimePrerequisiteExpectation { get; init; }
+}
 
 public sealed record RuntimeRegistryPackageChangeRequest(
     string PackageId,
@@ -94,6 +101,9 @@ public sealed record RuntimeRegistryPackageBatchRequest(
     IReadOnlyList<PackageCapabilityConsent>? CapabilityConsents = null,
     string? ExpectedResolutionFingerprint = null)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimePackageRuntimePrerequisiteExpectation? RuntimePrerequisiteExpectation { get; init; }
+
     public IReadOnlyList<RuntimeRegistryPackageChangeRequest> Packages { get; }
         = Array.AsReadOnly(Packages.ToArray());
     public IReadOnlyList<PackageCapabilityConsent> CapabilityConsents { get; init; }
@@ -114,6 +124,9 @@ public sealed record RuntimeRegistryUpdateRequest(
     IReadOnlyList<PackageCapabilityConsent>? CapabilityConsents = null,
     IReadOnlyList<RuntimeRegistryPackagePlanExpectation>? ExpectedPlans = null)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimePackageRuntimePrerequisiteExpectation? RuntimePrerequisiteExpectation { get; init; }
+
     public IReadOnlyList<RuntimeRegistryPackagePlanExpectation> ExpectedPlans { get; init; }
         = Array.AsReadOnly((ExpectedPlans ?? []).ToArray());
 }
@@ -129,7 +142,11 @@ public sealed record RuntimeRegistrySourceAdoptionRequest(
     bool Confirm = false,
     bool DryRun = false,
     IReadOnlyList<PackageCapabilityConsent>? CapabilityConsents = null,
-    string? ExpectedResolutionFingerprint = null);
+    string? ExpectedResolutionFingerprint = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimePackageRuntimePrerequisiteExpectation? RuntimePrerequisiteExpectation { get; init; }
+}
 
 public sealed record RuntimeRegistryPackageDependency(
     string PackageId,
@@ -154,21 +171,23 @@ public sealed record RuntimeRegistryPackageProjectionArtifact(
     string ProjectionContentIdentity,
     int ProjectionFormatVersion);
 
+/// <summary>Package target metadata and requirement only; official runtime selection is local to Host.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeRegistryPackageTarget(
-    string Role,
-    string Rid,
-    string Kind,
-    string EntryPoint,
-    string? TargetFramework,
-    string? SdkVersion,
+    [property: JsonRequired] string Role,
+    [property: JsonRequired] string Rid,
+    [property: JsonRequired] string Kind,
+    [property: JsonRequired] string EntryPoint,
+    [property: JsonRequired] string? TargetFramework,
+    [property: JsonRequired] string? SdkVersion,
     IReadOnlyList<string> RequiredHostCapabilities,
     IReadOnlyList<RuntimeRegistryPackageWebView>? Views = null,
     RuntimeRegistryExecutionRuntimeRequirement? ExecutionRuntime = null)
 {
-    public IReadOnlyList<string> RequiredHostCapabilities { get; }
-        = Array.AsReadOnly(RequiredHostCapabilities.ToArray());
-    public IReadOnlyList<RuntimeRegistryPackageWebView> Views { get; }
-        = Array.AsReadOnly((Views ?? []).ToArray());
+    private IReadOnlyList<string> _requiredHostCapabilities = RuntimeContractCollections.FreezeBounded(RequiredHostCapabilities, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<RuntimeRegistryPackageWebView> _views = RuntimeContractCollections.FreezeBounded(Views ?? [], RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    [JsonRequired] public IReadOnlyList<string> RequiredHostCapabilities { get => _requiredHostCapabilities; init => _requiredHostCapabilities = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    public IReadOnlyList<RuntimeRegistryPackageWebView> Views { get => _views; init => _views = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
 }
 
 public sealed record RuntimeRegistryPackageWebView(
@@ -179,85 +198,31 @@ public sealed record RuntimeRegistryPackageWebView(
     string DefaultPlacement,
     bool ShowInHotbar);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeRegistryPackageInstallPlanItem(
-    string PackageId,
-    string? CurrentVersion,
-    string? Version,
-    string PackageContentIdentity,
-    string ActionKind,
-    string? DeprecatedMessage,
+    [property: JsonRequired] string PackageId,
+    [property: JsonRequired] string? CurrentVersion,
+    [property: JsonRequired] string? Version,
+    [property: JsonRequired] string PackageContentIdentity,
+    [property: JsonRequired] string ActionKind,
+    [property: JsonRequired] string? DeprecatedMessage,
     IReadOnlyList<RuntimeRegistryPackageDependency> DependsOn,
     IReadOnlyList<RuntimeRegistryPackageTarget> Targets,
-    IReadOnlyList<RuntimeRegistryPackageProjectionArtifact> Artifacts,
-    IReadOnlyList<RuntimeRegistryPackageTargetRuntimeBinding>? RuntimeBindings = null,
-    RuntimeRegistryRuntimeOnlyRebindDetails? RuntimeOnlyRebind = null)
+    IReadOnlyList<RuntimeRegistryPackageProjectionArtifact> Artifacts)
 {
-    public IReadOnlyList<RuntimeRegistryPackageDependency> DependsOn { get; }
-        = Array.AsReadOnly(DependsOn.ToArray());
-    public IReadOnlyList<RuntimeRegistryPackageTarget> Targets { get; }
-        = Array.AsReadOnly(Targets.ToArray());
-    public IReadOnlyList<RuntimeRegistryPackageProjectionArtifact> Artifacts { get; }
-        = Array.AsReadOnly(Artifacts.ToArray());
-    public IReadOnlyList<RuntimeRegistryPackageTargetRuntimeBinding> RuntimeBindings { get; }
-        = Array.AsReadOnly((RuntimeBindings ?? []).ToArray());
+    private IReadOnlyList<RuntimeRegistryPackageDependency> _dependsOn = RuntimeContractCollections.FreezeBounded(DependsOn, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<RuntimeRegistryPackageTarget> _targets = RuntimeContractCollections.FreezeBounded(Targets, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<RuntimeRegistryPackageProjectionArtifact> _artifacts = RuntimeContractCollections.FreezeBounded(Artifacts, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    [JsonRequired] public IReadOnlyList<RuntimeRegistryPackageDependency> DependsOn { get => _dependsOn; init => _dependsOn = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    [JsonRequired] public IReadOnlyList<RuntimeRegistryPackageTarget> Targets { get => _targets; init => _targets = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    [JsonRequired] public IReadOnlyList<RuntimeRegistryPackageProjectionArtifact> Artifacts { get => _artifacts; init => _artifacts = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeRegistryExecutionRuntimeRequirement(
-    string RuntimeId,
-    string VersionRange,
-    string ModuleAbi);
-
-public sealed record RuntimeRegistryExecutionRuntimeIdentity(
-    string RuntimeId,
-    string Version,
-    int PackagingRevision,
-    string Rid,
-    string ModuleAbi);
-
-public sealed record RuntimeRegistryExecutionRuntimeLifecycle(
-    string State,
-    DateTimeOffset StagedAtUtc,
-    DateTimeOffset? SupportedFromUtc,
-    DateTimeOffset? DeprecatedAtUtc,
-    DateTimeOffset? InstallBlockedAtUtc,
-    DateTimeOffset? ActivationBlockedAtUtc,
-    DateTimeOffset? RevokedAtUtc,
-    string? Message);
-
-public sealed record RuntimeRegistryResolvedExecutionRuntimeArtifact(
-    RuntimeRegistryExecutionRuntimeIdentity Identity,
-    string ManifestSha256,
-    string ArtifactSha256,
-    long ArtifactSize,
-    string SigningKeyId,
-    long MinimumHostTrustGeneration,
-    string NativeAttestationSha256,
-    string NativeAttestationKeyId,
-    RuntimeRegistryExecutionRuntimeLifecycle Lifecycle,
-    long ObservedRuntimePolicyRevision,
-    string DownloadUrl);
-
-public sealed record RuntimeRegistryPackageTargetRuntimeBinding(
-    string Role,
-    string Rid,
-    RuntimeRegistryExecutionRuntimeRequirement Requirement,
-    RuntimeRegistryExecutionRuntimeIdentity Runtime);
-
-public sealed record RuntimeRegistryRuntimeOnlyRebindDetails(
-    string PackageVersion,
-    string PackageContentIdentity,
-    IReadOnlyList<RuntimeRegistryPackageTargetRuntimeBinding> PreviousBindings,
-    IReadOnlyList<RuntimeRegistryPackageTargetRuntimeBinding> NewBindings);
-
-public sealed record RuntimeRegistryExecutionRuntimeResolutionConflict(
-    string Code,
-    string Message,
-    RuntimeRegistryExecutionRuntimeRequirement Requirement,
-    string Rid,
-    string? PackageId = null,
-    string? TargetRole = null,
-    RuntimeRegistryExecutionRuntimeIdentity? CurrentRuntime = null,
-    long? RequiredHostTrustGeneration = null);
+    [property: JsonRequired] string RuntimeId,
+    [property: JsonRequired] string VersionRange,
+    [property: JsonRequired] string ModuleAbi);
 
 public sealed record RuntimeRegistryPackageInstallPlanConflict(
     string PackageId,
@@ -267,40 +232,39 @@ public sealed record RuntimeRegistryPackageInstallPlanConflict(
     string ErrorCode = "registry.v1.resource.conflict",
     string Message = "");
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeRegistryResolveInstallPlanResponse(
-    bool Success,
+    [property: JsonRequired] bool Success,
     IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> Items,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts,
     IReadOnlyList<string> TrustedArtifactOrigins,
     IReadOnlyList<PackageCapabilityConsent>? RequiredCapabilityConsents = null,
-    IReadOnlyList<RuntimeRegistryResolvedExecutionRuntimeArtifact>? RuntimeArtifacts = null,
-    IReadOnlyList<RuntimeRegistryExecutionRuntimeResolutionConflict>? RuntimeConflicts = null,
-    string ResolutionFingerprint = "",
-    long RuntimePolicyRevision = 0,
-    DateTimeOffset ExpiresAtUtc = default)
+    [property: JsonRequired] string ResolutionFingerprint = "",
+    [property: JsonRequired] DateTimeOffset ExpiresAtUtc = default)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimePackageRuntimePrerequisitePlan? RuntimePrerequisites { get; init; }
+
     private IReadOnlyList<RuntimeRegistryPackageCompatibilityConflict> _compatibilityConflicts = [];
     public IReadOnlyList<RuntimeRegistryPackageCompatibilityConflict> CompatibilityConflicts
     {
         get => _compatibilityConflicts;
-        init => _compatibilityConflicts = RuntimeContractCollections.Freeze(value);
+        init => _compatibilityConflicts = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
     }
-    public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> Items { get; }
-        = Array.AsReadOnly(Items.ToArray());
-    public IReadOnlyList<string> Warnings { get; } = Array.AsReadOnly(Warnings.ToArray());
-    public IReadOnlyList<string> Errors { get; } = Array.AsReadOnly(Errors.ToArray());
-    public IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts { get; }
-        = Array.AsReadOnly(Conflicts.ToArray());
-    public IReadOnlyList<string> TrustedArtifactOrigins { get; }
-        = Array.AsReadOnly(TrustedArtifactOrigins.ToArray());
-    public IReadOnlyList<PackageCapabilityConsent> RequiredCapabilityConsents { get; init; }
-        = Array.AsReadOnly((RequiredCapabilityConsents ?? []).ToArray());
-    public IReadOnlyList<RuntimeRegistryResolvedExecutionRuntimeArtifact> RuntimeArtifacts { get; }
-        = Array.AsReadOnly((RuntimeArtifacts ?? []).ToArray());
-    public IReadOnlyList<RuntimeRegistryExecutionRuntimeResolutionConflict> RuntimeConflicts { get; }
-        = Array.AsReadOnly((RuntimeConflicts ?? []).ToArray());
+    private IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> _items = RuntimeContractCollections.FreezeBounded(Items, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<string> _warnings = RuntimeContractCollections.FreezeBounded(Warnings, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<string> _errors = RuntimeContractCollections.FreezeBounded(Errors, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> _conflicts = RuntimeContractCollections.FreezeBounded(Conflicts, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<string> _trustedArtifactOrigins = RuntimeContractCollections.FreezeBounded(TrustedArtifactOrigins, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<PackageCapabilityConsent> _requiredCapabilityConsents = RuntimeContractCollections.FreezeBounded(RequiredCapabilityConsents ?? [], RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    [JsonRequired] public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> Items { get => _items; init => _items = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    [JsonRequired] public IReadOnlyList<string> Warnings { get => _warnings; init => _warnings = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    [JsonRequired] public IReadOnlyList<string> Errors { get => _errors; init => _errors = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    [JsonRequired] public IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts { get => _conflicts; init => _conflicts = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    [JsonRequired] public IReadOnlyList<string> TrustedArtifactOrigins { get => _trustedArtifactOrigins; init => _trustedArtifactOrigins = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    public IReadOnlyList<PackageCapabilityConsent> RequiredCapabilityConsents { get => _requiredCapabilityConsents; init => _requiredCapabilityConsents = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
 }
 
 public sealed record RuntimeRegistryPackageCompatibilityRequirement(string PackageId, string VersionRange, bool IncludePrerelease,
@@ -315,67 +279,57 @@ public sealed record RuntimeRegistryPackageCompatibilityConflict(string PackageI
     public IReadOnlyList<RuntimeRegistryPackageCompatibilityRequirement> Requirements { get; } = RuntimeContractCollections.Freeze(Requirements);
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeRegistryPackageChangeResult(
-    bool Success,
-    RuntimeRegistryErrorCode ErrorCode,
-    string Message,
-    bool RuntimeSessionApplied,
-    bool RequiresAppRestart,
+    [property: JsonRequired] bool Success,
+    [property: JsonRequired] RuntimeRegistryErrorCode ErrorCode,
+    [property: JsonRequired] string Message,
+    [property: JsonRequired] bool RuntimeSessionApplied,
+    [property: JsonRequired] bool RequiresAppRestart,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> ImpactedPackageIds,
     IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems,
     IReadOnlyList<PackageCapabilityConsent>? RequiredCapabilityConsents = null)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimePackageRuntimePrerequisitePlan? RuntimePrerequisites { get; init; }
+
     private IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> _conflicts
         = Array.AsReadOnly(Array.Empty<RuntimeRegistryPackageInstallPlanConflict>());
     private IReadOnlyList<RuntimeRegistryPackagePlanExpectation> _planExpectations
         = Array.AsReadOnly(Array.Empty<RuntimeRegistryPackagePlanExpectation>());
-    private IReadOnlyList<RuntimeRegistryResolvedExecutionRuntimeArtifact> _runtimeArtifacts
-        = Array.AsReadOnly(Array.Empty<RuntimeRegistryResolvedExecutionRuntimeArtifact>());
-    private IReadOnlyList<RuntimeRegistryExecutionRuntimeResolutionConflict> _runtimeConflicts
-        = Array.AsReadOnly(Array.Empty<RuntimeRegistryExecutionRuntimeResolutionConflict>());
     private IReadOnlyList<string> _skippedPackageIds = Array.AsReadOnly(Array.Empty<string>());
 
-    public IReadOnlyList<string> Warnings { get; } = Array.AsReadOnly(Warnings.ToArray());
-    public IReadOnlyList<string> Errors { get; } = Array.AsReadOnly(Errors.ToArray());
-    public IReadOnlyList<string> ImpactedPackageIds { get; }
-        = Array.AsReadOnly(ImpactedPackageIds.ToArray());
-    public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems { get; }
-        = Array.AsReadOnly(PlanItems.ToArray());
+    private IReadOnlyList<string> _warnings = RuntimeContractCollections.FreezeBounded(Warnings, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<string> _errors = RuntimeContractCollections.FreezeBounded(Errors, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<string> _impactedPackageIds = RuntimeContractCollections.FreezeBounded(ImpactedPackageIds, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> _planItems = RuntimeContractCollections.FreezeBounded(PlanItems, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    private IReadOnlyList<PackageCapabilityConsent> _requiredCapabilityConsents = RuntimeContractCollections.FreezeBounded(RequiredCapabilityConsents ?? [], RuntimeExecutionRuntimeManagementLimits.MaximumItems);
+    [JsonRequired] public IReadOnlyList<string> Warnings { get => _warnings; init => _warnings = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    [JsonRequired] public IReadOnlyList<string> Errors { get => _errors; init => _errors = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    [JsonRequired] public IReadOnlyList<string> ImpactedPackageIds { get => _impactedPackageIds; init => _impactedPackageIds = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
+    [JsonRequired] public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems { get => _planItems; init => _planItems = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
 
     public IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts
     {
         get => _conflicts;
-        init => _conflicts = Array.AsReadOnly((value ?? []).ToArray());
+        init => _conflicts = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
     }
 
-    public IReadOnlyList<PackageCapabilityConsent> RequiredCapabilityConsents { get; init; }
-        = Array.AsReadOnly((RequiredCapabilityConsents ?? []).ToArray());
+    public IReadOnlyList<PackageCapabilityConsent> RequiredCapabilityConsents { get => _requiredCapabilityConsents; init => _requiredCapabilityConsents = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems); }
     public RuntimePackageStamp? CommittedStamp { get; init; }
 
     public IReadOnlyList<RuntimeRegistryPackagePlanExpectation> PlanExpectations
     {
         get => _planExpectations;
-        init => _planExpectations = Array.AsReadOnly((value ?? []).ToArray());
-    }
-
-    public IReadOnlyList<RuntimeRegistryResolvedExecutionRuntimeArtifact> RuntimeArtifacts
-    {
-        get => _runtimeArtifacts;
-        init => _runtimeArtifacts = Array.AsReadOnly((value ?? []).ToArray());
-    }
-
-    public IReadOnlyList<RuntimeRegistryExecutionRuntimeResolutionConflict> RuntimeConflicts
-    {
-        get => _runtimeConflicts;
-        init => _runtimeConflicts = Array.AsReadOnly((value ?? []).ToArray());
+        init => _planExpectations = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
     }
 
     public IReadOnlyList<string> SkippedPackageIds
     {
         get => _skippedPackageIds;
-        init => _skippedPackageIds = Array.AsReadOnly((value ?? []).ToArray());
+        init => _skippedPackageIds = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
     }
 }
 

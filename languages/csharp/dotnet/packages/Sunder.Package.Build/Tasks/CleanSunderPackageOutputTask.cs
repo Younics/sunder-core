@@ -70,6 +70,13 @@ public sealed class CleanSunderPackageOutputTask : Microsoft.Build.Utilities.Tas
                 File.Delete(markerPath);
             }
 
+            var importsPath = output + Sunder.Package.Format.SunderPackageFormat.DevelopmentImportsSuffix;
+            if (File.Exists(importsPath))
+            {
+                GeneratedOutputPathSafety.EnsureRegularFile(importsPath, "development import handoff");
+                File.Delete(importsPath);
+            }
+
             return true;
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException or IOException or UnauthorizedAccessException or TimeoutException or AggregateException)

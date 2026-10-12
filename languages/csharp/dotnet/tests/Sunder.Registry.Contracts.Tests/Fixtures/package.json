@@ -25,6 +25,11 @@
       "entryPoint": "bin/sample-worker.dll",
       "targetFramework": "net10.0",
       "sdkVersion": "1.1.0",
+      "executionRuntime": {
+        "runtimeId": "sunder.runtime.dotnet",
+        "versionRange": "\u003E=10.0.0 \u003C11.0.0",
+        "moduleAbi": "sunder.dotnet-worker-module.v1"
+      },
       "requiredHostCapabilities": [
         "core.v1",
         "execution-runtime.v1",
@@ -32,11 +37,6 @@
         "sdk-baseline-1-1.v1",
         "worker-protocol.v1"
       ],
-      "executionRuntime": {
-        "runtimeId": "sunder.runtime.dotnet",
-        "versionRange": "\u003E=10.0.0 \u003C11.0.0",
-        "moduleAbi": "sunder.dotnet-worker-module.v1"
-      },
       "views": []
     },
     {
@@ -46,12 +46,12 @@
       "entryPoint": "web/index.html",
       "targetFramework": null,
       "sdkVersion": "1.1.0",
+      "executionRuntime": null,
       "requiredHostCapabilities": [
         "core.v1",
         "sdk-baseline-1-1.v1",
         "views.v1"
       ],
-      "executionRuntime": null,
       "views": [
         {
           "viewId": "sunder.package.sample.workspace",

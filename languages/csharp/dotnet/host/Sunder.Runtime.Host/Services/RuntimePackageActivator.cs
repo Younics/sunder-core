@@ -187,7 +187,7 @@ internal sealed class RuntimePackageActivator(
         ResolvedExecutionRuntimeLaunch? launch = null;
         try
         {
-            rpcBroker.RequirePackagePolicy(package.Source, package.ExecutionRuntimeBinding);
+            rpcBroker.RequirePackagePolicy(package.Source);
             launch = _executionRuntimeLaunchResolver.ResolveAsync(
                     recoveryPackage,
                     activationId,

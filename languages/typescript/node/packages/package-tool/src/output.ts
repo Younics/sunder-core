@@ -20,6 +20,7 @@ import { promisify } from "node:util";
 export const GENERATED_OUTPUT_MARKER_SUFFIX = ".sunder-generated-output";
 
 const AGGREGATE_GENERATED_OUTPUT_MARKER_SUFFIX = ".sunder-aggregate-generated-output";
+const DEVELOPMENT_IMPORTS_SUFFIX = ".imports.v1.json";
 const LOCK_SUFFIX = ".sunder-output.lock";
 const LOCK_OWNER_FILE = "owner.json";
 const LOCK_TRANSITION_SUFFIX = ".transition";
@@ -798,6 +799,7 @@ async function readTransaction(path: string, protectedPaths: readonly string[]):
     resolve(item),
     resolve(markerPath(item)),
     resolve(`${item}${AGGREGATE_GENERATED_OUTPUT_MARKER_SUFFIX}`),
+    ...(basename(resolve(item)) === "sunder-dev" ? [resolve(`${item}${DEVELOPMENT_IMPORTS_SUFFIX}`)] : []),
   ]));
   for (const raw of value.outputs) {
     const output = raw as Partial<TransactionOutput>;
@@ -917,7 +919,8 @@ async function cleanupOrphanedOutputArtifacts(keys: readonly string[]): Promise<
 
 function isMarkerSidecarPath(path: string): boolean {
   return path.endsWith(GENERATED_OUTPUT_MARKER_SUFFIX)
-    || path.endsWith(AGGREGATE_GENERATED_OUTPUT_MARKER_SUFFIX);
+    || path.endsWith(AGGREGATE_GENERATED_OUTPUT_MARKER_SUFFIX)
+    || path.endsWith(DEVELOPMENT_IMPORTS_SUFFIX);
 }
 
 async function assertOptionalRegularFile(path: string, label: string): Promise<void> {

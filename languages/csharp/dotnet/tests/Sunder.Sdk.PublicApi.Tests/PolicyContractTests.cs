@@ -31,7 +31,6 @@ public sealed class PolicyContractTests
     private static RegistryPolicyIdentity Policy => new(42, Hash('c'));
     private static RegistryPolicyCheckpointIdentity Checkpoint => new(99, Hash('d'), 1, Hash('e'));
     private static RegistryExactRpcRequirement Rpc => new("example.agent.tools", "1.0.0", Hash('f'), Hash('1'));
-    private static RegistryRuntimePolicySubject Runtime => new(new("sunder.runtime.dotnet", "10.0.0", 1, "osx-arm64", "sunder.dotnet-worker-module.v1"), Hash('2'), Hash('3'));
     private static RegistryPackageAvailabilityChange Change => new(Package, "Listed", "Yanked");
     private static RegistryPackageCompatibilityRequirement Requirement => new(Package.PackageId, ">=2.0.0 <3.0.0", false, "required", [Rpc], "example.consumer");
     private static RuntimePackagePolicySubject LocalPackage => new(Package.PackageId, Package.Version, Package.PackageContentIdentity);
@@ -40,7 +39,7 @@ public sealed class PolicyContractTests
     private static RuntimeAppProcessIdentity Process => new(42, "boot-session:process-birth-42", Hash('5'), "1.0.0+fixture", AppGeneration, HostInstance);
     private static RuntimeAppPolicySessionRequest Session => new(Nonce, AppGeneration, HostInstance);
     private static RuntimePolicyLeaseStatus Lease => new("valid", null,
-        new("https://registry.example", 42, Hash('c'), 3, 99, Hash('d'), 1, Hash('e')), Nonce, Hash('6'), Observed, Observed.AddHours(24),
+        new("https://registry.example", 42, Hash('c'), 99, Hash('d'), 1, Hash('e')), Nonce, Hash('6'), Observed, Observed.AddHours(24),
         new("boot-session", "continuous-test-clock", 1000, 10_000, 86_410_000, 10_001, null));
     private static RuntimeRequiredProviderPredicate Predicate => new("example.consumer", "runtime", new(Rpc.ContractId, Rpc.ContractVersion, Rpc.DescriptorSha256, Rpc.AbiSha256), ["discover", "invoke"]);
 
@@ -50,13 +49,12 @@ public sealed class PolicyContractTests
 
     public static TheoryData<string, object, string> Cases => new()
     {
-        { "sync-request.json", new RegistryPolicySynchronizationRequest(Nonce, [Package], [Platform], [Runtime], Policy, 3, Checkpoint), "synchronizationRequest" },
-        { "sync-response.json", new RegistryPolicySynchronizationResponse(Nonce, "https://registry.example", Policy, 3, Checkpoint, Observed, Observed.AddHours(24),
-            [new(Package, "Active", "Listed", "Allowed", null, null, [Platform])], [new(Platform, "Supported", "Allowed", null, null)], [new(Runtime, "supported", "Allowed", null, null, null)]), "synchronizationResponse" },
+        { "sync-request.json", new RegistryPolicySynchronizationRequest(Nonce, [Package], [Platform], Policy, Checkpoint), "synchronizationRequest" },
+        { "sync-response.json", new RegistryPolicySynchronizationResponse(Nonce, "https://registry.example", Policy, Checkpoint, Observed, Observed.AddHours(24),
+            [new(Package, "Active", "Listed", "Allowed", null, null, [Platform])], [new(Platform, "Supported", "Allowed", null, null)]), "synchronizationResponse" },
         { "package-denial.json", new RegistryPackagePolicyDecision(Package, "SecurityBlocked", "Listed", "Denied", PackagePolicyErrorCodes.SecurityBlocked, "Security policy blocks this package identity.", [Platform]), "packageDecision" },
         { "package-publication.json", new RegistryPackagePublicationEvidence(Package, Nonce, Hash('9'), "Yanked"), "publicationEvidence" },
         { "platform-denial.json", new RegistryPlatformPolicyDecision(Platform, "Revoked", "Denied", PackagePolicyErrorCodes.ContractAuthorityRevoked, Observed), "platformDecision" },
-        { "runtime-denial.json", new RegistryRuntimePolicyDecision(Runtime, "revoked", "Denied", ExecutionRuntimeErrorCodes.Revoked, Observed, Observed), "runtimeDecision" },
         { "cohort-request.json", new PackageVersionCohortAvailabilityTransitionV1("release-2026-09", 41, [Change], [new(Package.PackageId, "latest", null)]), "cohortRequest" },
         { "cohort-result.json", new PackageVersionCohortAvailabilityResultV1("release-2026-09", Hash('8'), Policy, Checkpoint, Observed, [Change],
             [new(Package.PackageId, [new(Package.PackageId, "latest", Package)])], [new(Package.PackageId, [])]), "cohortResult" },
@@ -70,8 +68,8 @@ public sealed class PolicyContractTests
                 [new(Rpc.ContractId, Rpc.ContractVersion, 420, Rpc.DescriptorSha256, Rpc.AbiSha256, "owned", "package", Package.PackageId, Package.Version, Package.PackageContentIdentity)]), Hash('9')),
                 ">=2.0.0 <3.0.0", false, [new(Package.PackageId, ">=2.0.0 <3.0.0", false)])],
             [new("example.consumer", "example.optional", "omitted", null, "package-api.package-unavailable")], [new(Platform, "Supported", "Allowed", null, null)]), "resolutionPolicy" },
-        { "registry-status.json", new RegistryPolicyStatusV1("registry.ready", true, true, Checkpoint, Checkpoint, Checkpoint, Policy, new(8, Hash('a')), new(2, Hash('b')), 2, 4), "registryStatus" },
-        { "registry-bootstrap-required.json", new RegistryPolicyStatusV1(RegistryV1ErrorCodes.BootstrapRequired, false, false, null, null, null, null, null, null, null, null), "registryStatus" },
+        { "registry-status.json", new RegistryPolicyStatusV1("registry.ready", true, true, Checkpoint, Checkpoint, Checkpoint, Policy, new(8, Hash('a')), new(2, Hash('b')), 2), "registryStatus" },
+        { "registry-bootstrap-required.json", new RegistryPolicyStatusV1(RegistryV1ErrorCodes.BootstrapRequired, false, false, null, null, null, null, null, null, null), "registryStatus" },
         { "stack-revision.json", new RegistryStackRevisionDetails(new("example.stack", 7, Hash('a')), Nonce, Nonce, Observed, "Example Stack", "Immutable revision.", null, Hash('b'), 512,
             "https://registry.example/api/v1/stacks/example.stack/revisions/7/download", [new(Package.PackageId, "latest", Package.Version, "2.0.0", true)], [], [],
             [new(AppGeneration, "cover.png", "image/png", 128, Hash('c'), "https://registry.example/media/cover.png", 0, null)]), "stackRevision" },
@@ -143,7 +141,7 @@ public sealed class PolicyContractTests
     [InlineData("extra")]
     public void SynchronizationWireSchema_RejectsInvalidOrIncompleteSubjectSets(string mutation)
     {
-        var request = JsonSerializer.SerializeToNode(new RegistryPolicySynchronizationRequest(Nonce, [Package], [], [], null, 0, null), Json)!.AsObject();
+        var request = JsonSerializer.SerializeToNode(new RegistryPolicySynchronizationRequest(Nonce, [Package], [], null, null), Json)!.AsObject();
         switch (mutation)
         {
             case "nonce": request["nonce"] = "replayed-or-unbounded"; break;
@@ -183,7 +181,7 @@ public sealed class PolicyContractTests
         var original = Requirement with { Contracts = tuples }; tuples[0] = Rpc with { ContractVersion = "2.0.0" };
         Assert.Equal("1.0.0", Assert.Single(original.Contracts).ContractVersion);
         RegistryPackageVersionIdentity[] packages = [Package];
-        var request = new RegistryPolicySynchronizationRequest(Nonce, packages, [], [], null, 0, null);
+        var request = new RegistryPolicySynchronizationRequest(Nonce, packages, [], null, null);
         packages[0] = Package with { Version = "3.0.0" }; Assert.Equal("2.0.0", Assert.Single(request.Packages).Version);
         string[] actions = ["discover"];
         var predicate = Predicate with { Actions = actions }; actions[0] = "invoke"; Assert.Equal("discover", Assert.Single(predicate.Actions));
@@ -203,7 +201,6 @@ public sealed class PolicyContractTests
     [InlineData("package-denial.json", "packageDecision", "disposition", "Allowed")]
     [InlineData("package-unknown.json", "packageDecision", "disposition", "Allowed")]
     [InlineData("platform-denial.json", "platformDecision", "disposition", "Allowed")]
-    [InlineData("runtime-denial.json", "runtimeDecision", "disposition", "Allowed")]
     [InlineData("app-permit-denied.json", "appPermitResult", "allowed", true)]
     [InlineData("app-session-status.json", "appSessionStatus", "shutdownRequired", false)]
     [InlineData("lease-expired.json", "lease", "errorCode", null)]
@@ -278,6 +275,48 @@ public sealed class PolicyContractTests
             Assert.DoesNotContain(data[1].GetType().GetProperties(), property => property.Name.Contains("StorageKey", StringComparison.Ordinal)
                 || property.Name.Contains("FilePath", StringComparison.Ordinal) || property.Name.Contains("Token", StringComparison.Ordinal)
                 || typeof(Stream).IsAssignableFrom(property.PropertyType));
+    }
+
+    [Theory]
+    [InlineData("sync-request.json", "runtimes")]
+    [InlineData("sync-request.json", "minimumRuntimePolicyRevision")]
+    [InlineData("sync-response.json", "runtimes")]
+    [InlineData("sync-response.json", "runtimePolicyRevision")]
+    [InlineData("registry-status.json", "runtimePolicyRevision")]
+    public void PackagePlatformPolicyRejectsRemovedRuntimeAuthorityEvenWhenNull(string file, string property)
+    {
+        var entry = Cases.Single(data => (string)data[0] == file);
+        var value = entry[1];
+        var type = value.GetType();
+        var json = JsonSerializer.SerializeToNode(value, type, Json)!.AsObject();
+        Assert.NotNull(JsonSerializer.Deserialize(json.ToJsonString(), type, Json));
+        Assert.True(ValidateSchema((string)entry[2], json));
+        json[property] = null;
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(json.ToJsonString(), type, Json));
+        Assert.False(ValidateSchema((string)entry[2], json));
+    }
+
+    [Fact]
+    public void PackagePlatformSubjectBoundsRejectOverflowAndKeepBothSubjectKindsIndependent()
+    {
+        var platforms = new[] { Platform };
+        var request = new RegistryPolicySynchronizationRequest(Nonce, [], platforms, Policy, Checkpoint);
+        platforms[0] = Platform with { ReleaseVersion = "99.0.0" };
+        Assert.Equal(Platform, Assert.Single(request.PlatformCatalogs));
+        Assert.True(ValidateSchema("synchronizationRequest", JsonSerializer.SerializeToNode(request, Json)!));
+        var replacement = new[] { Platform };
+        var copied = request with { PlatformCatalogs = replacement };
+        replacement[0] = platforms[0];
+        Assert.Equal(Platform, Assert.Single(copied.PlatformCatalogs));
+        Assert.Throws<NotSupportedException>(() => ((IList<RegistryPlatformCatalogIdentity>)copied.PlatformCatalogs).Clear());
+        Assert.Throws<ArgumentException>(() => request with
+        { Packages = Enumerable.Repeat(Package, RegistryPolicyLimits.MaximumPackageSubjects + 1).ToArray() });
+        Assert.Throws<ArgumentException>(() => new RegistryPolicySynchronizationRequest(Nonce, [],
+            Enumerable.Repeat(Platform, RegistryPolicyLimits.MaximumPlatformSubjects + 1).ToArray(), Policy, Checkpoint));
+        var watermark = JsonSerializer.SerializeToNode(Lease.Watermark, Json)!.AsObject();
+        watermark["runtimePolicyRevision"] = 1;
+        Assert.Throws<JsonException>(() => watermark.Deserialize<RuntimePolicyWatermark>(Json));
+        Assert.False(ValidateSchema("watermark", watermark));
     }
 
     [Fact]

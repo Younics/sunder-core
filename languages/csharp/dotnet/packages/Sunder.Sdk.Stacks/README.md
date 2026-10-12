@@ -16,12 +16,13 @@ The package preserves the `Sunder.Sdk.Stacks` namespace while using its own asse
 
 `IPackageStackContributor` is marked as a platform-import domain surface. Implement
 its exporter/importer/applied interfaces on a partial class and bind that class with
-`[SunderRpcProvider(typeof(IPackageStackContributor), ProviderId = "my.package.stack")]`.
-Then register `contributor.CreateSunderRpcProviderRegistration()` in Worker options.
+`[SunderServiceProvider(typeof(IPackageStackContributor), ProviderId = "my.package.stack")]`
+from `Sunder.Sdk.Services`. Ordinary package composition registers it automatically;
+advanced explicit composition can use `contributor.CreateSunderRpcProviderRegistration()`.
 The [template contributor](https://github.com/Younics/sunder-core/blob/main/languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Stacks/StackSupport.cs)
 provides a complete example.
 
-After accepting owned source, explicitly select the platform contract:
+Explicitly select the platform contract; private-only source needs no Accept/Freeze:
 
 ```powershell
 dotnet msbuild MyPackage.csproj -t:ImplementSunderPlatformApi -p:SunderContractId=sunder.stack.contributor -p:SunderRegistryOrigin=https://registry.example/

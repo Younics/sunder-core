@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Sunder.Sdk.Compatibility;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Sdk.Rpc;
 
@@ -60,12 +61,17 @@ public sealed class SunderRpcJsonConverterFactory : JsonConverterFactory
            || typeToConvert == typeof(SunderRpcUri)
            || typeToConvert == typeof(SunderRpcDecimal)
            || typeToConvert == typeof(SunderRpcContentReference)
+           || typeToConvert == typeof(SunderContent)
+           || typeToConvert.IsGenericType && typeToConvert.GetGenericTypeDefinition() == typeof(ServiceReference<>)
            || typeToConvert.IsGenericType
            && typeToConvert.GetGenericTypeDefinition() == typeof(SunderRpcOptional<>);
 
     /// <inheritdoc />
     public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
     {
+        if (typeToConvert == typeof(SunderContent)
+            || typeToConvert.IsGenericType && typeToConvert.GetGenericTypeDefinition() == typeof(ServiceReference<>))
+            throw new JsonException("Service resources require an explicit generated marshalling context.");
         if (typeToConvert == typeof(Guid)) return new SunderRpcUuidJsonConverter();
         if (typeToConvert == typeof(DateOnly)) return new SunderRpcDateJsonConverter();
         if (typeToConvert == typeof(DateTimeOffset)) return new SunderRpcUtcDateTimeJsonConverter();

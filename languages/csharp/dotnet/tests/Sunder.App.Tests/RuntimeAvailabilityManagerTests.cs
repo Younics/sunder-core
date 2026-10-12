@@ -34,7 +34,7 @@ public sealed class RuntimeAvailabilityManagerTests
     }
 
     [Fact]
-    public void CanReuseRunningRuntime_RequiresBaseFeatureAndLeavesAtomicSnapshotOperationScoped()
+    public void CanReuseRunningRuntime_RequiresOfficialRuntimeFeatureAndLeavesAtomicSnapshotOperationScoped()
     {
         var handshake = CreateHandshake() with { SupportedFeatures = [] };
 
@@ -43,11 +43,18 @@ public sealed class RuntimeAvailabilityManagerTests
         {
             SupportedFeatures = [RuntimeProtocolFeatures.VersionedApiV1],
         };
-        Assert.True(RuntimeAvailabilityManager.CanReuseRunningRuntime(versionedApiOnly));
+        Assert.False(RuntimeAvailabilityManager.CanReuseRunningRuntime(versionedApiOnly));
+        Assert.Contains(RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1,
+            RuntimeProtocolCompatibility.GetIncompatibility(versionedApiOnly), StringComparison.Ordinal);
+        var baseFeatures = versionedApiOnly with
+        {
+            SupportedFeatures = [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1],
+        };
+        Assert.True(RuntimeAvailabilityManager.CanReuseRunningRuntime(baseFeatures));
         Assert.Contains(
             RuntimeProtocolFeatures.AtomicPackageSnapshotV1,
             RuntimeProtocolCompatibility.GetIncompatibility(
-                versionedApiOnly,
+                baseFeatures,
                 RuntimeProtocolFeatures.AtomicPackageSnapshotV1),
             StringComparison.Ordinal);
     }
@@ -2117,7 +2124,7 @@ public sealed class RuntimeAvailabilityManagerTests
             minimum,
             maximum,
             Guid.NewGuid(),
-            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
+            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
             new RuntimeProductVersionDiagnostics("Other.Runtime", "not-a-protocol-version", "diagnostic-build"));
 
     private static async Task<(string RootPath, string RuntimeHostPath)> CreateRuntimeHostFileAsync()

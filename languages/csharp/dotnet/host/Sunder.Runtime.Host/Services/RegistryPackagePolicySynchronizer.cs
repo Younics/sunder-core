@@ -18,7 +18,7 @@ internal sealed class RegistryPackagePolicySynchronizer(RegistryActivePolicyClie
             {
                 foreach (var batch in Batches(group.Key, group))
                 {
-                    var request = await cache.CreateRequestAsync(group.Key, batch.Packages, batch.Platforms, batch.Runtimes, token);
+                    var request = await cache.CreateRequestAsync(group.Key, batch.Packages, batch.Platforms, token);
                     await cache.ObserveAsync(await client.SynchronizeAsync(group.Key, request, token), token);
                 }
             }
@@ -33,37 +33,34 @@ internal sealed class RegistryPackagePolicySynchronizer(RegistryActivePolicyClie
             throw new PackagePolicyDeniedException(PackagePolicyErrorCodes.PolicyConflict);
         var packages = plan.Items.Where(value => value.ActionKind != RegistryPackageActionKinds.PackageRemove)
             .Select(value => new RegistryPackageVersionIdentity(value.PackageId, value.Version!, value.PackageContentIdentity)).ToArray();
-        var runtimes = plan.RuntimeArtifacts.Select(value => new RegistryRuntimePolicySubject(value.Identity, value.ManifestSha256, value.ArtifactSha256)).ToArray();
         var platforms = policy.PlatformCatalogs.Select(value => value.Catalog).ToArray();
-        if (packages.Length + runtimes.Length + platforms.Length == 0) return;
+        if (packages.Length + platforms.Length == 0) return;
         // The plan is not lease authority. A nonce-bound refresh must still agree with
-        // the exact package/runtime revision used by resolution before it can be used.
-        await RefreshAsync([new(origin, packages, platforms, runtimes)], token);
-        cache.RequirePlan(origin, policy.PackagePolicy, plan.RuntimePolicyRevision, policy.Checkpoint);
-        foreach (var package in packages) cache.RequireActivation(origin, package, runtimes);
+        // the exact package revision used by resolution before it can be used.
+        await RefreshAsync([new(origin, packages, platforms)], token);
+        cache.RequirePlan(origin, policy.PackagePolicy, policy.Checkpoint);
+        foreach (var package in packages) cache.RequireActivation(origin, package);
     }
 
     internal static IEnumerable<PackagePolicySubjects> Batches(string origin, IEnumerable<PackagePolicySubjects> subjects)
     {
         var packages = new HashSet<RegistryPackageVersionIdentity>();
         var platforms = new HashSet<RegistryPlatformCatalogIdentity>();
-        var runtimes = new HashSet<RegistryRuntimePolicySubject>();
         foreach (var item in subjects)
         {
             RegistryActivePolicyClient.Require(item.Packages.Count <= RegistryPolicyLimits.MaximumPackageSubjects
-                && item.Platforms.Count <= RegistryPolicyLimits.MaximumPlatformSubjects && item.Runtimes.Count <= RegistryPolicyLimits.MaximumRuntimeSubjects,
+                && item.Platforms.Count <= RegistryPolicyLimits.MaximumPlatformSubjects,
                 "One complete policy subject group exceeds the request bound.");
             if (packages.Union(item.Packages).Count() > RegistryPolicyLimits.MaximumPackageSubjects
-                || platforms.Union(item.Platforms).Count() > RegistryPolicyLimits.MaximumPlatformSubjects
-                || runtimes.Union(item.Runtimes).Count() > RegistryPolicyLimits.MaximumRuntimeSubjects)
+                || platforms.Union(item.Platforms).Count() > RegistryPolicyLimits.MaximumPlatformSubjects)
             {
-                yield return new(origin, packages.ToArray(), platforms.ToArray(), runtimes.ToArray());
-                packages.Clear(); platforms.Clear(); runtimes.Clear();
+                yield return new(origin, packages.ToArray(), platforms.ToArray());
+                packages.Clear(); platforms.Clear();
             }
-            packages.UnionWith(item.Packages); platforms.UnionWith(item.Platforms); runtimes.UnionWith(item.Runtimes);
+            packages.UnionWith(item.Packages); platforms.UnionWith(item.Platforms);
         }
-        if (packages.Count + platforms.Count + runtimes.Count > 0)
-            yield return new(origin, packages.ToArray(), platforms.ToArray(), runtimes.ToArray());
+        if (packages.Count + platforms.Count > 0)
+            yield return new(origin, packages.ToArray(), platforms.ToArray());
     }
 
     public void Dispose() { foreach (var gate in _origins.Values) gate.Dispose(); }

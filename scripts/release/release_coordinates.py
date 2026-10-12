@@ -12,12 +12,8 @@ import subprocess
 from urllib.parse import quote, urlsplit
 
 REPOSITORY = "Younics/sunder-core"
-NATIVE_WORKFLOW = ".github/workflows/sunder-execution-runtime-native-release.yml"
-PUBLICATION_WORKFLOW = ".github/workflows/sunder-execution-runtime-publication.yml"
 SDK_WORKFLOW = ".github/workflows/sunder-sdk-release.yml"
-LOCK = "eng/execution-runtimes/production.lock.json"
 BASELINE = "eng/platform-contracts/sunder-contracts.owned.json"
-RIDS = ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"]
 
 
 def require(condition, message):
@@ -170,19 +166,6 @@ def release(release_id, name, source, draft=True):
     return value
 
 
-def successful_native_run(run_id, attempt, name, source):
-    run = gh("actions/runs/" + number(run_id))
-    exact = gh(f"actions/runs/{number(run_id)}/attempts/{number(attempt)}")
-    for value in (run, exact):
-        require(type(value["id"]) is int and value["id"] == int(run_id) and value["repository"]["full_name"] == REPOSITORY
-                and value["path"] == NATIVE_WORKFLOW and value["event"] == "push"
-                and value["head_sha"] == source and value["head_branch"] == name,
-                "Native run belongs to another source, tag, repository or workflow")
-    # A later failed/running attempt does not invalidate an explicitly retained successful attempt.
-    require(type(exact["run_attempt"]) is int and exact["run_attempt"] == int(attempt) and exact["status"] == "completed" and exact["conclusion"] == "success",
-            "Selected native attempt did not finish successfully")
-
-
 def evidence_descendant(source, evidence):
     require(sha(evidence, 40) == os.environ.get("SUNDER_CORE_PUBLICATION_EVIDENCE_COMMIT"), "Unapproved publication evidence commit")
     commit = gh("git/commits/" + evidence)
@@ -229,26 +212,16 @@ def evidence_descendant(source, evidence):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("stream", choices=["sdk", "runtime"])
-    parser.add_argument("--release-id")
-    parser.add_argument("--lock", default=LOCK)
+    parser.add_argument("stream", choices=["sdk"])
     args = parser.parse_args()
     name = tag(os.environ["GITHUB_REF_NAME"], args.stream)
-    workflow = SDK_WORKFLOW if args.stream == "sdk" else NATIVE_WORKFLOW
-    context = current_invocation(workflow)
+    context = current_invocation(SDK_WORKFLOW)
     require(os.environ["GITHUB_EVENT_NAME"] == "push" and context["workflowRef"] == "refs/tags/" + name, "Only tag pushes produce artifacts")
     source = context["workflowSha"]
     approved_source(source)
     local_checkout(source)
     remote_tag(name, source)
-    if args.stream == "runtime":
-        require(Path(args.lock).resolve() == Path(LOCK).resolve(), "Native build must use the tagged production lock path")
-        remote_tag(tag(os.environ["SUNDER_CORE_SDK_TAG"], "sdk"), source)
-        require(digest(read(args.lock)) == sha(os.environ["SUNDER_EXECUTION_RUNTIME_LOCK_SHA256"]), "Unapproved production lock bytes")
-        if args.release_id:
-            release(args.release_id, name, source)
-    else:
-        origin(os.environ["SUNDER_CORE_REGISTRY_ORIGIN"])
+    origin(os.environ["SUNDER_CORE_REGISTRY_ORIGIN"])
     print("Verified approved artifactSourceCommit:", source)
 
 

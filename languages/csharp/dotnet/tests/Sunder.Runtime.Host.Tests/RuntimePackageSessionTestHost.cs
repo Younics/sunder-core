@@ -24,6 +24,8 @@ internal sealed class RuntimePackageSessionTestHost
     private readonly RuntimeProtocolDescriptor _protocol;
     private readonly RuntimeRpcCatalog _rpcCatalog;
     private readonly RuntimeRpcPermissionStore _rpcPermissions;
+    private readonly RuntimeOperationGate _operationGate;
+    private readonly PackageStoreCoordinator _storeCoordinator;
 
     public RuntimePackageSessionTestHost(
         ILogger<RuntimePackageSessionTestHost> logger,
@@ -40,7 +42,6 @@ internal sealed class RuntimePackageSessionTestHost
         PackageSessionStartupTraceWriter? startupTraceWriter = null,
         IExecutionRuntimeLaunchResolver? executionRuntimeLaunchResolver = null,
         LocalExecutionRuntimeBindingResolver? localExecutionRuntimeBindingResolver = null,
-        ExecutionRuntimeLifecyclePolicyCache? executionRuntimeLifecyclePolicies = null,
         RuntimeProcessPolicyOptions? processPolicy = null,
         PackageProjectionCache? projectionCache = null,
         DevelopmentImportAuthorityStore? developmentImports = null)
@@ -49,11 +50,13 @@ internal sealed class RuntimePackageSessionTestHost
         _paths = packageArchiveInstaller.Paths;
         lifecyclePolicy ??= new RuntimeLifecyclePolicyOptions();
         var gate = operationGate ?? new RuntimeOperationGate(lifecyclePolicy: lifecyclePolicy);
+        _operationGate = gate;
         var events = eventStream ?? new RuntimeEventStreamService();
         var transfers = transferStore ?? new RuntimeContentTransferStore(packageArchiveInstaller.Paths);
         var snapshots = snapshotStore ?? new PackageUiSnapshotStore(packageArchiveInstaller.Paths);
         var storeCoordinator = packageStoreCoordinator
             ?? new PackageStoreCoordinator(packageArchiveInstaller.Paths, installedPackageStore, packageArchiveInstaller);
+        _storeCoordinator = storeCoordinator;
         timeProvider ??= TimeProvider.System;
         _rpcCatalog = new RuntimeRpcCatalog();
         _rpcPermissions = new RuntimeRpcPermissionStore(packageArchiveInstaller.Paths, timeProvider);
@@ -135,8 +138,7 @@ internal sealed class RuntimePackageSessionTestHost
             lifecyclePolicy,
             timeProvider,
             _rpcCatalog,
-            localExecutionRuntimeBindingResolver,
-            executionRuntimeLifecyclePolicies);
+            localExecutionRuntimeBindingResolver);
         _ui = new RuntimePackageUiService(
             _owner,
             snapshots,
@@ -179,16 +181,16 @@ internal sealed class RuntimePackageSessionTestHost
     public Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(string stageId, CancellationToken token = default) => _sessions.CommitStageAsync(stageId, token);
     public Task<bool> DiscardPackageLifecycleStageAsync(string stageId, CancellationToken token = default) => _sessions.DiscardStageAsync(stageId, token);
     public Task<PackageStoreStageResult> StagePackageStoreChangesAsync(PackageStoreStageRequest request, CancellationToken token = default) => _installed.StageAsync(request, token);
-    internal Task<PackageStoreStageResult> StageExecutionRuntimeRebindAsync(
+    internal async Task<PackageStoreStageResult> StageExecutionRuntimeRebindAsync(
         InstalledPackageRecord expectedPackage,
         IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> desiredBindings,
         CancellationToken token = default)
-        => _installed.StageRegistryAsync(
-            new PackageStoreStageRequest([]),
-            new Dictionary<string, RegistryPackageUploadMetadata>(StringComparer.Ordinal),
-            [expectedPackage],
-            [new PackageExecutionRuntimeRebindMutation(expectedPackage.PackageId, expectedPackage, desiredBindings)],
-            token);
+    {
+        await using var operation = await _operationGate.EnterAsync(token);
+        var preparation = await _storeCoordinator.PrepareStageAsync(
+            [new PackageExecutionRuntimeRebindMutation(expectedPackage.PackageId, expectedPackage, desiredBindings)], operation.CancellationToken);
+        return await _installed.PrepareRuntimeBindingCandidateUnderGateAsync(preparation, operation.CancellationToken);
+    }
     public Task<PackageOperationResult> CommitPackageStoreStageAsync(string stageId, CancellationToken token = default) => _installed.CommitStageAsync(stageId, token);
     internal Task<PackageOperationResult> CommitRegistryPackageStoreStageAsync(
         string stageId,

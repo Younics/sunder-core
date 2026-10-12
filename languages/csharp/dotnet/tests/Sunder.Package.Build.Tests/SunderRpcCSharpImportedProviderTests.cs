@@ -1,5 +1,6 @@
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 
@@ -9,7 +10,7 @@ namespace Sunder.Package.Build.Tests
     {
         private const string ContractId = "example.rpc.v1.minimal";
         private const string GeneratedNamespace = "Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal";
-        private const string ProviderAttribute = "[SunderRpcProvider(typeof(IMinimalProviderService))]";
+        private const string ProviderAttribute = "[SunderServiceProvider(typeof(IMinimalProviderService))]";
         private const string UnaryImplementation = "ValueTask<Payload> IFirstProvider.EchoAsync(SunderRpcInvocationContext context, Payload request, CancellationToken cancellationToken) => throw new System.NotImplementedException();";
         private const string StreamImplementation = "IAsyncEnumerable<Payload> ISecondProvider.WatchAsync(SunderRpcInvocationContext context, Payload request, CancellationToken cancellationToken) => throw new System.NotImplementedException();";
         private const string MarkerSource = """
@@ -25,6 +26,7 @@ namespace Sunder.Package.Build.Tests
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
             using Sunder.Generated.Rpc;
             using {{GeneratedNamespace}};
             namespace Example.Imported;
@@ -38,12 +40,12 @@ namespace Sunder.Package.Build.Tests
         private const string OwnedSource = """
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
             namespace Example.Owned;
-            [SunderRpcService(SunderRpcExposure.Public)]
-            [SunderRpcProvider(ProviderId = "example.owned.provider")]
+            [SunderService(SunderServiceExposure.Public)]
+            [SunderServiceProvider(ProviderId = "example.owned.provider")]
             public sealed partial class OwnedService
             {
-                [SunderRpcMethod]
                 public ValueTask<Response> EchoAsync() => throw new System.NotImplementedException();
             }
             public sealed record Response
@@ -88,7 +90,7 @@ namespace Sunder.Package.Build.Tests
             Assert.Same(expectedSurface.Contract.Descriptor, imported.Surface.Contract.Descriptor);
             Assert.Equal(ContractId, imported.Surface.Contract.ContractKey);
             Assert.Equal(ContractId + ".provider", imported.Provider.ProviderId);
-            Assert.Equal(SunderRpcProviderAudience.Public, imported.Provider.Audience);
+            Assert.Equal(SunderServiceAudience.Public, imported.Provider.Audience);
             Assert.Equal(2, imported.Surface.Contract.Descriptor.Services.Count);
 
             var generated = SunderRpcCSharpImplementationEmitter.Emit(result.Contracts, result.ImportedProviders);
@@ -210,7 +212,7 @@ namespace Sunder.Package.Build.Tests
             input = input with
             {
                 Sources = [new("Provider.cs", $$"""
-                    [Sunder.Sdk.Rpc.SunderRpcProvider(typeof({{markerName}}))]
+                    [Sunder.Sdk.Services.SunderServiceProvider(typeof({{markerName}}))]
                     public partial class Provider : {{markerName}} { }
                     """)],
                 ReferencePaths = input.ReferencePaths.Append(typeof(ImportedProviderMetadata.IMetadataProviderService).Assembly.Location).ToArray(),
@@ -268,24 +270,24 @@ namespace Sunder.Package.Build.Tests
                 ? input with
                 {
                     Sources = [new("Owned.cs", OwnedSource.Replace(
-                        "[SunderRpcProvider(ProviderId = \"example.owned.provider\")]",
-                        "[SunderRpcProvider(ProviderId = \"example.one\")]\n[SunderRpcProvider(ProviderId = \"example.two\")]", StringComparison.Ordinal))],
+                        "[SunderServiceProvider(ProviderId = \"example.owned.provider\")]",
+                        "[SunderServiceProvider(ProviderId = \"example.one\")]\n[SunderServiceProvider(ProviderId = \"example.two\")]", StringComparison.Ordinal))],
                     ImportedProviderSurfaces = [],
                     SupplementalSources = [],
                 }
                 : WithProviderSource(input, ProviderSource.Replace(ProviderAttribute,
-                    "[SunderRpcProvider(typeof(IMinimalProviderService), ProviderId = \"example.one\")]\n[SunderRpcProvider(typeof(IMinimalProviderService), ProviderId = \"example.two\")]", StringComparison.Ordinal));
+                    "[SunderServiceProvider(typeof(IMinimalProviderService), ProviderId = \"example.one\")]\n[SunderServiceProvider(typeof(IMinimalProviderService), ProviderId = \"example.two\")]", StringComparison.Ordinal));
 
             AssertDiagnostic(new SunderRpcCSharpSourceCompiler().Compile(input), "rpc-authoring.provider-invalid");
         }
 
         [Theory]
-        [InlineData("Owner", SunderRpcProviderAudience.Owner)]
-        [InlineData("Public", SunderRpcProviderAudience.Public)]
-        public void Compile_ImportedProvider_UsesExistingAudienceAndExplicitIdentityRules(string audience, SunderRpcProviderAudience expected)
+        [InlineData("Owner", SunderServiceAudience.Owner)]
+        [InlineData("Public", SunderServiceAudience.Public)]
+        public void Compile_ImportedProvider_UsesExistingAudienceAndExplicitIdentityRules(string audience, SunderServiceAudience expected)
         {
             var input = WithProviderSource(CreateInput(), ProviderSource.Replace(ProviderAttribute,
-                $"[SunderRpcProvider(typeof(IMinimalProviderService), ProviderId = \"example.custom\", Audience = SunderRpcProviderAudience.{audience})]", StringComparison.Ordinal));
+                $"[SunderServiceProvider(typeof(IMinimalProviderService), ProviderId = \"example.custom\", Audience = SunderServiceAudience.{audience})]", StringComparison.Ordinal));
 
             var result = new SunderRpcCSharpSourceCompiler().Compile(input);
 
@@ -297,11 +299,11 @@ namespace Sunder.Package.Build.Tests
 
         [Theory]
         [InlineData("ProviderId = \"Not.Canonical\"")]
-        [InlineData("Audience = (SunderRpcProviderAudience)99")]
+        [InlineData("Audience = (SunderServiceAudience)99")]
         public void Compile_ImportedProvider_RejectsInvalidIdentityOrAudience(string arguments)
         {
             var input = WithProviderSource(CreateInput(), ProviderSource.Replace(ProviderAttribute,
-                $"[SunderRpcProvider(typeof(IMinimalProviderService), {arguments})]", StringComparison.Ordinal));
+                $"[SunderServiceProvider(typeof(IMinimalProviderService), {arguments})]", StringComparison.Ordinal));
 
             AssertDiagnostic(new SunderRpcCSharpSourceCompiler().Compile(input), "rpc-authoring.provider-invalid");
         }
@@ -329,7 +331,7 @@ namespace Sunder.Package.Build.Tests
                 Sources = Enumerable.Range(0, importedCount).Select(index => new SunderRpcCSharpSourceFile($"Provider{index}.cs",
                     ProviderSource.Replace("class ImportedProvider", $"class ImportedProvider{index}", StringComparison.Ordinal)
                         .Replace(ProviderAttribute,
-                            $"[SunderRpcProvider(typeof(IMinimalProviderService), ProviderId = \"example.provider.p{index}\")]", StringComparison.Ordinal)))
+                            $"[SunderServiceProvider(typeof(IMinimalProviderService), ProviderId = \"example.provider.p{index}\")]", StringComparison.Ordinal)))
                     .Append(new("Owned.cs", OwnedSource)).ToArray(),
             };
 
@@ -384,11 +386,14 @@ namespace Sunder.Package.Build.Tests
                   }
                 }
                 """u8);
-            var contract = new SunderRpcCSharpImportedContract(ContractId, GeneratedNamespace, descriptor);
+            // This fixture deliberately starts at the low-level descriptor boundary;
+            // it has no authored named models to project.
+            var contract = new SunderRpcCSharpImportedContract(ContractId, GeneratedNamespace, descriptor)
+            { ModelProjection = Sunder.Package.Format.SunderRpcModelProjection.Empty };
             var platformAssemblies = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")
                                      ?? throw new InvalidOperationException("Trusted platform assemblies are unavailable.");
             var references = platformAssemblies.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-                .Append(typeof(SunderRpcServiceAttribute).Assembly.Location)
+                .Append(typeof(SunderServiceAttribute).Assembly.Location)
                 .Append(typeof(SunderWorkerProviderRegistration).Assembly.Location)
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             return new("example.consumer", "9.8.7", [new("Provider.cs", ProviderSource)], references,

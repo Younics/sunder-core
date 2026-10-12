@@ -49,7 +49,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                 "", "7.6.5", [new(path, ImplementationFirstSource)], references)).Contracts).Descriptor;
             WriteSourceAuthoringState(root, descriptor);
             var changed = ImplementationFirstSource.Replace("public sealed partial class GreetingService\n{", "public sealed partial class GreetingService\n{\n"
-                + "    [SunderRpcMethod] public ValueTask<GreetingResult> SecondAsync(GreetingRequest request, CancellationToken token) => ValueTask.FromResult(new GreetingResult { Message = request.Name });", StringComparison.Ordinal);
+                + "    public ValueTask<GreetingResult> SecondAsync(GreetingRequest request, CancellationToken token) => ValueTask.FromResult(new GreetingResult { Message = request.Name });", StringComparison.Ordinal);
             Assert.NotEqual(ImplementationFirstSource, changed);
             File.WriteAllText(path, changed + OwnedCaller.Replace(".GreetAsync(", ".SecondAsync(", StringComparison.Ordinal));
             var accept = CreateSourceTask(root, Path.Combine(root, "obj"), path, references);
@@ -101,7 +101,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         {
             internal async System.Threading.Tasks.ValueTask<string> Call(System.Threading.CancellationToken token)
             {
-                var api = new Sunder.Generated.Rpc.PackageApi(rpc).Greeting;
+                var api = new Sunder.Generated.Packages.Example_Generated_Internal.PackageApi(rpc).Greeting;
                 var catalog = await api.ListAsync(token);
                 await using var scope = await rpc.CreateCallScopeAsync(cancellationToken: token);
                 var reply = await api.CreateClient(scope, catalog.Providers[0]).SGreeting.GreetAsync(new() { Name = "hello" }, token);

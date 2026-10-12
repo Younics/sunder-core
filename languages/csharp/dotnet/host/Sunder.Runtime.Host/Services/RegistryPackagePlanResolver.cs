@@ -9,7 +9,6 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed class RegistryPackagePlanResolver(
     RegistryHttpClient registryClient,
     InstalledPackageStore installedPackages,
-    ExecutionRuntimeHostTrustService runtimeTrust,
     ILogger<RegistryPackagePlanResolver> logger,
     RegistryPackagePolicySynchronizer? policySynchronizer = null)
 {
@@ -77,6 +76,7 @@ internal sealed class RegistryPackagePlanResolver(
                 .Select(target => new RegistryPackageProjectionKey(target.Role, target.Rid))
                 .Prepend(new RegistryPackageProjectionKey(SunderPackageProjectionFormat.SharedKind, null))
                 .ToArray();
+            ValidateRuntimeBindings(package, validation.Manifest);
             installed.Add(new RegistryInstalledPackageState(
                 package.PackageId,
                 package.Version,
@@ -84,8 +84,7 @@ internal sealed class RegistryPackagePlanResolver(
                     dependency.PackageId,
                     dependency.VersionRange)).ToArray(),
                 acquired,
-                GetRegistryPackageContentIdentity(package),
-                ProjectRuntimeBindings(package, validation.Manifest)));
+                GetRegistryPackageContentIdentity(package)));
         }
         using var response = await registryClient.SendAsync(
             new HttpRequestMessage(
@@ -98,7 +97,6 @@ internal sealed class RegistryPackagePlanResolver(
                     RuntimeRegistryContractMapper.ToRegistry(request.Packages),
                     installed,
                     RuntimeRegistryContractMapper.CompatibilityProfile,
-                    new RegistryHostRuntimeTrustProfile(runtimeTrust.ProfileId, runtimeTrust.Generation),
                     ExpectedResolutionFingerprint: expectedResolutionFingerprint,
                     IncludePrerelease: request.IncludePrerelease,
                     AllowDowngrade: request.AllowDowngrade,
@@ -126,7 +124,7 @@ internal sealed class RegistryPackagePlanResolver(
         return new RegistryResolveInstallPlanResponse(false, [], [], [await registryClient.ReadErrorAsync(response, cancellationToken)], [], []);
     }
 
-    internal static IReadOnlyList<RegistryPackageTargetRuntimeBinding> ProjectRuntimeBindings(
+    internal static void ValidateRuntimeBindings(
         InstalledPackageRecord package,
         SunderPackageManifest manifest)
     {
@@ -139,7 +137,6 @@ internal sealed class RegistryPackagePlanResolver(
             }
         }
 
-        var projected = new List<RegistryPackageTargetRuntimeBinding>(bindingsByTarget.Count);
         InstalledPackageProjection.ValidateScope(InstalledPackageProjection.Keys(package), manifest);
         foreach (var target in InstalledPackageProjection.Targets(package, manifest)
                      .Where(static target => target?.ExecutionRuntime is not null)
@@ -150,33 +147,22 @@ internal sealed class RegistryPackagePlanResolver(
             var key = (target.Role!, target.Rid!);
             var requirement = target.ExecutionRuntime!;
             if (!bindingsByTarget.Remove(key, out var binding)
-                || !string.Equals(binding.RuntimeId, requirement.Id, StringComparison.Ordinal)
-                || !string.Equals(binding.ModuleAbi, requirement.ModuleAbi, StringComparison.Ordinal)
-                || !PackageVersionRange.IsSatisfiedBy(binding.RuntimeVersion, requirement.VersionRange!))
+                || !string.Equals(binding.Requirement.RuntimeId, requirement.Id, StringComparison.Ordinal)
+                || !string.Equals(binding.Requirement.VersionRange, requirement.VersionRange, StringComparison.Ordinal)
+                || !string.Equals(binding.Requirement.ModuleAbi, requirement.ModuleAbi, StringComparison.Ordinal)
+                || !string.Equals(binding.Runtime.RuntimeId, requirement.Id, StringComparison.Ordinal)
+                || !string.Equals(binding.Runtime.Rid, target.Rid, StringComparison.Ordinal)
+                || !string.Equals(binding.Runtime.ModuleAbi, requirement.ModuleAbi, StringComparison.Ordinal)
+                || !PackageVersionRange.IsSatisfiedBy(binding.Runtime.VendorVersion, requirement.VersionRange!))
             {
                 throw RuntimeBindingMismatch(package.PackageId);
             }
-
-            projected.Add(new RegistryPackageTargetRuntimeBinding(
-                target.Role!,
-                target.Rid!,
-                new RegistryExecutionRuntimeRequirement(
-                    requirement.Id!,
-                    requirement.VersionRange!,
-                    requirement.ModuleAbi!),
-                new RegistryExecutionRuntimeIdentity(
-                    binding.RuntimeId,
-                    binding.RuntimeVersion,
-                    binding.RuntimePackagingRevision,
-                    binding.Rid,
-                    binding.ModuleAbi)));
         }
 
         if (bindingsByTarget.Count != 0)
         {
             throw RuntimeBindingMismatch(package.PackageId);
         }
-        return projected;
     }
 
     private static InvalidDataException RuntimeBindingMismatch(string packageId)

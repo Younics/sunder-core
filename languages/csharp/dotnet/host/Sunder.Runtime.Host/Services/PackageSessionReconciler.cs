@@ -35,7 +35,6 @@ internal sealed class PackageSessionReconciler(
             installedPackages,
             devOverlays,
             null,
-            null,
             baseGeneration,
             started,
             startupTrace,
@@ -55,28 +54,6 @@ internal sealed class PackageSessionReconciler(
             installedPackages,
             devOverlays,
             preparationSourcePaths,
-            null,
-            baseGeneration,
-            started,
-            startupTrace,
-            cancellationToken);
-    }
-
-    internal async Task<PackageSessionLoadResult> LoadMergedSessionAsync(
-        IReadOnlyList<InstalledPackageRecord> installedPackages,
-        IReadOnlyCollection<PackageSessionDevOverlay> devOverlays,
-        long baseGeneration,
-        IReadOnlyDictionary<string, string>? preparationSourcePaths,
-        ExecutionRuntimeLifecyclePolicySnapshot? runtimePolicyAuthority,
-        CancellationToken cancellationToken)
-    {
-        var started = Stopwatch.GetTimestamp();
-        var startupTrace = startupTraceWriter?.BeginAttempt(baseGeneration);
-        return await LoadMergedSessionCoreAsync(
-            installedPackages,
-            devOverlays,
-            preparationSourcePaths,
-            runtimePolicyAuthority,
             baseGeneration,
             started,
             startupTrace,
@@ -87,7 +64,6 @@ internal sealed class PackageSessionReconciler(
         IReadOnlyList<InstalledPackageRecord> installedPackages,
         IReadOnlyCollection<PackageSessionDevOverlay> devOverlays,
         IReadOnlyDictionary<string, string>? preparationSourcePaths,
-        ExecutionRuntimeLifecyclePolicySnapshot? runtimePolicyAuthority,
         long baseGeneration,
         long started,
         PackageSessionStartupTraceAttempt? startupTrace,
@@ -113,15 +89,13 @@ internal sealed class PackageSessionReconciler(
                         installedPackages,
                         preparationSourcePaths,
                         cancellationToken,
-                        startupTrace,
-                        runtimePolicyAuthority)
+                        startupTrace)
                     : await loader.LoadInstalledWithDevOverlaysAsync(
                         installedPackages,
                         devFolders,
                         preparationSourcePaths,
                         cancellationToken,
-                        startupTrace,
-                        runtimePolicyAuthority);
+                        startupTrace);
             }
 
             logger.LogInformation(

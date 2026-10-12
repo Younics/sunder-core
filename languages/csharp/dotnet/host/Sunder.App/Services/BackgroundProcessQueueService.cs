@@ -30,26 +30,37 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue, IDi
         => Enqueue(request, Guid.NewGuid());
 
     internal BackgroundProcessSnapshot Enqueue(BackgroundProcessRequest request, Guid processId)
+        => EnqueueBatch([new(processId, request)])[0];
+
+    // Publish the complete ordered group before any delegate can start. The SDK API and
+    // scheduler stay unchanged; this also closes the fast-first-job-failure enrollment race.
+    internal IReadOnlyList<BackgroundProcessSnapshot> EnqueueBatch(IReadOnlyList<QueuedBackgroundProcess> requests, CancellationToken cancellationToken = default)
     {
-        BackgroundProcessRequestValidator.Validate(request);
-        var normalizedRequest = request with { Metadata = NormalizeMetadata(request.Metadata) };
-        var item = new BackgroundProcessWorkItem(processId, normalizedRequest, DateTimeOffset.UtcNow);
-
-        BackgroundProcessSnapshot snapshot;
-        lock (_syncRoot)
+        var items = requests.Select(entry =>
         {
-            if (_disposed)
+            BackgroundProcessRequestValidator.Validate(entry.Request);
+            return new BackgroundProcessWorkItem(entry.ProcessId,
+                entry.Request with { Metadata = NormalizeMetadata(entry.Request.Metadata) }, DateTimeOffset.UtcNow, entry.StatusText);
+        }).ToArray();
+        BackgroundProcessSnapshot[] snapshots;
+        try
+        {
+            lock (_syncRoot)
             {
-                throw new ObjectDisposedException(nameof(BackgroundProcessQueueService));
+                cancellationToken.ThrowIfCancellationRequested();
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                if (items.Select(item => item.ProcessId).Distinct().Count() != items.Length
+                    || items.Any(item => _processes.Any(existing => existing.ProcessId == item.ProcessId)))
+                    throw new ArgumentException("Background process IDs must be unique.", nameof(requests));
+                _processes.AddRange(items);
+                snapshots = items.Select(item => item.ToSnapshot()).ToArray();
             }
-
-            _processes.Add(item);
-            snapshot = item.ToSnapshot();
         }
+        catch { foreach (var item in items) item.DisposeCancellationTokenSource(); throw; }
 
-        Publish(snapshot);
+        foreach (var snapshot in snapshots) Publish(snapshot);
         ScheduleEligibleProcesses();
-        return snapshot;
+        return snapshots;
     }
 
     public IReadOnlyList<BackgroundProcessSnapshot> ListProcesses(string? groupKey = null)
@@ -74,6 +85,9 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue, IDi
 
     public bool Cancel(Guid processId)
         => TryCancel(processId, force: false);
+
+    internal bool Cancel(Guid processId, string queuedStatus)
+        => TryCancel(processId, force: false, queuedStatus);
 
     public void Dispose()
     {
@@ -284,7 +298,7 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue, IDi
         return runningTasks;
     }
 
-    private bool TryCancel(Guid processId, bool force)
+    private bool TryCancel(Guid processId, bool force, string? queuedStatus = null)
     {
         BackgroundProcessSnapshot? snapshot = null;
         CancellationTokenSource? cancellationTokenSourceToCancel = null;
@@ -304,7 +318,7 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue, IDi
 
             if (item.State == BackgroundProcessState.Queued)
             {
-                item.MarkQueuedCancelled(DateTimeOffset.UtcNow);
+                item.MarkQueuedCancelled(DateTimeOffset.UtcNow, queuedStatus);
                 snapshot = item.ToSnapshot();
                 shouldSchedule = true;
             }
@@ -441,3 +455,5 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue, IDi
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(metadata, StringComparer.OrdinalIgnoreCase);
 }
+
+internal sealed record QueuedBackgroundProcess(Guid ProcessId, BackgroundProcessRequest Request, string? StatusText = null);

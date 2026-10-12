@@ -26,7 +26,10 @@ internal sealed class CliCommandDispatcher(
         ListExecutionRuntimesCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
         ShowExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
         EnsureExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
-        ImportExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
+        InstallExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
+        ExecutionRuntimeSettingsCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
+        UpdateExecutionRuntimesCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
+        RemoveExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
         VerifyExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
         RepairExecutionRuntimeCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
         GarbageCollectExecutionRuntimesCommand value => ExecutionRuntimeHandler().ExecuteAsync(value, token),
@@ -131,7 +134,7 @@ internal sealed class CliCommandDispatcher(
         => new(RequireRuntime(), _archives, output, progress);
 
     private ExecutionRuntimeCommandHandler ExecutionRuntimeHandler()
-        => new(RequireRuntime(), output, progress, options);
+        => new(RequireRuntime(), output, progress);
 
     private DevPackageCommandHandler DevPackageHandler()
         => new(RequireHost(), RequireRuntime(), output);

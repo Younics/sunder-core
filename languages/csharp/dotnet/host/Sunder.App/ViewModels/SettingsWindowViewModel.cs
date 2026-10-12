@@ -24,6 +24,8 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     private readonly CancellationTokenSource _disposeCts = new();
     private SettingsSectionItemViewModel? _presentedSection;
     private bool _disposed;
+    private bool _windowVisible;
+    public const string PackageRuntimesSectionId = "runtime";
 
     public SettingsWindowViewModel(
         IRuntimePackageSettingsClient runtimeApiClient,
@@ -35,9 +37,11 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         double backgroundProcessPopoverHeight = ShellState.DefaultBackgroundProcessPopoverHeight,
         Action<double, double>? persistBackgroundProcessPopoverSize = null,
         AppRuntimeResourcePolicySettingsService? runtimeResourcePolicySettingsService = null,
-        IRuntimeResourcePolicyStatusSource? runtimeResourcePolicyStatusSource = null)
+        IRuntimeResourcePolicyStatusSource? runtimeResourcePolicyStatusSource = null,
+        SettingsPackageRuntimesViewModel? packageRuntimes = null)
     {
         _runtimeApiClient = runtimeApiClient;
+        PackageRuntimes = packageRuntimes;
         _packageViewHostService = packageViewHostService;
         var resolvedUpdateService = updateService ?? new SunderUpdateService();
         _cli = new SettingsCliViewModel(new SettingsCliCoordinator(cliInstallationService));
@@ -69,7 +73,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         CoreSections =
         [
             new("appearance", "Appearance", "Theme, startup behavior, and shell presentation.", false),
-            new("runtime", "Runtime", "Shell composition, package loading, and local runtime behavior.", false),
+            new(PackageRuntimesSectionId, "Package Runtimes", ".NET and Node.js runtimes used by your packages.", false),
             new("cli", "CLI", "Terminal command installation and shell profile instructions.", false),
             new("updates", "Updates", "Package updates and future managed rollout behavior.", false),
             new("notifications", "Notifications", "Notification preferences and attention management.", false),
@@ -94,6 +98,32 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public SettingsRuntimeResourcesViewModel RuntimeResources => _runtimeResources;
 
+    public SettingsPackageRuntimesViewModel? PackageRuntimes { get; }
+
+    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
+    private bool _isPackageRuntimesSelection;
+
+    partial void OnIsPackageRuntimesSelectionChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowPlainCoreSelection));
+        OnPropertyChanged(nameof(ShowApplySaveButtons));
+        if (!value) PackageRuntimes?.Deactivate();
+    }
+
+    public void SetWindowVisible(bool visible)
+    {
+        _windowVisible = visible;
+        if (visible && IsPackageRuntimesSelection && PackageRuntimes is not null)
+            _tasks.Observe(PackageRuntimes.ActivateAsync(), "opening Package Runtimes");
+        else if (!visible) PackageRuntimes?.Deactivate();
+    }
+
+    public Task<bool> SelectCoreSectionAsync(string sectionId, CancellationToken cancellationToken = default)
+    {
+        var section = CoreSections.FirstOrDefault(item => item.Id == sectionId);
+        return section is null ? Task.FromResult(false) : SelectSectionCoreAsync(section, new Dictionary<string, string?>(), cancellationToken);
+    }
+
     public SettingsPackageSectionsViewModel PackageSettings => _packageSettings;
 
     public ObservableCollection<string> SelectedCoreLines { get; }
@@ -103,6 +133,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     public bool IsCoreSelection => !IsPackageSelection;
 
     public bool ShowPlainCoreSelection => IsCoreSelection
+                                          && !IsPackageRuntimesSelection
                                           && !IsCliSelection
                                           && !IsUpdatesSelection
                                           && !IsAdvancedSelection;
@@ -121,7 +152,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public bool ShowScrollableSelectionContent => !HasHostedSettingsView;
 
-    public bool ShowApplySaveButtons => !HasHostedSettingsView && !IsCliSelection;
+    public bool ShowApplySaveButtons => !HasHostedSettingsView && !IsCliSelection && !IsPackageRuntimesSelection;
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private string _selectedTitle = "Appearance";
@@ -485,6 +516,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
 
         _disposed = true;
+        PackageRuntimes?.Dispose();
         _selection.Dispose();
         _selectionLoadRequest.Dispose();
         _packageSectionRefresh.Dispose();
@@ -531,6 +563,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         ReleaseStagedHostedSettingsView();
         HostedSettingsView = null;
         IsPackageSelection = false;
+        IsPackageRuntimesSelection = item.Id == PackageRuntimesSectionId;
         IsCliSelection = string.Equals(item.Id, "cli", StringComparison.OrdinalIgnoreCase);
         IsUpdatesSelection = string.Equals(item.Id, "updates", StringComparison.OrdinalIgnoreCase);
         IsAdvancedSelection = string.Equals(item.Id, "advanced", StringComparison.OrdinalIgnoreCase);
@@ -727,6 +760,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IsCliSelection = false;
         IsUpdatesSelection = false;
         IsAdvancedSelection = false;
+        IsPackageRuntimesSelection = false;
         IsPackageSelection = true;
     }
 

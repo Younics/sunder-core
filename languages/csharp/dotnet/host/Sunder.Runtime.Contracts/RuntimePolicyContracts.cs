@@ -43,7 +43,6 @@ public sealed record RuntimePolicyWatermark(
     [property: JsonRequired] string RegistryOrigin,
     [property: JsonRequired] long PackagePolicyRevision,
     [property: JsonRequired] string PackagePolicyFingerprint,
-    [property: JsonRequired] long RuntimePolicyRevision,
     [property: JsonRequired] long CheckpointSequence,
     [property: JsonRequired] string CheckpointDigest,
     [property: JsonRequired] long TopologyGeneration,

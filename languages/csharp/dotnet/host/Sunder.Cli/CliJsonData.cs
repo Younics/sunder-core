@@ -189,12 +189,12 @@ internal static class CliJsonData
             binding = new
             {
                 runtimeId = status.Binding.Runtime.RuntimeId,
-                version = status.Binding.Runtime.Version,
-                packagingRevision = status.Binding.Runtime.PackagingRevision,
+                sourceId = status.Binding.Runtime.SourceId.ToString().ToLowerInvariant(),
+                vendorVersion = status.Binding.Runtime.VendorVersion,
                 rid = status.Binding.Runtime.Rid,
                 moduleAbi = status.Binding.Runtime.ModuleAbi,
-                manifestSha256 = status.Binding.Runtime.ManifestSha256,
-                artifactSha256 = status.Binding.Runtime.ArtifactSha256,
+                vendorChecksumAlgorithm = status.Binding.Runtime.VendorChecksumAlgorithm.ToString().ToLowerInvariant(),
+                vendorChecksumDigest = status.Binding.Runtime.VendorChecksumDigest,
             },
             installed = status.InstalledRuntime is not null,
             status = status.InstalledRuntime?.Status ?? "missing",
@@ -205,19 +205,7 @@ internal static class CliJsonData
                 repairRecommended = status.InstalledRuntime.Health.RepairRecommended,
                 message = status.InstalledRuntime.Health.Message,
             },
-            lifecycle = new
-            {
-                state = status.Lifecycle.State,
-                supportedFromUtc = status.Lifecycle.SupportedFromUtc,
-                deprecatedAtUtc = status.Lifecycle.DeprecatedAtUtc,
-                installBlockedAtUtc = status.Lifecycle.InstallBlockedAtUtc,
-                activationBlockedAtUtc = status.Lifecycle.ActivationBlockedAtUtc,
-                revokedAtUtc = status.Lifecycle.RevokedAtUtc,
-                policyMessage = status.Lifecycle.PolicyMessage,
-                runtimePolicyRevision = status.Lifecycle.RuntimePolicyRevision,
-                policyObservedAtUtc = status.Lifecycle.PolicyObservedAtUtc,
-                source = status.LifecycleSource,
-            },
+            support = status.InstalledRuntime?.Support,
             actions = new
             {
                 ensureRequired = status.EnsureRequired,
@@ -281,25 +269,18 @@ internal static class CliJsonData
             {
                 identity = new
                 {
-                    runtimeId = download.Artifact.Identity.RuntimeId,
-                    version = download.Artifact.Identity.Version,
-                    packagingRevision = download.Artifact.Identity.PackagingRevision,
-                    rid = download.Artifact.Identity.Rid,
-                    moduleAbi = download.Artifact.Identity.ModuleAbi,
+                    runtimeId = download.Resolution.Artifact.Identity.RuntimeId,
+                    sourceId = download.Resolution.Artifact.Identity.SourceId.ToString().ToLowerInvariant(),
+                    vendorVersion = download.Resolution.Artifact.Identity.VendorVersion,
+                    rid = download.Resolution.Artifact.Identity.Rid,
+                    moduleAbi = download.Resolution.Artifact.Identity.ModuleAbi,
+                    vendorChecksumAlgorithm = download.Resolution.Artifact.Identity.VendorChecksumAlgorithm.ToString().ToLowerInvariant(),
+                    vendorChecksumDigest = download.Resolution.Artifact.Identity.VendorChecksumDigest,
                 },
-                fullBytes = download.Artifact.ArtifactSize,
+                fullBytes = download.FullBytes,
                 incrementalBytes = download.IncrementalBytes,
                 alreadyInstalledAndHealthy = download.AlreadyInstalled,
-                lifecycle = new
-                {
-                    state = download.Artifact.Lifecycle.State,
-                    supportedFromUtc = download.Artifact.Lifecycle.SupportedFromUtc,
-                    deprecatedAtUtc = download.Artifact.Lifecycle.DeprecatedAtUtc,
-                    installBlockedAtUtc = download.Artifact.Lifecycle.InstallBlockedAtUtc,
-                    activationBlockedAtUtc = download.Artifact.Lifecycle.ActivationBlockedAtUtc,
-                    revokedAtUtc = download.Artifact.Lifecycle.RevokedAtUtc,
-                    message = download.Artifact.Lifecycle.Message,
-                },
+                support = download.Resolution.Artifact.Support,
             }).ToArray(),
             conflicts = preflight.Conflicts.Select(conflict => new
             {
@@ -309,18 +290,6 @@ internal static class CliJsonData
                 requiredByPackageId = conflict.RequiredByPackageId,
                 code = conflict.ErrorCode,
                 message = conflict.Message,
-            }).ToArray(),
-            runtimeConflicts = preflight.RuntimeConflicts.Select(conflict => new
-            {
-                code = conflict.Code,
-                message = conflict.Message,
-                runtimeId = conflict.Requirement.RuntimeId,
-                versionRange = conflict.Requirement.VersionRange,
-                moduleAbi = conflict.Requirement.ModuleAbi,
-                rid = conflict.Rid,
-                packageId = conflict.PackageId,
-                targetRole = conflict.TargetRole,
-                requiredHostTrustGeneration = conflict.RequiredHostTrustGeneration,
             }).ToArray(),
             requiredCapabilityConsents = preflight.RequiredCapabilityConsents.Select(consent => new
             {

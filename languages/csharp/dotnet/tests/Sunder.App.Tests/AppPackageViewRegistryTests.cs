@@ -59,6 +59,44 @@ public sealed class AppPackageViewRegistryTests
     }
 
     [Fact]
+    public void RegisteredViews_UseGeneratedFactoriesForViewsAndSettingsLazily()
+    {
+        var dependency = new ConstructorDependency();
+        var created = 0;
+        using var services = new ServiceCollection()
+            .AddTransient(_ =>
+            {
+                created++;
+                return new FactoryConfiguredView(dependency) { DataContext = dependency };
+            })
+            .BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<FactoryConfiguredView>("test.package", "test.factory", services);
+        registry.RegisterSettingsView<FactoryConfiguredView>("test.package", services);
+        Assert.Equal(0, created);
+
+        var view = Assert.IsType<FactoryConfiguredView>(registry.GetOrCreateView("test.factory", _ => false, ReportFailure));
+        var settings = Assert.IsType<FactoryConfiguredView>(registry.GetOrCreateSettingsView("test.package", _ => false, ReportFailure));
+        Assert.Same(dependency, view.Dependency);
+        Assert.Same(dependency, view.DataContext);
+        Assert.Same(dependency, settings.Dependency);
+        Assert.Same(dependency, settings.DataContext);
+        Assert.NotSame(view, settings);
+        Assert.Same(view, registry.GetOrCreateView("test.factory", _ => false, ReportFailure));
+        Assert.Equal(2, created);
+        registry.RemoveCachedViews("test.package");
+        Assert.NotSame(view, registry.GetOrCreateView("test.factory", _ => false, ReportFailure));
+        Assert.Equal(3, created);
+    }
+
+    private sealed class FactoryConfiguredView : Control
+    {
+        public FactoryConfiguredView() => throw new InvalidOperationException("The generated factory must select the internal constructor.");
+        internal FactoryConfiguredView(ConstructorDependency dependency) => Dependency = dependency;
+        internal ConstructorDependency Dependency { get; } = null!;
+    }
+
+    [Fact]
     public async Task ViewNavigation_SupersedingOrClosingViewCancelsCurrentPresentation()
     {
         var probe = new NavigationProbe();

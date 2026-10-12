@@ -20,6 +20,9 @@ import { generateRpcBindingsForLoadedProject } from "../src/rpc-bindings";
 import { bundleProduction } from "../src/package";
 import { packageApiCommand, type PackageApiRequest } from "../src/rpc-package-commands";
 import { collectContractCache } from "../src/rpc-contract-cache-gc";
+import { generatedProviders, invocation } from "./service-fixtures";
+import { publishFixtureModelProjections } from "./model-projection-fixtures";
+import { preparePackageImports } from "../src/rpc-package-imports";
 
 const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1/authoring/conformance/valid");
 const compact = (value: unknown) => Buffer.from(JSON.stringify(value));
@@ -45,12 +48,11 @@ for (const extension of ["ts", "js"]) test(`fresh complete ${extension} multi-pr
     await writeFile(c.path, compact({ ...c.envelopeValue, contractCount: 2, contracts: [extra, ...c.envelopeValue.contracts] }));
     await writeFile(c.lockPath, await readFile(join(ROOT, "minimal-contract-lock.json"))); await mkdir(join(c.root, "src"));
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Multi Provider", version: "1.0.0",
-      entry: `src/worker.${extension}`, workerCapabilities: [], rpc: { module: `src/rpc.${extension}`, export: "packageRpc" } }));
-    const source = 'import {rpc} from "@sunder/sdk"; import {rpcImports} from "#sunder/rpc"; export const packageRpc=rpc.router({contracts:{},providers:{'
-      + 'stack:rpcImports.stackContributor.provider({handlers:{example:{ping(request){return request;}}}}),'
-      + 'extension:rpcImports.extension.provider({handlers:{example:{ping(request){return request;}}}})}});';
+      workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
+    const source = 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; '
+      + 'export const stack=defineService({ping(request){return request;}},{implements:Implementations.stackContributor});'
+      + 'export const extension=defineService({ping(request){return request;}},{implements:Implementations.extension});';
     const sourcePath = join(c.root, `src/rpc.${extension}`); await writeFile(sourcePath, source);
-    await writeFile(join(c.root, `src/worker.${extension}`), 'export {packageRpc} from "./rpc.js";');
     let requests = 0;
     const command = (request: PackageApiRequest) => packageApiCommand(c.root, { ...request, cacheRoot: c.cache, platformCatalog: c.path,
       fetchImplementation: async () => { requests++; assert.fail("Initial local configuration attempted HTTP"); } });
@@ -78,8 +80,10 @@ for (const extension of ["ts", "js"]) test(`fresh complete ${extension} multi-pr
     const receiptPath = join(c.root, ".sunder/generated/rpc/authoring-receipt.v1.json"); const receipt = await readFile(receiptPath);
     await writeFile(sourcePath, source.replaceAll("return request;", "return request.missing;"));
     await assert.rejects(command({ operation: "platform-update" }), /handler-incomplete/u);
-    await rm(join(c.root, "sunder-contracts.owned.json"));
-    await assert.rejects(command({ operation: "platform-update" }), /baseline-drift/u);
+    await assert.rejects(stat(join(c.root, "sunder-contracts.owned.json")), {code:"ENOENT"});
+    // Imported-only source needs no owned baseline, but still cannot bypass a
+    // bad implementation through a lock update.
+    await assert.rejects(command({ operation: "platform-update" }), /handler-incomplete/u);
     assert.deepEqual(await readFile(c.lockPath), complete); assert.deepEqual(await readFile(receiptPath), receipt); assert.equal(requests, 0);
   } finally { await c.dispose(); }
 });
@@ -120,6 +124,7 @@ test("partial local restore requires remaining exact cache evidence before publi
     const contract = [...locked.packageArtifacts.get("example.dependency")!.contracts.values()][0]!;
     const descriptor = Buffer.from(canonicalRpcDescriptorBytes(parseRpcContractDescriptor(await readFile(resolve(ROOT, "../../../conformance/valid/minimal.rpc.json")))));
     await publishContractCache(c.cache, new Map([[contract.descriptorSha256, descriptor]]), locked.requirements);
+    await publishFixtureModelProjections(c.cache,locked,new Map([[contract.descriptorSha256,descriptor]]));
     assert.equal(await restore(), 1); assert.equal((await readContractCache(c.cache, locked.requirements)).size, 2);
     assert.deepEqual(await readFile(c.lockPath), bytes);
   } finally { await c.dispose(); }
@@ -193,7 +198,7 @@ for (const failure of ["content", "inventory", "digest", "url", "etag", "length"
   } finally { await c.dispose(); }
 });
 
-test("metadata-only platform inventory verifies catalog content without materializing descriptors or using HTTP", async () => {
+test("metadata-only platform inventory verifies complete sidecar bytes without creating provider bindings or using HTTP", async () => {
   const c = await fixture();
   try {
     const locked = JSON.parse(await readFile(join(ROOT, "mixed-contract-lock.json"), "utf8")); locked.platformImports = {};
@@ -202,9 +207,12 @@ test("metadata-only platform inventory verifies catalog content without material
     const required = [...selection.requirements.values()][0]!;
     const descriptor = Buffer.from(canonicalRpcDescriptorBytes(parseRpcContractDescriptor(await readFile(resolve(ROOT, "../../../conformance/valid/minimal.rpc.json")))));
     await publishContractCache(c.cache, new Map([[required.descriptorSha256, descriptor]]), selection.requirements);
+    await publishFixtureModelProjections(c.cache,selection,new Map([[required.descriptorSha256,descriptor],...c.envelopeValue.contracts.map((entry:{descriptorSha256:string;canonicalDescriptor:string})=>[entry.descriptorSha256,Buffer.from(entry.canonicalDescriptor)] as const)]));
     const count = await restoreContracts(c.root, { cacheRoot: c.cache, platformCatalog: c.path, fetchImplementation: async () => { assert.fail("Unexpected HTTP"); } });
-    assert.equal(count, 0); assert.deepEqual((await readdir(c.cache)).sort(), [".sunder-contract-cache", required.descriptorSha256 + ".json", required.descriptorSha256 + ".receipt.json", "platform-catalogs"].sort());
-    await assert.rejects(stat(join(c.cache, c.requirement.descriptorSha256 + ".json")), { code: "ENOENT" });
+    assert.equal(count, 1); assert.deepEqual((await readdir(c.cache)).sort(), [".sunder-contract-cache", required.descriptorSha256 + ".json", required.descriptorSha256 + ".receipt.json",
+      c.requirement.descriptorSha256+".json",c.requirement.descriptorSha256+".receipt.json","model-projections", "platform-catalogs"].sort());
+    const imports=await preparePackageImports(selection,c.cache,"example.owner",[]);
+    assert.deepEqual(imports.contracts.map(contract=>contract.descriptor.contractId),[required.contractId]);assert.equal(imports.providerSurfaces.size,0);
     assert.equal((await readPlatformCatalogs(parseContractLock(bytes), c.cache)).size, 1);
   } finally { await c.dispose(); }
 });
@@ -251,9 +259,9 @@ for (const extension of ["ts", "js"]) test(`offline ${extension} platform provid
     await mkdir(join(c.root, "src"));
     await writeFile(join(c.root, "sunder-contracts.owned.json"), await readFile(join(ROOT, "minimal-package-owned-baseline.json")));
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Platform", version: "1.0.0",
-      entry: `src/worker.${extension}`, workerCapabilities: [], rpc: { module: `src/rpc.${extension}`, export: "packageRpc" } }));
-    const source = 'import {rpc} from "@sunder/sdk"; import {rpcImports} from "#sunder/rpc"; export const packageRpc=rpc.router({contracts:{},providers:{stack:rpcImports.stackContributor.provider({handlers:{example:{ping(request,context){context.signal.throwIfAborted();return request;}}}})}});';
-    await writeFile(join(c.root, `src/rpc.${extension}`), source); await writeFile(join(c.root, `src/worker.${extension}`), 'export {packageRpc} from "./rpc.js";');
+      workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
+    const source = 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const stack=defineService({ping(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.stackContributor});';
+    await writeFile(join(c.root, `src/rpc.${extension}`), source);
     const options = { contractCacheRoot: c.cache };
     const loaded = await loadProjectWithOwnedFrame(c.root, options); const analysis = loaded.ownedRpc!;
     assert.equal(loaded.contracts[0]!.imported!.authorityKind, "platform"); assert.deepEqual(loaded.config.usesContracts, []);
@@ -267,11 +275,11 @@ for (const extension of ["ts", "js"]) test(`offline ${extension} platform provid
     assert.equal((await stat(generated)).mtimeMs, time);
     const output = join(c.root, "provider.cjs");
     await bundleProduction(loaded, currentRid(), output);
-    const registration = createRequire(__filename)(output).packageRpc.providerRegistrations[0];
+    const registration = (await generatedProviders(c.root))[0]!;
     assert.equal(registration.contractId, "sunder.stack.contributor"); assert.equal(registration.descriptorSha256, c.requirement.descriptorSha256);
-    assert.deepEqual(await registration.handler.invokeUnary({ signal: new AbortController().signal }, "example", "ping", {}), {});
-    await assert.rejects(async () => registration.handler.invokeUnary({ signal: new AbortController().signal }, "example", "ping", { extra: true }));
-    await writeFile(join(c.root, `src/rpc.${extension}`), 'import {rpc} from "@sunder/sdk"; export const packageRpc=rpc.router({contracts:{},providers:{}});');
+    assert.deepEqual(await registration.handler.invokeUnary(invocation(), "example", "ping", {}), {});
+    await assert.rejects(async () => registration.handler.invokeUnary(invocation(), "example", "ping", { extra: true }));
+    await writeFile(join(c.root, `src/rpc.${extension}`), 'export {};');
     await assert.rejects(loadProjectWithOwnedFrame(c.root, options), /handler-incomplete/u);
     await writeFile(join(c.root, `src/rpc.${extension}`), source);
     await rm(catalogPath(c.cache, c.requirement.contentIdentity));
@@ -286,10 +294,10 @@ for (const local of [false, true]) test(`platform commands select from ${local ?
     await writeFile(c.lockPath, await readFile(join(ROOT, "minimal-contract-lock.json"))); await mkdir(join(c.root, "src"));
     if (!local) await writeFile(join(c.root, "sunder-contracts.owned.json"), await readFile(join(ROOT, "minimal-package-owned-baseline.json")));
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Platform", version: "1.0.0",
-      entry: "src/worker.ts", workerCapabilities: [], rpc: { module: "src/rpc.ts", export: "packageRpc" } }));
-    const owned = local ? 'owned:rpc.contract({exposure:"package",errors:{},definitions:{Unit:rpc.schema.object({})},services:{main:{ping:rpc.unary({request:rpc.schema.ref("Unit"),response:rpc.schema.ref("Unit")})}}})' : '';
-    const empty = `import {rpc} from "@sunder/sdk"; export const packageRpc=rpc.router({contracts:{${owned}},providers:{}});`;
-    await writeFile(join(c.root, "src/rpc.ts"), empty); await writeFile(join(c.root, "src/worker.ts"), 'export {packageRpc} from "./rpc.js";');
+      workerCapabilities: [], services: { module: "src/rpc.ts" } }));
+    const owned = local ? 'export const owned=defineService<{ping():Promise<void>}>(null,{declarationOnly:true});' : '';
+    const empty = `import {defineService} from "@sunder/sdk"; ${owned}`;
+    await writeFile(join(c.root, "src/rpc.ts"), empty);
     let requests = 0; let revoked = false;
     const fetchImplementation: typeof fetch = async input => {
       if (local) throw new Error("Local catalog authoring attempted HTTP.");
@@ -307,8 +315,7 @@ for (const local of [false, true]) test(`platform commands select from ${local ?
     assert.equal((await command({ operation: "platform-implement", contractId: "sunder.stack.contributor" })).changed, false);
     assert.equal(requests, calls); assert.equal((await stat(c.lockPath)).mtimeMs, time);
     await assert.rejects(loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }), /handler-incomplete/u);
-    const source = empty.replace('export const', 'import {rpcImports} from "#sunder/rpc"; export const')
-      .replace('providers:{}', 'providers:{stack:rpcImports.stackContributor.provider({handlers:{example:{ping(request){return request;}}}})}');
+    const source = empty + '\nimport {Implementations} from "#sunder/api"; export const stack=defineService({ping(request){return request;}},{implements:Implementations.stackContributor});';
     await writeFile(join(c.root, "src/rpc.ts"), source);
     if (local) {
       await assert.rejects(stat(join(c.root, "sunder-contracts.owned.json")), { code: "ENOENT" });
@@ -316,7 +323,7 @@ for (const local of [false, true]) test(`platform commands select from ${local ?
       const run = (...args: string[]) => promisify(execFile)(process.execPath, [resolve(__dirname, "../src/cli.js"), "contracts", ...args, "--project", c.root],
         { env: { ...process.env, SUNDER_CONTRACT_CACHE: c.cache } });
       await run("accept"); await run("check");
-      assert.deepEqual(Object.keys(JSON.parse(await readFile(join(c.root, "sunder-contracts.owned.json"), "utf8")).contracts), ["owned"]);
+      await assert.rejects(stat(join(c.root, "sunder-contracts.owned.json")), {code:"ENOENT"});
       assert.deepEqual(await readFile(c.lockPath), before);
     }
     const restoreInput = local ? { platformCatalog: c.path } : {};

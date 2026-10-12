@@ -5,6 +5,7 @@ using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Package.Build.Rpc.Authoring;
 
@@ -142,7 +143,7 @@ internal static partial class SunderRpcAuthoringDocuments
         string? contractKey)
     {
         var source = OwnedCandidatesByKey(baseline, candidates, contractKey);
-        if (source.Values.Any(static candidate => candidate.Exposure != SunderRpcExposure.Public)
+        if (source.Values.Any(static candidate => candidate.Exposure != SunderServiceExposure.Public)
             || !source.Values.Any(static candidate => candidate.Descriptor.ContractId == MandatoryPlatformContractId))
         {
             throw new InvalidDataException($"Platform source must be public-only and retain the mandatory current '{MandatoryPlatformContractId}' contract.");

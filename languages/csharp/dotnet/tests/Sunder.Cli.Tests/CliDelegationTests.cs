@@ -721,9 +721,9 @@ public sealed class CliDelegationTests
                     SdkVersion = "1.1.0",
                     ExecutionRuntime = new SunderPackageExecutionRuntimeManifest
                     {
-                        Id = SunderExecutionRuntimeFormat.DotNetRuntimeId,
+                        Id = "sunder.runtime.dotnet",
                         VersionRange = ">=10.0.0 <11.0.0",
-                        ModuleAbi = SunderExecutionRuntimeFormat.DotNetModuleAbi,
+                        ModuleAbi = "sunder.dotnet-worker-module.v1",
                     },
                     RequiredHostCapabilities =
                     [
@@ -741,6 +741,13 @@ public sealed class CliDelegationTests
             source,
             SunderPackageFormat.ManifestPath.Replace('/', Path.DirectorySeparatorChar));
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest));
+        // This capability-consent fixture declares no RPC contracts or source models.
+        var projectionPath = Path.Combine(source, SunderPackageFormat.SharedPayloadRoot, "contracts", "rpc-model-projection.v1.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(projectionPath)!);
+        File.WriteAllBytes(projectionPath, [.. JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schemaVersion = 1, packageId = manifest.Id, packageVersion = manifest.Version, contracts = Array.Empty<object>(),
+        }, new JsonSerializerOptions { WriteIndented = true, NewLine = "\n" }), (byte)'\n']);
         var manifestSha256 = HashFile(manifestPath);
         var indexPath = Path.Combine(
             source,

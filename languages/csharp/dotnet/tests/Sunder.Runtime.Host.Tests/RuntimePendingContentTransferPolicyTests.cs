@@ -5,7 +5,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed class RuntimePendingContentTransferPolicyTests
+public sealed partial class RuntimePendingContentTransferPolicyTests
 {
     [Fact]
     public void Construction_DoesNotDeleteTransfersOwnedByTheRunningRuntime()

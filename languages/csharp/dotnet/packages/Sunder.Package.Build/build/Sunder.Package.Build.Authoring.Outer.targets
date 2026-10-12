@@ -47,7 +47,7 @@
       <_SunderPackageRole Include="app" OutputType="Library" AssemblyName="$(AssemblyName).App" Condition="'%(_SunderPackageRolePlan.HasApp)' == 'true'" />
     </ItemGroup>
     <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Build" BuildInParallel="false" StopOnFirstFailure="true"
-             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderRoleRid);SunderPackageCompilationRole=%(_SunderPackageRole.Identity);SunderPackageRolePlanPath=$(_SunderRolePlanPath);SunderPackageRolePlanSha256=$(_SunderRolePlanSha256);AssemblyName=%(_SunderPackageRole.AssemblyName);OutputType=%(_SunderPackageRole.OutputType);SunderPackageProject=true;IntermediateOutputPath=$(_SunderRoleIntermediateRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/;OutputPath=$(_SunderRoleOutputRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/;AppendRuntimeIdentifierToOutputPath=false;ProjectAssetsFile=$(_SunderRoleSnapshotRoot)/roles/%(_SunderPackageRole.Identity)/restore/project.assets.json;MSBuildProjectExtensionsPath=$(_SunderRoleSnapshotRoot)/roles/%(_SunderPackageRole.Identity)/restore/"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderRoleRid);SunderPackageCompilationRole=%(_SunderPackageRole.Identity);SunderPackageRolePlanPath=$(_SunderRolePlanPath);SunderPackageRolePlanSha256=$(_SunderRolePlanSha256);SunderPackageAnalysisGlobalUsingsFile=$([System.IO.Path]::GetFullPath('$(GeneratedGlobalUsingsFile)', '$(MSBuildProjectDirectory)'));AssemblyName=%(_SunderPackageRole.AssemblyName);OutputType=%(_SunderPackageRole.OutputType);SunderPackageProject=true;IntermediateOutputPath=$(_SunderRoleIntermediateRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/;OutputPath=$(_SunderRoleOutputRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/;AppendRuntimeIdentifierToOutputPath=false;ProjectAssetsFile=$(_SunderRoleSnapshotRoot)/roles/%(_SunderPackageRole.Identity)/restore/project.assets.json;MSBuildProjectExtensionsPath=$(_SunderRoleSnapshotRoot)/roles/%(_SunderPackageRole.Identity)/restore/"
              RemoveProperties="OutDir;StartupObject;SunderPackagePrimaryProject;SunderPackageInnerBuild">
       <Output TaskParameter="TargetOutputs" ItemName="_SunderPackageRoleOutput" />
     </MSBuild>
@@ -56,9 +56,10 @@
                        DiscoveryRoot="$(_SunderRoleOutputRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/" />
     </ItemGroup>
     <AggregateSunderPackageTask TargetLeaves="@(_SunderRoleLeaf)" OutputPath="$(SunderDevOutputPath)" OutputDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                                ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                 ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(SunderDevOutputDiscoveryRoot)" ExpectedPackageVersion="$(Version)" />
-    <ManageSunderPackageRoleInputsTask Action="Export" ProjectDirectory="$(MSBuildProjectDirectory)" CapturedInputs="@(_SunderQualifiedRoleInputFrame)"
-                                      RolePlanPath="$(_SunderRolePlanPath)" RolePlanSha256="$(_SunderRolePlanSha256)" DevPackagePath="$(SunderDevOutputPath)">
+    <ManageSunderPackageRoleInputsTask Action="Export" ProjectDirectory="$(MSBuildProjectDirectory)" CapturedInputs="@(_SunderQualifiedRoleInputFrame)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                                      RolePlanPath="$(_SunderRolePlanPath)" RolePlanSha256="$(_SunderRolePlanSha256)" DevPackagePath="$(SunderDevOutputPath)" GeneratedGlobalUsingsFile="$(GeneratedGlobalUsingsFile)">
       <Output TaskParameter="Result" ItemName="_SunderExportedRoleInputs" />
     </ManageSunderPackageRoleInputsTask>
     <ItemGroup>
@@ -124,6 +125,7 @@
       <SunderPackageOutputPath Condition="'$(SunderPackageOutputPath)' == ''">$(_SunderRoleOutputRoot)$(AssemblyName).$(Version).sunderpkg</SunderPackageOutputPath>
     </PropertyGroup>
     <PackSunderPackageTask DevPackagePath="$(SunderDevOutputPath)" DevPackageDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                            ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                            PackageOutputPath="$(SunderPackageOutputPath)" ProjectDirectory="$(MSBuildProjectDirectory)"
                            GeneratePackageRoles="true" SourceFiles="@(Compile)" ReferencePaths="@(ReferencePath)"
                            ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
@@ -168,6 +170,7 @@
       <_SunderPackNullable Condition="'$(Nullable)' == 'enable' or '$(Nullable)' == 'annotations'">true</_SunderPackNullable>
     </PropertyGroup>
     <PackSunderPackageTask DevPackagePath="$(SunderPackageAuthoringPackInput)" DevPackageDiscoveryRoot="$(SunderPackageAuthoringOutputRoot)"
+                            ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                            PackageOutputPath="$(SunderPackageAuthoringPackOutput)" ProjectDirectory="$(MSBuildProjectDirectory)" GeneratePackageRoles="true"
                            SourceFiles="@(Compile)" ReferencePaths="@(ReferencePath)" ResourceItems="@(_SunderResourceInputs)"
                            GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"

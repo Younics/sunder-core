@@ -1,0 +1,44 @@
+{
+  "lockVersion": 1,
+  "packageArtifacts": {
+    "example.dependency": {
+      "requestedVersionRange": ">=1.0.0 <2.0.0",
+      "includePrerelease": false,
+      "selectedPackageVersion": "1.2.3",
+      "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+      "registryOrigin": "https://registry.example/",
+      "publicContractCount": 1,
+      "publicInventorySha256": "1d1c5dbcae220e7052df3f87f9b4fe9e5feb3fd2a23c70f2b41453039ccb9fbe",
+      "modelProjectionBytes": 475,
+      "modelProjectionSha256": "6547e16179e682ab249c64dfbf496d972aad6ff6e4965bc96ef662c0395e2b0a",
+      "contracts": {
+        "example.rpc.v1.minimal": {
+          "artifactSource": "owned",
+          "authorityKind": "package",
+          "authorityId": "example.dependency",
+          "selectedAuthorityRelease": "1.2.3",
+          "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+          "resolvedContractVersion": "2.0.0",
+          "descriptorBytes": 487,
+          "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+          "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+          "etag": "\"709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371\""
+        }
+      }
+    }
+  },
+  "packageImports": {
+    "example.dependency": {
+      "localName": "dependency",
+      "presence": "required",
+      "requiredContracts": [
+        "example.rpc.v1.minimal"
+      ],
+      "consumerRoles": [
+        "app"
+      ]
+    }
+  },
+  "providerImports": {},
+  "platformImports": {}
+}

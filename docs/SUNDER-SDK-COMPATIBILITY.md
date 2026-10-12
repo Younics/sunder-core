@@ -112,6 +112,14 @@ RPC server-stream methods use descriptor-validated events and exact provider-gen
 
 ## Schema-First RPC
 
+This heading describes the wire/runtime validation boundary, not an instruction to
+author schemas. Current package source uses ordinary C# service declarations or
+Node `defineService` definitions with TS/checked JSDoc; tooling derives the same
+descriptor V1 bytes and managed clients. See
+[Implementation-First RPC Authoring](package-development/IMPLEMENTATION-FIRST-RPC.md)
+and [Node services](SUNDER-NODE-PROCESS-PACKAGES.md). The capability ID
+`schema-first-rpc.v1` and advanced descriptor/wire APIs keep their existing meaning.
+
 Cross-package Runtime contracts are strict, versioned JSON descriptors bundled in package content and identified by canonical SHA-256. Manifests declare imported contracts, requested actions, and provided endpoints. Installing or updating consents to every declared action for that exact package version and manifest; undeclared actions remain default-deny. Runtime validates descriptor compatibility and payload schemas before dispatch.
 
 Descriptor schema version and contract semantic version are separate identities. Descriptor V1 is the only supported schema, and the unversioned `SunderRpcProtocol.DescriptorVersion` constant selects it. Manifest V1 package authoring, parsing, generation, and validation all require its strict keyed shape. The value-schema profile remains the current `sunder.rpc.values.v1` contract and is a separate identity from the descriptor version.

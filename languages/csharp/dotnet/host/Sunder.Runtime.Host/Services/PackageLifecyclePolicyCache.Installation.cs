@@ -63,30 +63,23 @@ internal sealed partial class PackageLifecyclePolicyCache
                 && (pair.Key == PackageKey(subject) || pair.Value.Decision.Package.PackageId == subject.PackageId && pair.Value.Decision.PackageState == "SecurityBlocked"))
                 .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
             var platformKeys = selectedPackages.Values.SelectMany(value => value.Decision.PlatformDependencies).Select(PlatformKey).ToHashSet(StringComparer.Ordinal);
-            var runtimeKeys = package.ExecutionRuntimeBindings.Where(binding => binding.AcquisitionSource != RuntimeExecutionRuntimeAcquisitionSources.Development
-                    && Origin(binding.RegistryOrigin) == authority)
-                .Select(binding => RuntimeKey(PackagePolicyAdmission.RuntimeSubject(RuntimePackageExecutionRuntimeBinding.FromInstalled(binding)))).ToHashSet(StringComparer.Ordinal);
             var platforms = source.Platforms.Where(pair => platformKeys.Contains(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-            var runtimes = source.Runtimes.Where(pair => runtimeKeys.Contains(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-            if (selectedPackages.Count + platforms.Count + runtimes.Count == 0) continue;
+            if (selectedPackages.Count + platforms.Count == 0) continue;
             snapshots.Add(source with
             {
                 Packages = PackagePolicyOriginFile.Freeze(selectedPackages),
                 Platforms = PackagePolicyOriginFile.Freeze(platforms),
-                Runtimes = PackagePolicyOriginFile.Freeze(runtimes),
             });
         }
         string? error = null;
         try
         {
             if (origin is null) throw Denied(PackagePolicyErrorCodes.PolicyRequired);
-            RequireActivation(origin, subject, []);
-            foreach (var binding in package.ExecutionRuntimeBindings.Where(value => value.AcquisitionSource != RuntimeExecutionRuntimeAcquisitionSources.Development))
-                PackagePolicyAdmission.RequireBindingPolicy(this, RuntimePackageExecutionRuntimeBinding.FromInstalled(binding));
+            RequireActivation(origin, subject);
         }
         catch (PackagePolicyDeniedException denied) { error = denied.Code; }
         var result = new InstalledPackagePolicyRecord(error is null ? "Allowed"
-            : error is PackagePolicyErrorCodes.PolicyRequired or ExecutionRuntimeErrorCodes.PolicyRequired ? "PolicyRequired" : "PolicyBlocked",
+            : error is PackagePolicyErrorCodes.PolicyRequired ? "PolicyRequired" : "PolicyBlocked",
             error, origin, subject, snapshots);
         result.Validate(package);
         return result;
@@ -108,7 +101,7 @@ internal sealed partial class PackageLifecyclePolicyCache
             foreach (var policy in expected)
             {
                 if (policy.State != "Allowed" || policy.RegistryOrigin is null) throw Denied(policy.ErrorCode ?? PackagePolicyErrorCodes.PolicyRequired);
-                RequireActivation(policy.RegistryOrigin, policy.Package, []);
+                RequireActivation(policy.RegistryOrigin, policy.Package);
                 foreach (var snapshot in policy.Snapshots)
                 {
                     var current = _snapshots[snapshot.Origin];
@@ -117,8 +110,6 @@ internal sealed partial class PackageLifecyclePolicyCache
                     // Renewals during a local transaction cannot extend its captured lease.
                     foreach (var entry in snapshot.Packages.Values) RequireLease(snapshot, entry.Lease, now);
                     foreach (var entry in snapshot.Platforms.Values) RequireLease(snapshot, entry.Lease, now);
-                    RequireRuntimes(snapshot, snapshot.Runtimes.Values.Select(value => value.Decision.Subject).ToArray(), now);
-                    RequireRuntimes(current, snapshot.Runtimes.Values.Select(value => value.Decision.Subject).ToArray(), now);
                 }
             }
             token.ThrowIfCancellationRequested();
@@ -155,7 +146,7 @@ internal sealed partial class PackageLifecyclePolicyCache
         var original = current;
         if (current.ClockGeneration != latest.ClockGeneration || latest.ClockInvalidated) current = InvalidateLeases(current);
         if (retained.ClockGeneration != latest.ClockGeneration || latest.ClockInvalidated) retained = InvalidateLeases(retained);
-        var packages = Copy(current.Packages); var platforms = Copy(current.Platforms); var runtimes = Copy(current.Runtimes);
+        var packages = Copy(current.Packages); var platforms = Copy(current.Platforms);
         foreach (var (key, incoming) in retained.Packages)
         {
             if (packages.TryGetValue(key, out var old))
@@ -179,23 +170,9 @@ internal sealed partial class PackageLifecyclePolicyCache
             }
             else platforms[key] = incoming;
         }
-        foreach (var (key, incoming) in retained.Runtimes)
-        {
-            if (runtimes.TryGetValue(key, out var old))
-            {
-                var cutoff = old.Decision.ActivationBlockedAtUtc == incoming.Decision.ActivationBlockedAtUtc
-                    && old.Decision.LifecycleState == incoming.Decision.LifecycleState && old.Decision.RevokedAtUtc == incoming.Decision.RevokedAtUtc
-                    && (old.Decision.Disposition == "Denied" || incoming.Decision.Disposition == "Denied");
-                Require(old.Revision != incoming.Revision || Same(old.Decision, incoming.Decision) || cutoff, "Retained runtime policy conflicts at the same revision.");
-                var winner = incoming.Revision > old.Revision || incoming.Revision == old.Revision && (incoming.Decision.Disposition == "Denied" || retained.AuthorityGeneration > current.AuthorityGeneration && old.Decision.Disposition != "Denied") ? incoming : old;
-                Require(old.Decision.Disposition != "Denied" && incoming.Decision.Disposition != "Denied" || winner.Decision.Disposition == "Denied", "Retained runtime denial cannot be erased.");
-                runtimes[key] = winner;
-            }
-            else runtimes[key] = incoming;
-        }
         var merged = latest with
         {
-            Packages = PackagePolicyOriginFile.Freeze(packages), Platforms = PackagePolicyOriginFile.Freeze(platforms), Runtimes = PackagePolicyOriginFile.Freeze(runtimes),
+            Packages = PackagePolicyOriginFile.Freeze(packages), Platforms = PackagePolicyOriginFile.Freeze(platforms),
         };
         if (merged.ClockInvalidated || !current.HighWater.SameEpoch(retained.HighWater))
         {
@@ -208,7 +185,6 @@ internal sealed partial class PackageLifecyclePolicyCache
             {
                 Packages = PackagePolicyOriginFile.Freeze(packages.ToDictionary(pair => pair.Key, pair => pair.Value with { Lease = Normalize(pair.Value.Lease) })),
                 Platforms = PackagePolicyOriginFile.Freeze(platforms.ToDictionary(pair => pair.Key, pair => pair.Value with { Lease = Normalize(pair.Value.Lease) })),
-                Runtimes = PackagePolicyOriginFile.Freeze(runtimes.ToDictionary(pair => pair.Key, pair => pair.Value with { Lease = Normalize(pair.Value.Lease) })),
             };
         }
         ValidateRetainedSnapshot(merged);
@@ -231,36 +207,23 @@ internal sealed partial class PackageLifecyclePolicyCache
             && retained.Platforms.All(pair => current.Platforms.TryGetValue(pair.Key, out var entry) && entry.Revision >= pair.Value.Revision
                 && (entry.Revision > pair.Value.Revision || Same(entry.Decision, pair.Value.Decision))
                 && (pair.Value.Decision.LifecycleState != "Revoked" || entry.Decision.LifecycleState == "Revoked")
-                && (current.AuthorityGeneration != retained.AuthorityGeneration || Same(entry, pair.Value)))
-            && retained.Runtimes.All(pair => current.Runtimes.TryGetValue(pair.Key, out var entry) && entry.Revision >= pair.Value.Revision
-                && (entry.Revision > pair.Value.Revision || Same(entry.Decision, pair.Value.Decision)
-                    || entry.Decision.Disposition == "Denied" && pair.Value.Decision.Disposition == "Allowed"
-                    && entry.Decision.LifecycleState == pair.Value.Decision.LifecycleState
-                    && entry.Decision.ActivationBlockedAtUtc == pair.Value.Decision.ActivationBlockedAtUtc
-                    && entry.Decision.RevokedAtUtc == pair.Value.Decision.RevokedAtUtc
-                    && entry.Decision.ActivationBlockedAtUtc <= entry.Lease.ObservedAtUtc)
-                && (pair.Value.Decision.Disposition != "Denied" || entry.Decision.Disposition == "Denied")
                 && (current.AuthorityGeneration != retained.AuthorityGeneration || Same(entry, pair.Value)));
     }
 
     private static bool SameMetadata(PackagePolicyOriginFile first, PackagePolicyOriginFile second)
         => first.Origin == second.Origin && first.AuthorityGeneration == second.AuthorityGeneration && first.ClockGeneration == second.ClockGeneration && first.PackagePolicy == second.PackagePolicy
-            && first.RuntimeRevision == second.RuntimeRevision && first.Checkpoint == second.Checkpoint
-            && first.HighWater.SameEpoch(second.HighWater) && first.LastRequestStarted == second.LastRequestStarted
+            && first.Checkpoint == second.Checkpoint && first.HighWater.SameEpoch(second.HighWater) && first.LastRequestStarted == second.LastRequestStarted
             && first.LastNonce == second.LastNonce && first.ClockInvalidated == second.ClockInvalidated;
 
     private static bool SameAuthority(PackagePolicyOriginFile current, PackagePolicyOriginFile expected)
-        => current.ClockGeneration == expected.ClockGeneration && current.PackagePolicy == expected.PackagePolicy && current.RuntimeRevision == expected.RuntimeRevision
-            && current.Checkpoint == expected.Checkpoint
+        => current.ClockGeneration == expected.ClockGeneration && current.PackagePolicy == expected.PackagePolicy && current.Checkpoint == expected.Checkpoint
             && expected.Packages.All(pair => current.Packages.TryGetValue(pair.Key, out var entry) && Same(entry.Decision, pair.Value.Decision))
-            && expected.Platforms.All(pair => current.Platforms.TryGetValue(pair.Key, out var entry) && Same(entry.Decision, pair.Value.Decision))
-            && expected.Runtimes.All(pair => current.Runtimes.TryGetValue(pair.Key, out var entry) && Same(entry.Decision, pair.Value.Decision));
+            && expected.Platforms.All(pair => current.Platforms.TryGetValue(pair.Key, out var entry) && Same(entry.Decision, pair.Value.Decision));
 
     private static void RequireWatermarksAtLeast(PackagePolicyOriginFile latest, PackagePolicyOriginFile older)
         => Require(latest.Origin == older.Origin && latest.AuthorityGeneration >= older.AuthorityGeneration && latest.ClockGeneration >= older.ClockGeneration
             && latest.PackagePolicy.Revision >= older.PackagePolicy.Revision
             && (latest.PackagePolicy.Revision != older.PackagePolicy.Revision || latest.PackagePolicy == older.PackagePolicy)
-            && latest.RuntimeRevision >= older.RuntimeRevision
             && latest.Checkpoint.Sequence >= older.Checkpoint.Sequence && latest.Checkpoint.TopologyGeneration >= older.Checkpoint.TopologyGeneration
             && (latest.Checkpoint.Sequence != older.Checkpoint.Sequence || latest.Checkpoint == older.Checkpoint)
             && (latest.Checkpoint.TopologyGeneration != older.Checkpoint.TopologyGeneration || latest.Checkpoint.TopologyFingerprint == older.Checkpoint.TopologyFingerprint),
@@ -270,12 +233,9 @@ internal sealed partial class PackageLifecyclePolicyCache
     {
         if (IsDevelopment(package)) yield break;
         if (PackageOrigin(package) is { } origin) yield return origin;
-        foreach (var binding in package.ExecutionRuntimeBindings.Where(value => value.AcquisitionSource != RuntimeExecutionRuntimeAcquisitionSources.Development))
-            yield return Origin(binding.RegistryOrigin);
     }
 
     private string? PackageOrigin(InstalledPackageRecord package) => package.Provenance.RegistryOrigin is { } origin
         ? Origin(origin) : package.Policy?.RegistryOrigin ?? FindPackageOrigin(InstalledPackagePolicyRecord.Subject(package));
-    private static bool IsDevelopment(InstalledPackageRecord package) => package.Provenance.SourceKind != InstalledPackageSourceKind.Registry
-        && package.ExecutionRuntimeBindings.Count > 0 && package.ExecutionRuntimeBindings.All(binding => binding.AcquisitionSource == RuntimeExecutionRuntimeAcquisitionSources.Development);
+    private static bool IsDevelopment(InstalledPackageRecord package) => package.Provenance.SourceKind == InstalledPackageSourceKind.Development;
 }

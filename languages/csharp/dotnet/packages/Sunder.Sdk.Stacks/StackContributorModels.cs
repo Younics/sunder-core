@@ -1,5 +1,6 @@
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Sdk.Stacks;
 
@@ -420,7 +421,7 @@ public sealed record StackImportResult(
 
 /// <summary>Describes the committed outcome of one contributor import.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-[SunderRpcNumericEnum]
+[SunderNumericEnum]
 public enum StackImportOutcome
 {
     /// <summary>All selected contributor actions committed.</summary>
@@ -464,7 +465,7 @@ public sealed record StackImportAppliedContext(
 
 /// <summary>Classifies whether a Stack value may be disclosed or must remain secret.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-[SunderRpcNumericEnum]
+[SunderNumericEnum]
 public enum StackValueSensitivity
 {
     /// <summary>The value may be stored directly in an exported Stack.</summary>
@@ -475,7 +476,7 @@ public enum StackValueSensitivity
 
 /// <summary>Describes the target mutation represented by an import action.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-[SunderRpcNumericEnum]
+[SunderNumericEnum]
 public enum StackImportActionKind
 {
     /// <summary>Creates a new target item.</summary>
@@ -492,7 +493,7 @@ public enum StackImportActionKind
 
 /// <summary>Specifies whether an import conflict blocks application.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-[SunderRpcNumericEnum]
+[SunderNumericEnum]
 public enum StackImportConflictSeverity
 {
     /// <summary>Import may continue after user review.</summary>

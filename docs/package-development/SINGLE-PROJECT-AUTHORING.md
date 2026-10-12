@@ -13,11 +13,13 @@ assemblies and composes one package. The author does not maintain role projects,
 generated interfaces, RPC handlers, default role entry points or duplicate dependency
 lists. Source folders are organizational and do not determine role ownership.
 
-## Frozen intent declarations
+## Intent declarations
 
-- `SunderRpcServiceAttribute` remains the RPC declaration. A concrete source service
-  is a Worker root; its existing exposure, methods, errors and use policy retain their
-  meanings. No second service-declaration attribute family is introduced.
+- `[SunderService]` marks an ordinary service. A concrete source service is a Worker
+  root; declared public async methods form its generated interface without method
+  annotations. Optional semantic metadata preserves stable identities, constraints,
+  errors and use policies. See [ordinary services](ORDINARY-SERVICES.md) for natural
+  value roots, selected package APIs and the retired declaration migration.
 - `SunderPackageViewAttribute(viewId, displayName)` marks an App view. `ViewModel`
   identifies its optional DI-created view model; `IconPath` and `DefaultPlacement`
   provide existing view registration metadata. The view must be a concrete Avalonia
@@ -36,9 +38,12 @@ signatures. Reserved-name collisions fail; generated symbols do not rename thems
 with unstable suffixes. Concrete implementation references from UI code are rejected;
 UI code depends on the generated API. Declared interfaces are not duplicated.
 
-`[SunderRpcService]` defaults to package-private exposure. A public C# member does not make a public
-package contract. Public App use, Runtime broker use, provider imports and required
-readiness remain explicit policies. Worker-local typed API dependencies resolve to
+`[SunderService]` defaults to package-private exposure. A public C# member does not make a public
+package contract. Private App use defaults to required applicable actions; concrete
+ordinary public services default to optional App readiness with applicable actions.
+Explicit App policy overrides those defaults; public declaration-only interfaces
+retain opt-in App use. Runtime broker use and provider imports remain explicit.
+Worker-local typed API dependencies resolve to
 the local implementation/adapter; App typed APIs resolve through generated exact-
 provider RPC clients. Default generated service lifetime is package-activation
 singleton; custom DI/lifecycle registration must remain explicitly analyzable before
@@ -308,7 +313,7 @@ and artifact isolation. One workspace integration fixture loads actual projects,
 runs both generators together and updates service, XAML and referenced-project
 documents in memory. Its source-SDK/task-host and fresh-NuGet variants cover the two
 supported tooling distribution paths. The package case also covers locked restore,
-Build/Freeze/Pack, acceptance and Clean without tooling assemblies in the payload.
+Build/Pack, explicit public acceptance and Clean without tooling assemblies in the payload.
 Source-workspace compiler tooling may bootstrap independently of the package.
 
 ## Initial build implementation
@@ -335,8 +340,7 @@ namespace lookup and runtime AssemblyRef closure are tracked separately; an unus
 compile-time lookup must not add UI dependencies to a Worker `.deps.json`.
 
 The pilot verifies exact App-use/Worker-provider projection, concurrent unchanged
-builds, failure preservation, draft-Pack rejection, explicit Freeze followed by
-Pack, Rebuild/Clean, and removal of obsolete App outputs when source becomes
+builds, failure preservation, baseline-free private Pack, Rebuild/Clean, and removal of obsolete App outputs when source becomes
 headless. The restored-dependency fixture covers source-SDK and binary-SDK references,
 a separate backend project, Avalonia NuGet build imports, and a real current-RID
 SQLite operation from Worker output. App excludes the backend/SQLite closure; Worker
@@ -361,7 +365,10 @@ host RID. The RID must be declared and already restored. The declared set comes 
 Pack selects an explicit `RuntimeIdentifier` first, then an explicitly configured
 `SunderPackageComposeRuntimeIdentifiers`, otherwise the declared set. It builds and
 checks each selected RID; duplicate, empty and undeclared selections are rejected.
-Contract acceptance and Freeze remain explicit prerequisites.
+Private services use the full effective package version and need no owned baseline,
+Accept or Freeze. Public contract acceptance and Freeze remain explicit prerequisites.
+Historical private baseline records are retained through the explicit retirement
+migration; ordinary builds never rewrite them.
 
 Native builds also export portable qualified role-input evidence alongside each
 exact-RID development leaf. [Qualified prebuilt Pack](PREBUILT-ROLE-INPUTS.md) validates
@@ -408,8 +415,8 @@ role/TFM/RID outputs. Design-time symbols and debug/source mapping use the same
 semantic model. An additive C# source generator alone cannot remove Worker source
 from an App compilation. No mixed authoring assembly is a payload.
 
-Ordinary builds remain offline, using reviewed locks and cache contents. Accept,
-Freeze, package/provider selection and publication remain explicit operations.
+Ordinary builds remain offline, using reviewed locks and cache contents. Public
+Accept/Freeze, package/provider selection and publication remain explicit operations.
 Template/Quickstart/Builder and Agent migration close only after their canonical
 one-project builds and cleanup pass, including removal of authored App/Protocol
 projects and obsolete role/bootstrap/transport scaffolding.

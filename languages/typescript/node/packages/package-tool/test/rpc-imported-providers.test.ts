@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -13,12 +13,14 @@ import { publishContractCache } from "../src/rpc-contract-cache";
 import { currentRid, loadProjectWithOwnedFrame } from "../src/model";
 import { generateRpcBindingsForLoadedProject } from "../src/rpc-bindings";
 import { packageApiCommand, type PackageApiRequest } from "../src/rpc-package-commands";
+import { generatedProviders, invocation, writeSourceFile as writeFile } from "./service-fixtures";
+import { rebindFixtureProjection } from "./model-projection-fixtures";
+import { publishModelProjectionCache } from "../src/rpc-model-projection-cache";
 
 const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1");
 const exec = promisify(execFile); const cli = resolve(__dirname, "../src/cli.js");
-const source = (providers = 'extension: imported.extension.provider({handlers:{example:{ping(request, context){context.signal.throwIfAborted(); return request;}}}})') =>
-  `import {rpc} from "@sunder/sdk"; import {rpcImports as imported} from "#sunder/rpc";
-export const packageRpc=rpc.router({contracts:{},providers:{${providers}}});`;
+const source = (providers = 'export const extension=defineService({ping(request, context){context.signal.throwIfAborted(); return request;}},{implements:imported.extension});') =>
+  `import {defineService} from "@sunder/sdk"; import {Implementations as imported} from "#sunder/api";\n${providers}`;
 async function fixture(extension = "ts", consumer = false, stream = false) {
   const root = await mkdtemp(join(tmpdir(), "sunder-imported-providers-")); const cache = join(root, "cache"); await mkdir(join(root, "src"));
   const value = JSON.parse(await readFile(join(ROOT, "authoring/conformance/valid/package-api-contract-lock.json"), "utf8"));
@@ -38,27 +40,21 @@ async function fixture(extension = "ts", consumer = false, stream = false) {
         selectedAuthorityRelease: contract.selectedAuthorityRelease, selectedAuthorityContentIdentity: contract.selectedAuthorityContentIdentity }] };
     artifact.publicInventorySha256 = createHash("sha256").update("sunder.package-public-api-inventory.v1\0").update(JSON.stringify(inventory)).digest("hex");
   }
+  const projection = rebindFixtureProjection("example.dependency",value.packageArtifacts["example.dependency"],await readFile(join(ROOT,"authoring/conformance/valid/rpc-model-projection-nonempty.json")));
   const original = Buffer.from(JSON.stringify(value, null, 2) + "\n"); const locked = parseContractLock(original);
   await publishContractCache(cache, new Map([[hash, bytes]]), locked.requirements);
+  await publishModelProjectionCache(cache,new Map([["example.dependency",projection]]),locked.packageArtifacts,new Map([[hash,bytes]]));
   const lockPath = join(root, "sunder-contracts.lock.json"); await writeFile(lockPath, original);
   await writeFile(join(root, "sunder-contracts.owned.json"), await readFile(join(ROOT, "authoring/conformance/valid/minimal-package-owned-baseline.json")));
   const sourcePath = join(root, `src/rpc.${extension}`);
   await writeFile(sourcePath, stream ? source().replace("return request;}", "return request;}, async *watch(request, context){context.signal.throwIfAborted(); yield request;}") : source());
-  await writeFile(join(root, `src/worker.${extension}`), 'export {packageRpc} from "./rpc.js";');
   await writeFile(join(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Imported Provider", version: "1.0.0",
-    entry: `src/worker.${extension}`, workerCapabilities: [], rpc: { module: `src/rpc.${extension}`, export: "packageRpc" } }));
+    workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
   const load = () => loadProjectWithOwnedFrame(root, { contractCacheRoot: cache });
   const run = (...args: string[]) => exec(process.execPath, [cli, ...args, "--project", root], { env: { ...process.env, SUNDER_CONTRACT_CACHE: cache }, timeout: 180_000, maxBuffer: 4_194_304 });
-  const request: typeof fetch = async (input, init) => {
-    const url = String(input); assert.equal(init?.redirect, "error"); const artifact = locked.packageArtifacts.get("example.dependency")!;
-    let body: string | Uint8Array; let headers: Record<string, string> = { "content-type": "application/json" };
-    if (url.endsWith("/public-api")) body = JSON.stringify({ inventory: JSON.parse(inventoryBytes(artifact).toString()), publicInventorySha256: artifact.publicInventorySha256 });
-    else if (url.endsWith("/descriptor")) { body = bytes; headers = { "content-type": "application/schema+json", etag: `"${hash}"` }; }
-    else body = JSON.stringify({ contractId: descriptor.contractId, version: descriptor.version, descriptorSha256: hash, abiSha256: abi, size: bytes.length, etag: `"${hash}"`, exposure: "public", firstPublisherPackageId: "example.dependency" });
-    const response = new Response(typeof body === "string" ? body : new Uint8Array(body), { headers }); Object.defineProperty(response, "url", { value: url }); return response;
-  };
+  const request: typeof fetch = async () => assert.fail("A complete pinned provider cache must not acquire descriptor-only or canonical fallback data.");
   const command = (input: PackageApiRequest) => packageApiCommand(root, { ...input, cacheRoot: cache, fetchImplementation: request });
-  return { root, cache, sourcePath, lockPath, original, locked, hash, descriptor, load, run, command, dispose: () => rm(root, { recursive: true, force: true }) };
+  return { root, cache, sourcePath, lockPath, original, locked, hash, descriptor, projection, load, run, command, dispose: () => rm(root, { recursive: true, force: true }) };
 }
 
 for (const extension of ["ts", "js"]) test(`imported ${extension} providers compile from the cache and dispatch unary/stream values through generated codecs`, { timeout: 180_000 }, async () => {
@@ -73,9 +69,8 @@ for (const extension of ["ts", "js"]) test(`imported ${extension} providers comp
     await c.run("build"); await c.run("package", "--discovery-root", join(c.root, "dist/targets"));
     const manifest = JSON.parse(await readFile(join(c.root, "dist/package/manifest/sunder-package.json"), "utf8"));
     assert.equal(manifest.providerImports[0].providerRefs.length, 1); assert.deepEqual(manifest.usesContracts, []); assert.equal(manifest.dependsOn[0].presence, "required");
-    const worker = createRequire(__filename)(join(c.root, "dist/targets", currentRid(), "payload/runtime", currentRid(), "bin/worker.cjs"));
-    const registration = worker.packageRpc.providerRegistrations[0]; assert.equal(registration.descriptorSha256, c.hash);
-    const context = { signal: new AbortController().signal };
+    const registration = (await generatedProviders(c.root))[0]!; assert.equal(registration.descriptorSha256, c.hash);
+    const context = invocation();
     assert.deepEqual(await registration.handler.invokeUnary(context, "example", "ping", {}), {});
     await assert.rejects(async () => registration.handler.invokeUnary(context, "example", "ping", { unknown: true }));
     const values = []; for await (const value of registration.handler.invokeServerStream(context, "example", "watch", {})) values.push(value);
@@ -89,7 +84,7 @@ test("provider intent requires a complete implementation and never borrows a con
     const loaded = await c.load(); assert.equal(loaded.ownedRpc!.imports.dependencies[0]!.presence, "required");
     assert.equal(loaded.config.usesContracts![0]!.required, false); assert.equal(loaded.contracts.length, 1);
     await generateRpcBindingsForLoadedProject(loaded); const receiptPath = join(c.root, ".sunder/generated/rpc/authoring-receipt.v1.json"); const before = await readFile(receiptPath);
-    await writeFile(c.sourcePath, source("")); await assert.rejects(c.load(), /handler-incomplete.*no local implementation/u);
+    await writeFile(c.sourcePath, source("")); await assert.rejects(c.load(), /handler-incomplete.*no defineService implementation/u);
     await rm(join(c.cache, c.hash + ".json")); await writeFile(c.sourcePath, "not even valid TypeScript");
     await assert.rejects(c.load(), /contract-cache.entry-missing/u); assert.deepEqual(await readFile(receiptPath), before);
   } finally { await c.dispose(); }
@@ -100,14 +95,14 @@ for (const extension of ["ts", "js"]) test(`imported ${extension} handlers retai
   try {
     const variants = [
       source().replace("return request", "return request.missing"), source().replace("ping(request, context)", "other(request, context)"),
-      source().replace("imported.extension.provider", "imported.missing.provider"),
-      source().replace('from "#sunder/rpc"', 'from "./fake.js"'),
-      source().replace("imported.extension.provider", "builder").replace("export const", "const builder=imported.extension.provider; export const"),
-      source().replace("imported.extension.provider", "imported['extension'].provider"),
-      source().replace("{handlers:", '{contract:"example.rpc.v1.minimal",handlers:'),
-      source().replace("imported.extension.provider({handlers:", 'rpc.provider({contract:"example.rpc.v1.minimal",handlers:'),
+      source().replace("imported.extension", "imported.missing"),
+      source().replace('from "#sunder/api"', 'from "./fake.js"'),
+      source().replace("implements:imported.extension", "implements:builder").replace("export const", "const builder=imported.extension; export const"),
+      source().replace("imported.extension", "imported['extension']"),
+      source().replace("implements:imported.extension", 'implements:imported.extension,contractId:"example.rpc.v1.minimal"'),
+      source().replace("implements:imported.extension", 'implements:{key:"extension"}'),
     ];
-    await writeFile(join(c.root, "src/fake.js"), 'throw new Error("SOURCE WAS EXECUTED"); export const rpcImports={extension:{provider(value){return value;}}};');
+    await writeFile(join(c.root, "src/fake.js"), 'throw new Error("SOURCE WAS EXECUTED"); export const Implementations={extension:{key:"extension"}};');
     for (const [index, text] of variants.entries()) {
       await writeFile(c.sourcePath, text);
       await assert.rejects(c.load(), error => error instanceof Error && /rpc-authoring\./u.test(error.message) && !error.message.includes("SOURCE WAS EXECUTED"), `source variant ${index}`);
@@ -117,15 +112,27 @@ for (const extension of ["ts", "js"]) test(`imported ${extension} handlers retai
   } finally { await c.dispose(); }
 });
 
-test("multiple imported implementations require explicit distinct IDs and all retain their exact provider refs", async () => {
-  const c = await fixture();
+for (const extension of ["ts", "js"]) test(`multiple imported ${extension} implementations retain provider refs without granting either consumer role`, async () => {
+  const c = await fixture(extension);
   try {
-    const binding = 'imported.extension.provider({handlers:{example:{ping(request){return request;}}}})';
-    await writeFile(c.sourcePath, source(`one:${binding},two:${binding}`)); await assert.rejects(c.load(), /explicit IDs/u);
-    await writeFile(c.sourcePath, source(`one:${binding.replace("{handlers", '{id:"example.one",handlers')},two:${binding.replace("{handlers", '{id:"example.two",handlers')}`));
+    await mkdir(join(c.root,"app")); await writeFile(join(c.root,"app/index.html"),"<!doctype html><title>Provider</title>");
+    const configPath=join(c.root,"sunder.package.json"); const config=JSON.parse(await readFile(configPath,"utf8"));
+    config.app={root:"app",entryPoint:"index.html",views:[{viewId:"example.owner.main",displayName:"Provider",route:"/",defaultPlacement:"middle",showInHotbar:true}]};
+    await writeFile(configPath,JSON.stringify(config));
+    const binding = 'defineService({ping(request){return request;}},{implements:imported.extension})';
+    await writeFile(c.sourcePath, source(`export const one=${binding}; export const two=${binding};`)); await assert.rejects(c.load(), /explicit provider IDs/u);
+    await writeFile(c.sourcePath, source(`export const one=${binding.replace("{implements", '{providerId:"example.one",implements')}; export const two=${binding.replace("{implements", '{providerId:"example.two",implements')};`));
     const loaded = await c.load(); const receipt = JSON.parse(loaded.ownedRpc!.files.get("authoring-receipt.v1.json")!);
     assert.deepEqual(receipt.providerImports[0].providerRefs.map((value: { providerId: string }) => value.providerId), ["example.one", "example.two"]);
-    await writeFile(c.sourcePath, (await readFile(c.sourcePath, "utf8")).replace("example.two", "example.one"));
+    assert.deepEqual(loaded.config.usesContracts, []); assert.deepEqual(receipt.uses, []);
+    assert.deepEqual(JSON.parse(loaded.ownedRpc!.files.get("app-authoring-receipt.v1.json")!).uses, []);
+    assert.equal(loaded.contracts[0]!.appUse, undefined); assert.equal(loaded.contracts[0]!.runtimeUse, undefined);
+    const implementations = await readFile(c.sourcePath, "utf8");
+    for (const field of ["appUse", "runtimeUse"]) {
+      await writeFile(c.sourcePath, implementations.replace("implements:imported.extension", `implements:imported.extension,${field}:{}`));
+      await assert.rejects(c.load(), /Implementations cannot redeclare.*consumer policy/);
+    }
+    await writeFile(c.sourcePath, implementations.replace("example.two", "example.one"));
     await assert.rejects(c.load(), /identity-collision/u);
   } finally { await c.dispose(); }
 });
@@ -141,7 +148,7 @@ for (const extension of ["ts", "js"]) test(`${extension} implement/unimplement b
     const before = await readFile(c.lockPath); const time = (await stat(c.lockPath)).mtimeMs;
     assert.equal((await c.command({ operation: "implement", packageId: "example.dependency", contractId: c.descriptor.contractId })).changed, false);
     assert.equal((await stat(c.lockPath)).mtimeMs, time);
-    await assert.rejects(c.load(), /no local implementation/u);
+    await assert.rejects(c.load(), /no defineService implementation/u);
     await writeFile(c.sourcePath, source()); await c.run("contracts", "accept"); await c.load();
     await assert.rejects(c.run("api", "unimplement", "example.dependency", c.descriptor.contractId), /remove-still-referenced/u);
     assert.deepEqual(await readFile(c.lockPath), before);
@@ -174,12 +181,17 @@ for (const extension of ["ts", "js"]) test(`mixed ${extension} owned/imported sh
   const c = await fixture(extension);
   try {
     const text = (valid: boolean, reverse: boolean) => {
-      const providers = ['local:rpc.provider({contract:"local",handlers})', 'extension:imported.extension.provider({handlers})'];
+      const providers = ['export const localImpl=defineService(handlers,{implements:local});', 'export const extension=defineService(handlers,{implements:imported.extension});'];
       if (reverse) providers.reverse();
-      return `import {rpc} from "@sunder/sdk"; import {rpcImports as imported} from "#sunder/rpc"; const s=rpc.schema;
-const handlers={example:{ping(request,context){context.signal.throwIfAborted(); return ${valid ? "{}" : "42"};}}};
-export const packageRpc=rpc.router({contracts:{local:rpc.contract({exposure:"package",errors:{},definitions:{Input:s.object({}),Output:s.json({maxProperties:5})},
-services:{example:{ping:rpc.unary({request:s.ref("Input"),response:s.ref("Output")})}}})},providers:{${providers.join(",")}}});`;
+      return `import {defineService} from "@sunder/sdk"; import {Implementations as imported} from "#sunder/api";
+/** @typedef {{ping(request:{},context:import("@sunder/sdk").ServiceContext):import("@sunder/sdk").JsonObject}} Local */
+/*ts type Local={ping(request:{},context:import("@sunder/sdk").ServiceContext):import("@sunder/sdk").JsonObject};*/
+/** @type {import("@sunder/sdk").ServiceDefinition<Local>} */
+export const local=defineService/*<Local>*/(null,{declarationOnly:true,exposure:"public",serviceId:"example",constraints:{"ping.result":{maxProperties:5}}});
+const handlers={
+/** @param {{}} request @param {import("@sunder/sdk").ServiceContext} context */
+ping(request/*: {}*/,context/*: import("@sunder/sdk").ServiceContext*/){context.signal.throwIfAborted(); return ${valid ? "{}" : "42"};}};
+${providers.join("\n")}`;
     };
     for (const reverse of [false, true]) { await writeFile(c.sourcePath, text(false, reverse)); await assert.rejects(c.load(), /handler-incomplete/u); }
     await writeFile(c.sourcePath, text(true, false)); await c.run("contracts", "accept"); await c.run("contracts", "freeze");
@@ -202,13 +214,15 @@ test("removing an authority selection cannot strand a still-referenced provider 
     const inventory = JSON.parse(inventoryBytes(c.locked.packageArtifacts.get("example.dependency")!).toString());
     inventory.packageId = "example.reexport"; inventory.packageContentIdentity = artifact.selectedPackageContentIdentity; inventory.contracts[0].artifactSource = "imported";
     artifact.publicInventorySha256 = createHash("sha256").update("sunder.package-public-api-inventory.v1\0").update(JSON.stringify(inventory)).digest("hex");
+    const projection = rebindFixtureProjection("example.reexport",artifact,c.projection);
     value.packageArtifacts["example.reexport"] = artifact;
     value.providerImports.reexport = { packageId: "example.reexport", contractId: c.descriptor.contractId };
     const original = Buffer.from(JSON.stringify(value, null, 2) + "\n"); await writeFile(c.lockPath, original);
+    await publishModelProjectionCache(c.cache,new Map([["example.reexport",projection]]),parseContractLock(original).packageArtifacts,new Map([[c.hash,Buffer.from(canonicalRpcDescriptorBytes(c.descriptor))]]));
     await writeFile(c.sourcePath, source(""));
     await assert.rejects(c.command({ operation: "unimplement", packageId: "example.dependency", contractId: c.descriptor.contractId }), /authority-release-conflict/u);
     assert.deepEqual(await readFile(c.lockPath), original);
-    value.packageImports["example.dependency"] = { localName: "dependency", presence: "optional", requiredContracts: [] };
+    value.packageImports["example.dependency"] = { localName: "dependency", presence: "optional", requiredContracts: [], consumerRoles:["runtime"] };
     const retained = Buffer.from(JSON.stringify(value, null, 2) + "\n"); await writeFile(c.lockPath, retained);
     await assert.rejects(c.command({ operation: "unimplement", packageId: "example.dependency", contractId: c.descriptor.contractId }), /handler-incomplete.*reexport/u);
     assert.deepEqual(await readFile(c.lockPath), retained);

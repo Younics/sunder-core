@@ -14,12 +14,9 @@ internal sealed class ExecutionRuntimeStoreLayout
         RuntimeStateRootPath = packagePaths.RootPath;
         RootPath = packagePaths.ExecutionRuntimeStoreRootPath;
         ArchiveRootPath = packagePaths.ExecutionRuntimeArtifactRootPath;
-        ManifestRootPath = packagePaths.ExecutionRuntimeManifestRootPath;
         ContentRootPath = packagePaths.ExecutionRuntimeRootsPath;
         ReceiptRootPath = packagePaths.ExecutionRuntimeReceiptRootPath;
         HealthRootPath = packagePaths.ExecutionRuntimeHealthRootPath;
-        PolicyRootPath = packagePaths.ExecutionRuntimePolicyRootPath;
-        LifecyclePolicyPath = packagePaths.ExecutionRuntimeLifecyclePolicyFilePath;
         StagingRootPath = packagePaths.ExecutionRuntimeStagingRootPath;
         TransactionRootPath = packagePaths.ExecutionRuntimeTransactionRootPath;
         QuarantineRootPath = packagePaths.ExecutionRuntimeQuarantineRootPath;
@@ -42,12 +39,9 @@ internal sealed class ExecutionRuntimeStoreLayout
     public string RuntimeStateRootPath { get; }
     public string RootPath { get; }
     public string ArchiveRootPath { get; }
-    public string ManifestRootPath { get; }
     public string ContentRootPath { get; }
     public string ReceiptRootPath { get; }
     public string HealthRootPath { get; }
-    public string PolicyRootPath { get; }
-    public string LifecyclePolicyPath { get; }
     public string StagingRootPath { get; }
     public string TransactionRootPath { get; }
     public string QuarantineRootPath { get; }
@@ -65,11 +59,9 @@ internal sealed class ExecutionRuntimeStoreLayout
     [
         RootPath,
         ArchiveRootPath,
-        ManifestRootPath,
         ContentRootPath,
         ReceiptRootPath,
         HealthRootPath,
-        PolicyRootPath,
         StagingRootPath,
         TransactionRootPath,
         QuarantineRootPath,
@@ -81,10 +73,7 @@ internal sealed class ExecutionRuntimeStoreLayout
     ];
 
     public string GetArchivePath(string sha256)
-        => GetContentAddressedPath(ArchiveRootPath, sha256, ".sunderruntime");
-
-    public string GetManifestPath(string sha256)
-        => GetContentAddressedPath(ManifestRootPath, sha256, ".json");
+        => GetContentAddressedPath(ArchiveRootPath, sha256, ".archive");
 
     public string GetContentRootPath(string contentIdentity)
         => GetContentAddressedPath(ContentRootPath, contentIdentity, extension: null);
@@ -97,11 +86,13 @@ internal sealed class ExecutionRuntimeStoreLayout
         ArgumentNullException.ThrowIfNull(identity);
         return Path.Combine(
             ReceiptRootPath,
+            ValidateSegment(identity.SourceId.ToString(), nameof(identity.SourceId)),
             ValidateSegment(identity.RuntimeId, nameof(identity.RuntimeId)),
-            ValidateSegment(identity.Version, nameof(identity.Version)),
-            identity.PackagingRevision.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ValidateSegment(identity.VendorVersion, nameof(identity.VendorVersion)),
             ValidateSegment(identity.Rid, nameof(identity.Rid)),
-            ValidateSegment(identity.ModuleAbi, nameof(identity.ModuleAbi)) + ".json");
+            ValidateSegment(identity.ModuleAbi, nameof(identity.ModuleAbi)),
+            ValidateSegment(identity.VendorChecksumAlgorithm.ToString(), nameof(identity.VendorChecksumAlgorithm)),
+            ValidateSegment(identity.VendorChecksumDigest, nameof(identity.VendorChecksumDigest)) + ".json");
     }
 
     public string GetStagingPath(string transactionId)
@@ -125,6 +116,14 @@ internal sealed class ExecutionRuntimeStoreLayout
         var digest = Convert.ToHexStringLower(
             SHA256.HashData(Encoding.UTF8.GetBytes(identity.SingleFlightKey)));
         return Path.Combine(IdentityLockRootPath, digest + ".lock");
+    }
+
+    public string GetVersionLockPath(ExecutionRuntimeIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        var digest = Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes(identity.VersionKey)));
+        return Path.Combine(IdentityLockRootPath, digest + ".version.lock");
     }
 
     public string GetGarbageCollectionMarkPath(string contentIdentity)

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "packageId": "example.dependency",
+  "packageVersion": "1.2.3",
+  "contracts": [
+    {
+      "contractId": "example.rpc.v1.minimal",
+      "contractVersion": "2.0.0",
+      "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371",
+      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+      "modelProjection": {
+        "models": {},
+        "serviceReferences": {}
+      },
+      "methodPolicies": {
+        "example": {
+          "ping": {
+            "timeoutSeconds": 2100
+          }
+        }
+      }
+    }
+  ]
+}

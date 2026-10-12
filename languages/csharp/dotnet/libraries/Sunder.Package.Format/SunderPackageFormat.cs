@@ -35,7 +35,14 @@ public static class SunderPackageFormat
     internal const long MaxArchiveBytes = 512L * 1024 * 1024;
     public const string ManifestPath = "manifest/sunder-package.json";
     public const string ContentIndexPath = "manifest/content-index.json";
+    // Local build-to-Host handoff beside the dev directory, never part of an archive.
+    internal const string DevelopmentImportsSuffix = ".imports.v1.json";
+    internal const int MaxDevelopmentImportsBytes = 96 * 1024 * 1024;
     public const string SharedPayloadRoot = "payload/shared/";
+    internal const string RpcModelProjectionFileName = "rpc-model-projection.v1.json";
+    internal const string RpcModelProjectionLogicalPath = "contracts/" + RpcModelProjectionFileName;
+    internal const string RpcModelProjectionPath = SharedPayloadRoot + RpcModelProjectionLogicalPath;
+    internal const int MaxRpcModelProjectionBytes = 4_194_304;
     public const string AppPayloadRoot = "payload/app/";
     public const string RuntimePayloadRoot = "payload/runtime/";
     public const long MaxIconBytes = 1024L * 1024L;

@@ -5,7 +5,7 @@
   "description": "The reviewed tool-owned compatibility baseline for package-owned or Sunder Core platform-owned RPC contracts.",
   "type": "object",
   "additionalProperties": false,
-  "maxProperties": 5,
+  "maxProperties": 6,
   "required": [
     "schemaVersion",
     "authorityKind",
@@ -28,7 +28,10 @@
     "packageId": {
       "$ref": "#/$defs/packageId"
     },
-    "contracts": {}
+    "contracts": {},
+    "retiredPrivateContracts": {
+      "$ref": "#/$defs/retiredPrivateContractMap"
+    }
   },
   "allOf": [
     {
@@ -65,7 +68,8 @@
           "packageId": false,
           "contracts": {
             "$ref": "#/$defs/platformOwnedContractMap"
-          }
+          },
+          "retiredPrivateContracts": false
         }
       }
     }
@@ -147,6 +151,49 @@
       "additionalProperties": {
         "$ref": "#/$defs/platformOwnedContract"
       }
+    },
+    "retiredPrivateContractMap": {
+      "description": "Append-only exact before-images of package-only families. The combined contracts and retiredPrivateContracts entry count must not exceed 128.",
+      "type": "object",
+      "minProperties": 0,
+      "maxProperties": 128,
+      "propertyNames": {
+        "$ref": "#/$defs/portableKey"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/retiredPrivateContract"
+      }
+    },
+    "retiredPrivateContract": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/packageOwnedContract"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "current": {
+              "type": "object",
+              "properties": {
+                "exposure": {
+                  "const": "package"
+                }
+              }
+            },
+            "history": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "exposure": {
+                    "const": "package"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "packageOwnedContract": {
       "type": "object",

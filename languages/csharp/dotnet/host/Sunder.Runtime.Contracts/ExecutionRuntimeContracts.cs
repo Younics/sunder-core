@@ -10,196 +10,233 @@ public static class RuntimeExecutionRuntimeStatuses
     public const string Quarantined = "quarantined";
 }
 
-public static class RuntimeExecutionRuntimeLifecycleStates
+/// <summary>Host-configured official sources; callers cannot introduce another source or URL.</summary>
+[JsonConverter(typeof(RuntimeContractStringEnumConverter<ConfiguredOfficialSourceId>))]
+public enum ConfiguredOfficialSourceId
 {
-    public const string PolicyRequired = "policy-required";
+    [JsonStringEnumMemberName("dotnet")] DotNet = 1,
+    [JsonStringEnumMemberName("node")] Node = 2,
 }
 
-public static class RuntimeExecutionRuntimeAcquisitionSources
+[JsonConverter(typeof(RuntimeContractStringEnumConverter<RuntimeExecutionRuntimeChecksumAlgorithm>))]
+public enum RuntimeExecutionRuntimeChecksumAlgorithm
 {
-    public const string Registry = "registry";
-    public const string LocalImport = "local-import";
-    public const string Development = "development";
+    [JsonStringEnumMemberName("sha512")] Sha512 = 1,
+    [JsonStringEnumMemberName("sha256")] Sha256 = 2,
+}
+
+[JsonConverter(typeof(RuntimeContractStringEnumConverter<RuntimeExecutionRuntimeArchiveFormat>))]
+public enum RuntimeExecutionRuntimeArchiveFormat
+{
+    [JsonStringEnumMemberName("zip")] Zip = 1,
+    [JsonStringEnumMemberName("tar.gz")] TarGzip = 2,
+}
+
+[JsonConverter(typeof(RuntimeContractStringEnumConverter<RuntimeExecutionRuntimeSupportState>))]
+public enum RuntimeExecutionRuntimeSupportState
+{
+    Unknown,
+    Supported,
+    EndOfLife,
 }
 
 public static class RuntimeExecutionRuntimeOperationActions
 {
+    public const string Install = "install";
     public const string Ensure = "ensure";
-    public const string Import = "import";
     public const string Verify = "verify";
     public const string Repair = "repair";
     public const string GarbageCollect = "garbage-collect";
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionRuntimeRequirement(
-    string RuntimeId,
-    string VersionRange,
-    string ModuleAbi);
+    [property: JsonRequired] string RuntimeId,
+    [property: JsonRequired] string VersionRange,
+    [property: JsonRequired] string ModuleAbi);
 
+/// <summary>Exact upstream bytes. DotNet uses SHA-512; Node uses SHA-256. Digests are lowercase hex.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionRuntimeIdentity(
-    string RuntimeId,
-    string Version,
-    int PackagingRevision,
-    string Rid,
-    string ModuleAbi,
-    string ManifestSha256,
-    string ArtifactSha256);
+    [property: JsonRequired] ConfiguredOfficialSourceId SourceId,
+    [property: JsonRequired] string RuntimeId,
+    [property: JsonRequired] string VendorVersion,
+    [property: JsonRequired] string Rid,
+    [property: JsonRequired] string ModuleAbi,
+    [property: JsonRequired] RuntimeExecutionRuntimeChecksumAlgorithm VendorChecksumAlgorithm,
+    [property: JsonRequired] string VendorChecksumDigest);
 
-public sealed record RuntimeExecutionRuntimeLifecycle(
-    string State,
-    DateTimeOffset? SupportedFromUtc,
-    DateTimeOffset? DeprecatedAtUtc,
-    DateTimeOffset? InstallBlockedAtUtc,
-    DateTimeOffset? ActivationBlockedAtUtc,
-    DateTimeOffset? RevokedAtUtc,
-    string? PolicyMessage,
-    long RuntimePolicyRevision,
-    DateTimeOffset PolicyObservedAtUtc);
+/// <summary>Host-resolved official distribution evidence, never an acquisition request supplied by a client.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeExecutionRuntimeDistribution(
+    [property: JsonRequired] string DownloadUrl,
+    [property: JsonRequired] string MetadataUrl,
+    [property: JsonRequired] string MetadataSha256,
+    [property: JsonRequired] string? ChecksumUrl,
+    [property: JsonRequired] string? ChecksumDocumentSha256,
+    [property: JsonRequired] RuntimeExecutionRuntimeArchiveFormat ArchiveFormat,
+    [property: JsonRequired] string MaterializationProfile,
+    [property: JsonRequired] long? DownloadSize);
 
+/// <summary>Observed vendor support information, not an execution-policy lease or Registry authorization.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeExecutionRuntimeSupportStatus(
+    [property: JsonRequired] RuntimeExecutionRuntimeSupportState State,
+    [property: JsonRequired] string SupportLine,
+    [property: JsonRequired] DateTimeOffset ObservedAtUtc,
+    [property: JsonRequired] DateTimeOffset? EndOfLifeAtUtc,
+    [property: JsonRequired] string? Message);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeExecutionRuntimeVendorArtifact(
+    [property: JsonRequired] RuntimeExecutionRuntimeIdentity Identity,
+    [property: JsonRequired] RuntimeExecutionRuntimeDistribution Distribution,
+    [property: JsonRequired] RuntimeExecutionRuntimeSupportStatus Support);
+
+/// <summary>Recorded only after a successful official-source download and checksum verification.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeExecutionRuntimeProvenance(
+    [property: JsonRequired] RuntimeExecutionRuntimeDistribution Distribution,
+    [property: JsonRequired] string FinalDownloadUrl,
+    [property: JsonRequired] DateTimeOffset RetrievedAtUtc);
+
+/// <summary>Local verified bytes; ContentIdentity commits the separate Host-owned extracted file inventory.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeExecutionRuntimeInstalledArtifact(
+    [property: JsonRequired] string ArchiveSha256,
+    [property: JsonRequired] long ArchiveSize,
+    [property: JsonRequired] string ContentIdentity,
+    [property: JsonRequired] RuntimeExecutionRuntimeProvenance Provenance);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionRuntimeHealth(
-    string Status,
-    DateTimeOffset CheckedAtUtc,
-    bool RepairRecommended,
-    string? Message);
+    [property: JsonRequired] string Status,
+    [property: JsonRequired] DateTimeOffset CheckedAtUtc,
+    [property: JsonRequired] bool RepairRecommended,
+    [property: JsonRequired] string? Message);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record InstalledExecutionRuntimeSummary(
-    RuntimeExecutionRuntimeIdentity Identity,
-    string Status,
-    long Size,
-    int PackageReferenceCount,
-    string AcquisitionSource,
-    string SigningKeyId,
-    long TrustGeneration,
-    RuntimeExecutionRuntimeHealth Health,
-    RuntimeExecutionRuntimeLifecycle Lifecycle,
-    DateTimeOffset InstalledAtUtc);
+    [property: JsonRequired] RuntimeExecutionRuntimeIdentity Identity,
+    [property: JsonRequired] string Status,
+    [property: JsonRequired] long Size,
+    [property: JsonRequired] int PackageReferenceCount,
+    [property: JsonRequired] RuntimeExecutionRuntimeInstalledArtifact InstalledArtifact,
+    [property: JsonRequired] RuntimeExecutionRuntimeHealth Health,
+    [property: JsonRequired] RuntimeExecutionRuntimeSupportStatus Support,
+    [property: JsonRequired] DateTimeOffset InstalledAtUtc,
+    bool RetainedUntilUninstall = false);
 
+/// <summary>Host installed-package state is the sole authority for this exact local binding.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record PackageTargetExecutionRuntimeBinding(
-    string Role,
-    string Rid,
-    RuntimeExecutionRuntimeRequirement Requirement,
-    RuntimeExecutionRuntimeIdentity Runtime,
-    long ArtifactSize,
-    string RegistryOrigin,
-    string AcquisitionSource,
-    string SigningKeyId,
-    long TrustGeneration,
-    RuntimeExecutionRuntimeLifecycle Lifecycle,
-    DateTimeOffset ResolvedAtUtc);
+    [property: JsonRequired] string Role,
+    [property: JsonRequired] string Rid,
+    [property: JsonRequired] RuntimeExecutionRuntimeRequirement Requirement,
+    [property: JsonRequired] RuntimeExecutionRuntimeIdentity Runtime,
+    [property: JsonRequired] RuntimeExecutionRuntimeInstalledArtifact InstalledArtifact,
+    [property: JsonRequired] DateTimeOffset ResolvedAtUtc);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ExecutionRuntimeRebindResult(
-    bool Success,
-    string? ErrorCode,
-    string Message,
-    string PackageId,
-    string PackageVersion,
-    string PackageContentIdentity,
-    PackageTargetExecutionRuntimeBinding? PreviousBinding,
-    PackageTargetExecutionRuntimeBinding? NewBinding,
-    bool RuntimeSessionApplied,
+    [property: JsonRequired] bool Success,
+    [property: JsonRequired] string? ErrorCode,
+    [property: JsonRequired] string Message,
+    [property: JsonRequired] string PackageId,
+    [property: JsonRequired] string PackageVersion,
+    [property: JsonRequired] string PackageContentIdentity,
+    [property: JsonRequired] PackageTargetExecutionRuntimeBinding? PreviousBinding,
+    [property: JsonRequired] PackageTargetExecutionRuntimeBinding? NewBinding,
+    [property: JsonRequired] bool RuntimeSessionApplied,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     RuntimeExecutionRuntimeImpact? Impact = null);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionRuntimeEnsureRequest(
-    string RegistryOrigin,
-    RuntimeExecutionRuntimeRequirement Requirement);
+    [property: JsonRequired] RuntimeExecutionRuntimeRequirement Requirement,
+    bool RetainUntilUninstall = true);
 
-public sealed record RuntimeExecutionRuntimeImportRequest(string UploadId);
-
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionRuntimePackageReference(
-    string PackageId,
-    string PackageVersion,
-    string PackageContentIdentity,
-    string Role,
-    string Rid);
+    [property: JsonRequired] string PackageId,
+    [property: JsonRequired] string PackageVersion,
+    [property: JsonRequired] string PackageContentIdentity,
+    [property: JsonRequired] string Role,
+    [property: JsonRequired] string Rid);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionRuntimeImpact(
-    int PackageReferenceCount,
+    [property: JsonRequired] int PackageReferenceCount,
     IReadOnlyList<string> ImpactedPackageIds,
-    string Fingerprint)
+    [property: JsonRequired] string Fingerprint)
 {
-    private IReadOnlyList<string> _impactedPackageIds =
-        RuntimeContractCollections.Freeze(ImpactedPackageIds);
+    private IReadOnlyList<string> _impactedPackageIds = RuntimeContractCollections.FreezeBounded(
+        ImpactedPackageIds, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
 
+    [JsonRequired]
     public IReadOnlyList<string> ImpactedPackageIds
     {
         get => _impactedPackageIds;
-        init => _impactedPackageIds = RuntimeContractCollections.Freeze(value);
+        init => _impactedPackageIds = RuntimeContractCollections.FreezeBounded(value, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
     }
 }
 
-public sealed record RuntimeExecutionRuntimeActionRequest(string ExpectedImpactFingerprint);
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeExecutionRuntimeActionRequest([property: JsonRequired] string ExpectedImpactFingerprint);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionRuntimeOperationResult(
-    bool Success,
-    string? ErrorCode,
-    string Message,
-    string Action,
-    InstalledExecutionRuntimeSummary? Runtime,
-    bool AlreadyPresent,
+    [property: JsonRequired] bool Success,
+    [property: JsonRequired] string? ErrorCode,
+    [property: JsonRequired] string Message,
+    [property: JsonRequired] string Action,
+    [property: JsonRequired] InstalledExecutionRuntimeSummary? Runtime,
+    [property: JsonRequired] bool AlreadyPresent,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     RuntimeExecutionRuntimeImpact? Impact = null);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionRuntimeStoreFault(
-    string Code,
-    string Message,
-    bool Retryable,
-    string Operation,
-    string? RuntimeId,
-    string? Version,
-    int? PackagingRevision,
-    string? Rid,
-    string? PackageId,
-    string? TargetRole,
-    DateTimeOffset OccurredAtUtc);
+    [property: JsonRequired] string Code,
+    [property: JsonRequired] string Message,
+    [property: JsonRequired] bool Retryable,
+    [property: JsonRequired] string Operation,
+    [property: JsonRequired] RuntimeExecutionRuntimeIdentity? Runtime,
+    [property: JsonRequired] string? PackageId,
+    [property: JsonRequired] string? TargetRole,
+    [property: JsonRequired] DateTimeOffset OccurredAtUtc);
 
 public static partial class RuntimeApiRoutes
 {
     public const string Root = "/api/v1";
     public const string ExecutionRuntimes = Root + "/execution-runtimes";
     public const string ExecutionRuntimeEnsure = ExecutionRuntimes + "/ensure";
-    public const string ExecutionRuntimeImport = ExecutionRuntimes + "/import";
     public const string ExecutionRuntimeGarbageCollection = ExecutionRuntimes + "/gc";
 
-    public static string ExecutionRuntime(
-        string runtimeId,
-        string version,
-        int packagingRevision,
-        string rid,
-        string moduleAbi)
-        => $"{ExecutionRuntimes}/{Segment(runtimeId, nameof(runtimeId))}/versions/{Segment(version, nameof(version))}/revisions/{PositiveRevision(packagingRevision)}/{Segment(rid, nameof(rid))}/abis/{Segment(moduleAbi, nameof(moduleAbi))}";
+    public static string ExecutionRuntime(RuntimeExecutionRuntimeIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        var source = identity.SourceId switch
+        {
+            ConfiguredOfficialSourceId.DotNet => "dotnet",
+            ConfiguredOfficialSourceId.Node => "node",
+            _ => throw new ArgumentOutOfRangeException(nameof(identity), "Unknown official runtime source."),
+        };
+        var algorithm = identity.VendorChecksumAlgorithm switch
+        {
+            RuntimeExecutionRuntimeChecksumAlgorithm.Sha512 => "sha512",
+            RuntimeExecutionRuntimeChecksumAlgorithm.Sha256 => "sha256",
+            _ => throw new ArgumentOutOfRangeException(nameof(identity), "Unknown vendor checksum algorithm."),
+        };
+        return $"{ExecutionRuntimes}/sources/{source}/{Segment(identity.RuntimeId, nameof(identity.RuntimeId))}"
+            + $"/versions/{Segment(identity.VendorVersion, nameof(identity.VendorVersion))}/{Segment(identity.Rid, nameof(identity.Rid))}"
+            + $"/abis/{Segment(identity.ModuleAbi, nameof(identity.ModuleAbi))}/checksums/{algorithm}/{Segment(identity.VendorChecksumDigest, nameof(identity.VendorChecksumDigest))}";
+    }
 
-    public static string ExecutionRuntimeReferences(
-        string runtimeId,
-        string version,
-        int packagingRevision,
-        string rid,
-        string moduleAbi)
-        => $"{ExecutionRuntime(runtimeId, version, packagingRevision, rid, moduleAbi)}/references";
-
-    public static string ExecutionRuntimeImpact(
-        string runtimeId,
-        string version,
-        int packagingRevision,
-        string rid,
-        string moduleAbi)
-        => $"{ExecutionRuntime(runtimeId, version, packagingRevision, rid, moduleAbi)}/impact";
-
-    public static string ExecutionRuntimeVerify(
-        string runtimeId,
-        string version,
-        int packagingRevision,
-        string rid,
-        string moduleAbi)
-        => $"{ExecutionRuntime(runtimeId, version, packagingRevision, rid, moduleAbi)}/verify";
-
-    public static string ExecutionRuntimeRepair(
-        string runtimeId,
-        string version,
-        int packagingRevision,
-        string rid,
-        string moduleAbi)
-        => $"{ExecutionRuntime(runtimeId, version, packagingRevision, rid, moduleAbi)}/repair";
+    public static string ExecutionRuntimeReferences(RuntimeExecutionRuntimeIdentity identity) => $"{ExecutionRuntime(identity)}/references";
+    public static string ExecutionRuntimeImpact(RuntimeExecutionRuntimeIdentity identity) => $"{ExecutionRuntime(identity)}/impact";
+    public static string ExecutionRuntimeVerify(RuntimeExecutionRuntimeIdentity identity) => $"{ExecutionRuntime(identity)}/verify";
+    public static string ExecutionRuntimeRepair(RuntimeExecutionRuntimeIdentity identity) => $"{ExecutionRuntime(identity)}/repair";
 
     public static string PackageExecutionRuntimeBindings(string packageId)
         => $"{Root}/packages/{Segment(packageId, nameof(packageId))}/execution-runtime-bindings";
@@ -211,12 +248,6 @@ public static partial class RuntimeApiRoutes
         {
             throw new ArgumentException("A Runtime API route segment cannot be empty, '.' or '..'.", parameterName);
         }
-
         return Uri.EscapeDataString(value);
     }
-
-    private static int PositiveRevision(int packagingRevision)
-        => packagingRevision > 0
-            ? packagingRevision
-            : throw new ArgumentOutOfRangeException(nameof(packagingRevision), "A packaging revision must be positive.");
 }

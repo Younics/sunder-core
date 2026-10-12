@@ -141,11 +141,5 @@ internal sealed class PackagesInstalledCatalog(
     private static bool IdentityMatches(
         RuntimeExecutionRuntimeIdentity installed,
         RuntimeExecutionRuntimeIdentity binding)
-        => string.Equals(installed.RuntimeId, binding.RuntimeId, StringComparison.Ordinal)
-           && string.Equals(installed.Version, binding.Version, StringComparison.Ordinal)
-           && installed.PackagingRevision == binding.PackagingRevision
-           && string.Equals(installed.Rid, binding.Rid, StringComparison.Ordinal)
-           && string.Equals(installed.ModuleAbi, binding.ModuleAbi, StringComparison.Ordinal)
-           && string.Equals(installed.ManifestSha256, binding.ManifestSha256, StringComparison.Ordinal)
-           && string.Equals(installed.ArtifactSha256, binding.ArtifactSha256, StringComparison.Ordinal);
+        => installed == binding;
 }

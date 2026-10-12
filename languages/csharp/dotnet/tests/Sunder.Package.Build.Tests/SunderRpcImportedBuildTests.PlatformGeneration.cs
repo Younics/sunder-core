@@ -75,7 +75,7 @@ public sealed partial class SunderRpcImportedBuildTests
         var fixture = PlatformFixture();
         var value = ReadJson(LockPath); value["platformImports"]!["stackContributor"]!["authorityReleaseRange"] = ">=1.1.0 <1.2.0"; WriteJson(LockPath, value);
         File.Delete(Path.Combine(_root, "Consumer.cs"));
-        File.WriteAllText(Path.Combine(_root, "Provider.cs"), ProviderSource.Replace("IMinimalProviderService", "IStackContributorService", StringComparison.Ordinal)
+        File.WriteAllText(Path.Combine(_root, "Provider.cs"), PlatformProviderSource.Replace("IMinimalProviderService", "IStackContributorService", StringComparison.Ordinal)
             .Replace("CExample_Rpc_V1_Minimal", "CSunder_Stack_Contributor", StringComparison.Ordinal));
         File.WriteAllText(Path.Combine(_root, "Program.cs"), WorkerSource.Replace("new SunderWorkerOptions([])",
             "new SunderWorkerOptions([new LocalProvider().CreateSunderRpcProviderRegistration()])", StringComparison.Ordinal));

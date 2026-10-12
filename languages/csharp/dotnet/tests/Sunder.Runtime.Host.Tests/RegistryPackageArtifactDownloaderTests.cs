@@ -569,12 +569,8 @@ public sealed partial class RegistryPackageArtifactDownloaderTests
                  view.Icon,
                  view.DefaultPlacement!,
                  view.ShowInHotbar!.Value)).ToArray(),
-             target.ExecutionRuntime is null
-                 ? null
-                 : new RegistryExecutionRuntimeRequirement(
-                     target.ExecutionRuntime.Id!,
-                     target.ExecutionRuntime.VersionRange!,
-                     target.ExecutionRuntime.ModuleAbi!));
+              ExecutionRuntime: target.ExecutionRuntime is { } requirement
+                  ? new(requirement.Id!, requirement.VersionRange!, requirement.ModuleAbi!) : null);
 
     private static string AlternateRid()
         => SunderPackageFormat.SupportedRuntimeIdentifiers.First(rid =>

@@ -2,7 +2,7 @@ using System.Reflection;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Packaging;
-using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Xunit;
 
 namespace Sunder.Sdk.PublicApi.Tests;
@@ -12,7 +12,7 @@ public sealed class SunderPackageAuthoringAttributeTests
     [Fact]
     public void SingleProjectIntent_HasExplicitRoleAndPrivateServiceDefaults()
     {
-        Assert.Equal(SunderRpcExposure.Package, new SunderRpcServiceAttribute().Exposure);
+        Assert.Equal(SunderServiceExposure.Package, new SunderServiceAttribute().Exposure);
         Assert.Equal(new[] { SunderPackageCodeRole.Worker, SunderPackageCodeRole.App, SunderPackageCodeRole.Shared }, Enum.GetValues<SunderPackageCodeRole>());
         Assert.Equal(SunderPackageCodeRole.Shared, new SunderPackageCodeRoleAttribute(SunderPackageCodeRole.Shared).Role);
         var usage = typeof(SunderPackageCodeRoleAttribute).GetCustomAttribute<AttributeUsageAttribute>()!;

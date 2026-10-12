@@ -132,6 +132,7 @@ internal static class CliRenderers
         foreach (var warning in result.Warnings) output.Warning(warning);
         if (!result.Success)
         {
+            RuntimePrerequisites(output, result.RuntimePrerequisites);
             var code = $"runtime.registry.{CliJsonData.RegistryErrorCode(result.ErrorCode)}";
             foreach (var error in result.Errors.DefaultIfEmpty(result.Message)) output.Error(error, code);
             return CliErrorMapper.FromRegistryCode(result.ErrorCode);
@@ -180,14 +181,16 @@ internal static class CliRenderers
             output.Info("Shared execution runtimes:");
             foreach (var download in preflight.RuntimeDownloads)
             {
-                var identity = download.Artifact.Identity;
+                var artifact = download.Resolution.Artifact;
+                var identity = artifact.Identity;
                 output.Line(
-                    $"  {identity.RuntimeId} {identity.Version} r{identity.PackagingRevision} "
-                    + $"{identity.Rid} {identity.ModuleAbi}: "
+                    $"  {identity.RuntimeId} {identity.VendorVersion} "
+                    + $"{identity.Rid} {identity.ModuleAbi} {DisplaySource(identity.SourceId)} "
+                    + $"{DisplayChecksumAlgorithm(identity.VendorChecksumAlgorithm)}:{identity.VendorChecksumDigest}: "
                     + (download.AlreadyInstalled
-                        ? $"0 incremental bytes ({Bytes(download.Artifact.ArtifactSize)} already installed and healthy)"
-                        : $"{Bytes(download.Artifact.ArtifactSize)} incremental"));
-                output.Line($"    lifecycle: {download.Artifact.Lifecycle.State}");
+                        ? $"0 incremental bytes ({DisplayBytes(download.FullBytes)} already installed and healthy)"
+                        : $"{DisplayBytes(download.FullBytes)} incremental"));
+                output.Line($"    support: {artifact.Support.State} ({artifact.Support.SupportLine})");
             }
         }
 
@@ -198,10 +201,6 @@ internal static class CliRenderers
                     ? $"Package '{conflict.PackageId}' conflicts with the requested change."
                     : conflict.Message,
                 conflict.ErrorCode);
-        }
-        foreach (var conflict in preflight.RuntimeConflicts)
-        {
-            output.Error(conflict.Message, conflict.Code);
         }
         foreach (var warning in preflight.Warnings) output.Warning(warning);
         foreach (var error in preflight.Errors) output.Error(error, "runtime.registry.conflict");
@@ -234,10 +233,11 @@ internal static class CliRenderers
                 $"    Requirement: {binding.Requirement.RuntimeId} {binding.Requirement.VersionRange} "
                 + $"(ABI {binding.Requirement.ModuleAbi})");
             output.Line(
-                $"    Binding: {binding.Runtime.RuntimeId} {binding.Runtime.Version} "
-                + $"r{binding.Runtime.PackagingRevision} / {binding.Runtime.Rid} / ABI {binding.Runtime.ModuleAbi}");
+                $"    Binding: {binding.Runtime.RuntimeId} {binding.Runtime.VendorVersion} "
+                + $"/ {binding.Runtime.Rid} / ABI {binding.Runtime.ModuleAbi} / {DisplaySource(binding.Runtime.SourceId)} "
+                + $"/ {DisplayChecksumAlgorithm(binding.Runtime.VendorChecksumAlgorithm)}:{binding.Runtime.VendorChecksumDigest}");
             output.Line($"    Health: {status.InstalledRuntime?.Health.Status ?? "missing"}");
-            output.Line($"    Lifecycle: {status.Lifecycle.State}");
+            output.Line($"    Support: {status.InstalledRuntime?.Support.State.ToString() ?? "unknown"}");
             output.Line($"    Package impact: {string.Join(", ", status.ImpactedPackageIds)}");
             output.Line($"    Action: {status.ActionMessage}");
             if (status.EnsureCommand is not null) output.Line($"      {status.EnsureCommand}");
@@ -246,10 +246,24 @@ internal static class CliRenderers
             if (status.RebindApplyCommand is not null) output.Line($"      apply: {status.RebindApplyCommand}");
             if (!string.IsNullOrWhiteSpace(status.InstalledRuntime?.Health.Message))
                 output.Warning(status.InstalledRuntime.Health.Message);
-            if (!string.IsNullOrWhiteSpace(status.Lifecycle.PolicyMessage))
-                output.Warning(status.Lifecycle.PolicyMessage);
         }
     }
+
+    private static string DisplayBytes(long? bytes) => bytes is null ? "unknown size" : Bytes(bytes.Value);
+
+    private static string DisplaySource(ConfiguredOfficialSourceId source) => source switch
+    {
+        ConfiguredOfficialSourceId.DotNet => "dotnet",
+        ConfiguredOfficialSourceId.Node => "node",
+        _ => source.ToString(),
+    };
+
+    private static string DisplayChecksumAlgorithm(RuntimeExecutionRuntimeChecksumAlgorithm algorithm) => algorithm switch
+    {
+        RuntimeExecutionRuntimeChecksumAlgorithm.Sha512 => "sha512",
+        RuntimeExecutionRuntimeChecksumAlgorithm.Sha256 => "sha256",
+        _ => algorithm.ToString(),
+    };
 
     public static void CapabilityConsents(
         CliOutput output,
@@ -278,6 +292,7 @@ internal static class CliRenderers
     public static int PackageOperation(CliOutput output, PackageOperationResult result)
     {
         output.Data(CliJsonData.PackageOperation(result));
+        if (!result.Success) RuntimePrerequisites(output, result.RuntimePrerequisites);
         foreach (var warning in result.Warnings) output.Warning(warning);
         foreach (var error in result.Errors) output.Error(error, "runtime.package.operation_failed");
         if (!string.IsNullOrWhiteSpace(result.Message)) WriteOutcome(output, result.Success, result.Message);
@@ -374,6 +389,15 @@ internal static class CliRenderers
     {
         if (success) output.Success(message);
         else output.Error(message);
+    }
+
+    private static void RuntimePrerequisites(CliOutput output, RuntimePackageRuntimePrerequisitePlan? plan)
+    {
+        if (plan is null || plan.Satisfied) return;
+        output.Info("Install the required runtime first in Settings > Runtimes, then re-preview and retry the package operation.");
+        foreach (var requirement in plan.Requirements.Where(item => !item.Satisfied).Select(item => item.Requirement).Distinct())
+            output.Line($"  sunder runtime install {requirement.RuntimeId} \"{requirement.VersionRange}\" {requirement.ModuleAbi} --yes");
+        output.Info("Use your configured Registry; the upload or prerequisite preview is not package-install consent.");
     }
 
     private static string Bytes(long value)

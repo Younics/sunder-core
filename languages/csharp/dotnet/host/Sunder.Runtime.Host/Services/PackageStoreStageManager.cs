@@ -16,11 +16,9 @@ internal sealed class PackageStoreStageManager(
         IReadOnlyList<PackageStoreChange> mutations,
         long catalogGeneration,
         LocalExecutionRuntimeBindingSnapshot? localBindingAuthority,
-        IReadOnlyList<ExecutionRuntimeLifecyclePolicyEntryV1> registryRuntimePolicyUpdates,
-        ExecutionRuntimeLifecyclePolicySnapshot? registryRuntimePolicyAuthority,
         CancellationToken cancellationToken)
     {
-        if (mutations.Count == 0 && registryRuntimePolicyUpdates.Count == 0)
+        if (mutations.Count == 0)
         {
             return new PackageStoreStagePreparation(
                 null,
@@ -37,10 +35,8 @@ internal sealed class PackageStoreStageManager(
         var messages = new List<string>();
         var packageMutations = mutations.OfType<PackageStoreMutation>().ToArray();
         var runtimeRebinds = mutations.OfType<PackageExecutionRuntimeRebindMutation>().ToArray();
-        var runtimePolicyBindingUpdates = mutations.OfType<PackageExecutionRuntimePolicyUpdateMutation>().ToArray();
         var packagePolicyUpdates = mutations.OfType<PackageLifecyclePolicyUpdateMutation>().ToArray();
-        var localPolicyIdentities = new Dictionary<string, ExecutionRuntimeIdentity>(StringComparer.Ordinal);
-        if (packageMutations.Length + runtimeRebinds.Length + runtimePolicyBindingUpdates.Length + packagePolicyUpdates.Length != mutations.Count)
+        if (packageMutations.Length + runtimeRebinds.Length + packagePolicyUpdates.Length != mutations.Count)
         {
             return new PackageStoreStagePreparation(
                 null,
@@ -104,16 +100,6 @@ internal sealed class PackageStoreStageManager(
                             cancellationToken,
                             InstalledPackageProjection.Keys(archive.InstalledRecord))
                         .ConfigureAwait(false);
-                    foreach (var binding in exactBindings)
-                    {
-                        var identity = new ExecutionRuntimeIdentity(
-                            binding.RuntimeId,
-                            binding.RuntimeVersion,
-                            binding.RuntimePackagingRevision,
-                            binding.Rid,
-                            binding.ModuleAbi);
-                        localPolicyIdentities.TryAdd(identity.SingleFlightKey, identity);
-                    }
                 }
                 if (exactBindings is not null)
                 {
@@ -126,7 +112,7 @@ internal sealed class PackageStoreStageManager(
                     };
                     try
                     {
-                        _ = RegistryPackagePlanResolver.ProjectRuntimeBindings(
+                        RegistryPackagePlanResolver.ValidateRuntimeBindings(
                             archive.InstalledRecord,
                             archive.Manifest);
                     }
@@ -265,25 +251,14 @@ internal sealed class PackageStoreStageManager(
                 }
             }
 
-            var bindingUpdates = runtimeRebinds
-                .Select(static mutation => (
-                    mutation.PackageId,
-                    mutation.ExpectedPackage,
-                    mutation.DesiredBindings,
-                    MetadataOnly: false))
-                .Concat(runtimePolicyBindingUpdates.Select(static mutation => (
-                    mutation.PackageId,
-                    mutation.ExpectedPackage,
-                    mutation.DesiredBindings,
-                    MetadataOnly: true)));
-            foreach (var update in bindingUpdates)
+            foreach (var update in runtimeRebinds)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrWhiteSpace(update.PackageId)
                     || update.ExpectedPackage is null
                     || update.DesiredBindings is null)
                 {
-                    return Fail("A Registry execution-runtime rebind is incomplete.");
+                    return Fail("An execution-runtime rebind is incomplete.");
                 }
                 if (!desired.TryGetValue(update.PackageId, out var package))
                 {
@@ -295,19 +270,11 @@ internal sealed class PackageStoreStageManager(
                 }
                 if (!PackageStorePolicy.CatalogBindingsEqual([package], [update.ExpectedPackage]))
                 {
-                    return Fail($"Registry execution-runtime rebind for package '{package.PackageId}' is stale.");
+                    return Fail($"Execution-runtime rebind for package '{package.PackageId}' is stale.");
                 }
                 if (package.ExecutionRuntimeBindings.SequenceEqual(update.DesiredBindings))
                 {
-                    return Fail($"Registry execution-runtime rebind for package '{package.PackageId}' does not change its exact binding.");
-                }
-                if (update.MetadataOnly
-                    && !IsLifecyclePolicyOnlyUpdate(
-                        package.ExecutionRuntimeBindings,
-                        update.DesiredBindings))
-                {
-                    return Fail(
-                        $"Registry lifecycle policy update for package '{package.PackageId}' changed immutable execution-runtime binding evidence.");
+                    return Fail($"Execution-runtime rebind for package '{package.PackageId}' does not change its exact binding.");
                 }
 
                 var validation = await InstalledPackageProjection.ValidateAsync(package, cancellationToken);
@@ -325,7 +292,7 @@ internal sealed class PackageStoreStageManager(
                 var rebound = package with { ExecutionRuntimeBindings = update.DesiredBindings };
                 try
                 {
-                    _ = RegistryPackagePlanResolver.ProjectRuntimeBindings(rebound, validation.Manifest);
+                    RegistryPackagePlanResolver.ValidateRuntimeBindings(rebound, validation.Manifest);
                 }
                 catch (InvalidDataException exception)
                 {
@@ -334,15 +301,8 @@ internal sealed class PackageStoreStageManager(
 
                 desired[package.PackageId] = rebound;
                 prospective[package.PackageId] = rebound;
-                if (update.MetadataOnly)
-                {
-                    messages.Add($"Updated execution-runtime lifecycle evidence for package '{package.Name}'.");
-                }
-                else
-                {
-                    impacted.Add(package.PackageId);
-                    messages.Add($"Rebound package '{package.Name}' to its resolved execution runtime.");
-                }
+                impacted.Add(package.PackageId);
+                messages.Add($"Rebound package '{package.Name}' to its resolved execution runtime.");
             }
 
             foreach (var update in packagePolicyUpdates)
@@ -356,7 +316,7 @@ internal sealed class PackageStoreStageManager(
             }
 
             IReadOnlyList<InstalledPackagePolicyRecord> policyAuthority = [];
-            if (packagePolicies is not null && (packageMutations.Length > 0 || runtimeRebinds.Length > 0 || runtimePolicyBindingUpdates.Length > 0))
+            if (packagePolicies is not null && (packageMutations.Length > 0 || runtimeRebinds.Length > 0))
             {
                 var captured = await packagePolicies.CaptureInstalledAsync(desired.Values.ToArray(), cancellationToken);
                 var required = prepared.Keys.Concat(runtimeRebinds.Select(value => value.PackageId))
@@ -424,18 +384,6 @@ internal sealed class PackageStoreStageManager(
                 PackageStorePolicy.BuildMessage(messages, impacted.Count),
                 impactedPackageIds: impacted.OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase).ToArray(),
                 removedPackageIds: removedPackageIds);
-            var activationPolicyIdentities = prospective.Values
-                .Where(static package => package.IsEnabled)
-                .SelectMany(static package => package.ExecutionRuntimeBindings)
-                .Select(static binding => new ExecutionRuntimeIdentity(
-                    binding.RuntimeId,
-                    binding.RuntimeVersion,
-                    binding.RuntimePackagingRevision,
-                    binding.Rid,
-                    binding.ModuleAbi))
-                .DistinctBy(static identity => identity.SingleFlightKey, StringComparer.Ordinal)
-                .OrderBy(static identity => identity.SingleFlightKey, StringComparer.Ordinal)
-                .ToArray();
             var stageId = Guid.NewGuid().ToString("N");
             var stage = new PendingStoreStage(
                 stageId,
@@ -445,18 +393,7 @@ internal sealed class PackageStoreStageManager(
                 prepared.Values.Where(archive => desired.ContainsKey(archive.InstalledRecord.PackageId)).ToArray(),
                 result,
                 catalogGeneration,
-                Array.AsReadOnly(registryRuntimePolicyUpdates.ToArray()),
-                registryRuntimePolicyAuthority,
                 localBindingAuthority,
-                localBindingAuthority is null
-                    || (localPolicyIdentities.Count == 0 && activationPolicyIdentities.Length == 0)
-                    ? null
-                    : new LocalExecutionRuntimePolicyAuthority(
-                        localBindingAuthority.PolicyGeneration,
-                        Array.AsReadOnly(localPolicyIdentities.Values
-                            .OrderBy(static identity => identity.SingleFlightKey, StringComparer.Ordinal)
-                            .ToArray()),
-                        Array.AsReadOnly(activationPolicyIdentities)),
                 policyAuthority);
             lock (_sync)
             {
@@ -472,9 +409,7 @@ internal sealed class PackageStoreStageManager(
                         static archive => archive.StagingPath,
                         StringComparer.OrdinalIgnoreCase),
                     result,
-                    catalogGeneration,
-                    stage.LocalRuntimePolicyAuthority,
-                    stage.RegistryRuntimePolicyAuthority),
+                    catalogGeneration),
                 null);
         }
         catch
@@ -564,29 +499,4 @@ internal sealed class PackageStoreStageManager(
     private static bool IsArchiveMutation(PackageStoreMutation mutation) =>
         mutation.Kind is PackageStoreMutationKind.Install or PackageStoreMutationKind.Upgrade;
 
-    private static bool IsLifecyclePolicyOnlyUpdate(
-        IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> current,
-        IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> desired)
-    {
-        if (current.Count != desired.Count)
-        {
-            return false;
-        }
-        var currentByTarget = current.ToDictionary(
-            static binding => $"{binding.Role}\0{binding.Rid}",
-            StringComparer.Ordinal);
-        return desired.All(binding =>
-            currentByTarget.TryGetValue($"{binding.Role}\0{binding.Rid}", out var existing)
-            && string.Equals(existing.RuntimeId, binding.RuntimeId, StringComparison.Ordinal)
-            && string.Equals(existing.RuntimeVersion, binding.RuntimeVersion, StringComparison.Ordinal)
-            && existing.RuntimePackagingRevision == binding.RuntimePackagingRevision
-            && string.Equals(existing.ModuleAbi, binding.ModuleAbi, StringComparison.Ordinal)
-            && string.Equals(existing.RuntimeManifestSha256, binding.RuntimeManifestSha256, StringComparison.Ordinal)
-            && string.Equals(existing.RuntimeArtifactSha256, binding.RuntimeArtifactSha256, StringComparison.Ordinal)
-            && existing.RuntimeArtifactSize == binding.RuntimeArtifactSize
-            && string.Equals(existing.RegistryOrigin, binding.RegistryOrigin, StringComparison.Ordinal)
-            && string.Equals(existing.AcquisitionSource, binding.AcquisitionSource, StringComparison.Ordinal)
-            && string.Equals(existing.SigningKeyId, binding.SigningKeyId, StringComparison.Ordinal)
-            && existing.TrustStoreGeneration == binding.TrustStoreGeneration);
-    }
 }

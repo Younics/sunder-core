@@ -125,7 +125,6 @@ internal sealed class PackageSessionPreparer
                 contentIdentity,
                 approvedSensitiveCapabilities: [],
                 installedRuntimeBindings: null,
-                runtimePolicyAuthority: null,
                 errors,
                 cancellationToken,
                 startupTrace);
@@ -184,7 +183,6 @@ internal sealed class PackageSessionPreparer
         ICollection<string> errors,
         CancellationToken cancellationToken,
         PackageSessionStartupTracePackage? startupTrace = null,
-        ExecutionRuntimeLifecyclePolicySnapshot? runtimePolicyAuthority = null,
         InstalledPackageValidation? validatedPackage = null)
     {
         var preparationStarted = Stopwatch.GetTimestamp();
@@ -223,7 +221,6 @@ internal sealed class PackageSessionPreparer
                 package.ContentIdentity,
                 package.CapabilityGrants.Select(static grant => grant.Capability).ToArray(),
                 package.ExecutionRuntimeBindings,
-                runtimePolicyAuthority,
                 errors,
                 cancellationToken,
                 startupTrace,
@@ -322,7 +319,6 @@ internal sealed class PackageSessionPreparer
         string contentIdentity,
         IReadOnlyList<string> approvedSensitiveCapabilities,
         IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord>? installedRuntimeBindings,
-        ExecutionRuntimeLifecyclePolicySnapshot? runtimePolicyAuthority,
         ICollection<string> errors,
         CancellationToken cancellationToken,
         PackageSessionStartupTracePackage? startupTrace,
@@ -345,7 +341,6 @@ internal sealed class PackageSessionPreparer
             SunderPackageTargetManifest? selectedTarget = null;
             string? entryAssemblyPath = null;
             RuntimePackageExecutionRuntimeBinding? executionRuntimeBinding = null;
-            ExecutionRuntimeLifecyclePolicyEntryV1? executionRuntimePolicyAuthority = null;
             IReadOnlyDictionary<string, SunderRpcContractDescriptor> rpcContracts =
                 new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal);
             var effectiveProjectionFolder = projectionFolder;
@@ -410,16 +405,6 @@ internal sealed class PackageSessionPreparer
                     }
                     if (executionRuntimeBinding is null)
                     {
-                        return null;
-                    }
-                    if (runtimePolicyAuthority is not null
-                        && (!runtimePolicyAuthority.TryGet(
-                                executionRuntimeBinding.Identity,
-                                out executionRuntimePolicyAuthority)
-                            || executionRuntimePolicyAuthority is null))
-                    {
-                        errors.Add(
-                            $"Installed package '{manifest.Id}' does not carry complete staged policy authority for execution runtime '{executionRuntimeBinding.Identity.SingleFlightKey}'.");
                         return null;
                     }
                 }
@@ -607,7 +592,6 @@ internal sealed class PackageSessionPreparer
                 GetManifestSha256(contentIndex))
             {
                 ExecutionRuntimeBinding = executionRuntimeBinding,
-                ExecutionRuntimePolicyAuthority = executionRuntimePolicyAuthority,
                 SessionId = GetSessionId(projectionFolder),
                 ApprovedSensitiveCapabilities = approvedSensitiveCapabilities,
                 ExecutionRuntimeRetention = ephemeralBinding,
@@ -671,10 +655,11 @@ internal sealed class PackageSessionPreparer
         if (!string.Equals(binding.Role, targetKey.Role, StringComparison.Ordinal)
             || !string.Equals(binding.Rid, targetKey.Rid, StringComparison.Ordinal)
             || requirement is null
-            || !string.Equals(binding.RuntimeId, requirement.Id, StringComparison.Ordinal)
-            || !string.Equals(binding.ModuleAbi, requirement.ModuleAbi, StringComparison.Ordinal)
+            || binding.Requirement != new RuntimeExecutionRuntimeRequirement(requirement.Id!, requirement.VersionRange!, requirement.ModuleAbi!)
+            || !string.Equals(binding.Runtime.RuntimeId, requirement.Id, StringComparison.Ordinal)
+            || !string.Equals(binding.Runtime.ModuleAbi, requirement.ModuleAbi, StringComparison.Ordinal)
             || !Sunder.Sdk.Packaging.PackageVersionRange.IsSatisfiedBy(
-                binding.RuntimeVersion,
+                binding.Runtime.VendorVersion,
                 requirement.VersionRange!))
         {
             errors.Add(

@@ -4,6 +4,7 @@ using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Package.Format;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Package.Build.Rpc.Authoring;
 
@@ -18,27 +19,32 @@ internal static partial class SunderRpcAuthoringDocuments
         StringProperty(output, 1, "authorityKind", "package", comma: true);
         StringProperty(output, 1, "authorityId", baseline.PackageId, comma: true);
         StringProperty(output, 1, "packageId", baseline.PackageId, comma: true);
-        OwnedContractMapProperty(output, baseline.Contracts);
+        var hasArchive = baseline.HasRetiredPrivateContracts || baseline.RetiredPrivateContracts.Count != 0;
+        OwnedContractMapProperty(output, baseline.Contracts, comma: hasArchive);
+        if (hasArchive) OwnedContractMapProperty(output, baseline.RetiredPrivateContracts, "retiredPrivateContracts");
         Line(output, 0, "}");
 
         var bytes = Utf8NoBom.GetBytes(output.ToString());
         var reparsed = ParseOwnedPackageBaseline(bytes);
         ValidateOwnedSnapshotModels(baseline.Contracts, reparsed.Contracts);
+        ValidateOwnedSnapshotModels(baseline.RetiredPrivateContracts, reparsed.RetiredPrivateContracts);
+        if (baseline.ExactBytes.Length != 0) ValidatePrivateArchiveTransition(ParseOwnedPackageBaseline(baseline.ExactBytes), reparsed);
         return bytes;
     }
 
     private static void OwnedContractMapProperty(
         StringBuilder output,
-        IReadOnlyDictionary<string, SunderRpcOwnedContractBaseline> baseline)
+        IReadOnlyDictionary<string, SunderRpcOwnedContractBaseline> baseline,
+        string mapName = "contracts", bool comma = false)
     {
         var contracts = baseline.OrderBy(static pair => pair.Key, StringComparer.Ordinal).ToArray();
         if (contracts.Length == 0)
         {
-            Line(output, 1, "\"contracts\": {}");
+            Line(output, 1, $"\"{mapName}\": {{}}" + (comma ? "," : ""));
         }
         else
         {
-            Line(output, 1, "\"contracts\": {");
+            Line(output, 1, $"\"{mapName}\": {{");
             for (var index = 0; index < contracts.Length; index++)
             {
                 var (key, contract) = contracts[index];
@@ -69,7 +75,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 }
                 Line(output, 2, index + 1 == contracts.Length ? "}" : "},");
             }
-            Line(output, 1, "}");
+            Line(output, 1, comma ? "}," : "}");
         }
     }
 
@@ -99,9 +105,19 @@ internal static partial class SunderRpcAuthoringDocuments
     {
         ArgumentNullException.ThrowIfNull(baseline);
         _ = WriteOwnedPackageBaseline(baseline);
+        candidates = PublicLifecycleCandidates(baseline, candidates);
         var source = OwnedCandidatesByKey(baseline.Contracts, candidates, contractKey);
         var contracts = AcceptOwnedContracts(baseline.Contracts, source, contractKey, expectedCurrentVersion, nextVersion, acknowledgeBreakingChange);
         return WriteOwnedPackageBaseline(baseline with { Contracts = contracts });
+    }
+
+    private static IReadOnlyList<SunderRpcCSharpCompiledContract> PublicLifecycleCandidates(SunderRpcOwnedPackageBaseline baseline,
+        IReadOnlyList<SunderRpcCSharpCompiledContract> source)
+    {
+        foreach (var (key, value) in baseline.Contracts.Where(pair => pair.Value.Current is not null && !HasPublicEvidence(pair.Value)))
+            throw new InvalidDataException($"rpc-authoring.private-baseline-migration-required: '{key}' ({value.ContractId}) requires MigratePrivateSunderContracts before public lifecycle operations.");
+        return source.Where(contract => contract.Exposure == SunderServiceExposure.Public || baseline.Contracts.Any(pair => HasPublicEvidence(pair.Value)
+            && (pair.Key == contract.ContractKey || pair.Value.ContractId == contract.Descriptor.ContractId))).ToArray();
     }
 
     private static IReadOnlyDictionary<string, SunderRpcOwnedContractBaseline> AcceptOwnedContracts(
@@ -197,23 +213,7 @@ internal static partial class SunderRpcAuthoringDocuments
             if (current is not null && current.State != "draft") immutableHistory = immutableHistory.Append(current).ToArray();
             if (nextVersion is null && previous is not null)
             {
-                var minimum = SemanticVersion.Parse(current is { State: "draft" }
-                    ? current.Descriptor.Version
-                    : GetMinimumOwnedContractVersion(previous.Descriptor.Version,
-                        kind == SunderRpcContractChangeKind.Unchanged ? SunderRpcContractChangeKind.Patch : kind));
-                var major = minimum.Major;
-                foreach (var snapshot in immutableHistory)
-                {
-                    var historicalVersion = SemanticVersion.Parse(snapshot.Descriptor.Version);
-                    if (historicalVersion.Major != major && !ReferenceEquals(snapshot, immutableHistory[^1])) continue;
-                    // The final-version validator rejects any still-applicable undefined prerelease progression.
-                    if (historicalVersion.Prerelease is not null) continue;
-                    var historicalKind = ClassifyOwnedChange(snapshot, candidate);
-                    var floor = SemanticVersion.Parse(GetMinimumOwnedContractVersion(snapshot.Descriptor.Version,
-                        historicalKind == SunderRpcContractChangeKind.Unchanged ? SunderRpcContractChangeKind.Patch : historicalKind));
-                    if (floor.ComparePrecedenceTo(minimum) > 0) minimum = floor;
-                }
-                version = minimum.ToString();
+                version = SelectOwnedCandidateVersion(current, previous, candidate, kind, immutableHistory);
             }
             var descriptor = OwnedDescriptorAtVersion(candidate.Descriptor, version);
             ValidateOwnedCandidateHistory(key, descriptor, exposure, immutableHistory, preserveUnchangedPrerelease: false);
@@ -223,6 +223,27 @@ internal static partial class SunderRpcAuthoringDocuments
                 Array.AsReadOnly(immutableHistory.ToArray()));
         }
         return contracts;
+    }
+
+    private static string SelectOwnedCandidateVersion(SunderRpcOwnedContractSnapshot? current, SunderRpcOwnedContractSnapshot previous,
+        SunderRpcCSharpCompiledContract candidate, SunderRpcContractChangeKind kind, IReadOnlyList<SunderRpcOwnedContractSnapshot> immutableHistory)
+    {
+        var minimum = SemanticVersion.Parse(current is { State: "draft" } ? current.Descriptor.Version
+            : GetMinimumOwnedContractVersion(previous.Descriptor.Version,
+                kind == SunderRpcContractChangeKind.Unchanged ? SunderRpcContractChangeKind.Patch : kind));
+        var major = minimum.Major;
+        foreach (var snapshot in immutableHistory)
+        {
+            var historicalVersion = SemanticVersion.Parse(snapshot.Descriptor.Version);
+            if (historicalVersion.Major != major && !ReferenceEquals(snapshot, immutableHistory[^1])) continue;
+            // The final-version validator rejects any still-applicable undefined prerelease progression.
+            if (historicalVersion.Prerelease is not null) continue;
+            var historicalKind = ClassifyOwnedChange(snapshot, candidate);
+            var floor = SemanticVersion.Parse(GetMinimumOwnedContractVersion(snapshot.Descriptor.Version,
+                historicalKind == SunderRpcContractChangeKind.Unchanged ? SunderRpcContractChangeKind.Patch : historicalKind));
+            if (floor.ComparePrecedenceTo(minimum) > 0) minimum = floor;
+        }
+        return minimum.ToString();
     }
 
     public static string GetMinimumOwnedContractVersion(string previousVersion, SunderRpcContractChangeKind kind)
@@ -257,6 +278,7 @@ internal static partial class SunderRpcAuthoringDocuments
             throw new InvalidDataException("Release freeze requires an exact semantic package version.");
         }
         _ = WriteOwnedPackageBaseline(baseline);
+        candidates = PublicLifecycleCandidates(baseline, candidates);
         var source = OwnedCandidatesByKey(baseline.Contracts, candidates, contractKey);
         var contracts = FreezeOwnedContracts(baseline.Contracts, source, contractKey, "packageRelease",
             JsonSerializer.SerializeToElement(new { packageId = baseline.PackageId, packageVersion }),
@@ -348,7 +370,7 @@ internal static partial class SunderRpcAuthoringDocuments
             if (!IsPortableKey(candidate.ContractKey)
                 || !foldedKeys.Add(candidate.ContractKey)
                 || !identities.Add(candidate.Descriptor.ContractId)
-                || candidate.Exposure is not (SunderRpcExposure.Package or SunderRpcExposure.Public))
+                || candidate.Exposure is not (SunderServiceExposure.Package or SunderServiceExposure.Public))
             {
                 throw new InvalidDataException($"Source owned contract '{candidate.ContractKey}' has an invalid or duplicate key, identity, or exposure.");
             }

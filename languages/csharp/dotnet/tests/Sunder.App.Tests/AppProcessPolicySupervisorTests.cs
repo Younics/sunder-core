@@ -123,7 +123,7 @@ public sealed class AppProcessPolicySupervisorTests
             BeforePermit?.Invoke();
             return Task.FromResult(new RuntimeAppPackageLoadPermitResult(true, null, new('d', 32), request.Session,
                 WrongIdentity ? request.Package with { Version = "2.0.0" } : request.Package,
-                Development && !DevelopmentPlatformLease ? null : new("valid", null, new("https://registry.example", 1, new('a', 64), 1, 1, new('b', 64), 1, new('c', 64)),
+                Development && !DevelopmentPlatformLease ? null : new("valid", null, new("https://registry.example", 1, new('a', 64), 1, new('b', 64), 1, new('c', 64)),
                     new('d', 32), new('e', 64), DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddHours(24), new("boot", "test", 1000, 10000, 86410000, 10000, null))) { Development = Development });
         }
         public Task<RuntimeAppPolicySessionStatus> ShutdownAsync(RuntimeAppPolicySessionRequest request, CancellationToken token)

@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Reflection;
@@ -541,6 +540,11 @@ public sealed partial class PackageBuildManifestTests
         task.RpcProviders = [provider];
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        var projectionFile = Assert.Single(task.ResolvedContractFiles,
+            file => file.GetMetadata("DescriptorPath") == SunderPackageFormat.RpcModelProjectionLogicalPath);
+        var sourceClaims = Assert.Single(SunderRpcModelProjectionDocument.Parse(File.ReadAllBytes(projectionFile.ItemSpec)).Contracts).ModelProjection;
+        Assert.Empty(sourceClaims.Models);
+        Assert.Empty(sourceClaims.ServiceReferences);
         using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
         Assert.Equal(1, document.RootElement.GetProperty("archiveFormatVersion").GetInt32());
         Assert.Equal(1, document.RootElement.GetProperty("manifestVersion").GetInt32());
@@ -656,7 +660,8 @@ public sealed partial class PackageBuildManifestTests
         Assert.Equal("owned", generatedBundle.GetProperty("source").GetString());
         Assert.Equal("package", generatedBundle.GetProperty("authorityKind").GetString());
         Assert.Equal("test.package.build.fixture", generatedBundle.GetProperty("authorityId").GetString());
-        Assert.Equal(File.ReadAllBytes(snapshot.ItemSpec), File.ReadAllBytes(Assert.Single(task.ResolvedContractFiles).ItemSpec));
+        Assert.Equal(File.ReadAllBytes(snapshot.ItemSpec), File.ReadAllBytes(Assert.Single(task.ResolvedContractFiles,
+            item => item.GetMetadata("DescriptorPath") != SunderPackageFormat.RpcModelProjectionLogicalPath).ItemSpec));
     }
 
     [Fact]
@@ -2432,11 +2437,13 @@ public sealed partial class PackageBuildManifestTests
         Assert.False(Directory.Exists(root), $"Output-lock interop temporary root was retained: {root}");
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     [Trait("Category", "Conformance")]
     [Trait("Capability", "Filesystem")]
     [Trait("Size", "Small")]
-    public void SharedOutputDocuments_MatchCrossLanguagePropertyCorpusAndRecoverTransaction()
+    public void SharedOutputDocuments_MatchCrossLanguagePropertyCorpusAndRecoverTransaction(bool developmentHandoff)
     {
         using var corpus = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
             AppContext.BaseDirectory,
@@ -2445,7 +2452,7 @@ public sealed partial class PackageBuildManifestTests
         var documents = corpus.RootElement.GetProperty("documents");
         Assert.Equal(1, corpus.RootElement.GetProperty("formatVersion").GetInt32());
         var root = CreateTempDirectory();
-        var output = Path.Combine(root, "shared-output");
+        var output = Path.Combine(root, developmentHandoff ? "sunder-dev" : "shared-output");
         using (AcquireGeneratedOutputLock(output))
         {
             using var owner = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
@@ -2465,12 +2472,22 @@ public sealed partial class PackageBuildManifestTests
         Directory.CreateDirectory(staged);
         File.WriteAllText(Path.Combine(staged, "generation.txt"), "new");
         var journal = output + GeneratedOutputTransaction.TransactionSuffix;
+        var imports = output + SunderPackageFormat.DevelopmentImportsSuffix;
+        var stagedImports = imports + ".stage-" + Guid.NewGuid().ToString("N");
+        var importsBackup = imports + ".backup-" + token;
+        var outputs = new List<object> { new { finalPath = output, stagedPath = staged, backupPath = backup, existed = true } };
+        if (developmentHandoff)
+        {
+            File.WriteAllText(imports, "old selection");
+            File.WriteAllText(stagedImports, "new selection");
+            outputs.Add(new { finalPath = imports, stagedPath = stagedImports, backupPath = importsBackup, existed = true });
+        }
         File.WriteAllText(journal, JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
             token,
             coordinatorPath = output,
-            outputs = new[] { new { finalPath = output, stagedPath = staged, backupPath = backup, existed = true } },
+            outputs,
         }));
         using (var transaction = JsonDocument.Parse(File.ReadAllBytes(journal)))
         {
@@ -2481,11 +2498,17 @@ public sealed partial class PackageBuildManifestTests
         }
         Directory.Move(output, backup);
         Directory.Move(staged, output);
+        if (developmentHandoff)
+        {
+            File.Move(imports, importsBackup);
+            File.Move(stagedImports, imports);
+        }
 
         GeneratedOutputTransaction.RecoverAndCleanup(
             GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(output));
 
         Assert.Equal("old", File.ReadAllText(Path.Combine(output, "generation.txt")));
+        if (developmentHandoff) Assert.Equal("old selection", File.ReadAllText(imports));
         Assert.False(File.Exists(journal));
 
         using var mutated = JsonDocument.Parse("""{"schemaVersion":1,"token":"x","coordinatorPath":"x","outputs":[],"seeded":true}""");
@@ -2749,7 +2772,7 @@ public sealed partial class PackageBuildManifestTests
             TargetDirectory = target,
             ExpectedPackageVersion = "1.2.3",
         }.Execute());
-        Assert.Contains(buildEngine.Errors, error => error.Contains("package-wide manifest metadata", StringComparison.Ordinal));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("conflicting 'contractBundles' evidence", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -3701,9 +3724,19 @@ public sealed partial class PackageBuildManifestTests
         Directory.CreateDirectory(Path.Combine(devPackage, "manifest"));
         Directory.CreateDirectory(Path.Combine(devPackage, "payload", "shared", "lib"));
         var manifestPath = Path.Combine(devPackage, "manifest", "sunder-package.json");
+        var inputs = devPackage + "-inputs";
+        Directory.CreateDirectory(inputs);
+        var generation = CreateTask(Path.Combine(inputs, "sunder-package.json"), buildEngine);
         Assert.True(
-            CreateTask(manifestPath, buildEngine).Execute(),
+            generation.Execute(),
             string.Join(Environment.NewLine, buildEngine.Errors));
+        File.Copy(generation.ManifestOutputPath, manifestPath);
+        foreach (var file in generation.ResolvedContractFiles)
+        {
+            var destination = Path.Combine(devPackage, "payload", "shared", file.GetMetadata("DescriptorPath"));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(file.ItemSpec, destination);
+        }
         File.Copy(
             Assembly.GetExecutingAssembly().Location,
             Path.Combine(devPackage, "payload", "shared", "lib", Path.GetFileName(Assembly.GetExecutingAssembly().Location)));
@@ -3787,10 +3820,41 @@ public sealed partial class PackageBuildManifestTests
             ConfigureWorkerTask(manifestTask, rid, target);
             workerFiles = CreateDotNetWorkerFiles(targetDirectory, rid, executablePath);
         }
-        manifestTask.ContractBundles = [ContractBundle(descriptorPath, exposure)];
-        manifestTask.UsesContracts = includeUse ? [ContractUse(role, required: required)] : [];
-        manifestTask.RpcProviders = includeProvider ? [RpcProvider(role, audience: audience)] : [];
         Assert.True(manifestTask.Execute(), string.Join(Environment.NewLine, manifestEngine.Errors));
+        // This is an archive/aggregation fixture, not retired descriptor-first
+        // authoring. Construct its complete current canonical contract evidence.
+        var manifest = JsonNode.Parse(File.ReadAllBytes(manifestPath))!;
+        var descriptor = Sunder.Sdk.Rpc.SunderRpcContractDescriptor.Parse(File.ReadAllBytes(descriptorPath));
+        manifest["contractBundles"] = new JsonArray(new JsonObject
+        {
+            ["contractId"] = descriptor.ContractId, ["version"] = descriptor.Version, ["descriptorPath"] = "contracts/minimal.rpc.json",
+            ["descriptorSha256"] = descriptor.Sha256, ["abiSha256"] = descriptor.AbiSha256, ["exposure"] = exposure,
+            ["source"] = "owned", ["authorityKind"] = "package", ["authorityId"] = manifest["id"]!.GetValue<string>(),
+        });
+        manifest["usesContracts"] = includeUse ? new JsonArray(new JsonObject
+        {
+            ["role"] = role, ["contractId"] = descriptor.ContractId, ["contractVersion"] = descriptor.Version,
+            ["abiSha256"] = descriptor.AbiSha256, ["required"] = required, ["actions"] = new JsonArray("discover", "invoke"),
+        }) : new JsonArray();
+        manifest["provides"] = includeProvider ? new JsonArray(new JsonObject
+        {
+            ["providerId"] = "test.rpc.provider", ["role"] = role, ["audience"] = audience,
+            ["contractId"] = descriptor.ContractId, ["contractVersion"] = descriptor.Version,
+            ["descriptorSha256"] = descriptor.Sha256, ["abiSha256"] = descriptor.AbiSha256,
+        }) : new JsonArray();
+        if (includeUse || includeProvider)
+            foreach (var targetValue in manifest["targets"]!.AsArray())
+            {
+                var capabilities = targetValue!["requiredHostCapabilities"]!.AsArray();
+                if (!capabilities.Any(value => value!.GetValue<string>() == SunderPackageFormat.RpcV1Capability)) capabilities.Add(SunderPackageFormat.RpcV1Capability);
+            }
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        var projection = new SunderRpcModelProjectionDocument(1, manifest["id"]!.GetValue<string>(), manifest["version"]!.GetValue<string>(), exposure == "public"
+            ? [new(descriptor.ContractId, descriptor.Version, descriptor.Sha256, descriptor.AbiSha256, SunderRpcModelProjection.Empty)] : []);
+        var projectionPath = Path.Combine(leafRoot, SunderPackageFormat.RpcModelProjectionFileName);
+        File.WriteAllBytes(projectionPath, projection.ToCanonicalUtf8());
+        var projectionItem = new MSBuildTaskItem(projectionPath); projectionItem.SetMetadata("DescriptorPath", SunderPackageFormat.RpcModelProjectionLogicalPath);
+        var descriptorItem = new MSBuildTaskItem(descriptorPath); descriptorItem.SetMetadata("DescriptorPath", "contracts/minimal.rpc.json");
         var emitEngine = new TestBuildEngine();
         Assert.True(new EmitSunderDevOutputTask
         {
@@ -3801,7 +3865,7 @@ public sealed partial class PackageBuildManifestTests
             TargetDirectory = targetDirectory,
             ManagedFiles = role == SunderPackageFormat.AppHostRole ? [new MSBuildTaskItem(assemblyPath)] : [],
             WorkerFiles = workerFiles,
-            ContractFiles = manifestTask.ResolvedContractFiles,
+            ContractFiles = [descriptorItem, projectionItem],
         }.Execute(), string.Join(Environment.NewLine, emitEngine.Errors));
         return devPackage;
     }
@@ -3851,9 +3915,9 @@ public sealed partial class PackageBuildManifestTests
                     ExecutionRuntime = kind == SunderPackageFormat.WorkerTargetKind
                         ? new SunderPackageExecutionRuntimeManifest
                         {
-                            Id = SunderExecutionRuntimeFormat.NodeRuntimeId,
+                            Id = SunderPackageFormat.NodeExecutionRuntimeId,
                             VersionRange = ">=24.18.1 <25.0.0",
-                            ModuleAbi = SunderExecutionRuntimeFormat.NodeModuleAbi,
+                            ModuleAbi = SunderPackageFormat.NodeWorkerModuleAbi,
                         }
                         : null,
                 },
@@ -3866,6 +3930,9 @@ public sealed partial class PackageBuildManifestTests
             ProviderImports = [],
             PlatformImports = [],
         }));
+        var projectionPath = Path.Combine(leaf, SunderPackageFormat.RpcModelProjectionPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(projectionPath)!);
+        File.WriteAllBytes(projectionPath, new SunderRpcModelProjectionDocument(1, "test.process", "1.0.0", []).ToCanonicalUtf8());
         PackageContentIndexer.Write(leaf);
         if (validate)
         {
@@ -3981,14 +4048,22 @@ public sealed partial class PackageBuildManifestTests
         [
             new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.ImportedProvider_CompilesRegistrationAndCoalescesOnlyExplicitConsumerGrants"),
             new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.StackPlatform_GeneratesRealSixMethodProviderAndPreservesSemanticContentBehavior"),
-            new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.StackPlatform_TemplateUsesOwnedBootstrapThenTheRegistryImportAndGeneratedRegistration"),
+            new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.StackPlatform_TemplateUsesSelectedImportAndGeneratedRegistrationWithoutPrivateBootstrap"),
             new("Sunder.Package.Build.Tests.SunderRpcAuthoringReceiptTests.Parse_RejectsCrossArtifactSelectionsEvenWhenAuthorityCountAndFormatGraphMatch"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImplementationCodecTests+RuntimeProbe..ctor"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InjectedPackageApiIsLazyOwnsUnaryScopesRejectsDriftAndDoesNotRetry"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.GeneratedCancellation_UsesOriginalCallerAndRetainsRemoteDispatchMetadata"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.GeneratedCatalogBorrowedSelectionProbesFreshPermissionAfterEndpointUnavailable"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InvokeCollectibleImportedGraph"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.AssertNoCollectibleJsonAccessorEntries"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InjectedPackageStreamOpensLazilyAndRetirementCancelsAndDrainsItsScope"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InjectedRoleClientsUseReviewedRangeAndExactTupleWithoutRestoreVersionAuthority"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpUnionCodecTests+RuntimeProbe..ctor"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpUnionCodecTests+RuntimeProbe.CodecRoundTrip"),
             new("Sunder.Package.Build.Tests.StackContributorSourceParityTests.NeutralTransport_EmitsActualServicePartialAndCompilesWithOnlySdkAndCuratedBcl"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpProviderDeclarationTests.Declaration_ProvidesImmutableIdentityAndErrorsWithoutConstructingServiceAndForwardsExactly"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.Project_CompilesMixedSourceIntoSeparateRoleAssembliesWithoutImplementationLeakage"),
+            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.ConstructorValues_ExecuteTypedAppWorkerRoundTripsWithIndependentDomainRecords"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedTypedStream_PreservesCancellationErrorsRetirementAndEnumeratorOwnership"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedComposition_OwnsLocalServicesOnceAndPreservesStagedLifecycle"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedWorkerMixedApi_KeepsOrdinaryCallsLocalAndRoutesHostContextThroughExplicitBrokerUse"),
@@ -4000,6 +4075,16 @@ public sealed partial class PackageBuildManifestTests
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.ShutdownReason"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.Number"),
             new("Sunder.Package.Build.Tests.ImplementationFirstRpcBuildTests.SingleProject_NugetAndProjectAssetsStayWithinTheirRole"),
+            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.DeclarationOnlyCatalogPreservesSixNaturalSignaturesAndDispatchesExactForeignProvider"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.ImportedNaturalProviderNeedsNoContextUnitOrAuthoredTransportAdapter"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.NaturalCatalogEntriesAreLazyExactBoundAndRetiredWithTheirOwner"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.NaturalCatalogWatchPreservesBothCursorPartsLifecycleAndReset"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.NaturalProviderContextFreeExplicitAndInheritedBindingsRemainValid"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.NaturalProviderMixedMethodsReceiveTheActualHostContextForAuthorizationContentAndStreams"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpModelProjectionTests.LoadProjectionProbe"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.MultiContractProviderUsesOneInstanceAndExplicitDescribeBindingsWithRealContext"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.PrivateServiceReusesValidatedImportedRecordAndCodecWithoutClaimingItsOwnership"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpModelProjectionTests.ProjectedNullableRequiredResourcesRetainTypedMembersAndWithClones"),
         ];
 
     private static MSBuildTaskItem[] DynamicAccessAcknowledgements()
@@ -4215,37 +4300,6 @@ public sealed partial class PackageBuildManifestTests
             directory = directory.Parent;
         }
         throw new DirectoryNotFoundException("Could not locate Sunder.Package.Build tasks.");
-    }
-
-    private sealed class TestBuildEngine : IBuildEngine
-    {
-        public List<string> Errors { get; } = [];
-
-        public bool ContinueOnError => false;
-
-        public int LineNumberOfTaskNode => 0;
-
-        public int ColumnNumberOfTaskNode => 0;
-
-        public string ProjectFileOfTaskNode => string.Empty;
-
-        public bool BuildProjectFile(string projectFileName, string[] targetNames, IDictionary globalProperties, IDictionary targetOutputs)
-            => true;
-
-        public void LogCustomEvent(CustomBuildEventArgs e)
-        {
-        }
-
-        public void LogErrorEvent(BuildErrorEventArgs e)
-            => Errors.Add(e.Message ?? string.Empty);
-
-        public void LogMessageEvent(BuildMessageEventArgs e)
-        {
-        }
-
-        public void LogWarningEvent(BuildWarningEventArgs e)
-        {
-        }
     }
 
     private sealed class TemporaryProcessMarker(string path) : IDisposable

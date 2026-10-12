@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,6 +17,15 @@ test("residue scan covers active repository documentation", async () => {
     assert.deepEqual(await findV1Residue(root), [
       "docs/active.md:1: contains forbidden worker-capability-v3 residue",
     ]);
+  });
+});
+
+test("official runtime cutover rejects retired production tooling paths", async () => {
+  await withRepository(async (root) => {
+    const relative = ".github/workflows/sunder-execution-runtime-native-release.yml";
+    await mkdir(join(root, ".github/workflows"), { recursive: true });
+    await writeFile(join(root, relative), "name: stale runtime production\n");
+    assert.deepEqual(await findV1Residue(root), [`${relative}: obsolete path still exists`]);
   });
 });
 
@@ -113,6 +122,41 @@ test("residue scan rejects a changed reopened Phase 0 cutover inventory", async 
     assert.deepEqual(await findV1Residue(root), [
       "eng/compatibility/core-compatibility-candidate.json: pending cutovers differ from the Phase 0 implementation-first inventory",
     ]);
+  });
+});
+
+test("Node profile scan distinguishes pinned vendor development engines from Sunder runtime policy", async () => {
+  const current = JSON.parse(await readFile(new URL("../../languages/typescript/node/package-lock.json", import.meta.url), "utf8"));
+  const packages = Object.fromEntries(["@exodus/bytes", "html-encoding-sniffer", "jsdom"]
+    .map((name) => [`node_modules/${name}`, current.packages[`node_modules/${name}`]]));
+  await withRepository(async (root) => {
+    const directory = join(root, "languages", "typescript", "node");
+    const path = join(directory, "package-lock.json");
+    await mkdir(directory, { recursive: true });
+    const write = async (value) => writeFile(path, `${JSON.stringify({ lockfileVersion: 3, packages: value }, null, 2)}\n`);
+    await write(packages);
+    assert.deepEqual(await findV1Residue(root), []);
+
+    const rejected = async (value) => {
+      await write(value);
+      const failures = await findV1Residue(root);
+      assert.equal(failures.length, 1);
+      assert.match(failures[0], /package-lock\.json: contains/u);
+    };
+    await rejected({ ...packages, "": { engines: { node: ">=24.0.0 <25.0.0" } } });
+    await rejected({ ...packages, "packages/sdk": { engines: { node: ">=24.0.0" } } });
+    await rejected({ ...packages, "node_modules/unreviewed": { engines: { node: ">=24.0.0" } } });
+    await rejected({ ...packages, "node_modules/jsdom": { ...packages["node_modules/jsdom"], version: "27.4.1" } });
+    await rejected({ ...packages, "node_modules/jsdom": { ...packages["node_modules/jsdom"], dev: false } });
+    await rejected({ ...packages, "node_modules/jsdom": {
+      ...packages["node_modules/jsdom"], description: "Requires >=24.0.0",
+    } });
+
+    await write(packages);
+    const text = await readFile(path, "utf8");
+    const duplicate = `    "node_modules/jsdom": ${JSON.stringify(packages["node_modules/jsdom"], null, 2).replaceAll("\n", "\n    ")},\n`;
+    await writeFile(path, text.replace('  "packages": {\n', `  "packages": {\n${duplicate}`));
+    assert.equal((await findV1Residue(root)).length, 1);
   });
 });
 

@@ -162,10 +162,7 @@ internal static class SunderArchiveDeterministicWriter
             or SunderPackageFormat.ContentIndexPath
             or SunderPackageProjectionFormat.DescriptorPath
             or SunderStackFormat.ManifestPath
-            or SunderStackFormat.ContentIndexPath
-            or SunderExecutionRuntimeFormat.ManifestPath
-            or SunderExecutionRuntimeFormat.ContentIndexPath
-            or SunderExecutionRuntimeFormat.NativeAttestationPath;
+            or SunderStackFormat.ContentIndexPath;
 
     private static async Task CopyObservedBytesAsync(
         FileStream source,

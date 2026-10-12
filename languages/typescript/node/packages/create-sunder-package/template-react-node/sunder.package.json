@@ -4,7 +4,6 @@
   "name": "__SUNDER_PACKAGE_NAME_JSON__",
   "summary": "A React App and runtime-backed TypeScript Worker V1 package for Sunder.",
   "version": "1.0.0",
-  "entry": "src/worker.ts",
   "workerCapabilities": [],
   "app": {
     "root": "app",
@@ -19,6 +18,6 @@
       }
     ]
   },
-  "rpc": { "module": "src/rpc.ts", "export": "packageRpc" },
+  "services": { "module": "src/services.ts" },
   "maximumPackageBytes": 536870912
 }

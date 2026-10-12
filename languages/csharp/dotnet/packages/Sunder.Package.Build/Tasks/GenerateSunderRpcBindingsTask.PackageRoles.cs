@@ -21,13 +21,14 @@ public sealed partial class GenerateSunderRpcBindingsTask
         SunderRpcCSharpCompilationResult compilation, IReadOnlyList<SunderRpcCSharpSourceFile> sources,
         IReadOnlyList<SunderRpcCSharpSourceFile> generated, string inputFingerprint,
         IReadOnlyList<SunderPackageResourceInput> resourceInputs, IReadOnlyList<SunderRpcCSharpSourceFile> frameworkSources,
-        IReadOnlyList<SunderPackageFileEvidence> frameworkInputs, IReadOnlyList<SunderFrameworkSourceGenerator> roleGenerators)
+        IReadOnlyList<SunderPackageFileEvidence> frameworkInputs, IReadOnlyList<SunderFrameworkSourceGenerator> roleGenerators,
+        SunderRpcContractLock contractLock, SunderRpcCSharpImportPrepassResult imports, IReadOnlySet<string> presentRoles, SunderRpcInputSnapshot inputSnapshot)
     {
         var paths = sources.Select(source => source.Path).ToHashSet(StringComparer.Ordinal);
         var sourceCompilation = compilation.SourceCompilation!;
         var markup = SunderPackageResourcePlanner.Markup(sourceCompilation, resourceInputs);
         var plan = SunderPackageRolePlanner.Plan(sourceCompilation, sourceCompilation.SyntaxTrees.Where(tree => paths.Contains(tree.FilePath)).ToArray(),
-            compilation.Contracts.SelectMany(contract => contract.SourceTypes).Select(value => value.SourceType), markup.Types);
+            compilation.Contracts.SelectMany(contract => contract.SourceTypes).Select(value => value.SourceType), markup.Types, compilation.TrustedImportedModelTypes);
         if (!plan.Success) { LogCompilerDiagnostics(plan.Diagnostics); return false; }
         var analysis = SunderPackageAuthoringCompiler.Complete(new(compilation, plan, generated) { OrdinarySourcePaths = paths });
         if (!analysis.Success) { LogCompilerDiagnostics(analysis.RolePlan.Diagnostics); return false; }
@@ -43,10 +44,8 @@ public sealed partial class GenerateSunderRpcBindingsTask
         var lockSha256 = receiptDocument.RootElement.GetProperty("lockSha256").GetString()!;
         if (hasApp)
         {
-            var appReceipt = SunderRpcAuthoringDocuments.WriteProjectImportReceipt(GetProducerVersion(), inputFingerprint,
-                lockSha256, compilation.ResolvedPackageId, PackageVersion.Trim(), compilation.Contracts.Select(contract =>
-                    new SunderRpcPackageProjectExportContract(contract.ContractKey, contract.Exposure, contract.GeneratedLogicalName, contract.Descriptor)
-                    { AppUse = contract.AppUse }).ToArray());
+            var appReceipt = SunderRpcAuthoringDocuments.WriteAuthoringReceipt(GetProducerVersion(), inputFingerprint,
+                contractLock, compilation.ResolvedPackageId, PackageVersion.Trim(), compilation, imports, "app", presentRoles);
             _ = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(appReceipt, lockSha256, compilation.ResolvedPackageId, PackageVersion.Trim());
             AddSourceGeneratedFile(files, directory, SunderRpcAuthoringDocuments.AppAuthoringReceiptFileName, appReceipt, false, SourceOutputScope.Implementation);
         }
@@ -133,11 +132,11 @@ public sealed partial class GenerateSunderRpcBindingsTask
             packageVersion = PackageVersion.Trim(),
             lockSha256,
             defineConstants = DefineConstants.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
-            sourceSha256 = sources.Select(source => Convert.ToHexStringLower(SHA256.HashData(Utf8NoBom.GetBytes(source.Text)))).Order(StringComparer.Ordinal).ToArray(),
+            sourceSha256 = sources.Select(SourceHash).Order(StringComparer.Ordinal).ToArray(),
             sourceFiles = sources.OrderBy(source => source.Path, StringComparer.Ordinal).Select(source => new
             {
                 path = Path.GetRelativePath(projectDirectory, source.Path).Replace('\\', '/'),
-                sha256 = Convert.ToHexStringLower(SHA256.HashData(Utf8NoBom.GetBytes(source.Text))),
+                sha256 = SourceHash(source),
             }).ToArray(),
             inputFingerprint,
             assemblyName = AssemblyName,
@@ -177,6 +176,8 @@ public sealed partial class GenerateSunderRpcBindingsTask
         });
         AddSourceGeneratedFile(files, directory, RolePlanPath, bytes, false, SourceOutputScope.Implementation);
         return true;
+
+        string SourceHash(SunderRpcCSharpSourceFile source) => inputSnapshot.CapturedSha256(source.Path);
 
         object? Dependency(SunderPackageRoleMembership role)
         {

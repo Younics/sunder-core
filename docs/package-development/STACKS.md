@@ -35,7 +35,8 @@ source already contains a contributor. See [platform imports](PLATFORM-CONTRACT-
 | `IPackageStackImportAppliedHandler` | Refresh derived state after committed imports for one contributor id. |
 
 Mark the partial contributor class with
-`[SunderRpcProvider(typeof(IPackageStackContributor), ProviderId = "my.company.package.stack")]`.
+`[SunderServiceProvider(typeof(IPackageStackContributor), ProviderId = "my.company.package.stack")]`
+from `Sunder.Sdk.Services`.
 Register its generated provider from Worker V1:
 
 ```csharp

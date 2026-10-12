@@ -3,7 +3,7 @@
     <ProjectReference Include="..\..\host\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" />
     <ProjectReference Include="..\..\host\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
     <ProjectReference Include="..\..\host\Sunder.App\Sunder.App.csproj"
-                      ReferenceOutputAssembly="false" OutputItemType="_PolicyAppTargetPath" PrivateAssets="all" />
+                      OutputItemType="_PolicyAppTargetPath" PrivateAssets="all" />
     <ProjectReference Include="..\Sunder.Runtime.Host.TestWorker\Sunder.Runtime.Host.TestWorker.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Runtime.Host.InteropWorker\Sunder.Runtime.Host.InteropWorker.csproj"
@@ -14,9 +14,6 @@
 
   <ItemGroup>
     <None Update="Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\eng\execution-runtimes\test-fixtures.lock.json"
-          Link="ExecutionRuntimeFixtures\test-fixtures.lock.json"
-          CopyToOutputDirectory="PreserveNewest" />
     <Compile Remove="SyntheticExecutionRuntimeLauncher.cs" />
     <None Include="SyntheticExecutionRuntimeLauncher.cs" />
     <Compile Remove="AppPolicyStartupHook.cs" />
@@ -24,21 +21,6 @@
     <None Include="..\..\..\..\..\specs\worker\v1\conformance\corpus.json"
           Link="WorkerV1Conformance\corpus.json"
           CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\StrictJson.cs"
-             Link="ExecutionRuntimeBuild\StrictJson.cs" />
-    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\ExecutionRuntimeLockPolicy.cs"
-             Link="ExecutionRuntimeBuild\ExecutionRuntimeLockPolicy.cs" />
-    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\ExecutionRuntimeLockModels.cs"
-             Link="ExecutionRuntimeBuild\ExecutionRuntimeLockModels.cs" />
-    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\ExecutionRuntimeLockValidator.cs"
-             Link="ExecutionRuntimeBuild\ExecutionRuntimeLockValidator.cs" />
-    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\ExecutionRuntimeLockLoader.cs"
-             Link="ExecutionRuntimeBuild\ExecutionRuntimeLockLoader.cs" />
-    <Compile Include="..\..\tools\Sunder.ExecutionRuntime.Build\ExecutionRuntimeSourceMaterializer.cs"
-             Link="ExecutionRuntimeBuild\ExecutionRuntimeSourceMaterializer.cs" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -54,7 +36,7 @@
     <Error Condition="'@(_PolicyAppTargetPath->Count())' != '1'" Text="The native App policy tests require one exact App build output." />
     <MakeDir Directories="$(TargetDir)app-policy-hook" />
     <Csc Sources="$(MSBuildProjectDirectory)\AppPolicyStartupHook.cs"
-         References="@(ReferencePathWithRefAssemblies);@(_PolicyAppTargetPath)"
+         References="@(ReferencePathWithRefAssemblies)"
          OutputAssembly="$(TargetDir)app-policy-hook\Sunder.App.Tests.dll"
          TargetType="Library" TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
          NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"

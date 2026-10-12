@@ -10,6 +10,7 @@ import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@sunder
 import { inventoryBytes, parseContractLock, registryOrigin } from "../src/rpc-contract-lock";
 import { restoreContracts } from "../src/rpc-contract-restore";
 import { selectPackageArtifact } from "../src/rpc-package-selection";
+import { canonicalCandidateFixture, installFixtureInspector } from "./model-projection-fixtures";
 
 const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1");
 const fixtures = join(ROOT, "authoring/conformance/valid");
@@ -17,17 +18,20 @@ const outer = (value: unknown) => Buffer.from(JSON.stringify(value, null, 2) + "
 const exec = promisify(execFile); const cli = resolve(__dirname, "../src/cli.js");
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "sunder-development-registry-")); const cache = join(root, "cache"); const path = join(root, "sunder-contracts.lock.json");
-  const original = await readFile(join(fixtures, "package-api-contract-lock.json")); const locked = parseContractLock(original);
-  const artifact = locked.packageArtifacts.get("example.dependency")!; const requirement = [...locked.requirements.values()][0]!;
+  const raw=JSON.parse(await readFile(join(fixtures,"package-api-contract-lock.json"),"utf8"));const before=parseContractLock(outer(raw));
+  const requirement=[...before.requirements.values()][0]!;
   const descriptor = Buffer.from(canonicalRpcDescriptorBytes(parseRpcContractDescriptor(await readFile(join(ROOT, "conformance/valid/minimal.rpc.json")))));
+  const candidate=await canonicalCandidateFixture("example.dependency",raw.packageArtifacts["example.dependency"],await readFile(join(fixtures,"rpc-model-projection-nonempty.json")),new Map([[requirement.descriptorSha256,descriptor]]));
+  raw.packageArtifacts["example.dependency"]=candidate.artifact;const original=outer(raw);const locked=parseContractLock(original);const artifact=locked.packageArtifacts.get("example.dependency")!;
+  const restoreInspector=await installFixtureInspector(root);
   const setOrigin = async (origin: string): Promise<Buffer> => {
     const value = JSON.parse(original.toString()); value.packageArtifacts[artifact.packageId].registryOrigin = origin;
     const bytes = outer(value); await writeFile(path, bytes); return bytes;
   };
   await writeFile(path, original);
-  return { root, cache, path, original, locked, artifact, requirement, descriptor, setOrigin,
+  return { root, cache, path, original, locked, artifact, requirement, descriptor, candidate, setOrigin,
     run: (...args: string[]) => exec(process.execPath, [cli, ...args, "--project", root], { env: { ...process.env, SUNDER_CONTRACT_CACHE: cache }, timeout: 180_000, maxBuffer: 4_194_304 }),
-    dispose: () => rm(root, { recursive: true, force: true }) };
+    dispose: async () => {restoreInspector();await rm(root, { recursive: true, force: true });} };
 }
 
 for (const origin of ["http://localhost/", "http://localhost:43127/"]) test(`Development origin ${origin} requires explicit Boolean opt-in`, async () => {
@@ -64,11 +68,8 @@ test("actual localhost CLI selection/restore preserve exact provenance and offli
     if (request.url!.includes("/versions?")) {
       body = Buffer.from(JSON.stringify([{ version: c.artifact.selectedPackageVersion, isYanked: false }]));
       Object.assign(headers, { "X-Total-Count": "1", "X-Skip": "0", "X-Take": "100" });
-    } else if (request.url!.endsWith("/public-api")) body = Buffer.from(JSON.stringify({ inventory: JSON.parse(inventoryBytes(c.artifact).toString()), publicInventorySha256: c.artifact.publicInventorySha256 }));
-    else if (request.url!.endsWith("/descriptor")) { body = c.descriptor; headers["content-type"] = "application/schema+json"; headers.etag = `"${c.requirement.descriptorSha256}"`; }
-    else body = Buffer.from(JSON.stringify({ contractId: c.requirement.contractId, version: c.requirement.contractVersion,
-      descriptorSha256: c.requirement.descriptorSha256, abiSha256: c.requirement.abiSha256, size: c.requirement.descriptorBytes,
-      etag: `"${c.requirement.descriptorSha256}"`, exposure: "public", firstPublisherPackageId: c.artifact.packageId }));
+    } else if (request.url!.endsWith("/canonical")) {body=c.candidate.bytes;headers["content-type"]="application/octet-stream";}
+    else {response.writeHead(404);response.end();return;}
     response.writeHead(200, { ...headers, "content-length": String(body.length) }); response.end(body);
   });
   try {
@@ -77,9 +78,8 @@ test("actual localhost CLI selection/restore preserve exact provenance and offli
     await mkdir(join(c.root, "src"));
     await writeFile(join(c.root, "sunder-contracts.owned.json"), await readFile(join(fixtures, "minimal-package-owned-baseline.json")));
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Local Registry", version: "1.0.0",
-      entry: "src/worker.ts", workerCapabilities: [], rpc: { module: "src/rpc.ts", export: "packageRpc" } }));
-    await writeFile(join(c.root, "src/rpc.ts"), 'import {rpc} from "@sunder/sdk"; export const packageRpc=rpc.router({contracts:{},providers:{}});');
-    await writeFile(join(c.root, "src/worker.ts"), 'export {packageRpc} from "./rpc.js"; export {packageApis} from "#sunder/rpc";');
+      workerCapabilities: [], services: { module: "src/rpc.ts" } }));
+    await writeFile(join(c.root, "src/rpc.ts"), 'export {};');
     await writeFile(c.path, await readFile(join(fixtures, "minimal-contract-lock.json")));
     const add = ["api", "add", c.artifact.packageId, "--version", c.artifact.requestedVersionRange, "--registry", origin, "--cache-root", c.cache];
     await assert.rejects(c.run(...add), /registry-origin-invalid/u); assert.equal(requests, 0);

@@ -6,16 +6,74 @@ namespace Sunder.Cli;
 internal sealed class ExecutionRuntimeCommandHandler(
     ICliRuntimeExecutionRuntimeClient runtime,
     CliOutput output,
-    ICliProgress progress,
-    CliOptions options)
+    ICliProgress progress)
 {
+    public async Task<int> ExecuteAsync(ExecutionRuntimeSettingsCommand command, CancellationToken token)
+    {
+        var settings = await runtime.GetExecutionRuntimeSettingsAsync(token);
+        if (command.AutomaticUpdates is { } enabled) settings = await runtime.UpdateExecutionRuntimeSettingsAsync(new(settings.Revision, enabled), token);
+        output.Data(settings);
+        output.Info($"Automatic runtime binary updates: {settings.AutomaticUpdatesEnabled}; security refresh remains active.");
+        return CliExitCodes.Success;
+    }
+
+    public async Task<int> ExecuteAsync(InstallExecutionRuntimeCommand command, CancellationToken token)
+    {
+        var preview = await runtime.PreviewExecutionRuntimeInstallAsync(new(
+            new(command.RuntimeId, command.VersionRange, command.ModuleAbi), true), token);
+        output.Data(preview);
+        output.Info(preview.Message);
+        if (preview.Resolution is { } resolution)
+            output.Line($"{DisplayIdentity(resolution.Artifact.Identity)} ({resolution.Artifact.Identity.Rid}); download {DisplayDownloadSize(resolution.DownloadSize)}; retained until uninstall.");
+        if (!preview.Success || preview.Plan is null) return CliExitCodes.Conflict;
+        if (!command.Yes) { output.Info("Review the exact runtime and download size; rerun with --yes to install and retain it."); return CliExitCodes.Success; }
+        return RenderOperation(await runtime.ApplyExecutionRuntimeInstallAsync(new(preview.Plan.PlanId, preview.Plan.Fingerprint), token));
+    }
+
+    public async Task<int> ExecuteAsync(UpdateExecutionRuntimesCommand command, CancellationToken token)
+    {
+        var preview = await runtime.PreviewExecutionRuntimeUpdateAsync(new(), token);
+        output.Data(preview);
+        output.Info(preview.Message);
+        foreach (var candidate in preview.Runtimes)
+            output.Line($"{DisplayIdentity(candidate.CurrentRuntime)} -> {DisplayIdentity(candidate.Resolution.Artifact.Identity)}; download {DisplayDownloadSize(candidate.Resolution.DownloadSize)}.");
+        output.Line("Restart impact: " + string.Join(", ", preview.Usage.AffectedPackageIds));
+        if (!preview.Success || preview.Plan is null) return CliExitCodes.Conflict;
+        if (!command.Yes || preview.Runtimes.Count == 0) return CliExitCodes.Success;
+        var prepared = await runtime.PrepareExecutionRuntimeUpdateAsync(new(preview.Plan.PlanId, preview.Plan.Fingerprint), token);
+        if (!prepared.Success || prepared.Update is null) { output.Data(prepared); output.Info(prepared.Message); return prepared.Success ? CliExitCodes.Success : CliExitCodes.Conflict; }
+        var apply = await runtime.PreviewExecutionRuntimeUpdateAsync(new(PreparedUpdateId: prepared.Update.UpdateId), token);
+        output.Data(apply);
+        if (!apply.Success || apply.Plan is null || !preview.Usage.AffectedPackageIds.SequenceEqual(apply.Usage.AffectedPackageIds)
+            || preview.Usage.RequiresAppRestart != apply.Usage.RequiresAppRestart)
+        { output.Warning("Update impact changed; review a fresh preview before applying."); return CliExitCodes.Conflict; }
+        var result = await runtime.ApplyExecutionRuntimeUpdateAsync(new(new(apply.Plan.PlanId, apply.Plan.Fingerprint), apply.Usage.Fingerprint,
+            command.Restart ? RuntimeExecutionRuntimeApplyMode.RestartAffectedPackages : RuntimeExecutionRuntimeApplyMode.WhenStopped), token);
+        output.Data(result);
+        output.Info(result.Message);
+        return result.Success ? CliExitCodes.Success : CliExitCodes.Conflict;
+    }
+
+    public async Task<int> ExecuteAsync(RemoveExecutionRuntimeCommand command, CancellationToken token)
+    {
+        var installed = await runtime.GetExecutionRuntimeAsync(ToContract(command.Identity), token);
+        var preview = await runtime.PreviewExecutionRuntimeUninstallAsync(new(installed.Identity), token);
+        output.Data(preview);
+        output.Info(preview.Message);
+        if (!preview.Success || !preview.CanUninstall || preview.Plan is null) return CliExitCodes.Conflict;
+        var result = await runtime.ApplyExecutionRuntimeUninstallAsync(new(preview.Plan.PlanId, preview.Plan.Fingerprint), token);
+        output.Data(result);
+        output.Info(result.Message);
+        return result.Success ? CliExitCodes.Success : CliExitCodes.Conflict;
+    }
+
     public async Task<int> ExecuteAsync(ListExecutionRuntimesCommand command, CancellationToken token)
     {
         var runtimes = (await runtime.GetExecutionRuntimesAsync(token).ConfigureAwait(false))
             .OrderBy(item => item.Identity.RuntimeId, StringComparer.Ordinal)
-            .ThenBy(item => item.Identity.Version, StringComparer.Ordinal)
-            .ThenBy(item => item.Identity.PackagingRevision)
+            .ThenBy(item => item.Identity.VendorVersion, StringComparer.Ordinal)
             .ThenBy(item => item.Identity.Rid, StringComparer.Ordinal)
+            .ThenBy(item => item.Identity.VendorChecksumDigest, StringComparer.Ordinal)
             .ToArray();
         output.Data(runtimes);
         if (runtimes.Length == 0)
@@ -28,14 +86,14 @@ internal sealed class ExecutionRuntimeCommandHandler(
             "Execution Runtime".Length,
             runtimes.Max(item => DisplayIdentity(item.Identity).Length));
         var ridWidth = Math.Max("RID".Length, runtimes.Max(item => item.Identity.Rid.Length));
-        output.Line($"{"Execution Runtime".PadRight(identityWidth)}  {"RID".PadRight(ridWidth)}  Status     Lifecycle        Refs  Size");
+        output.Line($"{"Execution Runtime".PadRight(identityWidth)}  {"RID".PadRight(ridWidth)}  Status     Support          Refs  Size");
         foreach (var item in runtimes)
         {
             output.Line(
                 $"{DisplayIdentity(item.Identity).PadRight(identityWidth)}  "
                 + $"{item.Identity.Rid.PadRight(ridWidth)}  "
                 + $"{item.Status.PadRight(10)} "
-                + $"{item.Lifecycle.State.PadRight(16)} "
+                + $"{item.Support.State.ToString().PadRight(16)} "
                 + $"{item.PackageReferenceCount,4}  {item.Size} bytes");
         }
         return CliExitCodes.Success;
@@ -62,7 +120,6 @@ internal sealed class ExecutionRuntimeCommandHandler(
         progress.Report("Runtime is resolving, downloading, and verifying the execution runtime...");
         var result = await runtime.EnsureExecutionRuntimeAsync(
                 new RuntimeExecutionRuntimeEnsureRequest(
-                    command.RegistryOrigin ?? options.RequireRegistryApiUrl().AbsoluteUri,
                     new RuntimeExecutionRuntimeRequirement(
                         command.RuntimeId,
                         command.VersionRange,
@@ -70,17 +127,6 @@ internal sealed class ExecutionRuntimeCommandHandler(
                 token)
             .ConfigureAwait(false);
         return RenderOperation(result);
-    }
-
-    public async Task<int> ExecuteAsync(ImportExecutionRuntimeCommand command, CancellationToken token)
-    {
-        var path = Path.GetFullPath(command.File);
-        if (!File.Exists(path)) throw new FileNotFoundException("Execution runtime archive was not found.", path);
-        if (!string.Equals(Path.GetExtension(path), ".sunderruntime", StringComparison.OrdinalIgnoreCase))
-            throw new CliUsageException("Execution runtime import requires a .sunderruntime archive.");
-
-        progress.Report("Uploading the execution runtime archive for trusted validation and import...");
-        return RenderOperation(await runtime.ImportExecutionRuntimeAsync(path, token).ConfigureAwait(false));
     }
 
     public async Task<int> ExecuteAsync(VerifyExecutionRuntimeCommand command, CancellationToken token)
@@ -113,17 +159,17 @@ internal sealed class ExecutionRuntimeCommandHandler(
             {
                 ExecutionRuntimeErrorCodes.Missing => CliExitCodes.NotFound,
                 ExecutionRuntimeErrorCodes.DownloadFailed => CliExitCodes.Unavailable,
-                 ExecutionRuntimeErrorCodes.Busy
+                ExecutionRuntimeErrorCodes.Busy
                     or ExecutionRuntimeErrorCodes.RequirementInvalid
                     or ExecutionRuntimeErrorCodes.Unsupported
                     or ExecutionRuntimeErrorCodes.Unresolved
+                    or ExecutionRuntimeErrorCodes.SourceNotAllowed
+                    or ExecutionRuntimeErrorCodes.ArtifactChanged
+                    or ExecutionRuntimeErrorCodes.PlatformPrerequisiteMissing
                     or ExecutionRuntimeResolutionConflictCodes.NoCompatibleVersion
                     or ExecutionRuntimeResolutionConflictCodes.RidUnavailable
                     or ExecutionRuntimeResolutionConflictCodes.ModuleAbiMismatch
-                    or ExecutionRuntimeErrorCodes.PolicyRequired
-                    or ExecutionRuntimeErrorCodes.PlanStale
-                    or ExecutionRuntimeErrorCodes.HostTrustUpdateRequired
-                    or ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied => CliExitCodes.Conflict,
+                    or ExecutionRuntimeErrorCodes.PlanStale => CliExitCodes.Conflict,
                 _ => CliExitCodes.Failure,
             };
         }
@@ -136,26 +182,48 @@ internal sealed class ExecutionRuntimeCommandHandler(
     private void WriteSummary(InstalledExecutionRuntimeSummary summary)
     {
         output.Line($"Runtime: {DisplayIdentity(summary.Identity)}");
+        output.Line($"Source: {DisplaySource(summary.Identity.SourceId)}");
         output.Line($"RID: {summary.Identity.Rid}");
         output.Line($"Module ABI: {summary.Identity.ModuleAbi}");
+        output.Line($"Vendor checksum: {DisplayChecksumAlgorithm(summary.Identity.VendorChecksumAlgorithm)} {summary.Identity.VendorChecksumDigest}");
+        output.Line($"Archive: {summary.InstalledArtifact.ArchiveSize} bytes, sha256 {summary.InstalledArtifact.ArchiveSha256}");
         output.Line($"Status: {summary.Status}");
         output.Line($"Health: {summary.Health.Status}");
-        output.Line($"Lifecycle: {summary.Lifecycle.State}");
+        output.Line($"Support: {summary.Support.State} ({summary.Support.SupportLine})");
         output.Line($"References: {summary.PackageReferenceCount}");
         if (!string.IsNullOrWhiteSpace(summary.Health.Message)) output.Warning(summary.Health.Message);
-        if (!string.IsNullOrWhiteSpace(summary.Lifecycle.PolicyMessage)) output.Warning(summary.Lifecycle.PolicyMessage);
+        if (!string.IsNullOrWhiteSpace(summary.Support.Message)) output.Warning(summary.Support.Message);
     }
 
     private static string DisplayIdentity(RuntimeExecutionRuntimeIdentity identity)
-        => $"{identity.RuntimeId} {identity.Version} r{identity.PackagingRevision}";
+        => $"{identity.RuntimeId} {identity.VendorVersion}";
+
+    private static string DisplayDownloadSize(long? bytes)
+        => bytes is null ? "unknown size" : $"{bytes.Value} bytes";
+
+    private static string DisplaySource(ConfiguredOfficialSourceId source)
+        => source switch
+        {
+            ConfiguredOfficialSourceId.DotNet => "dotnet",
+            ConfiguredOfficialSourceId.Node => "node",
+            _ => source.ToString(),
+        };
+
+    private static string DisplayChecksumAlgorithm(RuntimeExecutionRuntimeChecksumAlgorithm algorithm)
+        => algorithm switch
+        {
+            RuntimeExecutionRuntimeChecksumAlgorithm.Sha512 => "sha512",
+            RuntimeExecutionRuntimeChecksumAlgorithm.Sha256 => "sha256",
+            _ => algorithm.ToString(),
+        };
 
     private static RuntimeExecutionRuntimeIdentity ToContract(CliExecutionRuntimeIdentity identity)
         => new(
+            identity.SourceId,
             identity.RuntimeId,
-            identity.Version,
-            identity.PackagingRevision,
+            identity.VendorVersion,
             identity.Rid,
             identity.ModuleAbi,
-            ManifestSha256: string.Empty,
-            ArtifactSha256: string.Empty);
+            identity.VendorChecksumAlgorithm,
+            identity.VendorChecksumDigest);
 }

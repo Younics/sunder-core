@@ -64,8 +64,8 @@
     <SunderAllowDevelopmentRegistryOrigin Condition="'$(SunderAllowDevelopmentRegistryOrigin)' == ''">false</SunderAllowDevelopmentRegistryOrigin>
     <SunderAcknowledgeBreakingChange Condition="'$(SunderAcknowledgeBreakingChange)' == ''">false</SunderAcknowledgeBreakingChange>
     <_SunderRpcPackResolveTargets Condition="'$(UsingMicrosoftNETSdk)' == 'true'">ResolveReferences;GenerateGlobalUsings</_SunderRpcPackResolveTargets>
-    <_SunderRpcHasOwnedContractsBaseline Condition="('$(SunderOwnedContractsPath)' != '' and Exists('$(SunderOwnedContractsPath)')) or ('$(SunderOwnedContractsPath)' == '' and Exists('$(MSBuildProjectDirectory)\sunder-contracts.owned.json'))">true</_SunderRpcHasOwnedContractsBaseline>
-    <_SunderRpcResolveReferencesTarget Condition="'$(_SunderRpcHasOwnedContractsBaseline)' == 'true'">ResolveReferences</_SunderRpcResolveReferencesTarget>
+    <_SunderRpcHasAuthoringInputs Condition="('$(SunderOwnedContractsPath)' != '' and Exists('$(SunderOwnedContractsPath)')) or ('$(SunderOwnedContractsPath)' == '' and Exists('$(MSBuildProjectDirectory)\sunder-contracts.owned.json')) or ('$(SunderContractLockPath)' != '' and Exists('$(SunderContractLockPath)')) or ('$(SunderContractLockPath)' == '' and Exists('$(MSBuildProjectDirectory)\sunder-contracts.lock.json'))">true</_SunderRpcHasAuthoringInputs>
+    <_SunderRpcResolveReferencesTarget Condition="'$(_SunderRpcHasAuthoringInputs)' == 'true'">ResolveReferences</_SunderRpcResolveReferencesTarget>
     <SelfContained Condition="'$(SelfContained)' == ''">false</SelfContained>
     <UseAppHost Condition="'$(UseAppHost)' == ''">false</UseAppHost>
     <PublishSingleFile Condition="'$(PublishSingleFile)' == ''">false</PublishSingleFile>
@@ -803,6 +803,8 @@
 
   <Target Name="CheckSunderContracts" DependsOnTargets="_PrepareSunderContractCommand">
     <GenerateSunderRpcBindingsTask ContractOperation="Check" GeneratePackageRoles="$(_SunderPackageSingleProject)"
+                                   ContractReviewPath="$(SunderContractReviewPath)" ContractReviewOutputPath="$(SunderContractReviewOutputPath)"
+                                   ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                   ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
                                   AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                   ContractKey="$(SunderContractKey)" ContractCurrentVersion="$(SunderContractCurrentVersion)"
@@ -856,7 +858,8 @@
              Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
 
   <Target Name="AddSunderPackageApi" DependsOnTargets="_PrepareSunderContractCommand">
-    <ManageSunderPackageApiTask Operation="Add" ProjectDirectory="$(MSBuildProjectDirectory)"
+    <ManageSunderPackageApiTask Operation="Add" ProjectDirectory="$(MSBuildProjectDirectory)" ConsumerRoles="$(SunderPackageApiConsumerRoles)"
+                               ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
                                GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
                                PlatformCatalogPath="$(SunderPlatformCatalogPath)"
@@ -872,7 +875,8 @@
                                OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" DefineConstants="$(DefineConstants)" NullableEnabled="$(_SunderRpcNullableEnabled)" />
   </Target>
   <Target Name="UpdateSunderPackageApi" DependsOnTargets="_PrepareSunderContractCommand">
-    <ManageSunderPackageApiTask Operation="Update" ProjectDirectory="$(MSBuildProjectDirectory)"
+    <ManageSunderPackageApiTask Operation="Update" ProjectDirectory="$(MSBuildProjectDirectory)" ConsumerRoles="$(SunderPackageApiConsumerRoles)"
+                               ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
                                GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
                                PlatformCatalogPath="$(SunderPlatformCatalogPath)"
@@ -896,6 +900,19 @@
                                Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)"
                                Candidate="$(SunderPackageCandidatePath)" />
   </Target>
+  <Target Name="MigrateSunderPackageApiConsumerRoles" DependsOnTargets="_PrepareSunderContractCommand">
+    <ManageSunderPackageApiTask Operation="MigrateConsumerRoles" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
+                               ConsumerRoles="$(SunderPackageApiConsumerRoles)" PackageId="$(SunderPackageId)"
+                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageVersion="$(Version)"
+                               OwnedContractsPath="$(SunderOwnedContractsPath)" IntermediateOutputPath="$(IntermediateOutputPath)"
+                               ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                               OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" DefineConstants="$(DefineConstants)" NullableEnabled="$(_SunderRpcNullableEnabled)"
+                               GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
+                               GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)" />
+  </Target>
   <Target Name="RequireSunderPackageApi" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
     <ManageSunderPackageApiTask Operation="Require" ProjectDirectory="$(MSBuildProjectDirectory)"
                                AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
@@ -916,6 +933,7 @@
   </Target>
   <Target Name="ImplementSunderPackageApi" DependsOnTargets="_PrepareSunderContractCommand">
     <ManageSunderPackageApiTask Operation="Implement" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
                                GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
                                PlatformCatalogPath="$(SunderPlatformCatalogPath)"
@@ -932,6 +950,7 @@
   </Target>
   <Target Name="UnimplementSunderPackageApi" DependsOnTargets="_PrepareSunderContractCommand">
     <ManageSunderPackageApiTask Operation="Unimplement" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
                                GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
                                AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
@@ -957,6 +976,7 @@
 
   <Target Name="ImplementSunderPlatformApi" DependsOnTargets="_PrepareSunderContractCommand">
     <ManageSunderPackageApiTask Operation="PlatformImplement" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
                                GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
                                PlatformCatalogPath="$(SunderPlatformCatalogPath)"
@@ -972,6 +992,7 @@
   </Target>
   <Target Name="UpdateSunderPlatformApi" DependsOnTargets="_PrepareSunderContractCommand">
     <ManageSunderPackageApiTask Operation="PlatformUpdate" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
                                GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
                                PlatformCatalogPath="$(SunderPlatformCatalogPath)"
@@ -987,6 +1008,7 @@
   </Target>
   <Target Name="UnimplementSunderPlatformApi" DependsOnTargets="_PrepareSunderContractCommand">
     <ManageSunderPackageApiTask Operation="PlatformUnimplement" ProjectDirectory="$(MSBuildProjectDirectory)"
+                               ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
                                GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
                                AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
@@ -1023,6 +1045,8 @@
 
   <Target Name="AcceptSunderContracts" DependsOnTargets="_PrepareSunderContractCommand">
     <GenerateSunderRpcBindingsTask ContractOperation="Accept" GeneratePackageRoles="$(_SunderPackageSingleProject)"
+                                   ContractReviewPath="$(SunderContractReviewPath)" ContractReviewOutputPath="$(SunderContractReviewOutputPath)"
+                                   ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                   ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
                                   AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                   ContractKey="$(SunderContractKey)" ContractCurrentVersion="$(SunderContractCurrentVersion)"
@@ -1042,6 +1066,8 @@
 
   <Target Name="FreezeSunderContracts" DependsOnTargets="_PrepareSunderContractCommand">
     <GenerateSunderRpcBindingsTask ContractOperation="Freeze" GeneratePackageRoles="$(_SunderPackageSingleProject)"
+                                   ContractReviewPath="$(SunderContractReviewPath)" ContractReviewOutputPath="$(SunderContractReviewOutputPath)"
+                                   ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                   ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
                                   AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                   ContractKey="$(SunderContractKey)" ContractCurrentVersion="$(SunderContractCurrentVersion)"
@@ -1053,6 +1079,19 @@
                                   OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
                                   ContractCacheRoot="$(SunderContractCacheRoot)" ProjectDirectory="$(MSBuildProjectDirectory)"
                                   IntermediateOutputPath="$(IntermediateOutputPath)" />
+  </Target>
+  <Target Name="MigratePrivateSunderContracts" DependsOnTargets="_PrepareSunderContractCommand">
+    <GenerateSunderRpcBindingsTask ContractOperation="MigratePrivate" GeneratePackageRoles="$(_SunderPackageSingleProject)"
+                                   ContractReviewPath="$(SunderContractReviewPath)" ContractReviewOutputPath="$(SunderContractReviewOutputPath)"
+                                   ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
+                                  ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
+                                  AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)" ContractKey="$(SunderContractKey)"
+                                  ContractCurrentVersion="$(SunderContractCurrentVersion)" ContractNextVersion="$(SunderContractNextVersion)" AcknowledgeBreakingChange="$(SunderAcknowledgeBreakingChange)"
+                                  SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageId="$(SunderPackageId)" PackageVersion="$(Version)"
+                                  ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                                  DefineConstants="$(DefineConstants)" OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" NullableEnabled="$(_SunderRpcNullableEnabled)"
+                                  OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
+                                  ContractCacheRoot="$(SunderContractCacheRoot)" ProjectDirectory="$(MSBuildProjectDirectory)" IntermediateOutputPath="$(IntermediateOutputPath)" />
   </Target>
 
   <Target Name="_GenerateSunderRpcContractExports"
@@ -1079,6 +1118,7 @@
       <Output TaskParameter="LeaseId" PropertyName="_SunderRpcProjectExportOutputLockLeaseId" />
     </ManageSunderRpcGeneratedOutputLockTask>
     <GenerateSunderRpcBindingsTask GenerationMode="ProjectExport"
+                                   ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                   AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                    SourceFiles="@(_SunderRpcAuthoringSource)"
                                    ReferencePaths="@(ReferencePath)"
@@ -1118,7 +1158,7 @@
 
   <Target Name="GenerateSunderRpcContractExports"
           Returns="@(_SunderRpcPackageProjectExport)"
-          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true' and '$(_SunderRpcProjectImportEnabled)' != 'true' and '$(_SunderRpcHasOwnedContractsBaseline)' == 'true'">
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true' and '$(_SunderRpcProjectImportEnabled)' != 'true' and '$(_SunderRpcHasAuthoringInputs)' == 'true'">
     <PropertyGroup Condition="'$(SunderRpcExpectedAppProject)' != ''">
       <_SunderRpcExpectedAppProjectFullPath>$([System.IO.Path]::GetFullPath('$(SunderRpcExpectedAppProject)', '$(MSBuildProjectDirectory)'))</_SunderRpcExpectedAppProjectFullPath>
       <_SunderRpcConfiguredAppProjectFullPath Condition="'$(SunderPackageAppProject)' != ''">$([System.IO.Path]::GetFullPath('$(SunderPackageAppProject)', '$(MSBuildProjectDirectory)'))</_SunderRpcConfiguredAppProjectFullPath>
@@ -1249,6 +1289,7 @@
       <_SunderRpcAuthoringReceipt Remove="@(_SunderRpcAuthoringReceipt)" />
     </ItemGroup>
     <GenerateSunderRpcBindingsTask GenerationMode="Implementation"
+                                   ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                                   AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                    Bindings="@(SunderRpcBinding)"
                                    SourceFiles="@(_SunderRpcAuthoringSource)"
@@ -1520,6 +1561,8 @@
     </ItemGroup>
 
     <EmitSunderDevOutputTask ManifestPath="$(SunderGeneratedPackageManifest)"
+                             ProjectDirectory="$(MSBuildProjectDirectory)"
+                             ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                              DevPackagePath="$(SunderDevOutputPath)"
                              DiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
                              TargetDirectory="$(TargetDir)"
@@ -1614,6 +1657,7 @@
     </ItemGroup>
 
     <AggregateSunderPackageTask TargetLeaves="@(_SunderPackageCompositionLeaf)"
+                                ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                 OutputPath="$(SunderPackageComposedOutputPath)"
                                 OutputDiscoveryRoot="$(SunderPackageComposedOutputRoot)"
                                 ProjectDirectory="$(MSBuildProjectDirectory)"
@@ -1637,6 +1681,7 @@
     </ItemGroup>
 
     <AggregateSunderPackageTask TargetLeaves="@(_SunderPackageCompositionLeaf)"
+                                  ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                   OutputPath="$(SunderPackageComposedOutputPath)"
                                   OutputDiscoveryRoot="$(SunderPackageComposedOutputRoot)"
                                   ProjectDirectory="$(MSBuildProjectDirectory)"
@@ -1704,6 +1749,7 @@
     </PropertyGroup>
 
     <PackSunderPackageTask DevPackagePath="$(_SunderPackagePackInputPath)"
+                           ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                           AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                              DevPackageDiscoveryRoot="$(_SunderPackagePackDiscoveryRoot)"
                              PackageOutputPath="$(SunderPackageOutputPath)"
@@ -1734,6 +1780,7 @@
 
     <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(SunderPublishPackageOutputPath)'))" />
     <PackSunderPackageTask DevPackagePath="$(_SunderPackagePublishInputPath)"
+                           ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
                           AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                              DevPackageDiscoveryRoot="$(_SunderPackagePublishDiscoveryRoot)"
                              PackageOutputPath="$(SunderPublishPackageOutputPath)"

@@ -12,7 +12,7 @@ This folder contains current Sunder documentation for the implementation in this
 - [SDK compatibility](SUNDER-SDK-COMPATIBILITY.md)
 - [Worker V1 protocol](SUNDER-WORKER-PROTOCOL-V1.md)
 - [RPC V1 specification and conformance fixtures](../specs/rpc/v1/README.md)
-- [TypeScript worker Runtime and web App packages](SUNDER-NODE-PROCESS-PACKAGES.md)
+- [TypeScript and checked-JavaScript services, Workers and web Apps](SUNDER-NODE-PROCESS-PACKAGES.md)
 - [Sunder V1 baseline](SUNDER-V1-BASELINE.md)
 - [CLI reference](SUNDER-CLI.md)
 - [Desktop app and development arguments](SUNDER-APP.md)
@@ -22,11 +22,15 @@ This folder contains current Sunder documentation for the implementation in this
 ## Package Development Guides
 
 - [Getting Started](package-development/GETTING-STARTED.md)
+- [Ordinary C# Services](package-development/ORDINARY-SERVICES.md)
+- [Implementation-First RPC](package-development/IMPLEMENTATION-FIRST-RPC.md): current source authoring, managed APIs and public/private lifecycle
+- [Node Service Authoring](SUNDER-NODE-PROCESS-PACKAGES.md#author-ordinary-services)
+- [Browser And React Lifetimes](SUNDER-NODE-PROCESS-PACKAGES.md#browser-and-react-lifetimes)
 - [Package Anatomy](package-development/PACKAGE-ANATOMY.md)
 - [Activation, DI, And Disposal](package-development/ACTIVATION-AND-DI.md)
 - [Data And Logging](package-development/DATA-AND-LOGGING.md)
 - [Avalonia Views](package-development/AVALONIA.md)
-- [Runtime Operations](package-development/RUNTIME-OPERATIONS.md)
+- [Advanced Runtime Operations](package-development/RUNTIME-OPERATIONS.md)
 - [Callbacks And Auth](package-development/CALLBACKS-AND-AUTH.md)
 - [Stacks](package-development/STACKS.md)
 - [Package Trust And Security](package-development/SECURITY.md)

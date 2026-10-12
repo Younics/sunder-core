@@ -22,13 +22,13 @@ public sealed partial class SunderRpcAuthoringReceiptTests
         var imports = Prepare(contractLock);
         var source = OwnedSource.Replace("Exposure.Public", "Exposure." + exposure, StringComparison.Ordinal);
         if (!provider) source = source
-            .Replace("[SunderRpcProvider(ProviderId = \"example.consumer.owned.provider\")]", "", StringComparison.Ordinal)
+            .Replace("[SunderServiceProvider(ProviderId = \"example.consumer.owned.provider\")]", "", StringComparison.Ordinal)
             .Replace("public sealed partial class OwnedService", "public interface OwnedService", StringComparison.Ordinal)
             .Replace("public ValueTask<Response> ReadAsync() => throw new System.NotImplementedException();", "ValueTask<Response> ReadAsync();", StringComparison.Ordinal);
-        source = source.Replace("[SunderRpcService", "[SunderRpcAppUse(Required = true, Actions = new[] { \"discover\" })]\n[SunderRpcService", StringComparison.Ordinal);
+        source = source.Replace("[SunderService(", "[SunderAppUse(Required = true, Actions = new[] { \"discover\" })]\n[SunderService(", StringComparison.Ordinal);
         var original = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", source));
-        var attribute = $"[SunderRpcRuntimeUse(Required = {required.ToString().ToLowerInvariant()}{(actions.Length == 0 ? "" : ", Actions = " + actions)})]";
-        var compiled = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", source.Replace("[SunderRpcService", attribute + "\n[SunderRpcService", StringComparison.Ordinal)));
+        var attribute = $"[SunderRuntimeUse(Required = {required.ToString().ToLowerInvariant()}{(actions.Length == 0 ? "" : ", Actions = " + actions)})]";
+        var compiled = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", source.Replace("[SunderService(", attribute + "\n[SunderService(", StringComparison.Ordinal)));
         var contract = Assert.Single(compiled.Contracts);
         Assert.Equal(original.Contracts[0].Descriptor.GetCanonicalUtf8(), contract.Descriptor.GetCanonicalUtf8());
         Assert.Equal(original.Contracts[0].Descriptor.AbiSha256, contract.Descriptor.AbiSha256);
@@ -45,14 +45,14 @@ public sealed partial class SunderRpcAuthoringReceiptTests
         Assert.Equal(required, receipt.GetProperty("contracts")[0].GetProperty("runtimeUse").GetProperty("required").GetBoolean());
 
         var exportPath = _temporary.GetPath("runtime-policy-export.json");
-        File.WriteAllBytes(exportPath, SunderRpcAuthoringDocuments.WritePackageExport("1.0.0", "Owner", "Debug", "net10.0", Fingerprint, contractLock.Sha256, PackageId, compiled.Contracts));
-        var export = SunderRpcAuthoringDocuments.ReadPackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId);
+        File.WriteAllBytes(exportPath, SunderRpcAuthoringDocuments.WritePackageExport("1.0.0", "Owner", "Debug", "net10.0", Fingerprint, contractLock.Sha256, PackageId, PackageVersion, compiled.Contracts));
+        var export = SunderRpcAuthoringDocuments.ReadPackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId, PackageVersion);
         Assert.True(SunderRpcAuthoringDocuments.SameUsePolicy(contract.RuntimeUse, Assert.Single(export.Contracts).RuntimeUse));
-        _ = SunderRpcAuthoringDocuments.ValidatePackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId, contractLock.Sha256, compiled.Contracts);
-        Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ValidatePackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId, contractLock.Sha256, original.Contracts));
+        _ = SunderRpcAuthoringDocuments.ValidatePackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId, PackageVersion, contractLock.Sha256, compiled.Contracts);
+        Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ValidatePackageProjectExport(exportPath, "1.0.0", "Owner", "Debug", "net10.0", PackageId, PackageVersion, contractLock.Sha256, original.Contracts));
         using var exportJson = JsonDocument.Parse(File.ReadAllBytes(exportPath));
         using var exportSchema = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/package-project-export.schema.json")));
-        Assert.True(JsonSchemaTestValidator.IsValid(exportSchema.RootElement, exportJson.RootElement));
+        Assert.True(MatchesAuthoringSchema(exportSchema.RootElement, exportJson.RootElement));
         var appBytes = SunderRpcAuthoringDocuments.WriteProjectImportReceipt("1.0.0", Fingerprint, contractLock.Sha256, PackageId, PackageVersion, export.Contracts);
         var app = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(appBytes, contractLock.Sha256, PackageId, PackageVersion);
         var appUse = Assert.Single(app.Manifest.UsesContracts!);
@@ -77,8 +77,8 @@ public sealed partial class SunderRpcAuthoringReceiptTests
     {
         var contractLock = ReadLock("minimal-contract-lock.json");
         var imports = Prepare(contractLock);
-        var compiled = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", OwnedSource.Replace("[SunderRpcService",
-            "[SunderRpcRuntimeUse(Actions = new[] { \"discover\" })]\n[SunderRpcService", StringComparison.Ordinal)));
+        var compiled = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", OwnedSource.Replace("[SunderService(",
+            "[SunderRuntimeUse(Actions = new[] { \"discover\" })]\n[SunderService(", StringComparison.Ordinal)));
         var receipt = JsonNode.Parse(Write(contractLock, compiled, imports))!;
         var use = receipt["uses"]![0]!;
         var contract = receipt["contracts"]![0]!.AsObject();
@@ -104,8 +104,8 @@ public sealed partial class SunderRpcAuthoringReceiptTests
     {
         var contractLock = ReadLock();
         var imports = Prepare(contractLock);
-        var compilation = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", OwnedSource.Replace("[SunderRpcService",
-            "[SunderRpcRuntimeUse(Actions = new[] { \"discover\" })]\n[SunderRpcService", StringComparison.Ordinal)));
+        var compilation = Compile(imports, new SunderRpcCSharpSourceFile("Owned.cs", OwnedSource.Replace("[SunderService(",
+            "[SunderRuntimeUse(Actions = new[] { \"discover\" })]\n[SunderService(", StringComparison.Ordinal)));
         var bytes = Write(contractLock, compilation, imports);
         var projection = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(bytes, contractLock.Sha256, PackageId, PackageVersion);
         Assert.Equal(2, projection.Manifest.UsesContracts!.Count);

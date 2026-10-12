@@ -3,7 +3,8 @@
   "authorityKind": "package",
   "authorityId": "docs.sunder.quickstart",
   "packageId": "docs.sunder.quickstart",
-  "contracts": {
+  "contracts": {},
+  "retiredPrivateContracts": {
     "greeting": {
       "contractId": "docs.sunder.quickstart.greeting",
       "current": {

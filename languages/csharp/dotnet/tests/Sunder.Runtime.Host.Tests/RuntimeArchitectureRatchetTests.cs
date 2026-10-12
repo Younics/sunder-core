@@ -171,7 +171,7 @@ public sealed class RuntimeArchitectureRatchetTests
     }
 
     [Fact]
-    public void RuntimeHost_RefreshesExecutionRuntimePolicyOnlyAfterPackageActivationStarts()
+    public void RuntimeHost_RunsRuntimeStoreMaintenanceAfterPackageBootstrapStarts()
     {
         var root = LocateRepositoryRoot();
         var program = File.ReadAllText(Path.Combine(

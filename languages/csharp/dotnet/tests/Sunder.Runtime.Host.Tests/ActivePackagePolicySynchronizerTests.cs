@@ -55,7 +55,7 @@ public sealed class ActivePackagePolicySynchronizerTests
     public void BatchBoundNeverSplitsAPackageFromItsPlatformDependencies()
     {
         var inputs = Enumerable.Range(0, 129).Select(index => new PackagePolicySubjects(Origin,
-            [new("example.package" + index, "1.0.0", Hash("package-" + index))], [Platform], [])).ToArray();
+            [new("example.package" + index, "1.0.0", Hash("package-" + index))], [Platform])).ToArray();
         var batches = RegistryPackagePolicySynchronizer.Batches(Origin, inputs).ToArray();
         Assert.Equal(2, batches.Length);
         Assert.Equal(128, batches[0].Packages.Count);
@@ -73,9 +73,9 @@ public sealed class ActivePackagePolicySynchronizerTests
             ContentIdentity: Hash("projection"), Manifest: new() { Id = ActivePolicyTestContext.Package.PackageId, Version = "1.0.0" })
         { RegistryPolicyOrigin = Origin, RegistryPolicyContentIdentity = ActivePolicyTestContext.Package.PackageContentIdentity };
         var admission = new PackagePolicyAdmission(policy.Cache);
-        await admission.RequireAsync(source, null, default);
+        await admission.RequireAsync(source, default);
         Assert.Equal(PackagePolicyErrorCodes.PolicyRequired, Assert.Throws<PackagePolicyDeniedException>(() => admission.Require(source with
-        { RegistryPolicyContentIdentity = source.ContentIdentity }, null)).Code);
+        { RegistryPolicyContentIdentity = source.ContentIdentity })).Code);
     }
 
     [Fact]
@@ -87,8 +87,8 @@ public sealed class ActivePackagePolicySynchronizerTests
         var admission = new PackagePolicyAdmission(restarted);
         var source = new RuntimePackageSource(ActivePolicyTestContext.Package.PackageId, PackageSourceKind.Installed, policy.Paths.RootPath,
             ContentIdentity: ActivePolicyTestContext.Package.PackageContentIdentity, Manifest: new() { Id = ActivePolicyTestContext.Package.PackageId, Version = "1.0.0" });
-        await admission.RequireAsync(source, null, default);
-        await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => admission.RequireAsync(source with { ContentIdentity = Hash("unknown") }, null, default));
+        await admission.RequireAsync(source, default);
+        await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => admission.RequireAsync(source with { ContentIdentity = Hash("unknown") }, default));
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public sealed class ActivePackagePolicySynchronizerTests
         var sample = await policy.FetchAsync();
         using var synchronizer = new RegistryPackagePolicySynchronizer(policy.Client, policy.Cache);
         var plan = new RegistryResolveInstallPlanResponse(true,
-            [new(ActivePolicyTestContext.Package.PackageId, null, "1.0.0", ActivePolicyTestContext.Package.PackageContentIdentity, RegistryPackageActionKinds.PackageInstall, null, [], [], [])], [], [], [], [], RuntimePolicyRevision: 1)
+            [new(ActivePolicyTestContext.Package.PackageId, null, "1.0.0", ActivePolicyTestContext.Package.PackageContentIdentity, RegistryPackageActionKinds.PackageInstall, null, [], [], [])], [], [], [], [])
         {
             PackagePolicy = sample.Response.PackagePolicy, PolicyCheckpoint = sample.Response.Checkpoint,
             ResolutionPolicy = new(sample.Response.PackagePolicy, sample.Response.Checkpoint, [], [], [], []),

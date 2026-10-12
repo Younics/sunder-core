@@ -18,14 +18,13 @@ internal sealed class PackageStoreCoordinator
         InstalledPackageStore store,
         SunderPackageArchiveInstaller archiveInstaller,
         IPackageStoreFaultInjector? faultInjector = null,
-        ExecutionRuntimeLifecyclePolicyCache? lifecyclePolicies = null,
         PackageLifecyclePolicyCache? packagePolicies = null)
     {
         _paths = paths;
         _store = store;
         _packagePolicies = packagePolicies;
         _stages = new PackageStoreStageManager(store, archiveInstaller, packagePolicies);
-        _transactions = new PackageStoreTransactionManager(paths, store, faultInjector, lifecyclePolicies, packagePolicies);
+        _transactions = new PackageStoreTransactionManager(paths, store, faultInjector, packagePolicies);
         _recovery = new PackageStoreRecovery(paths, store, _transactions);
     }
 
@@ -52,19 +51,6 @@ internal sealed class PackageStoreCoordinator
         IReadOnlyList<PackageStoreChange> mutations,
         LocalExecutionRuntimeBindingSnapshot? localBindingAuthority,
         CancellationToken cancellationToken = default)
-        => await PrepareStageAsync(
-            mutations,
-            localBindingAuthority,
-            registryRuntimePolicyUpdates: [],
-            registryRuntimePolicyAuthority: null,
-            cancellationToken).ConfigureAwait(false);
-
-    internal async Task<PackageStoreStagePreparation> PrepareStageAsync(
-        IReadOnlyList<PackageStoreChange> mutations,
-        LocalExecutionRuntimeBindingSnapshot? localBindingAuthority,
-        IReadOnlyList<ExecutionRuntimeLifecyclePolicyEntryV1> registryRuntimePolicyUpdates,
-        ExecutionRuntimeLifecyclePolicySnapshot? registryRuntimePolicyAuthority,
-        CancellationToken cancellationToken = default)
     {
         try
         {
@@ -90,8 +76,6 @@ internal sealed class PackageStoreCoordinator
                     mutations,
                     CatalogGeneration,
                     localBindingAuthority,
-                    registryRuntimePolicyUpdates,
-                    registryRuntimePolicyAuthority,
                     cancellationToken)
                 .ConfigureAwait(false);
             if (!preparation.Success && localBindingAuthority is not null)

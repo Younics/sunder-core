@@ -22,12 +22,12 @@ public sealed partial class SunderPackageRoleProjectionTests
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Packaging;
-            using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
+            using Sunder.Generated.Packages.Example_Notes_Services;
             namespace Example;
-            [SunderRpcService]
+            [SunderService]
             public sealed partial class NotesService
             {
-                [SunderRpcMethod]
                 public async IAsyncEnumerable<Note> WatchAsync(WatchRequest request, [EnumeratorCancellation] CancellationToken token = default)
                 {
                     yield return new Note { Text = "first" };
@@ -54,7 +54,7 @@ public sealed partial class SunderPackageRoleProjectionTests
             var service = Activator.CreateInstance(worker.GetType("Example.NotesService", true)!)!;
             var registration = (SunderWorkerProviderRegistration)service.GetType().GetMethod("CreateSunderRpcProviderRegistration")!.Invoke(service, null)!;
             var rpc = new RoleRpc(Assert.Single(analysis.Compilation.Contracts).Descriptor, registration);
-            var api = app.GetType("Example.INotesService", true)!;
+            var api = app.GetType("Sunder.Generated.Packages.Example_Notes_Services.INotesService", true)!;
             var clientType = app.GetTypes().Single(type => !type.IsInterface && api.IsAssignableFrom(type));
             var client = Activator.CreateInstance(clientType, rpc)!;
             await using var lifetime = (IAsyncDisposable)client;
@@ -85,7 +85,8 @@ public sealed partial class SunderPackageRoleProjectionTests
                 Assert.True(await cursor.MoveNextAsync());
                 var blocked = cursor.MoveNextAsync().AsTask(); Assert.False(blocked.IsCompleted);
                 cancellation.Cancel();
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => blocked);
+                var cancelled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => blocked);
+                Assert.Equal(cancellation.Token, cancelled.CancellationToken);
             }
             Assert.Equal(rpc.Created, rpc.Disposed);
 
@@ -110,7 +111,9 @@ public sealed partial class SunderPackageRoleProjectionTests
                 Assert.True(await cursor.MoveNextAsync());
                 var blocked = cursor.MoveNextAsync().AsTask();
                 var stopped = lifetime.DisposeAsync().AsTask();
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => blocked);
+                var retired = await Assert.ThrowsAsync<SunderRpcException>(() => blocked);
+                Assert.Equal("rpc.binding.retired", retired.Error.Code);
+                Assert.Equal(SunderRpcRetrySafety.Unsafe, retired.Error.RetrySafety);
                 await stopped.WaitAsync(TimeSpan.FromSeconds(5));
             }
             Assert.Equal(rpc.Created, rpc.Disposed);

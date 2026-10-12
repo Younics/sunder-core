@@ -8,7 +8,6 @@ namespace Sunder.Package.Build.Rpc.Authoring;
 
 internal sealed partial class SunderRpcContractRestore(HttpClient http, bool allowDevelopmentRegistryOrigin = false)
 {
-    private const int MaximumResponseBytes = 4 * 1024 * 1024;
     internal bool AllowDevelopmentRegistryOrigin { get; } = allowDevelopmentRegistryOrigin;
 
     internal async Task<int> RestoreAsync(string lockPath, string cacheRoot, IReadOnlyList<string> candidates, CancellationToken token = default,
@@ -18,8 +17,10 @@ internal sealed partial class SunderRpcContractRestore(HttpClient http, bool all
         if (platformCatalog is not null && string.IsNullOrWhiteSpace(platformCatalog))
             throw Error("platform-api.catalog-invalid", "An offline catalog input must be nonempty; no network fallback is permitted.");
         if (candidates.Count > 128) throw Error("package-api.public-inventory-invalid", "Candidate input count exceeds the restore limit.");
-        var required = SunderRpcContractCache.GetRequirements(contractLock);
+        var required = SunderRpcContractCache.GetVerificationRequirements(contractLock);
         var restored = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var projections = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var candidateSnapshots = new Dictionary<string, SunderPackagePublicApiSnapshot>(StringComparer.Ordinal);
         var platformRequirements = SunderRpcPlatformCatalogCache.Requirements(contractLock);
         if (platformCatalog is not null && platformRequirements.Count == 0)
             throw Error("platform-api.import-not-found", "Offline catalog restore requires existing platform constraints.");
@@ -40,25 +41,12 @@ internal sealed partial class SunderRpcContractRestore(HttpClient http, bool all
             var selected = new HashSet<string>(StringComparer.Ordinal);
             foreach (var candidate in candidates)
             {
-                var extracted = Path.Combine(Path.GetTempPath(), "sunder-contract-restore-" + Guid.NewGuid().ToString("N"));
-                try
-                {
-                    var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(candidate, extracted, token);
-                    if (!validation.Success || validation.Manifest is not { } manifest)
-                        throw Error("package-api.public-inventory-invalid", "The candidate is not a complete canonical package archive.");
-                    if (!selected.Add(manifest.Id!) || !contractLock.PackageArtifacts.TryGetValue(manifest.Id!, out var artifact))
-                        throw Error("package-api.import-not-found", "Each candidate must identify one distinct existing locked package artifact.");
-                    var inventory = CandidateInventory(extracted, validation.Manifest);
-                    RequireInventory(artifact, inventory);
-                    foreach (var contract in artifact.Contracts.Values.Where(contract => required.ContainsKey(contract.DescriptorSha256)))
-                    {
-                        var bundle = manifest.ContractBundles!.Single(bundle => bundle!.ContractId == contract.ContractId && bundle.Version == contract.ResolvedContractVersion)!;
-                        var path = ArchiveRelativePath.Parse(SunderPackageFormat.SharedPayloadRoot + bundle.DescriptorPath).ToPlatformPath(extracted);
-                        var bytes = SunderRpcDescriptorFileReader.ReadStableBytes(path, MaximumResponseBytes, "restored candidate descriptor");
-                        AddDescriptor(restored, contract, SunderRpcContractDescriptor.Parse(bytes).GetCanonicalUtf8());
-                    }
-                }
-                finally { if (Directory.Exists(extracted)) Directory.Delete(extracted, recursive: true); }
+                var snapshot = await ReadCandidateAsync(candidate, token);
+                var id = snapshot.Inventory.Payload.GetProperty("packageId").GetString()!;
+                if (!selected.Add(id) || !contractLock.PackageArtifacts.TryGetValue(id, out var artifact))
+                    throw Error("package-api.import-not-found", "Each candidate must identify one distinct existing locked package artifact.");
+                Collect(artifact, snapshot);
+                candidateSnapshots.Add(candidate, snapshot);
             }
         }
         else if (platformCatalog is null)
@@ -71,35 +59,54 @@ internal sealed partial class SunderRpcContractRestore(HttpClient http, bool all
                     // verified immutable cache entries, never the default Registry.
                     continue;
                 }
-                var origin = new Uri(artifact.RegistryOrigin.TrimEnd('/') + "/");
-                var inventory = await ReadInventoryAsync(origin, artifact.PackageId, artifact.SelectedPackageVersion, token);
-                RequireInventory(artifact, inventory);
-                foreach (var contract in artifact.Contracts.Values.Where(contract => contract.AuthorityKind == "package" && required.ContainsKey(contract.DescriptorSha256)))
+                // A cache hit is usable only with every selected pin and descriptor.
+                try
                 {
-                    var route = $"api/v1/contracts/{Segment(contract.ContractId)}/versions/{Segment(contract.ResolvedContractVersion)}";
-                    var metadata = await ReadAsync(new(origin, route), null, 64 * 1024, token);
-                    using var descriptorMetadata = SunderRpcAuthoringJson.ParseRegistryMetadata(metadata, 64 * 1024);
-                    var record = descriptorMetadata.RootElement;
-                    if (Text(record, "contractId") != contract.ContractId || Text(record, "version") != contract.ResolvedContractVersion
-                        || Text(record, "descriptorSha256") != contract.DescriptorSha256 || Text(record, "abiSha256") != contract.AbiSha256
-                        || Text(record, "exposure") != "public" || Text(record, "firstPublisherPackageId") != contract.AuthorityId
-                        || !record.TryGetProperty("size", out var size) || size.ValueKind != JsonValueKind.Number
-                        || !size.TryGetInt64(out var length) || length != contract.DescriptorBytes || Text(record, "etag") != contract.Etag)
-                        throw Error("package-api.public-inventory-invalid", "Registry descriptor metadata does not reproduce locked public authority.");
-                    AddDescriptor(restored, contract, await ReadAsync(new(origin, route + "/descriptor"), contract.Etag, contract.DescriptorBytes, token, "application/schema+json"));
+                    var entries = SunderRpcContractCache.Resolve(artifact.Contracts.Values.ToDictionary(contract => contract.DescriptorSha256,
+                        contract => required[contract.DescriptorSha256], StringComparer.Ordinal), cacheRoot);
+                    _ = SunderRpcContractCache.ResolveModelProjections([artifact], cacheRoot, entries);
+                    continue;
                 }
+                catch (InvalidDataException error) when (error.Message.StartsWith("contract-cache.entry-missing:", StringComparison.Ordinal)
+                    || error.Message.StartsWith("contract-cache.entry-corrupt:", StringComparison.Ordinal)) { }
+                var origin = new Uri(artifact.RegistryOrigin.TrimEnd('/') + "/");
+                Collect(artifact, await ReadCanonicalCandidateAsync(origin, artifact.PackageId, artifact.SelectedPackageVersion, token));
             }
         }
         // Offline inputs may cover only part of a selection. Require verified
         // cached evidence for the rest before publishing any newly acquired bytes.
+        SunderRpcResolvedContractCache cached;
         try
         {
-            _ = SunderRpcContractCache.Resolve(required.Where(pair => !restored.ContainsKey(pair.Key))
+            cached = SunderRpcContractCache.Resolve(required.Where(pair => !restored.ContainsKey(pair.Key))
                 .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), cacheRoot);
         }
         catch (InvalidDataException error) when (error.Message.StartsWith("contract-cache.entry-missing:", StringComparison.Ordinal))
         {
             throw new InvalidDataException("contract-cache.entry-missing: Supply the exact local package candidates and platform catalog, or restore the remaining descriptor cache evidence; no Registry is inferred.", error);
+        }
+        var complete = new SunderRpcResolvedContractCache(cached.EntriesByDescriptorSha256.Concat(restored.Select(pair =>
+            new KeyValuePair<string, SunderRpcResolvedContractCacheEntry>(pair.Key, new(required[pair.Key], SunderRpcContractDescriptor.Parse(pair.Value), pair.Value))))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
+        var cachedProjections = SunderRpcContractCache.ResolveProjectionContracts(contractLock.PackageArtifacts.Values
+            .Where(artifact => !projections.ContainsKey(artifact.PackageId)).ToArray(), cacheRoot, complete);
+        var allProjections = new Dictionary<string, SunderRpcModelProjectionContract>(cachedProjections, StringComparer.Ordinal);
+        foreach (var (id, bytes) in projections)
+            foreach (var entry in SunderRpcContractCache.VerifyModelProjection(contractLock.PackageArtifacts[id], bytes,
+                contractLock.PackageArtifacts[id].Contracts.Values.ToDictionary(contract => contract.ContractId,
+                    contract => complete.EntriesByDescriptorSha256[contract.DescriptorSha256].Descriptor, StringComparer.Ordinal)).Contracts)
+            {
+                if (allProjections.TryGetValue(entry.ContractId, out var previous)
+                    && !SunderRpcAuthoringDocuments.SameProjectionContract(previous, entry))
+                    throw Error("rpc-authoring.evidence-mismatch", "Selected reexport model projections differ from their reviewed origin.");
+                allProjections[entry.ContractId] = entry;
+            }
+        foreach (var (candidate, snapshot) in candidateSnapshots)
+        {
+            var current = await ReadCandidateAsync(candidate, token);
+            if (current.Inventory.PublicInventorySha256 != snapshot.Inventory.PublicInventorySha256
+                || !current.ModelProjectionUtf8.AsSpan().SequenceEqual(snapshot.ModelProjectionUtf8))
+                throw Error("rpc-authoring.evidence-mismatch", "A candidate changed during restore.");
         }
         var unchanged = SunderRpcAuthoringDocuments.ReadContractLock(lockPath, AllowDevelopmentRegistryOrigin);
         if (!unchanged.ExactBytes.AsSpan().SequenceEqual(contractLock.ExactBytes))
@@ -107,10 +114,21 @@ internal sealed partial class SunderRpcContractRestore(HttpClient http, bool all
         // Descriptor pairs and catalogs are independently immutable. If a
         // process stops between publications, generation fails until exact restore
         // supplies the missing catalog; descriptor integrity never creates a Registry selection.
-        if (restored.Count != 0) SunderRpcContractCacheStore.Publish(cacheRoot, restored, required, token);
+        foreach (var batch in restored.Chunk(128))
+            SunderRpcContractCacheStore.Publish(cacheRoot, batch.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), required, token);
+        if (projections.Count != 0) SunderRpcContractCacheStore.PublishModelProjections(cacheRoot, projections, contractLock.PackageArtifacts.Values.ToArray(), complete, token);
         if (catalogs.Count != 0) SunderRpcPlatformCatalogCache.Publish(cacheRoot,
             catalogs.ToDictionary(pair => pair.Key, pair => pair.Value.GetCanonicalUtf8(), StringComparer.Ordinal), platformRequirements, token);
         return restored.Count;
+
+        void Collect(SunderRpcLockedPackageArtifact artifact, SunderPackagePublicApiSnapshot snapshot)
+        {
+            RequireInventory(artifact, snapshot.Inventory);
+            _ = SunderRpcContractCache.VerifyModelProjection(artifact, snapshot.ModelProjectionUtf8,
+                snapshot.Descriptors.Values.Select(bytes => SunderRpcContractDescriptor.Parse(bytes)).ToDictionary(descriptor => descriptor.ContractId, StringComparer.Ordinal));
+            foreach (var contract in artifact.Contracts.Values) AddDescriptor(restored, contract, snapshot.Descriptors[contract.DescriptorSha256]);
+            projections.Add(artifact.PackageId, snapshot.ModelProjectionUtf8);
+        }
     }
 
     private async Task<byte[]> ReadAsync(Uri uri, string? etag, int maximumBytes, CancellationToken token, string mediaType = "application/json",
@@ -161,9 +179,6 @@ internal sealed partial class SunderRpcContractRestore(HttpClient http, bool all
             throw Error("contract-cache.entry-corrupt", "Restored sources disagree on one immutable descriptor.");
         restored[contract.DescriptorSha256] = bytes;
     }
-
-    private static SunderPackagePublicApiInventory CandidateInventory(string root, SunderPackageManifest manifest)
-        => SunderPackagePublicApiInspection.ReadValidated(root, manifest).Inventory;
 
     private static string Segment(string value) => Uri.EscapeDataString(value);
     private static string? Text(JsonElement value, string property) => value.ValueKind == JsonValueKind.Object

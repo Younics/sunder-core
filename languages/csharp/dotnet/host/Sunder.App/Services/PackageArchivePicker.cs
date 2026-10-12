@@ -52,9 +52,9 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
         {
             var review = await InspectAsync(snapshotPath, Path.GetFileName(packagePath), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            var dialog = new LocalPackageInstallConsentWindow(review.ViewModel);
-            if (!await dialog.ShowDialog<bool>(owner) || review.Sha256 is null)
+            if (review.Sha256 is null)
             {
+                await new LocalPackageInstallConsentWindow(review.ViewModel).ShowDialog<bool>(owner);
                 return null;
             }
 
@@ -63,7 +63,8 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
                 snapshotPath,
                 review.Sha256,
                 DeleteAfterUse: true,
-                review.CapabilityConsent);
+                review.CapabilityConsent,
+                review.ViewModel);
         }
         finally
         {

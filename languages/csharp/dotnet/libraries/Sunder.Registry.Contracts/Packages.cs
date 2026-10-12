@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Sunder.Registry.Contracts;
 
 public enum RegistrySearchSort
@@ -82,19 +84,23 @@ public sealed record RegistryPackageCanonicalArtifact(
     long Size,
     string DownloadUrl);
 
+/// <summary>Requirements stay attached to their immutable package role/RID target; runtime selection is Host-owned.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryPackageTarget(
-    string Role,
-    string Rid,
-    string Kind,
-    string EntryPoint,
-    string? TargetFramework,
-    string? SdkVersion,
+    [property: JsonRequired] string Role,
+    [property: JsonRequired] string Rid,
+    [property: JsonRequired] string Kind,
+    [property: JsonRequired] string EntryPoint,
+    [property: JsonRequired] string? TargetFramework,
+    [property: JsonRequired] string? SdkVersion,
     IReadOnlyList<string> RequiredHostCapabilities,
     IReadOnlyList<RegistryPackageWebView>? Views = null,
     RegistryExecutionRuntimeRequirement? ExecutionRuntime = null)
 {
-    public IReadOnlyList<RegistryPackageWebView> Views { get; }
-        = Array.AsReadOnly((Views ?? []).ToArray());
+    private IReadOnlyList<string> _requiredHostCapabilities = PolicyCollections.FreezeBounded(RequiredHostCapabilities);
+    private IReadOnlyList<RegistryPackageWebView> _views = PolicyCollections.FreezeBounded(Views ?? []);
+    [JsonRequired] public IReadOnlyList<string> RequiredHostCapabilities { get => _requiredHostCapabilities; init => _requiredHostCapabilities = PolicyCollections.FreezeBounded(value); }
+    public IReadOnlyList<RegistryPackageWebView> Views { get => _views; init => _views = PolicyCollections.FreezeBounded(value); }
 }
 
 public sealed record RegistryPackageWebView(
@@ -218,33 +224,40 @@ public sealed record RegistryPackageResolveResponse(
     IReadOnlyList<RegistryPackageProjectionArtifact> Artifacts,
     IReadOnlyList<string> TrustedArtifactOrigins);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryResolveUpdatesRequest(
     IReadOnlyList<RegistryInstalledPackage> InstalledPackages,
     IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets,
     [property: System.Text.Json.Serialization.JsonRequired]
     RegistryClientCompatibilityProfile Compatibility,
-    [property: System.Text.Json.Serialization.JsonRequired]
-    RegistryHostRuntimeTrustProfile RuntimeTrust,
     string? ExpectedResolutionFingerprint = null,
-    bool IncludePrerelease = false);
+    bool IncludePrerelease = false)
+{
+    private IReadOnlyList<RegistryInstalledPackage> _installedPackages = PolicyCollections.FreezeBounded(InstalledPackages);
+    private IReadOnlyList<RegistryPackageTargetRequest> _desiredTargets = PolicyCollections.FreezeBounded(DesiredTargets);
+    [JsonRequired] public IReadOnlyList<RegistryInstalledPackage> InstalledPackages { get => _installedPackages; init => _installedPackages = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets { get => _desiredTargets; init => _desiredTargets = PolicyCollections.FreezeBounded(value); }
+}
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryInstalledPackage(
-    string PackageId,
-    string Version,
+    [property: JsonRequired] string PackageId,
+    [property: JsonRequired] string Version,
     IReadOnlyList<RegistryPackageProjectionKey> AcquiredProjections,
-    string PackageContentIdentity,
-    IReadOnlyList<RegistryPackageTargetRuntimeBinding> RuntimeBindings);
+    [property: JsonRequired] string PackageContentIdentity)
+{
+    private IReadOnlyList<RegistryPackageProjectionKey> _acquiredProjections = PolicyCollections.FreezeBounded(AcquiredProjections);
+    [JsonRequired] public IReadOnlyList<RegistryPackageProjectionKey> AcquiredProjections { get => _acquiredProjections; init => _acquiredProjections = PolicyCollections.FreezeBounded(value); }
+}
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryResolveUpdatesResponse(
     IReadOnlyList<RegistryPackageUpdate> Updates,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> TrustedArtifactOrigins,
     IReadOnlyList<RegistryPackageInstallPlanItem>? Actions = null,
-    IReadOnlyList<RegistryResolvedExecutionRuntimeArtifact>? RuntimeArtifacts = null,
-    IReadOnlyList<RegistryExecutionRuntimeResolutionConflict>? RuntimeConflicts = null,
-    string ResolutionFingerprint = "",
-    long RuntimePolicyRevision = 0,
-    DateTimeOffset ExpiresAtUtc = default)
+    [property: JsonRequired] string ResolutionFingerprint = "",
+    [property: JsonRequired] DateTimeOffset ExpiresAtUtc = default)
 {
     /// <summary>Verified package policy for these actions; absence is not authorization.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
@@ -254,13 +267,15 @@ public sealed record RegistryResolveUpdatesResponse(
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public RegistryPackageResolutionPolicy? ResolutionPolicy { get; init; }
     private IReadOnlyList<RegistryPackageCompatibilityConflict> _compatibilityConflicts = [];
-    public IReadOnlyList<RegistryPackageCompatibilityConflict> CompatibilityConflicts { get => _compatibilityConflicts; init => _compatibilityConflicts = PolicyCollections.Freeze(value); }
-    public IReadOnlyList<RegistryPackageInstallPlanItem> Actions { get; }
-        = Array.AsReadOnly((Actions ?? []).ToArray());
-    public IReadOnlyList<RegistryResolvedExecutionRuntimeArtifact> RuntimeArtifacts { get; }
-        = Array.AsReadOnly((RuntimeArtifacts ?? []).ToArray());
-    public IReadOnlyList<RegistryExecutionRuntimeResolutionConflict> RuntimeConflicts { get; }
-        = Array.AsReadOnly((RuntimeConflicts ?? []).ToArray());
+    public IReadOnlyList<RegistryPackageCompatibilityConflict> CompatibilityConflicts { get => _compatibilityConflicts; init => _compatibilityConflicts = PolicyCollections.FreezeBounded(value); }
+    private IReadOnlyList<RegistryPackageUpdate> _updates = PolicyCollections.FreezeBounded(Updates);
+    private IReadOnlyList<string> _errors = PolicyCollections.FreezeBounded(Errors);
+    private IReadOnlyList<string> _trustedArtifactOrigins = PolicyCollections.FreezeBounded(TrustedArtifactOrigins);
+    private IReadOnlyList<RegistryPackageInstallPlanItem> _actions = PolicyCollections.FreezeBounded(Actions ?? []);
+    [JsonRequired] public IReadOnlyList<RegistryPackageUpdate> Updates { get => _updates; init => _updates = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<string> Errors { get => _errors; init => _errors = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<string> TrustedArtifactOrigins { get => _trustedArtifactOrigins; init => _trustedArtifactOrigins = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<RegistryPackageInstallPlanItem> Actions { get => _actions; init => _actions = PolicyCollections.FreezeBounded(value); }
 }
 
 public sealed record RegistryPackageUpdate(
@@ -270,66 +285,90 @@ public sealed record RegistryPackageUpdate(
     string? DeprecatedMessage,
     IReadOnlyList<RegistryPackageProjectionArtifact> Artifacts);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryResolveInstallPlanRequest(
-    string PackageId,
-    string? Version,
-    string? Tag,
+    [property: JsonRequired] string PackageId,
+    [property: JsonRequired] string? Version,
+    [property: JsonRequired] string? Tag,
     IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets,
     IReadOnlyList<RegistryInstalledPackageState> InstalledPackages,
     [property: System.Text.Json.Serialization.JsonRequired]
     RegistryClientCompatibilityProfile Compatibility,
-    [property: System.Text.Json.Serialization.JsonRequired]
-    RegistryHostRuntimeTrustProfile RuntimeTrust,
     string? ExpectedResolutionFingerprint = null,
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
     bool Reinstall = false,
     string? VersionRange = null,
-    bool Required = true);
+    bool Required = true)
+{
+    private IReadOnlyList<RegistryPackageTargetRequest> _desiredTargets = PolicyCollections.FreezeBounded(DesiredTargets);
+    private IReadOnlyList<RegistryInstalledPackageState> _installedPackages = PolicyCollections.FreezeBounded(InstalledPackages);
+    [JsonRequired] public IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets { get => _desiredTargets; init => _desiredTargets = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<RegistryInstalledPackageState> InstalledPackages { get => _installedPackages; init => _installedPackages = PolicyCollections.FreezeBounded(value); }
+}
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryPackageChangeRequest(
-    string PackageId,
-    string? Version,
+    [property: JsonRequired] string PackageId,
+    [property: JsonRequired] string? Version,
     IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets,
     string? Tag = null,
     string? VersionRange = null,
-    bool Required = true);
+    bool Required = true)
+{
+    private IReadOnlyList<RegistryPackageTargetRequest> _desiredTargets = PolicyCollections.FreezeBounded(DesiredTargets);
+    [JsonRequired] public IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets { get => _desiredTargets; init => _desiredTargets = PolicyCollections.FreezeBounded(value); }
+}
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryResolvePackageChangesRequest(
     IReadOnlyList<RegistryPackageChangeRequest> Packages,
     IReadOnlyList<RegistryInstalledPackageState> InstalledPackages,
     [property: System.Text.Json.Serialization.JsonRequired]
     RegistryClientCompatibilityProfile Compatibility,
-    [property: System.Text.Json.Serialization.JsonRequired]
-    RegistryHostRuntimeTrustProfile RuntimeTrust,
     string? ExpectedResolutionFingerprint = null,
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
-    bool Reinstall = false);
+    bool Reinstall = false)
+{
+    private IReadOnlyList<RegistryPackageChangeRequest> _packages = PolicyCollections.FreezeBounded(Packages);
+    private IReadOnlyList<RegistryInstalledPackageState> _installedPackages = PolicyCollections.FreezeBounded(InstalledPackages);
+    [JsonRequired] public IReadOnlyList<RegistryPackageChangeRequest> Packages { get => _packages; init => _packages = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<RegistryInstalledPackageState> InstalledPackages { get => _installedPackages; init => _installedPackages = PolicyCollections.FreezeBounded(value); }
+}
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryInstalledPackageState(
-    string PackageId,
-    string Version,
+    [property: JsonRequired] string PackageId,
+    [property: JsonRequired] string Version,
     IReadOnlyList<RegistryPackageDependency> DependsOn,
     IReadOnlyList<RegistryPackageProjectionKey> AcquiredProjections,
-    string PackageContentIdentity,
-    IReadOnlyList<RegistryPackageTargetRuntimeBinding> RuntimeBindings);
+    [property: JsonRequired] string PackageContentIdentity)
+{
+    private IReadOnlyList<RegistryPackageDependency> _dependsOn = PolicyCollections.FreezeBounded(DependsOn);
+    private IReadOnlyList<RegistryPackageProjectionKey> _acquiredProjections = PolicyCollections.FreezeBounded(AcquiredProjections);
+    [JsonRequired] public IReadOnlyList<RegistryPackageDependency> DependsOn { get => _dependsOn; init => _dependsOn = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<RegistryPackageProjectionKey> AcquiredProjections { get => _acquiredProjections; init => _acquiredProjections = PolicyCollections.FreezeBounded(value); }
+}
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryPackageInstallPlanItem(
-    string PackageId,
-    string? CurrentVersion,
-    string? Version,
-    string PackageContentIdentity,
-    string ActionKind,
-    string? DeprecatedMessage,
+    [property: JsonRequired] string PackageId,
+    [property: JsonRequired] string? CurrentVersion,
+    [property: JsonRequired] string? Version,
+    [property: JsonRequired] string PackageContentIdentity,
+    [property: JsonRequired] string ActionKind,
+    [property: JsonRequired] string? DeprecatedMessage,
     IReadOnlyList<RegistryPackageDependency> DependsOn,
     IReadOnlyList<RegistryPackageTarget> Targets,
-    IReadOnlyList<RegistryPackageProjectionArtifact> Artifacts,
-    IReadOnlyList<RegistryPackageTargetRuntimeBinding>? RuntimeBindings = null,
-    RegistryRuntimeOnlyRebindDetails? RuntimeOnlyRebind = null)
+    IReadOnlyList<RegistryPackageProjectionArtifact> Artifacts)
 {
-    public IReadOnlyList<RegistryPackageTargetRuntimeBinding> RuntimeBindings { get; }
-        = Array.AsReadOnly((RuntimeBindings ?? []).ToArray());
+    private IReadOnlyList<RegistryPackageDependency> _dependsOn = PolicyCollections.FreezeBounded(DependsOn);
+    private IReadOnlyList<RegistryPackageTarget> _targets = PolicyCollections.FreezeBounded(Targets);
+    private IReadOnlyList<RegistryPackageProjectionArtifact> _artifacts = PolicyCollections.FreezeBounded(Artifacts);
+    [JsonRequired] public IReadOnlyList<RegistryPackageDependency> DependsOn { get => _dependsOn; init => _dependsOn = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<RegistryPackageTarget> Targets { get => _targets; init => _targets = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<RegistryPackageProjectionArtifact> Artifacts { get => _artifacts; init => _artifacts = PolicyCollections.FreezeBounded(value); }
 }
 
 public sealed record RegistryPackageInstallPlanConflict(
@@ -340,18 +379,16 @@ public sealed record RegistryPackageInstallPlanConflict(
     string ErrorCode = RegistryV1ErrorCodes.Conflict,
     string Message = "");
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryResolveInstallPlanResponse(
-    bool Success,
+    [property: JsonRequired] bool Success,
     IReadOnlyList<RegistryPackageInstallPlanItem> Items,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<RegistryPackageInstallPlanConflict> Conflicts,
     IReadOnlyList<string> TrustedArtifactOrigins,
-    IReadOnlyList<RegistryResolvedExecutionRuntimeArtifact>? RuntimeArtifacts = null,
-    IReadOnlyList<RegistryExecutionRuntimeResolutionConflict>? RuntimeConflicts = null,
-    string ResolutionFingerprint = "",
-    long RuntimePolicyRevision = 0,
-    DateTimeOffset ExpiresAtUtc = default)
+    [property: JsonRequired] string ResolutionFingerprint = "",
+    [property: JsonRequired] DateTimeOffset ExpiresAtUtc = default)
 {
     /// <summary>Verified package policy for this plan; absence is not authorization.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
@@ -361,9 +398,15 @@ public sealed record RegistryResolveInstallPlanResponse(
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public RegistryPackageResolutionPolicy? ResolutionPolicy { get; init; }
     private IReadOnlyList<RegistryPackageCompatibilityConflict> _compatibilityConflicts = [];
-    public IReadOnlyList<RegistryPackageCompatibilityConflict> CompatibilityConflicts { get => _compatibilityConflicts; init => _compatibilityConflicts = PolicyCollections.Freeze(value); }
-    public IReadOnlyList<RegistryResolvedExecutionRuntimeArtifact> RuntimeArtifacts { get; }
-        = Array.AsReadOnly((RuntimeArtifacts ?? []).ToArray());
-    public IReadOnlyList<RegistryExecutionRuntimeResolutionConflict> RuntimeConflicts { get; }
-        = Array.AsReadOnly((RuntimeConflicts ?? []).ToArray());
+    public IReadOnlyList<RegistryPackageCompatibilityConflict> CompatibilityConflicts { get => _compatibilityConflicts; init => _compatibilityConflicts = PolicyCollections.FreezeBounded(value); }
+    private IReadOnlyList<RegistryPackageInstallPlanItem> _items = PolicyCollections.FreezeBounded(Items);
+    private IReadOnlyList<string> _warnings = PolicyCollections.FreezeBounded(Warnings);
+    private IReadOnlyList<string> _errors = PolicyCollections.FreezeBounded(Errors);
+    private IReadOnlyList<RegistryPackageInstallPlanConflict> _conflicts = PolicyCollections.FreezeBounded(Conflicts);
+    private IReadOnlyList<string> _trustedArtifactOrigins = PolicyCollections.FreezeBounded(TrustedArtifactOrigins);
+    [JsonRequired] public IReadOnlyList<RegistryPackageInstallPlanItem> Items { get => _items; init => _items = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<string> Warnings { get => _warnings; init => _warnings = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<string> Errors { get => _errors; init => _errors = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<RegistryPackageInstallPlanConflict> Conflicts { get => _conflicts; init => _conflicts = PolicyCollections.FreezeBounded(value); }
+    [JsonRequired] public IReadOnlyList<string> TrustedArtifactOrigins { get => _trustedArtifactOrigins; init => _trustedArtifactOrigins = PolicyCollections.FreezeBounded(value); }
 }

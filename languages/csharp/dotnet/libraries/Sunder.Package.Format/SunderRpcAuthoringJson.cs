@@ -13,12 +13,16 @@ internal static class SunderRpcAuthoringJson
     internal static JsonDocument Parse(ReadOnlySpan<byte> bytes, int maximumBytes)
         => ParseCore(bytes, maximumBytes, allowNull: false);
 
+    internal static JsonDocument ParseModelProjection(ReadOnlySpan<byte> bytes)
+        => ParseCore(bytes, SunderPackageFormat.MaxRpcModelProjectionBytes, allowNull: false, maximumValuesAndProperties: 524_288);
+
     // Registry DTO projections can contain nullable presentation/lifecycle fields.
     // This reader is not used for source locks, inventories or signed envelopes.
     internal static JsonDocument ParseRegistryMetadata(ReadOnlySpan<byte> bytes, int maximumBytes)
         => ParseCore(bytes, maximumBytes, allowNull: true);
 
-    private static JsonDocument ParseCore(ReadOnlySpan<byte> bytes, int maximumBytes, bool allowNull)
+    private static JsonDocument ParseCore(ReadOnlySpan<byte> bytes, int maximumBytes, bool allowNull,
+        int maximumValuesAndProperties = MaximumValuesAndProperties)
     {
         if (maximumBytes < 0) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         if (bytes.Length == 0 || bytes.Length > maximumBytes || bytes.StartsWith(new byte[] { 0xef, 0xbb, 0xbf }))
@@ -35,11 +39,16 @@ internal static class SunderRpcAuthoringJson
                 MaxDepth = 16,
             });
             var valuesAndProperties = 0;
+            var objects = new Stack<HashSet<string>>();
             while (reader.Read())
             {
                 if (reader.TokenType is not (JsonTokenType.EndArray or JsonTokenType.EndObject)
-                    && ++valuesAndProperties > MaximumValuesAndProperties)
+                    && ++valuesAndProperties > maximumValuesAndProperties)
                     throw new InvalidDataException("RPC authoring JSON exceeds its structural value/property budget.");
+                if (reader.TokenType == JsonTokenType.StartObject) objects.Push(new(StringComparer.Ordinal));
+                else if (reader.TokenType == JsonTokenType.EndObject) objects.Pop();
+                else if (reader.TokenType == JsonTokenType.PropertyName && !objects.Peek().Add(FoldAscii(reader.GetString()!)))
+                    throw new InvalidDataException("RPC authoring JSON contains duplicate or ASCII-case-colliding members.");
             }
             document = JsonDocument.Parse(bytes.ToArray(), new JsonDocumentOptions
             {
@@ -47,7 +56,7 @@ internal static class SunderRpcAuthoringJson
                 CommentHandling = JsonCommentHandling.Disallow,
                 MaxDepth = 16,
             });
-            ValidateRepresentation(document.RootElement, allowNull);
+            ValidateRepresentation(document.RootElement, allowNull, maximumValuesAndProperties);
             return document;
         }
         catch (Exception exception) when (exception is JsonException or DecoderFallbackException or InvalidOperationException)
@@ -176,17 +185,19 @@ internal static class SunderRpcAuthoringJson
         output.Append('"');
     }
 
-    private static void ValidateRepresentation(JsonElement value, bool allowNull = false)
+    private static void ValidateRepresentation(JsonElement value, bool allowNull = false,
+        int maximumValuesAndProperties = MaximumValuesAndProperties)
     {
         var valuesAndProperties = 0;
-        ValidateRepresentation(value, 0, ref valuesAndProperties, allowNull);
+        ValidateRepresentation(value, 0, ref valuesAndProperties, allowNull, maximumValuesAndProperties);
     }
 
-    private static void ValidateRepresentation(JsonElement value, int depth, ref int valuesAndProperties, bool allowNull)
+    private static void ValidateRepresentation(JsonElement value, int depth, ref int valuesAndProperties, bool allowNull,
+        int maximumValuesAndProperties)
     {
         if (depth > 16 || depth == 16 && value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
             throw new InvalidDataException("RPC authoring JSON exceeds the depth limit.");
-        if (++valuesAndProperties > MaximumValuesAndProperties)
+        if (++valuesAndProperties > maximumValuesAndProperties)
             throw new InvalidDataException("RPC authoring JSON exceeds its structural value/property budget.");
         switch (value.ValueKind)
         {
@@ -194,20 +205,16 @@ internal static class SunderRpcAuthoringJson
                 var names = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var property in value.EnumerateObject())
                 {
-                    if (++valuesAndProperties > MaximumValuesAndProperties)
+                    if (++valuesAndProperties > maximumValuesAndProperties)
                         throw new InvalidDataException("RPC authoring JSON exceeds its structural value/property budget.");
                     ValidateScalars(property.Name);
-                    var folded = string.Create(property.Name.Length, property.Name, static (span, name) =>
-                    {
-                        for (var index = 0; index < span.Length; index++)
-                            span[index] = name[index] is >= 'A' and <= 'Z' ? (char)(name[index] + ('a' - 'A')) : name[index];
-                    });
+                    var folded = FoldAscii(property.Name);
                     if (!names.Add(folded)) throw new InvalidDataException("RPC authoring JSON contains duplicate or ASCII-case-colliding members.");
-                    ValidateRepresentation(property.Value, depth + 1, ref valuesAndProperties, allowNull);
+                    ValidateRepresentation(property.Value, depth + 1, ref valuesAndProperties, allowNull, maximumValuesAndProperties);
                 }
                 break;
             case JsonValueKind.Array:
-                foreach (var item in value.EnumerateArray()) ValidateRepresentation(item, depth + 1, ref valuesAndProperties, allowNull);
+                foreach (var item in value.EnumerateArray()) ValidateRepresentation(item, depth + 1, ref valuesAndProperties, allowNull, maximumValuesAndProperties);
                 break;
             case JsonValueKind.String:
                 ValidateScalars(value.GetString()!);
@@ -237,4 +244,11 @@ internal static class SunderRpcAuthoringJson
             index++;
         }
     }
+
+    private static string FoldAscii(string value)
+        => string.Create(value.Length, value, static (span, name) =>
+        {
+            for (var index = 0; index < span.Length; index++)
+                span[index] = name[index] is >= 'A' and <= 'Z' ? (char)(name[index] + ('a' - 'A')) : name[index];
+        });
 }

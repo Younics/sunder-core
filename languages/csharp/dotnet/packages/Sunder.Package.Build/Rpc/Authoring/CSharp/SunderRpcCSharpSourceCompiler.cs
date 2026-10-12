@@ -9,6 +9,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Package.Build.Rpc.Authoring.CSharp;
 
@@ -42,7 +43,14 @@ internal sealed record SunderRpcCSharpCompilerInput(
     NullableContextOptions? NullableContext = null,
     IReadOnlySet<string>? AllowUnboundImportedProviderKeys = null,
     string AssemblyName = "Sunder.Rpc.Authoring",
-    bool GenerateServiceInterfaces = false);
+    bool GenerateServiceInterfaces = false,
+    IReadOnlyList<SunderRpcCSharpPackageApiSurface>? ImportedPackageApis = null)
+{
+    internal IReadOnlyDictionary<string, Sunder.Package.Format.SunderRpcServiceReferenceProjection> ServiceReferenceTargets { get; init; }
+        = new Dictionary<string, Sunder.Package.Format.SunderRpcServiceReferenceProjection>(StringComparer.Ordinal);
+    internal IReadOnlyDictionary<INamedTypeSymbol, SunderRpcCSharpImportedModel> ImportedModels { get; init; }
+        = new Dictionary<INamedTypeSymbol, SunderRpcCSharpImportedModel>(SymbolEqualityComparer.Default);
+}
 
 internal sealed record SunderRpcCSharpCompilerDiagnostic(
     string Id,
@@ -63,29 +71,49 @@ internal sealed record SunderRpcCSharpSourceSpan(
 
 internal sealed record SunderRpcCSharpProviderModel(
     string ProviderId,
-    SunderRpcProviderAudience Audience,
+    SunderServiceAudience Audience,
     string ServiceId,
-    INamedTypeSymbol SourceType);
+    INamedTypeSymbol SourceType)
+{
+    internal string BindingSuffix { get; init; } = string.Empty;
+    internal string RegistrationFactory => "CreateSunderRpcProviderRegistration" + BindingSuffix;
+    internal string ServicesFactory => "CreateSunderRpcProviderRegistrationForServices" + BindingSuffix;
+    internal string DeclarationFactory => "DeclareSunderRpcProvider" + BindingSuffix;
+    internal string PrivateFactory => "__CreateSunderRpcProviderRegistration" + BindingSuffix;
+    internal string HandlerTypeName => "__SunderGeneratedRpcHandler" + BindingSuffix;
+    internal string NaturalHandlerTypeName => "__SunderNaturalRpcHandler" + BindingSuffix;
+}
 
 internal sealed record SunderRpcCSharpImportedProvider(
     SunderRpcCSharpImportedProviderSurface Surface,
     SunderRpcCSharpProviderModel Provider)
 {
     internal SunderRpcCSharpPlatformAdapter? SemanticAdapter { get; init; }
+    internal IReadOnlyList<SunderRpcCSharpNaturalProviderMethod> NaturalMethods { get; init; } = [];
 }
 
 internal sealed record SunderRpcCSharpCompiledContract(
     string ContractKey,
-    SunderRpcExposure Exposure,
+    SunderServiceExposure Exposure,
     string GeneratedLogicalName,
     SunderRpcContractDescriptor Descriptor,
     IReadOnlyList<SunderRpcCSharpProviderModel> Providers,
     INamedTypeSymbol ServiceType,
     IReadOnlyList<SunderRpcCSharpMethodModel> Methods)
 {
+    internal string PackageId { get; init; } = string.Empty;
+    internal Sunder.Package.Format.SunderRpcModelProjection ModelProjection { get; init; } = null!;
+    internal Sunder.Package.Format.SunderRpcMethodPolicies MethodPolicies { get; init; } = Sunder.Package.Format.SunderRpcMethodPolicies.Empty;
     internal IReadOnlyList<SunderRpcCSharpSourceTypeModel> SourceTypes { get; init; } = [];
     internal SunderRpcOwnedUsePolicy? AppUse { get; init; }
     internal SunderRpcOwnedUsePolicy? RuntimeUse { get; init; }
+    internal bool UsesDateTimeOffset { get; init; }
+    internal IReadOnlyDictionary<string, Sunder.Package.Format.SunderRpcServiceReferenceProjection> SourceServiceReferences { get; init; }
+        = new Dictionary<string, Sunder.Package.Format.SunderRpcServiceReferenceProjection>(StringComparer.Ordinal);
+    internal IReadOnlyDictionary<string, SunderRpcCSharpResourceTarget> ResourceTargets { get; init; } = new Dictionary<string, SunderRpcCSharpResourceTarget>(StringComparer.Ordinal);
+    internal IReadOnlyDictionary<string, SunderRpcCSharpResourceLayout> ImportedValueLayouts { get; init; } = new Dictionary<string, SunderRpcCSharpResourceLayout>(StringComparer.Ordinal);
+    internal IReadOnlyDictionary<string, IReadOnlyList<string>> ImportedOptionalServiceReferenceMembers { get; init; }
+        = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 }
 
 internal sealed record SunderRpcCSharpSourceTypeModel(
@@ -103,7 +131,14 @@ internal sealed record SunderRpcCSharpSourceTypeModel(
     internal SunderRpcCSharpSourceUnionModel? Union { get; init; }
 
     internal SunderRpcCSharpSourceSyntheticTagModel? SyntheticTag { get; init; }
+
+    internal SunderRpcCSharpSourceConstructorModel? Construction { get; init; }
 }
+
+internal sealed record SunderRpcCSharpSourceConstructorModel(
+    IMethodSymbol Constructor,
+    IReadOnlyList<IPropertySymbol?> Parameters,
+    IReadOnlyList<IPropertySymbol> Initializers);
 
 internal sealed record SunderRpcCSharpSourceSyntheticTagModel(string PropertyName, string Tag);
 
@@ -137,7 +172,11 @@ internal sealed record SunderRpcCSharpMethodModel(
     string OutputDefinition,
     string Idempotency,
     IReadOnlyList<string> Errors,
-    IMethodSymbol Source);
+    IMethodSymbol Source)
+{
+    internal int TimeoutSeconds { get; init; }
+    internal bool ReturnsUnit => Source.ReturnType is INamedTypeSymbol { Arity: 0, Name: "Task" or "ValueTask" };
+}
 
 internal sealed record SunderRpcCSharpCompilationResult(
     IReadOnlyList<SunderRpcCSharpCompiledContract> Contracts,
@@ -148,7 +187,11 @@ internal sealed record SunderRpcCSharpCompilationResult(
     public IReadOnlyList<SunderRpcCSharpImportedProvider> ImportedProviders { get; init; } = [];
 
     public bool Success => Diagnostics.Count == 0;
+    internal IReadOnlyList<SunderRpcCSharpPackageApiSurface> ImportedPackageApis { get; init; } = [];
+    internal IReadOnlyList<SunderRpcCSharpImportedUse> ImportedUses { get; init; } = [];
     internal CSharpCompilation? SourceCompilation { get; init; }
+    internal IReadOnlySet<INamedTypeSymbol> TrustedImportedModelTypes { get; init; }
+        = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
 }
 
 internal sealed partial class SunderRpcCSharpSourceCompiler
@@ -160,7 +203,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
     private const int MaximumTraversalDepth = 64;
     private const long MaximumSafeInteger = 9_007_199_254_740_991;
     private const string InitialContractVersion = "1.0.0";
-    private static readonly AssemblyName SdkAssemblyIdentity = typeof(SunderRpcServiceAttribute).Assembly.GetName();
+    private static readonly AssemblyName SdkAssemblyIdentity = typeof(SunderServiceAttribute).Assembly.GetName();
 
     public SunderRpcCSharpCompilationResult Compile(SunderRpcCSharpCompilerInput input)
         => CompileCore(input, discoverOwnedClients: false);
@@ -175,10 +218,10 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         ArgumentNullException.ThrowIfNull(input);
         var diagnostics = new List<SunderRpcCSharpCompilerDiagnostic>();
         if ((!string.IsNullOrWhiteSpace(input.PackageId) && !PackageId.TryParse(input.PackageId, out _))
-            || !SemanticVersion.TryParse(input.PackageVersion, out _))
+            || !SemanticVersion.TryParse(input.PackageVersion, out _) || input.PackageVersion.Length > 256)
         {
             diagnostics.Add(new(
-                "rpc-authoring.service-invalid",
+                !SemanticVersion.TryParse(input.PackageVersion, out _) || input.PackageVersion.Length > 256 ? "rpc-authoring.private-package-version-invalid" : "rpc-authoring.service-invalid",
                 "C# RPC compilation requires a canonical lowercase package ID when supplied and a strict semantic package version.",
                 null,
                 null,
@@ -292,12 +335,14 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 }
                 foreach (var service in surface.Contract.Descriptor.Services)
                 {
-                    var metadataName = surface.Contract.GeneratedLogicalName
-                                       + ".I" + SunderRpcCSharpSyntax.Identifier(service.ServiceId) + "Provider";
+                    var metadataName = surface.IsNatural
+                        ? surface.Contract.NaturalServices.Single(value => value.ServiceId == service.ServiceId).InterfaceMetadataName
+                        : surface.Contract.GeneratedLogicalName + ".I" + SunderRpcCSharpSyntax.Identifier(service.ServiceId) + "Provider";
                     var serviceSymbol = compilation.GetTypeByMetadataName(metadataName);
                     if (serviceSymbol is not { TypeKind: TypeKind.Interface, IsGenericType: false }
                         || !IsOrdinarySourceSymbol(serviceSymbol, supplementalTreeSet)
-                        || !symbol.AllInterfaces.Contains(serviceSymbol, SymbolEqualityComparer.Default))
+                        || !SymbolEqualityComparer.Default.Equals(symbol, serviceSymbol)
+                            && !symbol.AllInterfaces.Contains(serviceSymbol, SymbolEqualityComparer.Default))
                     {
                         throw Failure(
                             "rpc-authoring.handler-incomplete",
@@ -313,25 +358,42 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                         symbol);
                 }
             }
+            // A sole implementation intent can bind its canonical natural
+            // contract directly. Generated key-specific interfaces remain useful
+            // when two reviewed reexport intents select the same contract.
+            foreach (var group in (input.ImportedProviderSurfaces ?? []).Where(surface => surface.IsNatural)
+                         .GroupBy(surface => surface.Contract.ContractKey, StringComparer.Ordinal))
+            {
+                if (group.Count() != 1) continue;
+                var surface = group.Single();
+                var canonical = compilation.GetTypeByMetadataName(SunderRpcCSharpImportPrepass.NaturalProviderInterface(surface.Contract));
+                if (canonical is not null) importedSurfaces.TryAdd(canonical, surface);
+            }
             foreach (var sourceType in sourceTypes)
             {
+                foreach (var property in sourceType.GetMembers().OfType<IPropertySymbol>().Where(property => HasAttribute(property, attributes.ServiceMember)))
+                    if (property.IsStatic || property.IsIndexer || property.DeclaredAccessibility != Accessibility.Public
+                        || property.GetMethod?.DeclaredAccessibility != Accessibility.Public || property.Type.TypeKind == TypeKind.Delegate)
+                        throw Failure("rpc-authoring.service-member-invalid", "SunderServiceMember requires a public instance, non-indexed value property with a public getter; local callbacks and nonpublic members cannot be transferred.", property);
                 if (HasAttribute(sourceType, attributes.AppUse) && !HasAttribute(sourceType, attributes.Service))
                     throw Failure("rpc-authoring.app-use-invalid", "App use policy belongs on an owned service declaration, not a provider or value type.", sourceType);
-                if (HasAttribute(sourceType, attributes.RuntimeUse) && !HasAttribute(sourceType, attributes.Service))
+                if (sourceType.GetAttributes().Any(attribute => SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, attributes.RuntimeUse)
+                        && attribute.ConstructorArguments.Length == 0) && !HasAttribute(sourceType, attributes.Service))
                     throw Failure("rpc-authoring.runtime-use-invalid", "Runtime use policy belongs on an owned service declaration, not a provider or value type.", sourceType);
-                if (sourceType.GetAttributes().Count(attribute =>
-                        SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, attributes.Provider)) > 1)
-                {
-                    throw Failure(
-                        "rpc-authoring.provider-invalid",
-                        $"RPC source class '{sourceType.Name}' may declare only one provider registration.",
-                        sourceType);
-                }
             }
         }
         catch (CompilerFailure failure)
         {
             diagnostics.Add(failure.Diagnostic);
+            return new([], diagnostics);
+        }
+        // Generated metadata names its reviewed codecs directly. Verify their
+        // source authority before reporting secondary C# accessibility errors
+        // from a substituted reference assembly or a missing generated model.
+        try { input = input with { ImportedModels = TrustedImportedModels(compilation, input, sourceTreeSet) }; }
+        catch (InvalidDataException exception)
+        {
+            diagnostics.Add(new("rpc-authoring.model-projection-invalid", exception.Message, null, null, null));
             return new([], diagnostics);
         }
         // Prefer the RPC handler diagnostic for incomplete imported interface implementations.
@@ -353,6 +415,33 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         {
             return new([], diagnostics);
         }
+        if (discoverOwnedClients && input.GenerateServiceInterfaces && !(input.SupplementalSources ?? []).Any(source => source.Path == "service-forward-types.g.cs"))
+        {
+            var forwards = new StringBuilder("// <auto-generated />\n#nullable enable\n");
+            foreach (var service in serviceSymbols)
+            {
+                string name;
+                try { name = Editor.GeneratedPackageNames.ServiceInterface(packageId, service); }
+                catch (ArgumentException) { continue; }
+                if (compilation.GetTypeByMetadataName(name) is not null) continue;
+                var dot = name.LastIndexOf('.');
+                forwards.Append("namespace ").Append(name[..dot]).Append(" { ")
+                    .Append(service.DeclaredAccessibility == Accessibility.Public ? "public" : "internal")
+                    .Append(" interface ").Append(name[(dot + 1)..]).AppendLine(" { } }");
+            }
+            if (forwards.Length > "// <auto-generated />\n#nullable enable\n".Length)
+                return CompileCore(input with { SupplementalSources = (input.SupplementalSources ?? []).Append(new SunderRpcCSharpSourceFile("service-forward-types.g.cs", forwards.ToString())).ToArray() }, discoverOwnedClients: true);
+        }
+        try
+        {
+            input = input with { ServiceReferenceTargets = BuildServiceReferenceTargets(packageId, serviceSymbols, attributes,
+                input.ImportedProviderSurfaces ?? [], input.ImportedPackageApis ?? []) };
+        }
+        catch (InvalidDataException exception)
+        {
+            diagnostics.Add(new("rpc-authoring.model-projection-invalid", exception.Message, null, null, null));
+            return new([], diagnostics);
+        }
         if (serviceSymbols.Length > MaximumContracts)
         {
             diagnostics.Add(new(
@@ -366,15 +455,27 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
 
         var contracts = new List<SunderRpcCSharpCompiledContract>(serviceSymbols.Length);
         var importedProviders = new List<SunderRpcCSharpImportedProvider>();
+        IReadOnlyList<SunderRpcCSharpImportedUse> importedUses = [];
         var contractIds = new Dictionary<string, INamedTypeSymbol>(StringComparer.OrdinalIgnoreCase);
         var contractKeys = new Dictionary<string, INamedTypeSymbol>(StringComparer.OrdinalIgnoreCase);
         var generatedNames = new Dictionary<string, INamedTypeSymbol>(StringComparer.OrdinalIgnoreCase);
+        var serviceApiNames = new Dictionary<string, INamedTypeSymbol>(StringComparer.OrdinalIgnoreCase);
         var contractIndexes = new Dictionary<ISymbol, int>(SymbolEqualityComparer.Default);
         try
         {
             foreach (var service in serviceSymbols)
             {
                 var contract = CompileService(input with { PackageId = packageId }, sourceTreeSet, attributes, service);
+                if (input.GenerateServiceInterfaces)
+                {
+                    var apiName = Editor.GeneratedPackageNames.ServiceInterface(packageId, contract.Descriptor.Services.Single().ServiceId);
+                    var authored = compilation.GetTypeByMetadataName(apiName);
+                    if (authored is not null && IsOrdinarySourceSymbol(authored, sourceTreeSet))
+                        throw Failure("rpc-authoring.generated-name-collision", $"Generated service API '{apiName}' conflicts with an authored declaration.", service, authored);
+                    if (serviceApiNames.TryGetValue(apiName, out var otherService))
+                        throw Failure("rpc-authoring.generated-name-collision", $"Services '{otherService}' and '{service}' generate the same API '{apiName}'. Use distinct source service names.", otherService, service);
+                    serviceApiNames.Add(apiName, service);
+                }
                 if (contractIds.TryGetValue(contract.Descriptor.ContractId, out var existing))
                 {
                     throw Failure(
@@ -406,11 +507,17 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 contracts.Add(contract);
             }
 
-            foreach (var providerType in sourceTypes.Where(symbol => !HasAttribute(symbol, attributes.Service)))
+            foreach (var providerType in sourceTypes)
             {
                 foreach (var providerAttribute in providerType.GetAttributes()
                              .Where(attribute => SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, attributes.Provider)))
                 {
+                    // The owning declaration already compiled its own shorthand.
+                    // Other explicit bindings on that same class are independent.
+                    if (HasAttribute(providerType, attributes.Service)
+                        && (providerAttribute.ConstructorArguments.Length == 0
+                            || providerAttribute.ConstructorArguments[0].Value is INamedTypeSymbol ownService
+                                && SymbolEqualityComparer.Default.Equals(ownService, providerType))) continue;
                     if (providerAttribute.ConstructorArguments.Length != 1
                         || providerAttribute.ConstructorArguments[0].Value is not INamedTypeSymbol service)
                     {
@@ -421,15 +528,18 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                     }
                     if (importedSurfaces.TryGetValue(service, out var surface))
                     {
-                        ValidateStandaloneProvider(providerType, service, sourceTreeSet, attributes.Method, imported: true);
+                        IReadOnlyList<SunderRpcCSharpNaturalProviderMethod> naturalMethods = [];
+                        if (surface.IsNatural)
+                            naturalMethods = BindNaturalProvider(compilation, providerType, surface, sourceTreeSet, attributes);
+                        else ValidateStandaloneProvider(providerType, service, sourceTreeSet, attributes.Method, imported: true);
                         importedProviders.Add(new(surface, CompileProvider(
                             providerAttribute,
                             surface.Contract.Descriptor.ContractId,
                             surface.Contract.Descriptor.Services.OrderBy(static item => item.ServiceId, StringComparer.Ordinal).First().ServiceId,
-                            SunderRpcExposure.Public,
+                            SunderServiceExposure.Public,
                             providerType,
                             service,
-                            sourceTreeSet)));
+                            sourceTreeSet)) { NaturalMethods = naturalMethods });
                         continue;
                     }
                     var adapter = CompilePlatformAdapter(service, attributes, importedSurfaces.Values, providerType);
@@ -438,7 +548,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                         ValidateStandaloneProvider(providerType, service, sourceTreeSet, attributes.Method, imported: true);
                         importedProviders.Add(new(adapter.Surface, CompileProvider(providerAttribute,
                             adapter.Surface.Contract.Descriptor.ContractId, adapter.Surface.Contract.Descriptor.Services.Single().ServiceId,
-                            SunderRpcExposure.Public, providerType, service, sourceTreeSet)) { SemanticAdapter = adapter });
+                            SunderServiceExposure.Public, providerType, service, sourceTreeSet)) { SemanticAdapter = adapter });
                         continue;
                     }
                     if (!contractIndexes.TryGetValue(service, out var contractIndex))
@@ -480,10 +590,14 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 }
             }
             var packageProviderIds = new Dictionary<string, SunderRpcCSharpProviderModel>(StringComparer.OrdinalIgnoreCase);
-            var packageProviderTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-            foreach (var provider in contracts.SelectMany(static contract => contract.Providers)
-                         .Concat(importedProviders.Select(static imported => imported.Provider)))
+            var packageProviderTypes = new Dictionary<INamedTypeSymbol, HashSet<string>>(SymbolEqualityComparer.Default);
+            foreach (var (contractId, provider) in contracts.SelectMany(contract => contract.Providers.Select(provider => (contract.Descriptor.ContractId, Provider: provider)))
+                         .Concat(importedProviders.Select(imported => (imported.Surface.Contract.Descriptor.ContractId, imported.Provider))))
             {
+                if (!packageProviderTypes.TryGetValue(provider.SourceType, out var bindings))
+                    packageProviderTypes.Add(provider.SourceType, bindings = new(StringComparer.Ordinal));
+                if (!bindings.Add(contractId))
+                    throw Failure("rpc-authoring.provider-invalid", $"RPC source class '{provider.SourceType.Name}' repeats provider binding '{contractId}'. Declare each contract once on a class.", provider.SourceType);
                 if (packageProviderIds.TryGetValue(provider.ProviderId, out var existing))
                 {
                     throw Failure(
@@ -493,14 +607,35 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                         provider.SourceType);
                 }
                 packageProviderIds.Add(provider.ProviderId, provider);
-                if (!packageProviderTypes.Add(provider.SourceType))
-                {
-                    throw Failure(
-                        "rpc-authoring.provider-invalid",
-                        $"RPC source class '{provider.SourceType.Name}' may declare only one provider registration.",
-                        provider.SourceType);
-                }
             }
+            SunderRpcCSharpProviderModel Bind(string contractId, SunderRpcCSharpProviderModel provider)
+                => provider with { BindingSuffix = packageProviderTypes[provider.SourceType].Count > 1 ? "_" + Editor.GeneratedPackageNames.ContractSymbol(contractId) : string.Empty };
+            contracts = contracts.Select(contract => contract with { Providers = contract.Providers.Select(provider => Bind(contract.Descriptor.ContractId, provider)).ToArray() }).ToList();
+            importedProviders = importedProviders.Select(imported => imported with { Provider = Bind(imported.Surface.Contract.Descriptor.ContractId, imported.Provider) }).ToList();
+            var responsePolicyMethods = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            foreach (var contract in contracts)
+                foreach (var method in contract.Methods)
+                {
+                    var serviceId = contract.Descriptor.Services.Single().ServiceId;
+                    responsePolicyMethods.Add(method.Source);
+                    _ = ResponseContentCompletion(method.Source, contract.Descriptor, serviceId, method.MethodId);
+                    foreach (var provider in contract.Providers)
+                    {
+                        var implementation = ProviderMethod(provider.SourceType, method.Source);
+                        responsePolicyMethods.Add(implementation);
+                        _ = ResponseContentCompletion(implementation, contract.Descriptor, serviceId, method.MethodId);
+                    }
+                }
+            foreach (var provider in importedProviders)
+                foreach (var method in provider.NaturalMethods)
+                    responsePolicyMethods.Add(ProviderMethod(provider.Provider.SourceType, method.InvocationMethod));
+            foreach (var method in sourceTypes.SelectMany(type => type.GetMembers().OfType<IMethodSymbol>()))
+                if (!responsePolicyMethods.Contains(method) && method.GetAttributes().Any(attribute =>
+                    SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, attributes.Method)
+                    && attribute.NamedArguments.Any(pair => pair.Key == nameof(SunderMethodAttribute.CompleteOnResponseContentRetirement))))
+                    throw Failure("rpc-authoring.method-invalid", "Response-content completion policy must bind an owned or imported natural provider method.", method);
+            importedUses = CompileImportedUses(compilation, input, sourceTreeSet, sourceTypes, attributes, importedProviders);
+            ValidateOptionalReferences(sourceTypes, contracts);
             var providerCount = packageProviderIds.Count;
             if (providerCount > MaximumProviders)
             {
@@ -526,12 +661,17 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             return new([], diagnostics);
         }
 
+        var projection = SunderRpcCSharpModelProjection.Plan(contracts, CompleteImportedContracts(input));
+        if (!projection.Success) return new([], projection.Diagnostics);
         return new(
-            contracts.OrderBy(static contract => contract.ContractKey, StringComparer.Ordinal).ToArray(),
+            projection.Contracts,
             diagnostics)
         {
             ResolvedPackageId = packageId,
             SourceCompilation = compilation,
+            TrustedImportedModelTypes = input.ImportedModels.Keys.ToHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default),
+            ImportedPackageApis = input.ImportedPackageApis ?? [],
+            ImportedUses = importedUses,
             ImportedProviders = importedProviders.OrderBy(static item => item.Surface.Key, StringComparer.Ordinal)
                 .ThenBy(static item => item.Provider.ProviderId, StringComparer.Ordinal)
                 .ToArray(),
@@ -580,21 +720,22 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         }
 
         var serviceAttribute = GetAttribute(service, attributes.Service)!;
-        var exposure = (SunderRpcExposure)(int)(serviceAttribute.ConstructorArguments[0].Value ?? 0);
+        var exposure = (SunderServiceExposure)(int)(serviceAttribute.ConstructorArguments[0].Value ?? 0);
         if (!Enum.IsDefined(exposure))
         {
             throw Failure("rpc-authoring.service-invalid", $"RPC service '{service.Name}' has an invalid exposure.", service);
         }
-        if (!SunderRpcCSharpNaming.TryCreate(service.Name, "Service", out var serviceName))
+        var explicitKey = GetNamedString(serviceAttribute, "Key");
+        if (!SunderRpcCSharpNaming.TryCreate(explicitKey ?? service.Name, explicitKey is null ? "Service" : null, out var serviceName))
         {
             throw Failure("rpc-authoring.service-invalid", $"RPC service name '{service.Name}' cannot produce a canonical wire identity.", service);
         }
         var canonicalServiceName = serviceName!;
         var contractKey = canonicalServiceName.LowerKebab;
 
-        var serviceId = GetNamedString(serviceAttribute, nameof(SunderRpcServiceAttribute.ServiceId))
+        var serviceId = GetNamedString(serviceAttribute, nameof(SunderServiceAttribute.ServiceId))
                         ?? canonicalServiceName.LowerKebab;
-        var contractId = GetNamedString(serviceAttribute, nameof(SunderRpcServiceAttribute.ContractId))
+        var contractId = GetNamedString(serviceAttribute, nameof(SunderServiceAttribute.ContractId))
                          ?? $"{input.PackageId}.{canonicalServiceName.ContractSuffix}";
         if (contractId.Length > MaximumIdentityCharacters)
         {
@@ -619,8 +760,8 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 $"RPC service '{serviceMetadataName}' derives contract identity '{contractId}', but its owned baseline records '{acceptedContractId}'.",
                 service);
         }
-        var contractVersion = InitialContractVersion;
-        if (input.OwnedContractsByContractKey?.TryGetValue(contractKey, out var acceptedContract) == true)
+        var contractVersion = exposure == SunderServiceExposure.Package ? input.PackageVersion : InitialContractVersion;
+        if (exposure == SunderServiceExposure.Public && input.OwnedContractsByContractKey?.TryGetValue(contractKey, out var acceptedContract) == true)
         {
             if (!PackageId.TryParse(acceptedContract.ContractId, out _)
                 || !SemanticVersion.TryParse(acceptedContract.ContractVersion, out _))
@@ -641,7 +782,8 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         }
         var methods = service.GetMembers()
             .OfType<IMethodSymbol>()
-            .Where(method => HasAttribute(method, attributes.Method))
+            .Where(method => HasAttribute(method, attributes.Method)
+                || Editor.ServiceAuthoringSemantics.IsImplicitMethod(method))
             .OrderBy(SourcePath, StringComparer.Ordinal)
             .ThenBy(SourceStart)
             .ToArray();
@@ -659,14 +801,14 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 overloadedMethod.Cast<ISymbol>().ToArray());
         }
 
-        var definitions = new DefinitionGraph(sourceTrees, attributes);
+        var definitions = new DefinitionGraph(sourceTrees, attributes, input.ServiceReferenceTargets, input.ImportedModels, exposure);
         var methodModels = methods.Select(method => CompileMethod(
             method,
             canonicalServiceName.Pascal,
             definitions,
             attributes)).ToArray();
         var errors = CompileErrors(service, definitions, attributes);
-        foreach (var argument in serviceAttribute.NamedArguments.Where(pair => pair.Key == nameof(SunderRpcServiceAttribute.AdditionalDefinitions)))
+        foreach (var argument in serviceAttribute.NamedArguments.Where(pair => pair.Key == nameof(SunderServiceAttribute.AdditionalDefinitions)))
         {
             if (argument.Value.Kind != TypedConstantKind.Array || argument.Value.IsNull || argument.Value.Values.Length > 256)
                 throw Failure("rpc-authoring.value-invalid", "AdditionalDefinitions must be a non-null array of at most 256 ordinary source value types.", service);
@@ -699,7 +841,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             methodModels,
             errors,
             definitions.Definitions,
-            serviceAttribute.NamedArguments.Any(pair => pair.Key == nameof(SunderRpcServiceAttribute.IncludeSchemaDialect) && pair.Value.Value is true));
+            serviceAttribute.NamedArguments.Any(pair => pair.Key == nameof(SunderServiceAttribute.IncludeSchemaDialect) && pair.Value.Value is true));
         SunderRpcContractDescriptor descriptor;
         try
         {
@@ -715,6 +857,8 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
 
         var providers = service.GetAttributes()
             .Where(attribute => SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, attributes.Provider))
+            .Where(attribute => attribute.ConstructorArguments.Length == 0
+                || attribute.ConstructorArguments[0].Value is INamedTypeSymbol ownService && SymbolEqualityComparer.Default.Equals(ownService, service))
             .Select(attribute => CompileProvider(attribute, descriptor.ContractId, serviceId, exposure, service, service, sourceTrees))
             .OrderBy(static provider => provider.ProviderId, StringComparer.Ordinal)
             .ToArray();
@@ -733,9 +877,9 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             [
                 new(
                     providerId,
-                    exposure == SunderRpcExposure.Package
-                        ? SunderRpcProviderAudience.Owner
-                        : SunderRpcProviderAudience.Public,
+                    exposure == SunderServiceExposure.Package
+                        ? SunderServiceAudience.Owner
+                        : SunderServiceAudience.Public,
                     serviceId,
                     service),
             ];
@@ -743,25 +887,60 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         return new(
             contractKey,
             exposure,
-            $"Sunder.Generated.Rpc.{canonicalServiceName.Pascal}",
+            Editor.GeneratedPackageNames.Transport(input.PackageId, contractId),
             descriptor,
             providers,
             service,
             methodModels)
         {
+            PackageId = input.PackageId,
             SourceTypes = definitions.GetSourceTypes(descriptor),
-            AppUse = CompileUsePolicy(service, descriptor, attributes.AppUse, "app"),
+            SourceServiceReferences = definitions.ServiceReferences,
+            ImportedValueLayouts = definitions.ImportedLayouts,
+            ImportedOptionalServiceReferenceMembers = definitions.ImportedOptionalServiceReferenceMembers,
+            UsesDateTimeOffset = definitions.UsesDateTimeOffset,
+            AppUse = CompileAppUsePolicy(service, descriptor, attributes.AppUse, exposure),
             RuntimeUse = CompileUsePolicy(service, descriptor, attributes.RuntimeUse, "runtime"),
+            MethodPolicies = methodModels.Any(method => method.TimeoutSeconds != 0)
+                ? new(new Dictionary<string, IReadOnlyDictionary<string, Sunder.Package.Format.SunderRpcMethodPolicy>>(StringComparer.Ordinal)
+                { [serviceId] = methodModels.Where(method => method.TimeoutSeconds != 0).ToDictionary(method => method.MethodId,
+                    method => new Sunder.Package.Format.SunderRpcMethodPolicy(method.TimeoutSeconds), StringComparer.Ordinal) })
+                : Sunder.Package.Format.SunderRpcMethodPolicies.Empty,
         };
+    }
+
+    private static SunderRpcOwnedUsePolicy? CompileAppUsePolicy(INamedTypeSymbol service, SunderRpcContractDescriptor descriptor,
+        INamedTypeSymbol attribute, SunderServiceExposure exposure)
+    {
+        var declaration = GetAttribute(service, attribute);
+        if (declaration?.NamedArguments.Any(pair => pair.Key == nameof(SunderAppUseAttribute.Enabled) && pair.Value.Value is false) == true)
+        {
+            if (exposure != SunderServiceExposure.Public
+                || declaration.NamedArguments.Any(pair => pair.Key == nameof(SunderAppUseAttribute.Required) && pair.Value.Value is true
+                    || pair.Key == nameof(SunderAppUseAttribute.Actions)))
+                throw Failure("rpc-authoring.app-use-invalid", "Only public services may disable App use, without required readiness or actions.", service);
+            return null;
+        }
+        return CompileUsePolicy(service, descriptor, attribute, "app")
+            ?? (service.TypeKind == TypeKind.Class && exposure == SunderServiceExposure.Public
+                ? SunderRpcAuthoringDocuments.ValidateUsePolicy(descriptor, required: false, actions: null, "app") : null);
     }
 
     private static SunderRpcOwnedUsePolicy? CompileUsePolicy(INamedTypeSymbol service, SunderRpcContractDescriptor descriptor, INamedTypeSymbol attribute, string role)
     {
-        var declaration = GetAttribute(service, attribute);
+        var declarations = service.GetAttributes().Where(value => SymbolEqualityComparer.Default.Equals(value.AttributeClass, attribute)
+            && value.ConstructorArguments.Length == 0).ToArray();
+        if (declarations.Length > 1) throw Failure($"rpc-authoring.{role}-use-invalid", "Declare the owning service use policy only once.", service);
+        var declaration = declarations.SingleOrDefault();
         if (declaration is null) return null;
-        var required = declaration.NamedArguments.Any(pair => pair.Key == nameof(SunderRpcAppUseAttribute.Required) && pair.Value.Value is true);
+        return CompileUsePolicy(service, descriptor, declaration, role);
+    }
+
+    private static SunderRpcOwnedUsePolicy CompileUsePolicy(INamedTypeSymbol service, SunderRpcContractDescriptor descriptor, AttributeData declaration, string role)
+    {
+        var required = declaration.NamedArguments.Any(pair => pair.Key == nameof(SunderAppUseAttribute.Required) && pair.Value.Value is true);
         string[]? actions = null;
-        foreach (var argument in declaration.NamedArguments.Where(pair => pair.Key == nameof(SunderRpcAppUseAttribute.Actions)))
+        foreach (var argument in declaration.NamedArguments.Where(pair => pair.Key == nameof(SunderAppUseAttribute.Actions)))
         {
             if (argument.Value.IsNull || argument.Value.Kind != TypedConstantKind.Array || argument.Value.Values.Length is < 1 or > 3
                 || argument.Value.Values.Any(value => value.Value is not string))
@@ -796,7 +975,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         }
 
         var (kind, outputType, isAsyncShape) = UnwrapOutput(method.ReturnType, method);
-        var methodAttribute = GetAttribute(method, attributes.Method)!;
+        var methodAttribute = GetAttribute(method, attributes.Method);
         var terminalSuffix = isAsyncShape ? "Async" : null;
         if (!SunderRpcCSharpNaming.TryCreate(method.Name, terminalSuffix, out var methodName))
         {
@@ -806,7 +985,6 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         var wireParameters = method.Parameters
             .Where(parameter => !IsCancellationToken(parameter.Type) && !IsInvocationContext(parameter.Type))
             .ToArray();
-        var foundAmbient = false;
         var foundContext = false;
         var foundCancellation = false;
         foreach (var parameter in method.Parameters)
@@ -821,7 +999,6 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 {
                     throw Failure("rpc-authoring.method-invalid", $"RPC invocation context has an invalid position on method '{method.Name}'.", parameter);
                 }
-                foundAmbient = true;
                 foundContext = true;
             }
             else if (IsCancellationToken(parameter.Type))
@@ -830,27 +1007,27 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 {
                     throw Failure("rpc-authoring.method-invalid", $"RPC method '{method.Name}' has more than one cancellation token.", parameter);
                 }
-                foundAmbient = true;
                 foundCancellation = true;
             }
-            else if (foundAmbient || parameter.IsOptional)
+            else if (foundCancellation || parameter.IsParams)
             {
                 throw Failure("rpc-authoring.method-invalid", $"RPC wire parameter '{parameter.Name}' has an invalid shape or position.", parameter);
             }
         }
 
-        var requestOverride = GetNamedString(methodAttribute, nameof(SunderRpcMethodAttribute.RequestDefinitionName));
-        var outputOverride = GetNamedString(methodAttribute, nameof(SunderRpcMethodAttribute.OutputDefinitionName));
+        var requestOverride = GetNamedString(methodAttribute, nameof(SunderMethodAttribute.RequestDefinitionName));
+        var outputOverride = GetNamedString(methodAttribute, nameof(SunderMethodAttribute.OutputDefinitionName));
         var requestDefinition = wireParameters.Length switch
         {
             0 => definitions.GetUnitDefinition(),
-            1 => definitions.GetDefinition(wireParameters[0].Type, wireParameters[0]),
+            1 => definitions.GetRootDefinition(wireParameters[0].Type, wireParameters[0], requestOverride ?? $"{serviceDefinitionKey}{methodName!.Pascal}Request"),
             _ => definitions.AddSyntheticRequest(
                 requestOverride ?? $"{serviceDefinitionKey}{methodName!.Pascal}Request",
                 wireParameters,
                 method),
         };
-        var outputDefinition = definitions.GetDefinition(outputType, method);
+        var outputDefinition = outputType is null ? definitions.GetUnitDefinition()
+            : definitions.GetRootDefinition(outputType, method, outputOverride ?? $"{serviceDefinitionKey}{methodName!.Pascal}{(kind == "server-stream" ? "Event" : "Result")}");
         if (wireParameters.Length <= 1
             && requestOverride is not null
             && !string.Equals(requestOverride, requestDefinition, StringComparison.Ordinal)
@@ -862,7 +1039,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 method);
         }
 
-        var idempotencyValue = GetNamedInt(methodAttribute, nameof(SunderRpcMethodAttribute.Idempotency));
+        var idempotencyValue = GetNamedInt(methodAttribute, nameof(SunderMethodAttribute.Idempotency));
         var idempotencyKind = (SunderRpcMethodIdempotency)idempotencyValue;
         if (!Enum.IsDefined(idempotencyKind))
         {
@@ -872,15 +1049,18 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 method);
         }
         var idempotency = idempotencyKind == SunderRpcMethodIdempotency.Idempotent ? "idempotent" : "none";
-        var errors = GetNamedStrings(methodAttribute, nameof(SunderRpcMethodAttribute.Errors));
+        var errors = GetNamedStrings(methodAttribute, nameof(SunderMethodAttribute.Errors));
+        var timeoutSeconds = GetNamedInt(methodAttribute, nameof(SunderMethodAttribute.TimeoutSeconds));
+        if (timeoutSeconds is < 0 or > Sunder.Package.Format.SunderRpcMethodPolicies.MaximumTimeoutSeconds)
+            throw Failure("rpc-authoring.method-invalid", "TimeoutSeconds must be zero (Host default) or an integer in 1..2100; Host policy still clamps the requested deadline.", method);
         return new(
-            GetNamedString(methodAttribute, nameof(SunderRpcMethodAttribute.MethodId)) ?? methodName!.LowerKebab,
+            GetNamedString(methodAttribute, nameof(SunderMethodAttribute.MethodId)) ?? methodName!.LowerKebab,
             kind,
             requestDefinition,
             outputDefinition,
             idempotency,
             errors,
-            method);
+            method) { TimeoutSeconds = timeoutSeconds };
     }
 
     private static IReadOnlyList<ErrorModel> CompileErrors(
@@ -898,10 +1078,10 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             {
                 throw Failure("rpc-authoring.service-invalid", $"RPC service '{service.Name}' declares error '{code}' more than once.", service);
             }
-            var detailsType = GetNamedType(attribute, nameof(SunderRpcDomainErrorAttribute.DetailsType));
+            var detailsType = GetNamedType(attribute, nameof(SunderServiceErrorAttribute.DetailsType));
             errors.Add(new(
                 code,
-                GetNamedString(attribute, nameof(SunderRpcDomainErrorAttribute.Description)),
+                GetNamedString(attribute, nameof(SunderServiceErrorAttribute.Description)),
                 detailsType is null ? null : definitions.GetDefinition(detailsType, service)));
         }
         return errors;
@@ -911,7 +1091,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         AttributeData attribute,
         string contractId,
         string serviceId,
-        SunderRpcExposure exposure,
+        SunderServiceExposure exposure,
         INamedTypeSymbol providerType,
         INamedTypeSymbol service,
         IReadOnlySet<SyntaxTree> sourceTrees)
@@ -927,28 +1107,28 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         }
         ValidateGeneratedProviderMembers(providerType, sourceTrees);
 
-        var audienceValue = GetNamedInt(attribute, nameof(SunderRpcProviderAttribute.Audience));
-        var audience = (SunderRpcProviderAudience)audienceValue;
-        if (audience == SunderRpcProviderAudience.Inferred)
+        var audienceValue = GetNamedInt(attribute, nameof(SunderServiceProviderAttribute.Audience));
+        var audience = (SunderServiceAudience)audienceValue;
+        if (audience == SunderServiceAudience.Inferred)
         {
-            audience = exposure == SunderRpcExposure.Package
-                ? SunderRpcProviderAudience.Owner
-                : SunderRpcProviderAudience.Public;
+            audience = exposure == SunderServiceExposure.Package
+                ? SunderServiceAudience.Owner
+                : SunderServiceAudience.Public;
         }
-        if (audience is not (SunderRpcProviderAudience.Owner or SunderRpcProviderAudience.Public))
+        if (audience is not (SunderServiceAudience.Owner or SunderServiceAudience.Public))
         {
             throw Failure("rpc-authoring.provider-invalid", $"RPC provider on '{providerType.Name}' has an invalid audience.", providerType);
         }
-        if (exposure == SunderRpcExposure.Package && audience == SunderRpcProviderAudience.Public)
+        if (exposure == SunderServiceExposure.Package && audience == SunderServiceAudience.Public)
         {
             throw FailureAtLocations(
                 "rpc-authoring.provider-invalid",
                 $"Package-exposed RPC service '{service.Name}' cannot have a public provider audience.",
-                [GetNamedArgumentValueLocation(attribute, nameof(SunderRpcProviderAttribute.Audience))
+                [GetNamedArgumentValueLocation(attribute, nameof(SunderServiceProviderAttribute.Audience))
                  ?? SourceLocation(providerType)]);
         }
 
-        var providerId = GetNamedString(attribute, nameof(SunderRpcProviderAttribute.ProviderId)) ?? $"{contractId}.provider";
+        var providerId = GetNamedString(attribute, nameof(SunderServiceProviderAttribute.ProviderId)) ?? $"{contractId}.provider";
         if (providerId.Length > MaximumIdentityCharacters)
         {
             throw Failure(
@@ -977,20 +1157,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         INamedTypeSymbol methodAttribute,
         bool imported = false)
     {
-        if (provider.TypeKind != TypeKind.Class
-            || provider.IsAbstract
-            || provider.IsRecord
-            || provider.IsGenericType
-            || provider.IsFileLocal
-            || provider.ContainingType is not null
-            || !HasOrdinarySourceDeclaration(provider, sourceTrees)
-            || !IsPartialType(provider))
-        {
-            throw Failure(
-                "rpc-authoring.provider-invalid",
-                $"RPC provider '{provider.ToDisplayString()}' must be a concrete, non-generic partial class in ordinary source.",
-                provider);
-        }
+        ValidateProviderClass(provider, sourceTrees);
         if (service.TypeKind == TypeKind.Interface
             ? !provider.AllInterfaces.Any(candidate => SymbolEqualityComparer.Default.Equals(candidate, service))
             : !InheritsFrom(provider, service))
@@ -1005,7 +1172,8 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             IEnumerable<INamedTypeSymbol> interfaces = imported ? service.AllInterfaces.Prepend(service) : [service];
             foreach (var method in interfaces.SelectMany(static type => type.GetMembers().OfType<IMethodSymbol>()))
             {
-                if (!imported && !HasAttribute(method, methodAttribute)) continue;
+                if (!imported && !HasAttribute(method, methodAttribute)
+                    && !Editor.ServiceAuthoringSemantics.IsImplicitMethod(method)) continue;
                 if (provider.FindImplementationForInterfaceMember(method) is not IMethodSymbol { IsAbstract: false, IsStatic: false } implementation
                     || imported && !SymbolEqualityComparer.Default.Equals(implementation.ReturnType, method.ReturnType))
                 {
@@ -1015,6 +1183,24 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                         provider);
                 }
             }
+        }
+    }
+
+    private static void ValidateProviderClass(INamedTypeSymbol provider, IReadOnlySet<SyntaxTree> sourceTrees)
+    {
+        if (provider.TypeKind != TypeKind.Class
+            || provider.IsAbstract
+            || provider.IsRecord
+            || provider.IsGenericType
+            || provider.IsFileLocal
+            || provider.ContainingType is not null
+            || !HasOrdinarySourceDeclaration(provider, sourceTrees)
+            || !IsPartialType(provider))
+        {
+            throw Failure(
+                "rpc-authoring.provider-invalid",
+                $"RPC provider '{provider.ToDisplayString()}' must be a concrete, non-generic partial class in ordinary source.",
+                provider);
         }
     }
 
@@ -1037,7 +1223,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
     {
         var factories = providerType.GetMembers("CreateSunderRpcServiceHandler");
         if (providerType.GetMembers().Any(member =>
-                (member.Name is "CreateSunderRpcProviderRegistration" or "DeclareSunderRpcProvider" or "__SunderGeneratedRpcHandler" or "__SunderGeneratedRpcDeclaration")
+                IsGeneratedProviderMember(member.Name)
                 && HasOrdinarySourceDeclaration(member, sourceTrees))
             || factories.Any(member => HasOrdinarySourceDeclaration(member, sourceTrees)
                 && (member is not IMethodSymbol method || !IsServiceHandlerFactoryDeclaration(method)
@@ -1054,13 +1240,21 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         }
     }
 
-    private static (string Kind, ITypeSymbol OutputType, bool IsAsyncShape) UnwrapOutput(
+    private static bool IsGeneratedProviderMember(string name)
+        => new[] { "CreateSunderRpcProviderRegistration", "CreateSunderRpcProviderRegistrationForServices", "CreateSunderRpcProviderRegistrations",
+                "CreateSunderRpcProviderRegistrationsForServices", "__CreateSunderRpcProviderRegistration", "DeclareSunderRpcProvider",
+                "__SunderGeneratedRpcHandler", "__SunderNaturalRpcHandler", "__SunderGeneratedRpcDeclaration" }
+            .Any(reserved => name == reserved || name.StartsWith(reserved + "_", StringComparison.Ordinal));
+
+    private static (string Kind, ITypeSymbol? OutputType, bool IsAsyncShape) UnwrapOutput(
         ITypeSymbol returnType,
         IMethodSymbol method)
     {
         if (returnType is INamedTypeSymbol named)
         {
             var namespaceName = named.ContainingNamespace.ToDisplayString();
+            if (namespaceName == "System.Threading.Tasks" && named is { Arity: 0, Name: "Task" or "ValueTask" })
+                return ("unary", null, true);
             if (namespaceName == "System.Threading.Tasks"
                 && named is { Arity: 1, Name: "Task" or "ValueTask" })
             {
@@ -1075,7 +1269,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
 
         throw Failure(
             "rpc-authoring.method-invalid",
-            $"RPC method '{method.Name}' must return Task<T>, ValueTask<T>, or IAsyncEnumerable<T>.",
+            $"Service method '{method.Name}' must return Task, ValueTask, Task<T>, ValueTask<T>, or IAsyncEnumerable<T>.",
             method);
     }
 
@@ -1148,20 +1342,21 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
     private static AttributeSymbols ResolveAttributes(CSharpCompilation compilation)
         => new(
             ResolveAttribute<SunderPackageAttribute>(compilation),
-            ResolveAttribute<SunderRpcServiceAttribute>(compilation),
-            ResolveAttribute<SunderRpcAppUseAttribute>(compilation),
-            ResolveAttribute<SunderRpcRuntimeUseAttribute>(compilation),
-            ResolveAttribute<SunderRpcProviderAttribute>(compilation),
-            ResolveAttribute<SunderRpcPlatformImportAttribute>(compilation),
-            ResolveAttribute<SunderRpcMethodAttribute>(compilation),
-            ResolveAttribute<SunderRpcDomainErrorAttribute>(compilation),
-            ResolveAttribute<SunderRpcDefinitionAttribute>(compilation),
-            ResolveAttribute<SunderRpcTransparentAttribute>(compilation),
-            ResolveAttribute<SunderRpcNumericEnumAttribute>(compilation),
-            ResolveAttribute<SunderRpcUnionAttribute>(compilation),
-            ResolveAttribute<SunderRpcDiscriminatorAttribute>(compilation),
-            ResolveAttribute<SunderRpcVariantAttribute>(compilation),
-            ResolveAttribute<SunderRpcFacetAttribute>(compilation),
+            ResolveAttribute<SunderServiceAttribute>(compilation),
+            ResolveAttribute<SunderAppUseAttribute>(compilation),
+            ResolveAttribute<SunderRuntimeUseAttribute>(compilation),
+            ResolveAttribute<SunderServiceProviderAttribute>(compilation),
+            ResolveAttribute<SunderPlatformImportAttribute>(compilation),
+            ResolveAttribute<SunderMethodAttribute>(compilation),
+            ResolveAttribute<SunderServiceErrorAttribute>(compilation),
+            ResolveAttribute<SunderValueAttribute>(compilation),
+            ResolveAttribute<SunderServiceMemberAttribute>(compilation),
+            ResolveAttribute<SunderTransparentValueAttribute>(compilation),
+            ResolveAttribute<SunderNumericEnumAttribute>(compilation),
+            ResolveAttribute<SunderUnionAttribute>(compilation),
+            ResolveAttribute<SunderDiscriminatorAttribute>(compilation),
+            ResolveAttribute<SunderVariantAttribute>(compilation),
+            ResolveAttribute<SunderValueConstraintsAttribute>(compilation),
             compilation.GetTypeByMetadataName("System.Text.Json.Serialization.JsonPropertyNameAttribute"),
             compilation.GetTypeByMetadataName("System.Text.Json.Serialization.JsonStringEnumMemberNameAttribute"));
 
@@ -1184,26 +1379,30 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
     }
 
     private static bool HasAttribute(ISymbol symbol, INamedTypeSymbol attribute)
-        => GetAttribute(symbol, attribute) is not null;
+        => symbol.GetAttributes().Any(candidate => SymbolEqualityComparer.Default.Equals(candidate.AttributeClass, attribute));
 
     private static AttributeData? GetAttribute(ISymbol symbol, INamedTypeSymbol attribute)
-        => symbol.GetAttributes().FirstOrDefault(candidate =>
-            SymbolEqualityComparer.Default.Equals(candidate.AttributeClass, attribute));
-
-    private static string? GetNamedString(AttributeData attribute, string name)
-        => attribute.NamedArguments.FirstOrDefault(pair => pair.Key == name).Value.Value as string;
-
-    private static int GetNamedInt(AttributeData attribute, string name)
     {
-        var value = attribute.NamedArguments.FirstOrDefault(pair => pair.Key == name).Value.Value;
+        var matches = symbol.GetAttributes().Where(candidate => SymbolEqualityComparer.Default.Equals(candidate.AttributeClass, attribute)).ToArray();
+        if (matches.Length > 1) throw Failure("rpc-authoring.service-invalid", $"'{symbol.Name}' repeats semantic metadata '{attribute.Name}', including migration aliases.", symbol);
+        return matches.FirstOrDefault();
+    }
+
+    private static string? GetNamedString(AttributeData? attribute, string name)
+        => attribute?.NamedArguments.FirstOrDefault(pair => pair.Key == name).Value.Value as string;
+
+    private static int GetNamedInt(AttributeData? attribute, string name)
+    {
+        var value = attribute?.NamedArguments.FirstOrDefault(pair => pair.Key == name).Value.Value;
         return value is int number ? number : 0;
     }
 
     private static ITypeSymbol? GetNamedType(AttributeData attribute, string name)
         => attribute.NamedArguments.FirstOrDefault(pair => pair.Key == name).Value.Value as ITypeSymbol;
 
-    private static IReadOnlyList<string> GetNamedStrings(AttributeData attribute, string name)
+    private static IReadOnlyList<string> GetNamedStrings(AttributeData? attribute, string name)
     {
+        if (attribute is null) return [];
         var value = attribute.NamedArguments.FirstOrDefault(pair => pair.Key == name).Value;
         return value.Kind == TypedConstantKind.Array
             ? value.Values.Select(static item => item.Value as string ?? string.Empty).ToArray()
@@ -1334,8 +1533,8 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         var receiver = compilation.GetSemanticModel(access.SyntaxTree).GetSymbolInfo(access.Expression).Symbol;
         if (receiver is IAliasSymbol alias) receiver = alias.Target;
         return receiver is INamedTypeSymbol { TypeKind: TypeKind.Class, IsAbstract: false } type
-            && (HasAttribute(type, ResolveAttribute<SunderRpcProviderAttribute>(compilation))
-                || HasAttribute(type, ResolveAttribute<SunderRpcServiceAttribute>(compilation)));
+            && (HasAttribute(type, ResolveAttribute<SunderServiceProviderAttribute>(compilation))
+                || HasAttribute(type, ResolveAttribute<SunderServiceAttribute>(compilation)));
     }
 
     private static bool IsServiceHandlerFactoryDeclaration(IMethodSymbol method)
@@ -1424,6 +1623,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         INamedTypeSymbol Method,
         INamedTypeSymbol DomainError,
         INamedTypeSymbol Definition,
+        INamedTypeSymbol ServiceMember,
         INamedTypeSymbol Transparent,
         INamedTypeSymbol NumericEnum,
         INamedTypeSymbol Union,
@@ -1435,17 +1635,24 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
 
     private sealed record ErrorModel(string Code, string? Description, string? DetailsDefinition);
 
-    private sealed class DefinitionGraph(
+    private sealed partial class DefinitionGraph(
         IReadOnlySet<SyntaxTree> sourceTrees,
-        AttributeSymbols attributes)
+        AttributeSymbols attributes,
+        IReadOnlyDictionary<string, Sunder.Package.Format.SunderRpcServiceReferenceProjection> serviceTargets,
+        IReadOnlyDictionary<INamedTypeSymbol, SunderRpcCSharpImportedModel> importedModels,
+        SunderServiceExposure exposure)
     {
         private readonly Dictionary<string, JsonObject> _definitions = new(StringComparer.Ordinal);
         private readonly Dictionary<ITypeSymbol, string> _typeNames = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<string, ISymbol> _definitionOwners = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<ITypeSymbol, SunderRpcCSharpSourceSyntheticTagModel> _taggedVariants = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<string, SunderRpcCSharpSourceTypeModel> _sourceTypes = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Sunder.Package.Format.SunderRpcServiceReferenceProjection> _serviceReferences = new(StringComparer.Ordinal);
+        internal IReadOnlyDictionary<string, Sunder.Package.Format.SunderRpcServiceReferenceProjection> ServiceReferences => _serviceReferences;
 
         public IReadOnlyDictionary<string, JsonObject> Definitions => _definitions;
+
+        public bool UsesDateTimeOffset { get; private set; }
 
         public IReadOnlyList<SunderRpcCSharpSourceTypeModel> GetSourceTypes(SunderRpcContractDescriptor descriptor)
         {
@@ -1518,6 +1725,12 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             {
                 return existing;
             }
+            if (type is INamedTypeSymbol importedType && importedModels.TryGetValue(importedType, out var imported))
+            {
+                var key = ImportModel(imported, source);
+                _typeNames.Add(type, key);
+                return key;
+            }
             if (type is not INamedTypeSymbol named
                 || named.TypeKind is not (TypeKind.Class or TypeKind.Struct or TypeKind.Enum)
                 || named.IsGenericType
@@ -1558,12 +1771,13 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             IReadOnlyList<SunderRpcCSharpSourcePropertyModel> properties = [];
             IReadOnlyList<SunderRpcCSharpSourceEnumMemberModel> enumMembers = [];
             SunderRpcCSharpSourceUnionModel? sourceUnion = null;
+            SunderRpcCSharpSourceConstructorModel? construction = null;
             var isTransparent = false;
             var isNumericEnum = false;
             if (named.TypeKind == TypeKind.Enum)
             {
                 schema = BuildEnum(named, out enumMembers);
-                isNumericEnum = HasAttribute(named, attributes.NumericEnum);
+                isNumericEnum = UsesNumericEnum(named);
             }
             else if (GetAttribute(named, attributes.Union) is { } union)
             {
@@ -1577,7 +1791,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             }
             else
             {
-                schema = BuildRecord(named, depth, out properties);
+                schema = BuildRecord(named, depth, out properties, out construction);
             }
             ApplyFacet(schema, GetAttribute(named, attributes.Facet), named);
             _definitions.Add(definitionName, schema);
@@ -1591,23 +1805,38 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 EnumMembers = enumMembers,
                 Union = sourceUnion,
                 SyntheticTag = _taggedVariants.GetValueOrDefault(named),
+                Construction = construction,
             });
             return definitionName;
+        }
+
+        public string GetRootDefinition(ITypeSymbol type, ISymbol source, string syntheticName)
+        {
+            var facet = source is IMethodSymbol method
+                ? method.GetReturnTypeAttributes().FirstOrDefault(attribute => SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, attributes.Facet))
+                : GetAttribute(source, attributes.Facet);
+            if (type.NullableAnnotation != NullableAnnotation.Annotated && type is INamedTypeSymbol { IsGenericType: false } named
+                && (IsOrdinarySourceSymbol(named, sourceTrees) || importedModels.ContainsKey(named)) && facet is null) return GetDefinition(type, source);
+            ReserveDefinition(syntheticName, source);
+            var schema = MapValueSchema(type, source, facet, 1);
+            _definitions.Add(syntheticName, schema);
+            return syntheticName;
         }
 
         private JsonObject BuildRecord(
             INamedTypeSymbol named,
             int depth,
-            out IReadOnlyList<SunderRpcCSharpSourcePropertyModel> sourceProperties)
+            out IReadOnlyList<SunderRpcCSharpSourcePropertyModel> sourceProperties,
+            out SunderRpcCSharpSourceConstructorModel? construction)
         {
             if (named.IsAbstract)
             {
                 throw Failure(
                     "rpc-authoring.value-invalid",
-                    $"Abstract RPC value type '{named.Name}' must declare SunderRpcUnion.",
+                    $"Abstract service value type '{named.Name}' must declare SunderUnion.",
                     named);
             }
-            var properties = named.GetMembers()
+            var knownProperties = named.GetMembers()
                 .OfType<IPropertySymbol>()
                 .Where(property => property is { IsStatic: false, DeclaredAccessibility: Accessibility.Public }
                                    && property.GetMethod is not null
@@ -1615,6 +1844,8 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 .OrderBy(SourcePath, StringComparer.Ordinal)
                 .ThenBy(SourceStart)
                 .ToArray();
+            var properties = knownProperties.Where(IsServiceProperty).ToArray();
+            construction = BindRecordConstructor(named, properties, knownProperties);
             var propertyObject = new JsonObject();
             var required = new List<string>();
             var propertyModels = new List<SunderRpcCSharpSourcePropertyModel>(properties.Length);
@@ -1637,11 +1868,13 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                         property);
                 }
                 var (propertyType, isOptional) = UnwrapOptional(property.Type);
-                if (!property.IsRequired && !isOptional)
+                if (!property.IsRequired && !isOptional
+                    && !(construction is not null && (construction.Parameters.Contains(property, SymbolEqualityComparer.Default)
+                         || named.IsRecord && IsAutoInitProperty(property) || IsExplicitServiceMember(property) && IsAutoInitProperty(property))))
                 {
                     throw Failure(
                         "rpc-authoring.value-invalid",
-                        $"RPC property '{named.Name}.{property.Name}' must be declared required or use SunderRpcOptional<T>.",
+                        $"RPC property '{named.Name}.{property.Name}' must be declared required, uniquely constructor-bound, or use SunderRpcOptional<T>.",
                         property);
                 }
                 if (property.IsRequired && isOptional)
@@ -1655,12 +1888,12 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                     wireName,
                     MapValueSchema(propertyType, property, GetAttribute(property, attributes.Facet), depth + 1));
                 propertyModels.Add(new(property, wireName, isOptional, explicitWireName is not null));
-                if (property.IsRequired)
+                if (!isOptional)
                 {
                     required.Add(wireName);
                 }
             }
-            if (propertyModels.Any(static property => property.IsOptional))
+            if (construction is null && propertyModels.Any(static property => property.IsOptional))
             {
                 // OnDeserializing is too late to reset values already bound to constructor parameters.
                 var jsonConstructors = named.InstanceConstructors.Where(static constructor =>
@@ -1740,7 +1973,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 .OrderBy(SourcePath, StringComparer.Ordinal)
                 .ThenBy(SourceStart)
                 .ToArray();
-            if (HasAttribute(named, attributes.NumericEnum))
+            if (UsesNumericEnum(named))
             {
                 if (HasSystemAttribute(named, "System.FlagsAttribute") || fields.Length == 0)
                 {
@@ -1782,8 +2015,8 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                     ["enum"] = new JsonArray(values),
                     ["type"] = "integer",
                 };
-                if (!GetAttribute(named, attributes.NumericEnum)!.NamedArguments.Any(pair =>
-                        pair.Key == nameof(SunderRpcNumericEnumAttribute.IncludeRangeBounds) && pair.Value.Value is false))
+                if (GetAttribute(named, attributes.NumericEnum)?.NamedArguments.Any(pair =>
+                        pair.Key == nameof(SunderNumericEnumAttribute.IncludeRangeBounds) && pair.Value.Value is false) != true)
                 {
                     schema["maximum"] = values[^1]!.DeepClone();
                     schema["minimum"] = values[0]!.DeepClone();
@@ -1938,6 +2171,11 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             };
         }
 
+        private bool UsesNumericEnum(INamedTypeSymbol type)
+            => HasAttribute(type, attributes.NumericEnum)
+                || !type.GetMembers().OfType<IFieldSymbol>().Any(field => attributes.JsonStringEnumMemberName is not null
+                    && HasAttribute(field, attributes.JsonStringEnumMemberName));
+
         private JsonObject MapValueSchema(ITypeSymbol type, ISymbol source, AttributeData? facet, int depth)
         {
             var isNullable = type.NullableAnnotation == NullableAnnotation.Annotated;
@@ -1994,6 +2232,25 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             if (type is INamedTypeSymbol named)
             {
                 var namespaceName = named.ContainingNamespace.ToDisplayString();
+                if (namespaceName == "Sunder.Sdk.Services" && SymbolEqualityComparer.Default.Equals(named.ContainingAssembly, attributes.Service.ContainingAssembly))
+                {
+                    if (named.Name == "SunderContent" && named.Arity == 0)
+                        return new() { ["type"] = "object", ["logicalType"] = "content-reference" };
+                    if (named.Name == "ServiceReference" && named.Arity == 1)
+                    {
+                        var targetName = named.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+                        if (!serviceTargets.TryGetValue(targetName, out var target))
+                            throw Failure("rpc-authoring.model-projection-invalid", $"ServiceReference target '{targetName}' is not an exact generated service in the validated owned/imported set.", source);
+                        var definition = Editor.GeneratedPackageNames.ContractSymbol(target.ContractId) + "_" + SunderRpcCSharpSyntax.Identifier(target.ServiceId).TrimStart('@') + "_ServiceReference";
+                        if (!_serviceReferences.ContainsKey(definition))
+                        {
+                            ReserveDefinition(definition, source);
+                            _definitions.Add(definition, Sunder.Package.Format.SunderRpcServiceReferenceSchema.Create());
+                            _serviceReferences.Add(definition, target);
+                        }
+                        return Reference(definition);
+                    }
+                }
                 if (named is { Name: "IReadOnlyList", Arity: 1 }
                     && namespaceName == "System.Collections.Generic")
                 {
@@ -2021,6 +2278,12 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 if (namespaceName == "System" && named.Name == nameof(DateOnly))
                 {
                     return FormattedString("date");
+                }
+                if (namespaceName == "System" && named.Name == nameof(DateTimeOffset)
+                    && named.ContainingAssembly.Identity.Name is "System.Runtime" or "System.Private.CoreLib" or "mscorlib")
+                {
+                    UsesDateTimeOffset = true;
+                    return FormattedString("date-time");
                 }
                 if (namespaceName == "System.Numerics" && named.Name == "BigInteger")
                 {
@@ -2063,7 +2326,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             {
                 switch (argument.Key)
                 {
-                    case nameof(SunderRpcFacetAttribute.JsonObjectOnly):
+                    case nameof(SunderValueConstraintsAttribute.JsonObjectOnly):
                         if (argument.Value.Value is true)
                         {
                             if (schema.Any(pair => pair.Key is not ("type" or "title" or "description" or "minProperties" or "maxProperties"))
@@ -2072,57 +2335,57 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                             schema["type"] = "object";
                         }
                         break;
-                    case nameof(SunderRpcFacetAttribute.MinLength):
+                    case nameof(SunderValueConstraintsAttribute.MinLength):
                         AddLengthFacet(schema, "minLength", Convert.ToInt64(argument.Value.Value, CultureInfo.InvariantCulture));
                         break;
-                    case nameof(SunderRpcFacetAttribute.MaxLength):
+                    case nameof(SunderValueConstraintsAttribute.MaxLength):
                         AddLengthFacet(schema, "maxLength", Convert.ToInt64(argument.Value.Value, CultureInfo.InvariantCulture));
                         break;
-                    case nameof(SunderRpcFacetAttribute.MinItems):
+                    case nameof(SunderValueConstraintsAttribute.MinItems):
                         schema["minItems"] = Convert.ToInt64(argument.Value.Value, CultureInfo.InvariantCulture);
                         break;
-                    case nameof(SunderRpcFacetAttribute.MaxItems):
+                    case nameof(SunderValueConstraintsAttribute.MaxItems):
                         schema["maxItems"] = Convert.ToInt64(argument.Value.Value, CultureInfo.InvariantCulture);
                         break;
-                    case nameof(SunderRpcFacetAttribute.MinProperties):
+                    case nameof(SunderValueConstraintsAttribute.MinProperties):
                         EnsureObjectSchema(schema);
                         schema["minProperties"] = Convert.ToInt64(argument.Value.Value, CultureInfo.InvariantCulture);
                         break;
-                    case nameof(SunderRpcFacetAttribute.MaxProperties):
+                    case nameof(SunderValueConstraintsAttribute.MaxProperties):
                         EnsureObjectSchema(schema);
                         schema["maxProperties"] = Convert.ToInt64(argument.Value.Value, CultureInfo.InvariantCulture);
                         break;
-                    case nameof(SunderRpcFacetAttribute.MaxDecodedBytes):
+                    case nameof(SunderValueConstraintsAttribute.MaxDecodedBytes):
                         schema["maxDecodedBytes"] = Convert.ToInt64(argument.Value.Value, CultureInfo.InvariantCulture);
                         break;
-                    case nameof(SunderRpcFacetAttribute.MaxDigits):
+                    case nameof(SunderValueConstraintsAttribute.MaxDigits):
                         schema["maxDigits"] = Convert.ToInt64(argument.Value.Value, CultureInfo.InvariantCulture);
                         break;
-                    case nameof(SunderRpcFacetAttribute.MaxPrecision):
+                    case nameof(SunderValueConstraintsAttribute.MaxPrecision):
                         schema["maxPrecision"] = Convert.ToInt64(argument.Value.Value, CultureInfo.InvariantCulture);
                         break;
-                    case nameof(SunderRpcFacetAttribute.MaxScale):
+                    case nameof(SunderValueConstraintsAttribute.MaxScale):
                         schema["maxScale"] = Convert.ToInt64(argument.Value.Value, CultureInfo.InvariantCulture);
                         break;
-                    case nameof(SunderRpcFacetAttribute.Minimum):
+                    case nameof(SunderValueConstraintsAttribute.Minimum):
                         AddNumericFacet(schema, "minimum", (string?)argument.Value.Value, source);
                         break;
-                    case nameof(SunderRpcFacetAttribute.Maximum):
+                    case nameof(SunderValueConstraintsAttribute.Maximum):
                         AddNumericFacet(schema, "maximum", (string?)argument.Value.Value, source);
                         break;
-                    case nameof(SunderRpcFacetAttribute.ExclusiveMinimum):
+                    case nameof(SunderValueConstraintsAttribute.ExclusiveMinimum):
                         AddNumericFacet(schema, "exclusiveMinimum", (string?)argument.Value.Value, source);
                         break;
-                    case nameof(SunderRpcFacetAttribute.ExclusiveMaximum):
+                    case nameof(SunderValueConstraintsAttribute.ExclusiveMaximum):
                         AddNumericFacet(schema, "exclusiveMaximum", (string?)argument.Value.Value, source);
                         break;
-                    case nameof(SunderRpcFacetAttribute.ExactNumber):
+                    case nameof(SunderValueConstraintsAttribute.ExactNumber):
                         schema["const"] = ParseNumber((string?)argument.Value.Value, source);
                         break;
-                    case nameof(SunderRpcFacetAttribute.ConstantString):
+                    case nameof(SunderValueConstraintsAttribute.ConstantString):
                         schema["const"] = (string?)argument.Value.Value;
                         break;
-                    case nameof(SunderRpcFacetAttribute.AllowedStrings):
+                    case nameof(SunderValueConstraintsAttribute.AllowedStrings):
                         if (schema["type"]?.GetValue<string>() != "string" || schema.ContainsKey("format")
                             || schema.ContainsKey("contentEncoding") || schema.ContainsKey("enum")
                             || argument.Value.Kind != TypedConstantKind.Array || argument.Value.IsNull
@@ -2142,10 +2405,10 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                         }
                         schema["enum"] = new JsonArray(strings.Select(value => JsonValue.Create(value)).ToArray());
                         break;
-                    case nameof(SunderRpcFacetAttribute.Title):
+                    case nameof(SunderValueConstraintsAttribute.Title):
                         schema["title"] = (string?)argument.Value.Value;
                         break;
-                    case nameof(SunderRpcFacetAttribute.Description):
+                    case nameof(SunderValueConstraintsAttribute.Description):
                         schema["description"] = (string?)argument.Value.Value;
                         break;
                 }
@@ -2222,7 +2485,9 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         {
             if (type is INamedTypeSymbol named
                 && named is { Name: "SunderRpcOptional", Arity: 1 }
-                && named.ContainingNamespace.ToDisplayString() == "Sunder.Sdk.Rpc")
+                && named.ContainingNamespace.ToDisplayString() == "Sunder.Sdk.Rpc"
+                && named.ContainingAssembly.Identity.Name == SdkAssemblyIdentity.Name
+                && named.ContainingAssembly.Identity.Version == SdkAssemblyIdentity.Version)
             {
                 return (named.TypeArguments[0], true);
             }

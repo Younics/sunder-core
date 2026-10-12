@@ -110,12 +110,12 @@ public sealed class SunderPackageCompositionPlannerTests
             public sealed class Helper(System.Lazy<ViewModel> viewModel) { public object Model => viewModel; }
             """);
         Assert.Contains(deferredCapture.RolePlan.Diagnostics, error => error.Id == "package-authoring.di-lifetime-conflict");
-        var publicApi = Analyze(Service.Replace("[SunderRpcService]", "[SunderRpcService(SunderRpcExposure.Public)]", StringComparison.Ordinal) + """
+        var publicApi = Analyze(Service.Replace("[SunderService]", "[SunderService(SunderServiceExposure.Public)]", StringComparison.Ordinal) + """
             [SunderPackageView("example.view", "View", ViewModel = typeof(ViewModel))]
             public sealed class View : Avalonia.Controls.UserControl;
             public sealed class ViewModel(ICounterService counter) { public ICounterService Counter => counter; }
             """);
-        Assert.Contains(publicApi.RolePlan.Diagnostics, error => error.Id == "package-authoring.di-use-required");
+        Assert.True(publicApi.Success, Errors(publicApi));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public sealed class SunderPackageCompositionPlannerTests
             .Replace("GetAsync()", "GetAsync(SunderRpcInvocationContext context)", StringComparison.Ordinal);
         var denied = Analyze(source);
         Assert.Contains(denied.RolePlan.Diagnostics, error => error.Id == "package-authoring.di-context-required");
-        var allowed = Analyze(source.Replace("[SunderRpcService]", "[SunderRpcRuntimeUse]\n[SunderRpcService]", StringComparison.Ordinal));
+        var allowed = Analyze(source.Replace("[SunderService]", "[SunderRuntimeUse]\n[SunderService]", StringComparison.Ordinal));
         Assert.True(allowed.Success, Errors(allowed));
         Assert.NotNull(Assert.Single(allowed.Compilation.Contracts).RuntimeUse);
         Assert.Single(allowed.Composition!.Worker);
@@ -152,12 +152,14 @@ public sealed class SunderPackageCompositionPlannerTests
     private const string Service = """
         using System.Threading.Tasks;
         using Sunder.Sdk.Packaging;
+        using Sunder.Sdk.Services;
         using Sunder.Sdk.Rpc;
+        using Sunder.Generated.Packages.Example_Notes_Services;
         namespace Example;
-        [SunderRpcService]
+        [SunderService]
         public sealed partial class CounterService()
         {
-            [SunderRpcMethod] public Task<Reply> GetAsync() => Task.FromResult(new Reply { Number = 1 });
+            public Task<Reply> GetAsync() => Task.FromResult(new Reply { Number = 1 });
         }
         public sealed record Reply { public required long Number { get; init; } }
 

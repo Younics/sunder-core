@@ -5,7 +5,10 @@
     "Example.Dependency": {
       "localName": "dependency",
       "presence": "required",
-      "requiredContracts": []
+      "requiredContracts": [],
+      "consumerRoles": [
+        "runtime"
+      ]
     }
   },
   "providerImports": {},

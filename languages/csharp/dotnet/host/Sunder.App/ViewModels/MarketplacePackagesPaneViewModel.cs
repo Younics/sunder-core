@@ -123,7 +123,8 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
     public bool HasExecutionRuntimeRequirements => ExecutionRuntimeRequirements.Count > 0;
 
     public bool RuntimePlanCanApply => RuntimePreflightLoaded
-                                       && _runtimePreflight?.Plan.Success == true
+                                       && (_runtimePreflight?.Plan.Success == true || _runtimePreflight?.Plan.RuntimePrerequisites is { Satisfied: false, Requirements.Count: > 0 })
+                                       && _runtimePreflight?.Plan.Conflicts.Count == 0
                                        && ExecutionRuntimeRequirements.All(static runtime => !runtime.IsBlocked);
 
     public string PackageDownloadText => RuntimePreflightLoading
@@ -134,9 +135,11 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
 
     public string SharedRuntimeDownloadText => RuntimePreflightLoading
         ? "Calculating..."
+        : _runtimePreflight?.Plan.RuntimePrerequisites is { Satisfied: false }
+            ? RegistryPackageChangePreflight.FormatBytes(_runtimePreflight.SharedRuntimeDownloadBytes) + " (runtime first)"
         : HasRuntimePreflightError || _runtimePreflight?.Plan.Success != true
             ? "Unavailable"
-            : _runtimePreflight.SharedRuntimeDownloadBytes == 0 && _runtimePreflight.ReusedSharedRuntimeBytes > 0
+            : _runtimePreflight.SharedRuntimeDownloadBytes == 0 && _runtimePreflight.ExecutionRuntimes.Any(item => item.AlreadyInstalled)
                 ? "0 bytes (already installed)"
                 : RegistryPackageChangePreflight.FormatBytes(_runtimePreflight.SharedRuntimeDownloadBytes);
 
@@ -147,10 +150,11 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
             if (RuntimePreflightLoading) return $"Checking compatibility for {CurrentRid}...";
             if (HasRuntimePreflightError) return $"Runtime compatibility could not be checked: {RuntimePreflightError}";
             if (_runtimePreflight is null) return "Select a package version.";
+            if (_runtimePreflight.Plan.RuntimePrerequisites is { Satisfied: false })
+                return "One review covers the runtimes and package. Runtimes install first; the package waits in the queue.";
             if (!_runtimePreflight.Plan.Success)
             {
-                return _runtimePreflight.Plan.RuntimeConflicts.FirstOrDefault()?.Message
-                       ?? _runtimePreflight.Plan.Errors.FirstOrDefault()
+                return _runtimePreflight.Plan.Errors.FirstOrDefault()
                        ?? $"This package is not compatible with {CurrentRid}.";
             }
             if (!HasExecutionRuntimeRequirements) return "No shared execution runtime is required for this version.";
@@ -299,65 +303,35 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
         RegistryPackageChangePreflight preflight)
     {
         var requirement = target.ExecutionRuntime!;
-        var conflict = preflight.Plan.RuntimeConflicts.FirstOrDefault(candidate =>
-            string.Equals(candidate.Rid, target.Rid, StringComparison.Ordinal)
-            && (string.IsNullOrWhiteSpace(candidate.PackageId)
-                || string.Equals(candidate.PackageId, details.PackageId, StringComparison.OrdinalIgnoreCase))
-            && (string.IsNullOrWhiteSpace(candidate.TargetRole)
-                || string.Equals(candidate.TargetRole, target.Role, StringComparison.Ordinal)));
-        if (conflict is not null)
+        var prerequisite = preflight.Plan.RuntimePrerequisites?.Requirements.FirstOrDefault(item =>
+            item.Package.PackageId == details.PackageId && item.Package.Role == target.Role && item.Package.Rid == target.Rid);
+        if (prerequisite is { Satisfied: false })
         {
-            return MarketplaceExecutionRuntimeRequirementViewModel.Unavailable(
-                requirement,
-                target.Rid,
-                conflict.Message);
+            var resolution = prerequisite.Installation?.Resolution;
+            return new(requirement.RuntimeId, requirement.VersionRange, requirement.ModuleAbi, target.Rid,
+                resolution is null ? "Not installed" : resolution.Artifact.Identity.VendorVersion,
+                resolution?.Artifact.Support.State.ToString() ?? "Required",
+                "Runtime and package installation will be queued in order.",
+                prerequisite.Installation?.Message ?? "Review the required runtime with this package.",
+                ShowWarning: true, IsBlocked: false);
         }
-
-        var binding = preflight.Plan.Items
-            .Where(item => string.Equals(item.PackageId, details.PackageId, StringComparison.OrdinalIgnoreCase))
-            .SelectMany(static item => item.RuntimeBindings)
-            .FirstOrDefault(candidate =>
-                string.Equals(candidate.Role, target.Role, StringComparison.Ordinal)
-                && string.Equals(candidate.Rid, target.Rid, StringComparison.Ordinal));
-        if (binding is null)
+        if (prerequisite?.InstalledRuntime is not { } identity)
         {
             var message = preflight.Plan.Errors.FirstOrDefault()
                           ?? $"No compatible execution runtime could be resolved for RID '{target.Rid}'.";
             return MarketplaceExecutionRuntimeRequirementViewModel.Unavailable(requirement, target.Rid, message);
         }
 
-        var download = preflight.ExecutionRuntimes.FirstOrDefault(candidate =>
-            string.Equals(candidate.Artifact.Identity.RuntimeId, binding.Runtime.RuntimeId, StringComparison.Ordinal)
-            && string.Equals(candidate.Artifact.Identity.Version, binding.Runtime.Version, StringComparison.Ordinal)
-            && candidate.Artifact.Identity.PackagingRevision == binding.Runtime.PackagingRevision
-            && string.Equals(candidate.Artifact.Identity.Rid, binding.Runtime.Rid, StringComparison.Ordinal)
-            && string.Equals(candidate.Artifact.Identity.ModuleAbi, binding.Runtime.ModuleAbi, StringComparison.Ordinal));
-        if (download is null)
-        {
-            return MarketplaceExecutionRuntimeRequirementViewModel.Unavailable(
-                requirement,
-                target.Rid,
-                "The resolved plan did not include the required shared runtime artifact.");
-        }
-
-        var lifecycle = FormatLifecycle(download.Artifact.Lifecycle.State);
-        var warning = !string.Equals(
-            download.Artifact.Lifecycle.State,
-            ExecutionRuntimeLifecycleStates.Supported,
-            StringComparison.Ordinal);
-        var availability = download.AlreadyInstalled
-            ? $"Available for {target.Rid}; exact runtime already installed."
-            : $"Available for {target.Rid}; {RegistryPackageChangePreflight.FormatBytes(download.Artifact.ArtifactSize)} shared download.";
         return new MarketplaceExecutionRuntimeRequirementViewModel(
             requirement.RuntimeId,
             requirement.VersionRange,
             requirement.ModuleAbi,
             target.Rid,
-            $"{binding.Runtime.Version} r{binding.Runtime.PackagingRevision}",
-            lifecycle,
-            availability,
-            download.Artifact.Lifecycle.Message ?? string.Empty,
-            warning,
+            identity.VendorVersion,
+            "Installed",
+            $"Available for {target.Rid}; exact runtime already installed.",
+            RuntimeManagementUi.Source(identity),
+            false,
             IsBlocked: false);
     }
 
@@ -385,11 +359,6 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
         OnPropertyChanged(nameof(SharedRuntimeDownloadText));
         OnPropertyChanged(nameof(RuntimeCompatibilitySummary));
     }
-
-    private static string FormatLifecycle(string state)
-        => string.IsNullOrWhiteSpace(state)
-            ? "Unknown"
-            : $"{char.ToUpperInvariant(state[0])}{state[1..]}";
 
     public RegistryPackageSearchItemViewModel? ResolvePackageSelection(string? selectedPackageId)
         => Packages
@@ -421,9 +390,9 @@ public sealed record MarketplaceExecutionRuntimeRequirementViewModel(
     string ModuleAbi,
     string Rid,
     string ResolvedRuntime,
-    string Lifecycle,
+    string StatusText,
     string Availability,
-    string LifecycleMessage,
+    string DetailText,
     bool ShowWarning,
     bool IsBlocked)
 {

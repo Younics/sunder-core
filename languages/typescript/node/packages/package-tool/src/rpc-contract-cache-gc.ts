@@ -6,11 +6,12 @@ import { cachePath, contractCacheFiles as fs } from "./rpc-contract-cache";
 import { contractError, hashBytes, parseContractLock, parseContractWireJson, readRequirement } from "./rpc-contract-lock";
 import { fields, outerBytes, parseOuter, type Outer } from "./rpc-baseline-json";
 import { CATALOG_DIRECTORY, MAXIMUM_CATALOG_BYTES, catalogArtifactKey, catalogReceiptBytes, proveCatalogArtifact, readOwnedCatalogPair } from "./rpc-platform-cache";
+import { MODEL_PROJECTION_DIRECTORY, modelProjectionReceiptBytes, readOwnedModelProjectionPair } from "./rpc-model-projection-cache";
 
 export interface ContractCacheGcResult { readonly removedEntries: number; readonly removedArtifacts: number; readonly retainedUnprovenArtifacts: number; readonly moreCandidates: boolean }
 export interface ContractCacheGcOptions { readonly graceDays?: number; readonly signal?: AbortSignal; readonly checkpoint?: (point: string) => void | Promise<void>; readonly observedNow?: number }
 interface GcFile { readonly name: string; readonly sha256: string; readonly bytes: number }
-interface GcUnit { readonly kind: "entry" | "catalog" | "artifact"; readonly key: string; readonly files: readonly GcFile[] }
+interface GcUnit { readonly kind: "entry" | "catalog" | "projection" | "artifact"; readonly key: string; readonly files: readonly GcFile[] }
 interface GcIntent { readonly schemaVersion: 1; readonly token: string; readonly cutoffUnixMilliseconds: number; readonly reviewedLocks: readonly string[]; readonly units: readonly GcUnit[] }
 const PENDING = ".gc-pending";
 const RECEIPT = ".receipt.json";
@@ -26,6 +27,7 @@ const token = (value: unknown): value is string => typeof value === "string" && 
 const tokenAfter = (value: string, prefix: string): boolean => value.startsWith(prefix) && token(value.slice(prefix.length));
 const catalogKey = (hash: string): string => CATALOG_DIRECTORY + "/" + hash;
 const isCatalogKey = (key: string): boolean => key.startsWith(CATALOG_DIRECTORY + "/") && digest(key.slice(CATALOG_DIRECTORY.length + 1));
+const isProjectionKey = (key: string): boolean => key.startsWith(MODEL_PROJECTION_DIRECTORY + "/") && digest(key.slice(MODEL_PROJECTION_DIRECTORY.length + 1));
 const maximumFileBytes = (key: string): number => isCatalogKey(key) || catalogArtifactKey(key) ? MAXIMUM_CATALOG_BYTES : MAXIMUM_FILE;
 const artifactKey = (key: string): boolean => tokenAfter(key, ".stage-") || tokenAfter(key, ".completed-") || tokenAfter(key, ".quarantine/") || tokenAfter(key, ".gc-stage-") || catalogArtifactKey(key);
 const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
@@ -33,7 +35,7 @@ const pathKey = (path: string): string => process.platform === "win32" ? path.to
 const unitDirectory = (index: number): string => String(index).padStart(4, "0");
 function artifactPath(root: string, key: string): string { if (!artifactKey(key)) corrupt("Invalid cache artifact path."); return join(root, ...key.split("/")); }
 const sourceFile = (root: string, unit: GcUnit, name: string): string => join(unit.kind === "entry" ? root
-  : unit.kind === "catalog" ? join(root, CATALOG_DIRECTORY) : artifactPath(root, unit.key), name);
+  : unit.kind === "catalog" ? join(root, CATALOG_DIRECTORY) : unit.kind === "projection" ? join(root, MODEL_PROJECTION_DIRECTORY) : artifactPath(root, unit.key), name);
 const intentBytes = (intent: GcIntent): Buffer => outerBytes(intent as unknown as Outer);
 function ordered(values: readonly string[]): void {
   if (values.some((value, index) => typeof value !== "string" || index > 0 && values[index - 1]! >= value)) corrupt("GC sets must be ascending and unique.");
@@ -59,6 +61,7 @@ export async function collectContractCache(root: string, reviewedLocks: readonly
     for (const path of paths) {
       options.signal?.throwIfAborted(); const bytes = await fs.read(path, Math.min(33_554_432, 67_108_864 - total)); total += bytes.length;
       const lock = parseContractLock(bytes, true); snapshots.push({ path, bytes: bytes.length, sha256: hashBytes(bytes) });
+      for (const artifact of lock.packageArtifacts.values()) marks.add(MODEL_PROJECTION_DIRECTORY + "/" + artifact.modelProjectionSha256);
       for (const artifact of lock.packageArtifacts.values()) for (const contract of artifact.contracts.values()) {
         marks.add(contract.descriptorSha256);
         if (contract.authorityKind === "platform") marks.add(catalogKey(contract.selectedAuthorityContentIdentity));
@@ -118,6 +121,23 @@ export async function collectContractCache(root: string, reviewedLocks: readonly
             } else if (catalogArtifactKey(name + "/" + child)) await selectArtifact(name + "/" + child);
             else if (!child.endsWith(RECEIPT) || !digest(child.slice(0, -RECEIPT.length))
               || !await fs.exists(join(directory, child.slice(0, -RECEIPT.length) + ".json"))) unproven++;
+          }
+        } else if (name === "model-projections") {
+          const parents = await names(join(root, name), 16_384);
+          for (const parent of parents) if (parent !== "sha256") unproven++;
+          if (!parents.includes("sha256")) continue;
+          const directory = join(root, MODEL_PROJECTION_DIRECTORY);
+          for (const child of (await names(directory, 16_384)).sort(compare)) {
+            await fs.safePath(join(directory, child));
+            if (child.length === 69 && child.endsWith(".json") && digest(child.slice(0, 64))) {
+              const hash = child.slice(0, 64); const key = MODEL_PROJECTION_DIRECTORY + "/" + hash; if (marks.has(key)) continue;
+              const receipt = hash + RECEIPT;
+              if (!await fs.exists(join(directory, receipt))) { unproven++; continue; }
+              if ((await Promise.all([child, receipt].map(file => modified(join(directory, file))))).some(time => time > cutoff)) continue;
+              let body: Buffer; try { body = await readOwnedModelProjectionPair(directory, hash); } catch { unproven++; continue; }
+              const ownership = modelProjectionReceiptBytes(hash, body.length);
+              select({ kind: "projection", key, files: [{ name: child, sha256: hash, bytes: body.length }, { name: receipt, sha256: hashBytes(ownership), bytes: ownership.length }] });
+            } else if (!child.endsWith(RECEIPT) || !digest(child.slice(0, -RECEIPT.length)) || !await fs.exists(join(directory, child.slice(0, -RECEIPT.length) + ".json"))) unproven++;
           }
         } else if (name.startsWith(".write-") || name.startsWith(".gc-stage-")) unproven++;
       }
@@ -217,8 +237,9 @@ async function readIntent(directory: string): Promise<GcIntent> {
   ordered(intent.reviewedLocks); if (intent.reviewedLocks.some(path => !path.trim() || !isAbsolute(path))) corrupt("GC reviewed lock paths are invalid.");
   ordered(intent.units.map(unit => unit.key)); let count = 0; let totalBytes = 0;
   for (const unit of intent.units) {
-    if (JSON.stringify(Object.keys(unit)) !== JSON.stringify(["kind", "key", "files"]) || !["entry", "catalog", "artifact"].includes(unit.kind)
+    if (JSON.stringify(Object.keys(unit)) !== JSON.stringify(["kind", "key", "files"]) || !["entry", "catalog", "projection", "artifact"].includes(unit.kind)
       || unit.kind === "entry" && !digest(unit.key) || unit.kind === "catalog" && !isCatalogKey(unit.key) || unit.kind === "artifact" && !artifactKey(unit.key)
+      || unit.kind === "projection" && !isProjectionKey(unit.key)
       || !Array.isArray(unit.files) || unit.files.length < 1 || unit.files.length > 257 || (count += unit.files.length) > 1024) corrupt("GC unit shape is invalid.");
     ordered(unit.files.map((file: GcFile) => file.name));
     for (const file of unit.files) {
@@ -227,7 +248,7 @@ async function readIntent(directory: string): Promise<GcIntent> {
         || !digest(file.sha256) || !Number.isInteger(file.bytes) || file.bytes < 0 || file.bytes > maximumFileBytes(unit.key)
         || (totalBytes += file.bytes) > MAXIMUM_COLLECTION_BYTES) corrupt("GC file shape is invalid.");
     }
-    const hash = unit.kind === "catalog" ? unit.key.slice(CATALOG_DIRECTORY.length + 1) : unit.key;
+    const hash = unit.kind === "catalog" ? unit.key.slice(CATALOG_DIRECTORY.length + 1) : unit.kind === "projection" ? unit.key.slice(MODEL_PROJECTION_DIRECTORY.length + 1) : unit.key;
     if (unit.kind !== "artifact" && JSON.stringify(unit.files.map((file: GcFile) => file.name)) !== JSON.stringify([hash + ".json", hash + RECEIPT])) corrupt("GC entry is not one complete content/receipt pair.");
     if (unit.kind !== "artifact" && unit.files[0]!.sha256 !== hash) corrupt("GC entry preimage differs from its content address.");
     if (unit.kind === "artifact" && !unit.files.some((file: GcFile) => file.name === INTENT)) corrupt("GC artifact lacks ownership evidence.");

@@ -123,13 +123,11 @@
       "sunder.executionruntime.build": {
         "type": "Project",
         "dependencies": {
-          "BouncyCastle.Cryptography": "[2.7.0, )",
           "Microsoft.Build.Framework": "[18.4.0, )",
           "Microsoft.Build.Utilities.Core": "[18.4.0, )",
           "Microsoft.CodeAnalysis.CSharp": "[5.0.0, )",
           "Sunder.Package.Build": "[1.1.0, )",
-          "Sunder.Package.Format": "[1.0.0, )",
-          "Sunder.Registry.Contracts": "[1.0.0, )"
+          "Sunder.Package.Format": "[1.0.0, )"
         }
       },
       "sunder.package.build": {
@@ -138,12 +136,8 @@
       "sunder.package.format": {
         "type": "Project",
         "dependencies": {
-          "BouncyCastle.Cryptography": "[2.7.0, )",
           "Sunder.Sdk": "[1.1.0, )"
         }
-      },
-      "sunder.registry.contracts": {
-        "type": "Project"
       },
       "sunder.sdk": {
         "type": "Project",
@@ -151,12 +145,6 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.8, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.8, )"
         }
-      },
-      "BouncyCastle.Cryptography": {
-        "type": "CentralTransitive",
-        "requested": "[2.7.0, )",
-        "resolved": "2.7.0",
-        "contentHash": "U+12df8UEWHgBi04YVf/Lgi2dy3SItlIYvHjjEVa/BngCQIzDCDRBk50DDByCfDvSbe5pRNFr3b7UrVK2kMcLw=="
       },
       "Microsoft.Build.Framework": {
         "type": "CentralTransitive",

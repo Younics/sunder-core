@@ -6,18 +6,15 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed class RegistryPackageChangeOrchestrator(
     RegistryPackagePlanResolver planResolver,
     RuntimeContentTransferStore transferStore,
-    RegistryExecutionRuntimeBindingPreparer runtimeBindingPreparer,
+    IHostExecutionRuntimeBindingPreparer runtimeBindingPreparer,
     RegistryPackageArtifactDownloader artifactDownloader,
     InstalledPackageLifecycleService installedPackages,
     InstalledPackageStore installedPackageStore,
-    ExecutionRuntimeLifecyclePolicyRefresher lifecyclePolicyRefresher,
-    ExecutionRuntimeLifecyclePolicyCache lifecyclePolicies,
     TimeProvider timeProvider,
     ILogger<RegistryPackageChangeOrchestrator> logger,
-    IHostApplicationLifetime? applicationLifetime = null)
+    IHostApplicationLifetime? applicationLifetime = null,
+    PackageRuntimePrerequisiteService? prerequisites = null)
 {
-    private const string HardDenyEnforcementFailureMessage =
-        "Registry reported an exact execution-runtime denial, but durable catalog and policy evidence could not be committed; Runtime shutdown was requested.";
     private const string StalePreviewMessage =
         "The Registry package plan changed after it was previewed. Review the current plan and retry; no package changes were applied.";
     private static readonly IReadOnlySet<string> NoSourceAdoptions =
@@ -37,34 +34,14 @@ internal sealed class RegistryPackageChangeOrchestrator(
             new PackageExecutionRequest(request, NoSourceAdoptions, NoPrereleasePolicyOverrides),
             installed);
         var plan = await planResolver.ResolveAsync(materialized.Request, cancellationToken);
-        if (plan.RuntimeConflicts.Any(static conflict => IsHardDenyCode(conflict.Code)))
-        {
-            IReadOnlyList<string> enforcementWarnings;
-            try
-            {
-                var origin = RegistryOrigin.Normalize(request.RegistryOrigin);
-                enforcementWarnings = await EnforceKnownBlockedExecutionRuntimesAsync(
-                        CreateHardDenyEvidence(origin, plan),
-                        installedRecords,
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                applicationLifetime?.StopApplication();
-                logger.LogWarning(
-                    "Registry package plan hard-denial enforcement failed: {ErrorType}",
-                    exception.GetType().Name);
-                enforcementWarnings = [HardDenyEnforcementFailureMessage];
-            }
-            plan = AddPlanWarnings(plan, enforcementWarnings);
-        }
         if (!plan.Success)
         {
             return plan;
         }
         return plan with
         {
+            RuntimePrerequisites = prerequisites is null ? null : await prerequisites.PreviewAsync(
+                new(Registry: materialized.Request with { ExpectedResolutionFingerprint = plan.ResolutionFingerprint }), cancellationToken),
             RequiredCapabilityConsents = PackageSensitiveCapabilityPolicy.GetRequiredConsents(
                 plan.Items,
                 installed),
@@ -88,7 +65,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 request.AllowDowngrade,
                 request.Reinstall,
                 request.CapabilityConsents,
-                request.ExpectedResolutionFingerprint),
+                request.ExpectedResolutionFingerprint) { RuntimePrerequisiteExpectation = request.RuntimePrerequisiteExpectation },
             cancellationToken);
 
     public async Task<RuntimeRegistryPackageChangeResult> UpdateAsync(
@@ -203,6 +180,19 @@ internal sealed class RegistryPackageChangeOrchestrator(
 
         if (groups.Count == 0)
         {
+            // An empty authoritative selection is an explicit no-op, not an incomplete
+            // preview. Use the same inspector/fingerprint rules as nonempty batches.
+            var emptyPrerequisites = prerequisites is null ? null
+                : await prerequisites.InspectRegistryAsync([], cancellationToken);
+            if (emptyPrerequisites is not null)
+            {
+                try { PackageRuntimePrerequisiteService.CheckExpectation(emptyPrerequisites, request.RuntimePrerequisiteExpectation); }
+                catch (RuntimeExecutionRuntimeException error) when (error.Code == ExecutionRuntimeErrorCodes.PlanStale)
+                {
+                    return AddContext(Failed(StalePreviewMessage, RuntimeRegistryErrorCode.StalePlan)
+                        with { RuntimePrerequisites = emptyPrerequisites }, warnings, skipped);
+                }
+            }
             return new RuntimeRegistryPackageChangeResult(
                 true,
                 RuntimeRegistryErrorCode.None,
@@ -216,6 +206,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
             {
                 CommittedStamp = installedPackages.Stamp,
                 SkippedPackageIds = skipped,
+                RuntimePrerequisites = emptyPrerequisites,
             };
         }
 
@@ -230,7 +221,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
                         group.Key.Origin,
                         group.Value.Select(selection => selection.Change).ToArray(),
                         group.Key.IncludePrerelease,
-                        ExpectedResolutionFingerprint: expectedPlans.GetValueOrDefault(key)),
+                        ExpectedResolutionFingerprint: expectedPlans.GetValueOrDefault(key)) { RuntimePrerequisiteExpectation = request.RuntimePrerequisiteExpectation },
                     NoSourceAdoptions,
                     group.Value.ToDictionary(
                         selection => selection.Change.PackageId,
@@ -301,16 +292,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
             return Failed($"Package '{request.PackageId}' is not installed.", RuntimeRegistryErrorCode.NotFound);
         }
 
-        var batch = new RuntimeRegistryPackageBatchRequest(
-            request.RegistryOrigin,
-            [new RuntimeRegistryPackageChangeRequest(
-                package.PackageId,
-                request.Version,
-                request.DesiredTargets ?? [],
-                request.Version is null ? request.Tag : null)],
-            request.IncludePrerelease,
-            request.AllowDowngrade,
-            ExpectedResolutionFingerprint: request.ExpectedResolutionFingerprint);
+        var batch = RegistrySourceAdoptionSelection.Create(request, package);
         var adoptedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             package.PackageId,
@@ -370,40 +352,11 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 if (expectedResolutionFingerprint is not null
                     && !ConfirmsExpectedPreview(resolution.Plan, expectedResolutionFingerprint, timeProvider.GetUtcNow()))
                 {
-                    IReadOnlyList<string> enforcementWarnings;
-                    try
-                    {
-                        enforcementWarnings = await EnforceKnownBlockedExecutionRuntimesAsync(
-                                CreateHardDenyEvidence(resolution.Origin, resolution.Plan),
-                                expectedCatalog,
-                                CancellationToken.None)
-                            .ConfigureAwait(false);
-                    }
-                    catch (InvalidDataException exception)
-                    {
-                        return PlanEnforcementFailed(resolved, resolution.Plan, exception.Message);
-                    }
-                    return StalePreview(
-                        resolved,
-                        resolution.Plan,
-                        enforcementWarnings);
+                    return StalePreview(resolved, resolution.Plan);
                 }
                 if (!resolution.Plan.Success)
                 {
-                    IReadOnlyList<string> enforcementWarnings;
-                    try
-                    {
-                        enforcementWarnings = await EnforceKnownBlockedExecutionRuntimesAsync(
-                                CreateHardDenyEvidence(resolution.Origin, resolution.Plan),
-                                expectedCatalog,
-                                CancellationToken.None)
-                            .ConfigureAwait(false);
-                    }
-                    catch (InvalidDataException exception)
-                    {
-                        return PlanEnforcementFailed(resolved, resolution.Plan, exception.Message);
-                    }
-                    return PlanFailed(resolved, resolution.Plan, enforcementWarnings);
+                    return PlanFailed(resolved, resolution.Plan);
                 }
 
                 var provenance = BuildProvenanceByPackageId(
@@ -460,12 +413,46 @@ internal sealed class RegistryPackageChangeOrchestrator(
 
         var planWarnings = ResolvedWarnings(resolved);
         var planItems = ResolvedPlanItems(resolved);
+        var planExpectations = resolved.Select(static resolution => new RuntimeRegistryPackagePlanExpectation(
+            resolution.Origin.AbsoluteUri, resolution.Execution.Request.IncludePrerelease,
+            resolution.Plan.ResolutionFingerprint)).ToArray();
+        RuntimePackageRuntimePrerequisitePlan? runtimePrerequisites = null;
+
+        // Carry the reviewed evidence on successes and rejections alike. The outcome still
+        // determines authority: diagnostic evidence on a stale/failed result is not a permit.
+        RuntimeRegistryPackageChangeResult ToResult(RuntimeRegistryPackageChangeResult result) => result with
+        {
+            PlanExpectations = result.PlanExpectations.Count == 0 ? planExpectations : result.PlanExpectations,
+            RequiredCapabilityConsents = result.RequiredCapabilityConsents.Count == 0 ? requiredCapabilityConsents : result.RequiredCapabilityConsents,
+            RuntimePrerequisites = result.RuntimePrerequisites ?? runtimePrerequisites,
+        };
+
+        if (prerequisites is not null)
+        {
+            runtimePrerequisites = await prerequisites.InspectRegistryAsync(
+                resolved.Select(value => new RegistryPackagePlanResolution(value.Origin, value.Plan)).ToArray(), cancellationToken,
+                executions.SelectMany(value => value.AdoptedPackageIds).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(packageId => installed[packageId]).ToArray());
+            try
+            {
+                foreach (var execution in executions)
+                    PackageRuntimePrerequisiteService.CheckExpectation(runtimePrerequisites, execution.Request.RuntimePrerequisiteExpectation);
+            }
+            catch (RuntimeExecutionRuntimeException error) when (error.Code == ExecutionRuntimeErrorCodes.PlanStale)
+            {
+                return ToResult(Failed("Package source or target OS changed while runtime prerequisites were being installed. Re-preview before resuming.",
+                    RuntimeRegistryErrorCode.StalePlan, planWarnings, planItems: planItems));
+            }
+            if (!runtimePrerequisites.Satisfied)
+                return ToResult(Failed(runtimePrerequisites.Message, RuntimeRegistryErrorCode.RuntimePrerequisitesRequired,
+                    planWarnings, planItems: planItems, requiredCapabilityConsents: requiredCapabilityConsents));
+        }
         if (dryRun)
         {
             var runtimePlans = resolved
                 .Select(static resolution => RuntimeRegistryContractMapper.ToRuntime(resolution.Plan))
                 .ToArray();
-            return new RuntimeRegistryPackageChangeResult(
+            return ToResult(new RuntimeRegistryPackageChangeResult(
                 true,
                 RuntimeRegistryErrorCode.None,
                 "Registry package plan resolved; no changes were applied.",
@@ -479,36 +466,23 @@ internal sealed class RegistryPackageChangeOrchestrator(
             {
                 CommittedStamp = installedPackages.Stamp,
                 Conflicts = runtimePlans.SelectMany(static plan => plan.Conflicts).ToArray(),
-                PlanExpectations = resolved.Select(static resolution =>
-                        new RuntimeRegistryPackagePlanExpectation(
-                            resolution.Origin.AbsoluteUri,
-                            resolution.Execution.Request.IncludePrerelease,
-                            resolution.Plan.ResolutionFingerprint))
-                    .ToArray(),
-                RuntimeArtifacts = runtimePlans
-                    .SelectMany(static plan => plan.RuntimeArtifacts)
-                    .DistinctBy(static artifact =>
-                        $"{artifact.Identity.RuntimeId}\0{artifact.Identity.Version}\0{artifact.Identity.PackagingRevision}\0{artifact.Identity.Rid}\0{artifact.Identity.ModuleAbi}\0{artifact.ArtifactSha256}",
-                    StringComparer.Ordinal)
-                    .ToArray(),
-                RuntimeConflicts = runtimePlans.SelectMany(static plan => plan.RuntimeConflicts).ToArray(),
-            };
+            });
         }
         var consentError = PackageSensitiveCapabilityPolicy.ValidateProvidedConsents(
             requiredCapabilityConsents,
             providedCapabilityConsents);
         if (consentError is not null)
         {
-            return Failed(
+            return ToResult(Failed(
                 consentError,
                 RuntimeRegistryErrorCode.ConsentRequired,
                 planWarnings,
                 planItems: planItems,
-                requiredCapabilityConsents: requiredCapabilityConsents);
+                requiredCapabilityConsents: requiredCapabilityConsents));
         }
         if (planItems.Count == 0)
         {
-            return new RuntimeRegistryPackageChangeResult(
+            return ToResult(new RuntimeRegistryPackageChangeResult(
                 true,
                 RuntimeRegistryErrorCode.None,
                 "No package changes required.",
@@ -520,13 +494,11 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 [])
             {
                 CommittedStamp = installedPackages.Stamp,
-            };
+            });
         }
 
         var uploadIds = new List<string>();
         var uploadMetadataById = new Dictionary<string, RegistryPackageUploadMetadata>(StringComparer.Ordinal);
-        var runtimeRebinds = new List<PackageExecutionRuntimeRebindMutation>();
-        var runtimePolicyUpdates = new List<PackageExecutionRuntimePolicyUpdateMutation>();
         string? stageId = null;
         var artifactsPrepared = false;
         try
@@ -535,11 +507,11 @@ internal sealed class RegistryPackageChangeOrchestrator(
                     await installedPackageStore.ListAsync(cancellationToken).ConfigureAwait(false),
                     expectedCatalog))
             {
-                return Failed(
+                return ToResult(Failed(
                     "Registry package staging is stale because the installed package catalog changed after resolution.",
                     RuntimeRegistryErrorCode.Conflict,
                     planWarnings,
-                    planItems: planItems);
+                    planItems: planItems));
             }
             await using var preparedExactBindings = await runtimeBindingPreparer.PrepareAsync(
                 resolved.Select(resolution => new RegistryPackagePlanResolution(
@@ -568,34 +540,6 @@ internal sealed class RegistryPackageChangeOrchestrator(
 
                     if (item.ActionKind == RegistryPackageActionKinds.Keep)
                     {
-                        if (!installed.TryGetValue(item.PackageId, out var current))
-                        {
-                            throw new InvalidDataException(
-                                $"Registry keep package '{item.PackageId}' is not installed.");
-                        }
-                        if (RequiresLifecycleEvidenceUpdate(
-                                item.PackageId,
-                                current.ExecutionRuntimeBindings,
-                                exactBindings))
-                        {
-                            runtimePolicyUpdates.Add(new PackageExecutionRuntimePolicyUpdateMutation(
-                                item.PackageId,
-                                current,
-                                exactBindings));
-                        }
-                        continue;
-                    }
-                    if (item.ActionKind == RegistryPackageActionKinds.RuntimeOnlyRebind)
-                    {
-                        if (!installed.TryGetValue(item.PackageId, out var current))
-                        {
-                            throw new InvalidDataException(
-                                $"Registry execution-runtime rebind package '{item.PackageId}' is not installed.");
-                        }
-                        runtimeRebinds.Add(new PackageExecutionRuntimeRebindMutation(
-                            item.PackageId,
-                            current,
-                            exactBindings));
                         continue;
                     }
                     if (item.ActionKind is not (
@@ -643,13 +587,11 @@ internal sealed class RegistryPackageChangeOrchestrator(
             }
             artifactsPrepared = true;
 
-            if (mutations.Count == 0 && runtimeRebinds.Count == 0 && runtimePolicyUpdates.Count == 0)
+            if (mutations.Count == 0)
             {
                 await ReconfirmResolutionAuthorityAsync(resolved, cancellationToken)
                     .ConfigureAwait(false);
-                await preparedExactBindings.ObserveLifecyclePoliciesAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                return new RuntimeRegistryPackageChangeResult(
+                return ToResult(new RuntimeRegistryPackageChangeResult(
                     true,
                     RuntimeRegistryErrorCode.None,
                     "No package changes required.",
@@ -661,17 +603,13 @@ internal sealed class RegistryPackageChangeOrchestrator(
                     planItems)
                 {
                     CommittedStamp = installedPackages.Stamp,
-                };
+                });
             }
 
             var stage = await installedPackages.StageRegistryAsync(
                 new PackageStoreStageRequest(mutations),
                 uploadMetadataById,
                 expectedCatalog,
-                runtimeRebinds,
-                runtimePolicyUpdates,
-                preparedExactBindings.LifecyclePolicyEntries,
-                preparedExactBindings.LifecyclePolicyAuthority,
                 cancellationToken);
             stageId = stage.StageId;
             if (!stage.Success || stageId is null)
@@ -684,7 +622,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 var errors = stage.Errors
                     .DefaultIfEmpty(stage.OperationResult.Message ?? "Package transaction staging failed.")
                     .ToArray();
-                return new RuntimeRegistryPackageChangeResult(
+                return ToResult(new RuntimeRegistryPackageChangeResult(
                     false,
                     RuntimeRegistryErrorCode.Conflict,
                     errors[0],
@@ -693,7 +631,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
                     planWarnings.Concat(stage.Warnings).ToArray(),
                     errors,
                     stage.ImpactedPackageIds,
-                    planItems);
+                    planItems) { RuntimePrerequisites = stage.OperationResult.RuntimePrerequisites });
             }
 
             var commit = await installedPackages.CommitRegistryStageAsync(
@@ -708,7 +646,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
             var commitErrors = commit.Errors
                 .DefaultIfEmpty(commit.Message ?? "Package transaction commit failed.")
                 .ToArray();
-            return new RuntimeRegistryPackageChangeResult(
+            return ToResult(new RuntimeRegistryPackageChangeResult(
                 commit.Success,
                 commit.Success ? RuntimeRegistryErrorCode.None : RuntimeRegistryErrorCode.InternalError,
                 commit.Message ?? (commit.Success
@@ -722,7 +660,8 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 planItems)
             {
                 CommittedStamp = commit.CommittedStamp,
-            };
+                RuntimePrerequisites = commit.RuntimePrerequisites,
+            });
         }
         catch (OperationCanceledException)
         {
@@ -732,52 +671,17 @@ internal sealed class RegistryPackageChangeOrchestrator(
             }
             throw;
         }
-        catch (RegistryExecutionRuntimeHardDenyException exception)
-        {
-            if (stageId is not null)
-            {
-                await installedPackages.DiscardStageAsync(stageId, CancellationToken.None);
-                stageId = null;
-            }
-            var runtimeConflicts = exception.Evidence
-                .SelectMany(static evidence => evidence.Conflicts)
-                .Select(RuntimeRegistryContractMapper.ToRuntime)
-                .ToArray();
-            try
-            {
-                var enforcementWarnings = await EnforceKnownBlockedExecutionRuntimesAsync(
-                        exception.Evidence,
-                        expectedCatalog,
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
-                return Failed(
-                    exception.Message,
-                    RuntimeRegistryErrorCode.Conflict,
-                    planWarnings.Concat(enforcementWarnings).ToArray(),
-                    planItems: planItems,
-                    runtimeConflicts: runtimeConflicts);
-            }
-            catch (Exception enforcementException)
-            {
-                return Failed(
-                    enforcementException.Message,
-                    RuntimeRegistryErrorCode.Conflict,
-                    planWarnings,
-                    planItems: planItems,
-                    runtimeConflicts: runtimeConflicts);
-            }
-        }
         catch (InvalidDataException exception)
         {
             if (stageId is not null)
             {
                 await installedPackages.DiscardStageAsync(stageId, CancellationToken.None);
             }
-            return Failed(
+            return ToResult(Failed(
                 exception.Message,
                 artifactsPrepared ? RuntimeRegistryErrorCode.Conflict : RuntimeRegistryErrorCode.ArtifactVerificationFailed,
                 planWarnings,
-                planItems: planItems);
+                planItems: planItems));
         }
         catch (RegistryArtifactTooLargeException exception)
         {
@@ -785,17 +689,17 @@ internal sealed class RegistryPackageChangeOrchestrator(
             {
                 await installedPackages.DiscardStageAsync(stageId, CancellationToken.None);
             }
-            return Failed(
+            return ToResult(Failed(
                 exception.Message,
                 RuntimeRegistryErrorCode.DownloadTooLarge,
                 planWarnings,
-                planItems: planItems);
+                planItems: planItems));
         }
         catch (PackagePolicyDeniedException exception)
         {
             if (stageId is not null) await installedPackages.DiscardStageAsync(stageId, CancellationToken.None);
-            return Failed(exception.Code, exception.Code == PackagePolicyErrorCodes.PlanStale ? RuntimeRegistryErrorCode.StalePlan : RuntimeRegistryErrorCode.Conflict,
-                planWarnings, planItems: planItems);
+            return ToResult(Failed(exception.Code, exception.Code == PackagePolicyErrorCodes.PlanStale ? RuntimeRegistryErrorCode.StalePlan : RuntimeRegistryErrorCode.Conflict,
+                planWarnings, planItems: planItems));
         }
         catch (Exception exception)
         {
@@ -805,11 +709,11 @@ internal sealed class RegistryPackageChangeOrchestrator(
             }
             if (exception is RuntimeRequiredProviderException) throw;
             logger.LogWarning("Registry package transaction failed: {ErrorType}", exception.GetType().Name);
-            return Failed(
+            return ToResult(Failed(
                 exception.Message,
                 RuntimeRegistryErrorCode.RegistryUnavailable,
                 planWarnings,
-                planItems: planItems);
+                planItems: planItems));
         }
         finally
         {
@@ -833,20 +737,13 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 expectedFingerprint,
                 cancellationToken);
             var plan = confirmation.Plan;
-            var hardDenyEvidence = CreateHardDenyEvidence(confirmation.Origin, plan);
-            if (hardDenyEvidence.Count > 0)
-            {
-                throw new RegistryExecutionRuntimeHardDenyException(hardDenyEvidence);
-            }
             if (!plan.Success
                 || plan.Errors.Count != 0
                 || plan.Conflicts.Count != 0
-                || plan.RuntimeConflicts.Count != 0
                 || !string.Equals(
                     plan.ResolutionFingerprint,
                     expectedFingerprint,
                     StringComparison.Ordinal)
-                || plan.RuntimePolicyRevision != original.Plan.RuntimePolicyRevision
                 || plan.ExpiresAtUtc <= timeProvider.GetUtcNow())
             {
                 throw new InvalidDataException(
@@ -854,375 +751,6 @@ internal sealed class RegistryPackageChangeOrchestrator(
             }
         }
     }
-
-    private async Task<IReadOnlyList<string>> EnforceKnownBlockedExecutionRuntimesAsync(
-        IReadOnlyList<RegistryRuntimeHardDenyEvidence> evidence,
-        IReadOnlyList<InstalledPackageRecord> expectedCatalog,
-        CancellationToken cancellationToken)
-    {
-        if (evidence.Count == 0)
-        {
-            return [];
-        }
-        var conflicts = evidence.SelectMany(static item => item.Conflicts).ToArray();
-        var identities = conflicts
-            .Where(static conflict => conflict.CurrentRuntime is not null)
-            .Select(static conflict => conflict.CurrentRuntime!)
-            .Distinct()
-            .Select(static identity => new ExecutionRuntimeIdentity(
-                identity.RuntimeId,
-                identity.Version,
-                identity.PackagingRevision,
-                identity.Rid,
-                identity.ModuleAbi))
-            .OrderBy(static identity => identity.SingleFlightKey, StringComparer.Ordinal)
-            .ToArray();
-        try
-        {
-            var refreshedEntries = new List<ExecutionRuntimeLifecyclePolicyEntryV1>();
-            foreach (var authority in evidence)
-            {
-                var refresh = await lifecyclePolicyRefresher.RefreshHardDenialsAsync(
-                        authority.RegistryOrigin,
-                        authority.RuntimePolicyRevision,
-                        authority.Conflicts,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                if (refresh.ReleasesUnavailable > 0)
-                {
-                    throw new InvalidDataException(
-                        "Registry reported a blocked execution runtime, but its exact lifecycle evidence could not be refreshed.");
-                }
-                if (refresh.PreparedUpdate is null
-                    || refresh.PreparedUpdate.Entries.Count != refresh.ReceiptsObserved)
-                {
-                    throw new InvalidDataException(
-                        "Registry hard-denial lifecycle evidence was not prepared for durable commit.");
-                }
-                refreshedEntries.AddRange(refresh.PreparedUpdate.Entries);
-            }
-
-            var preparedUpdate = await lifecyclePolicies.PrepareEntriesAsync(
-                    refreshedEntries,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            await lifecyclePolicies.ValidatePreparedUpdatePersistenceAsync(
-                    preparedUpdate,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-            var authoritativeEntries = identities.Select(identity =>
-                {
-                    if (!preparedUpdate.Authority.TryGet(identity, out var policy)
-                        || policy is null)
-                    {
-                        throw new InvalidDataException(
-                            $"Authoritative lifecycle policy is missing exact runtime '{identity.SingleFlightKey}'.");
-                    }
-                    return policy;
-                })
-                .ToArray();
-            var policyByIdentity = authoritativeEntries.ToDictionary(
-                static policy => policy.Identity.SingleFlightKey,
-                StringComparer.Ordinal);
-            var matchedPolicyIdentities = new HashSet<string>(StringComparer.Ordinal);
-            var desiredCatalog = expectedCatalog.ToDictionary(
-                static package => package.PackageId,
-                StringComparer.OrdinalIgnoreCase);
-            var policyUpdates = new List<PackageExecutionRuntimePolicyUpdateMutation>();
-            var affectedBindingCount = 0;
-            foreach (var package in expectedCatalog)
-            {
-                var changed = false;
-                var desiredBindings = package.ExecutionRuntimeBindings.Select(binding =>
-                {
-                    var identity = new ExecutionRuntimeIdentity(
-                        binding.RuntimeId,
-                        binding.RuntimeVersion,
-                        binding.RuntimePackagingRevision,
-                        binding.Rid,
-                        binding.ModuleAbi);
-                    if (!policyByIdentity.TryGetValue(identity.SingleFlightKey, out var policy))
-                    {
-                        return binding;
-                    }
-
-                    matchedPolicyIdentities.Add(identity.SingleFlightKey);
-                    affectedBindingCount++;
-                    if (!string.Equals(policy.RegistryOrigin, binding.RegistryOrigin, StringComparison.Ordinal)
-                        || !string.Equals(policy.ManifestSha256, binding.RuntimeManifestSha256, StringComparison.Ordinal)
-                        || !string.Equals(policy.ArtifactSha256, binding.RuntimeArtifactSha256, StringComparison.Ordinal)
-                        || policy.ArtifactSize != binding.RuntimeArtifactSize
-                        || !string.Equals(policy.SigningKeyId, binding.SigningKeyId, StringComparison.Ordinal))
-                    {
-                        throw new InvalidDataException(
-                            $"Authoritative lifecycle policy does not match installed binding '{identity.SingleFlightKey}'.");
-                    }
-                    if (policy.RuntimePolicyRevision < binding.RuntimePolicyRevision
-                        || policy.RuntimePolicyRevision == binding.RuntimePolicyRevision
-                        && !string.Equals(
-                            policy.Lifecycle.State,
-                            binding.RuntimeLifecycleState,
-                            StringComparison.Ordinal)
-                        || policy.RuntimePolicyRevision > binding.RuntimePolicyRevision
-                        && !IsForwardLifecycleTransition(
-                            binding.RuntimeLifecycleState,
-                            policy.Lifecycle.State)
-                        || policy.PolicyObservedAtUtc < binding.PolicyObservedAtUtc)
-                    {
-                        throw new InvalidDataException(
-                            $"Authoritative lifecycle policy conflicts with installed binding '{identity.SingleFlightKey}'.");
-                    }
-
-                    var desired = binding with
-                    {
-                        RuntimePolicyRevision = policy.RuntimePolicyRevision,
-                        RuntimeLifecycleState = policy.Lifecycle.State,
-                        PolicyObservedAtUtc = policy.PolicyObservedAtUtc,
-                        ResolvedAtUtc = policy.PolicyObservedAtUtc > binding.ResolvedAtUtc
-                            ? policy.PolicyObservedAtUtc
-                            : binding.ResolvedAtUtc,
-                    };
-                    changed |= desired != binding;
-                    return desired;
-                }).ToArray();
-                if (!changed)
-                {
-                    continue;
-                }
-
-                var desiredPackage = package with { ExecutionRuntimeBindings = desiredBindings };
-                desiredCatalog[package.PackageId] = desiredPackage;
-                policyUpdates.Add(new PackageExecutionRuntimePolicyUpdateMutation(
-                    package.PackageId,
-                    package,
-                    desiredBindings));
-            }
-            if (!matchedPolicyIdentities.SetEquals(policyByIdentity.Keys))
-            {
-                throw new InvalidDataException(
-                    "Registry hard-denial evidence does not match every affected installed execution-runtime binding.");
-            }
-
-            var desiredPackages = desiredCatalog.Values
-                .OrderBy(static package => package.PackageId, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            var stage = await installedPackages.StageRegistryAsync(
-                    new PackageStoreStageRequest([]),
-                    new Dictionary<string, RegistryPackageUploadMetadata>(StringComparer.Ordinal),
-                    expectedCatalog,
-                    registryRuntimeRebinds: [],
-                    registryRuntimePolicyUpdates: policyUpdates,
-                    registryRuntimePolicyEntries: authoritativeEntries,
-                    registryRuntimePolicyAuthority: preparedUpdate.Authority,
-                    cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-            if (!stage.Success || stage.StageId is null)
-            {
-                if (stage.StageId is not null)
-                {
-                    await installedPackages.DiscardStageAsync(stage.StageId, CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-                throw new InvalidDataException(
-                    stage.OperationResult.Message
-                    ?? "Execution-runtime hard-denial binding evidence could not be staged.");
-            }
-
-            var commit = await installedPackages.CommitStageAsync(
-                    stage.StageId,
-                    CancellationToken.None)
-                .ConfigureAwait(false);
-            if (!commit.Success)
-            {
-                throw new InvalidDataException(
-                    commit.Message
-                    ?? "Execution-runtime hard-denial binding evidence could not be committed.");
-            }
-            var committedCatalog = await installedPackageStore.ListAsync(CancellationToken.None)
-                .ConfigureAwait(false);
-            if (!PackageStorePolicy.CatalogsEqual(committedCatalog.Select(package => package with { Policy = null }).ToArray(),
-                    desiredPackages.Select(package => package with { Policy = null }).ToArray()))
-            {
-                throw new InvalidDataException(
-                    "Committed execution-runtime hard-denial binding evidence does not match the authoritative catalog.");
-            }
-            var committedPolicies = lifecyclePolicies.CaptureSnapshot();
-            if (authoritativeEntries.Any(expected =>
-                    !committedPolicies.TryGet(expected.Identity, out var actual)
-                    || actual != expected))
-            {
-                throw new InvalidDataException(
-                    "Committed execution-runtime hard-denial policy does not match installed binding evidence.");
-            }
-
-            var now = timeProvider.GetUtcNow();
-            var blocked = authoritativeEntries
-                .Where(policy => !policy.PermitsActivation(now))
-                .Select(static policy => policy.Identity)
-                .ToArray();
-            var faultedPackageCount = await installedPackages.EnforceExecutionRuntimePolicyAsync(
-                    blocked,
-                    CancellationToken.None)
-                .ConfigureAwait(false);
-            var warnings = new List<string>
-            {
-                $"Persisted authoritative lifecycle policy for {affectedBindingCount} installed execution-runtime binding(s).",
-            };
-            if (blocked.Length > 0)
-            {
-                warnings.Add(
-                    $"Stopped and faulted {faultedPackageCount} active package(s) bound to {blocked.Length} blocked execution runtime(s).");
-            }
-            return warnings;
-        }
-        catch (Exception exception)
-        {
-            applicationLifetime?.StopApplication();
-            throw new InvalidDataException(
-                HardDenyEnforcementFailureMessage,
-                exception);
-        }
-    }
-
-    private static IReadOnlyList<RegistryRuntimeHardDenyEvidence> CreateHardDenyEvidence(
-        Uri origin,
-        RuntimeRegistryResolveInstallPlanResponse plan)
-    {
-        var conflicts = plan.RuntimeConflicts
-            .Where(static conflict => IsHardDenyCode(conflict.Code))
-            .Select(static conflict => new RegistryExecutionRuntimeResolutionConflict(
-                conflict.Code,
-                conflict.Message,
-                new RegistryExecutionRuntimeRequirement(
-                    conflict.Requirement.RuntimeId,
-                    conflict.Requirement.VersionRange,
-                    conflict.Requirement.ModuleAbi),
-                conflict.Rid,
-                conflict.PackageId,
-                conflict.TargetRole,
-                conflict.CurrentRuntime is null
-                    ? null
-                    : new RegistryExecutionRuntimeIdentity(
-                        conflict.CurrentRuntime.RuntimeId,
-                        conflict.CurrentRuntime.Version,
-                        conflict.CurrentRuntime.PackagingRevision,
-                        conflict.CurrentRuntime.Rid,
-                        conflict.CurrentRuntime.ModuleAbi),
-                conflict.RequiredHostTrustGeneration))
-            .ToArray();
-        return conflicts.Length == 0
-            ? []
-            : [new RegistryRuntimeHardDenyEvidence(origin, plan.RuntimePolicyRevision, conflicts)];
-    }
-
-    private static IReadOnlyList<RegistryRuntimeHardDenyEvidence> CreateHardDenyEvidence(
-        Uri origin,
-        RegistryResolveInstallPlanResponse plan)
-    {
-        var conflicts = plan.RuntimeConflicts
-            .Where(static conflict => IsHardDenyCode(conflict.Code))
-            .ToArray();
-        return conflicts.Length == 0
-            ? []
-            : [new RegistryRuntimeHardDenyEvidence(origin, plan.RuntimePolicyRevision, conflicts)];
-    }
-
-    private static bool IsHardDenyCode(string code)
-        => code is ExecutionRuntimeErrorCodes.Revoked
-            or ExecutionRuntimeErrorCodes.Retired
-            or ExecutionRuntimeErrorCodes.CurrentRuntimeTrustDenied;
-
-    private static RuntimeRegistryResolveInstallPlanResponse AddPlanWarnings(
-        RuntimeRegistryResolveInstallPlanResponse plan,
-        IReadOnlyList<string> warnings)
-        => warnings.Count == 0
-            ? plan
-            : new RuntimeRegistryResolveInstallPlanResponse(
-                plan.Success,
-                plan.Items,
-                plan.Warnings.Concat(warnings).ToArray(),
-                plan.Errors,
-                plan.Conflicts,
-                plan.TrustedArtifactOrigins,
-                plan.RequiredCapabilityConsents,
-                plan.RuntimeArtifacts,
-                plan.RuntimeConflicts,
-                plan.ResolutionFingerprint,
-                plan.RuntimePolicyRevision,
-                plan.ExpiresAtUtc);
-
-    private static bool RequiresLifecycleEvidenceUpdate(
-        string packageId,
-        IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> currentBindings,
-        IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> desiredBindings)
-    {
-        if (currentBindings.Count != desiredBindings.Count)
-        {
-            throw InvalidKeepBinding(packageId);
-        }
-        var currentByTarget = currentBindings.ToDictionary(
-            static binding => $"{binding.Role}\0{binding.Rid}",
-            StringComparer.Ordinal);
-        var changed = false;
-        foreach (var desired in desiredBindings)
-        {
-            if (!currentByTarget.TryGetValue($"{desired.Role}\0{desired.Rid}", out var current)
-                || !SameImmutableBinding(current, desired))
-            {
-                throw InvalidKeepBinding(packageId);
-            }
-            if (desired.RuntimePolicyRevision < current.RuntimePolicyRevision
-                || desired.RuntimePolicyRevision == current.RuntimePolicyRevision
-                && !string.Equals(
-                    desired.RuntimeLifecycleState,
-                    current.RuntimeLifecycleState,
-                    StringComparison.Ordinal)
-                || desired.RuntimePolicyRevision > current.RuntimePolicyRevision
-                && !IsForwardLifecycleTransition(
-                    current.RuntimeLifecycleState,
-                    desired.RuntimeLifecycleState))
-            {
-                throw new InvalidDataException(
-                    $"Registry keep action for package '{packageId}' carries stale or conflicting execution-runtime policy evidence.");
-            }
-            changed |= desired.RuntimePolicyRevision != current.RuntimePolicyRevision
-                       || !string.Equals(
-                           desired.RuntimeLifecycleState,
-                           current.RuntimeLifecycleState,
-                           StringComparison.Ordinal);
-        }
-        return changed;
-    }
-
-    private static bool IsForwardLifecycleTransition(string current, string desired)
-        => current == desired
-           || current == ExecutionRuntimeLifecycleStates.Supported
-           || current == ExecutionRuntimeLifecycleStates.Deprecated
-           && desired is ExecutionRuntimeLifecycleStates.Retired or ExecutionRuntimeLifecycleStates.Revoked
-           || current == ExecutionRuntimeLifecycleStates.Retired
-           && desired == ExecutionRuntimeLifecycleStates.Revoked;
-
-    private static bool SameImmutableBinding(
-        InstalledPackageExecutionRuntimeBindingRecord current,
-        InstalledPackageExecutionRuntimeBindingRecord desired)
-        => string.Equals(current.Role, desired.Role, StringComparison.Ordinal)
-           && string.Equals(current.Rid, desired.Rid, StringComparison.Ordinal)
-           && string.Equals(current.RuntimeId, desired.RuntimeId, StringComparison.Ordinal)
-           && string.Equals(current.RuntimeVersion, desired.RuntimeVersion, StringComparison.Ordinal)
-           && current.RuntimePackagingRevision == desired.RuntimePackagingRevision
-           && string.Equals(current.ModuleAbi, desired.ModuleAbi, StringComparison.Ordinal)
-           && string.Equals(current.RuntimeManifestSha256, desired.RuntimeManifestSha256, StringComparison.Ordinal)
-           && string.Equals(current.RuntimeArtifactSha256, desired.RuntimeArtifactSha256, StringComparison.Ordinal)
-           && current.RuntimeArtifactSize == desired.RuntimeArtifactSize
-           && string.Equals(current.RegistryOrigin, desired.RegistryOrigin, StringComparison.Ordinal)
-           && string.Equals(current.AcquisitionSource, desired.AcquisitionSource, StringComparison.Ordinal)
-           && string.Equals(current.SigningKeyId, desired.SigningKeyId, StringComparison.Ordinal)
-           && current.TrustStoreGeneration == desired.TrustStoreGeneration;
-
-    private static InvalidDataException InvalidKeepBinding(string packageId)
-        => new(
-            $"Registry keep action for package '{packageId}' changed its immutable exact execution-runtime binding; a runtime-only rebind is required.");
 
     private static PackageExecutionRequest EnsureProvenanceChangesAreMaterialized(
         PackageExecutionRequest execution,
@@ -1420,15 +948,13 @@ internal sealed class RegistryPackageChangeOrchestrator(
 
     private static RuntimeRegistryPackageChangeResult PlanFailed(
         IReadOnlyList<ResolvedPackageExecution> resolved,
-        RegistryResolveInstallPlanResponse plan,
-        IReadOnlyList<string>? enforcementWarnings = null)
+        RegistryResolveInstallPlanResponse plan)
     {
         var runtimePlan = RuntimeRegistryContractMapper.ToRuntime(plan);
         var errors = plan.Errors
             .Concat(plan.Conflicts.Select(static conflict => string.IsNullOrWhiteSpace(conflict.Message)
                 ? $"Package '{conflict.PackageId}' conflicts with the requested change."
                 : conflict.Message))
-            .Concat(plan.RuntimeConflicts.Select(conflict => conflict.Message))
             .DefaultIfEmpty("Package plan resolution failed.")
             .ToArray();
         return new RuntimeRegistryPackageChangeResult(
@@ -1439,7 +965,6 @@ internal sealed class RegistryPackageChangeOrchestrator(
             false,
             ResolvedWarnings(resolved)
                 .Concat(plan.Warnings)
-                .Concat(enforcementWarnings ?? [])
                 .ToArray(),
             errors,
             [],
@@ -1448,35 +973,12 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 .ToArray())
         {
             Conflicts = runtimePlan.Conflicts,
-            RuntimeArtifacts = resolved
-                .SelectMany(static resolution =>
-                    RuntimeRegistryContractMapper.ToRuntime(resolution.Plan).RuntimeArtifacts)
-                .Concat(runtimePlan.RuntimeArtifacts)
-                .ToArray(),
-            RuntimeConflicts = runtimePlan.RuntimeConflicts,
         };
-    }
-
-    private static RuntimeRegistryPackageChangeResult PlanEnforcementFailed(
-        IReadOnlyList<ResolvedPackageExecution> resolved,
-        RegistryResolveInstallPlanResponse plan,
-        string message)
-    {
-        var runtimePlan = RuntimeRegistryContractMapper.ToRuntime(plan);
-        return Failed(
-            message,
-            RuntimeRegistryErrorCode.Conflict,
-            ResolvedWarnings(resolved).Concat(plan.Warnings).ToArray(),
-            planItems: ResolvedPlanItems(resolved).Concat(runtimePlan.Items).ToArray(),
-            conflicts: runtimePlan.Conflicts,
-            runtimeConflicts: runtimePlan.RuntimeConflicts,
-            runtimeArtifacts: runtimePlan.RuntimeArtifacts);
     }
 
     private static RuntimeRegistryPackageChangeResult StalePreview(
         IReadOnlyList<ResolvedPackageExecution> resolved,
-        RegistryResolveInstallPlanResponse plan,
-        IReadOnlyList<string>? enforcementWarnings = null)
+        RegistryResolveInstallPlanResponse plan)
     {
         var runtimePlan = RuntimeRegistryContractMapper.ToRuntime(plan);
         return Failed(
@@ -1484,14 +986,11 @@ internal sealed class RegistryPackageChangeOrchestrator(
             RuntimeRegistryErrorCode.StalePlan,
             ResolvedWarnings(resolved)
                 .Concat(plan.Warnings)
-                .Concat(enforcementWarnings ?? [])
                 .ToArray(),
             planItems: ResolvedPlanItems(resolved)
                 .Concat(runtimePlan.Items)
                 .ToArray(),
-            conflicts: runtimePlan.Conflicts,
-            runtimeConflicts: runtimePlan.RuntimeConflicts,
-            runtimeArtifacts: runtimePlan.RuntimeArtifacts);
+            conflicts: runtimePlan.Conflicts);
     }
 
     private static bool ConfirmsExpectedPreview(
@@ -1501,7 +1000,6 @@ internal sealed class RegistryPackageChangeOrchestrator(
         => plan.Success
            && plan.Errors.Count == 0
            && plan.Conflicts.Count == 0
-           && plan.RuntimeConflicts.Count == 0
            && string.Equals(
                plan.ResolutionFingerprint,
                expectedResolutionFingerprint,
@@ -1554,23 +1052,9 @@ internal sealed class RegistryPackageChangeOrchestrator(
         RuntimeRegistryPackageChangeResult result,
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> skippedPackageIds)
-        => new(
-            result.Success,
-            result.ErrorCode,
-            result.Message,
-            result.RuntimeSessionApplied,
-            result.RequiresAppRestart,
-            warnings.Concat(result.Warnings).ToArray(),
-            result.Errors,
-            result.ImpactedPackageIds,
-            result.PlanItems,
-            result.RequiredCapabilityConsents)
+        => result with
         {
-            CommittedStamp = result.CommittedStamp,
-            Conflicts = result.Conflicts,
-            PlanExpectations = result.PlanExpectations,
-            RuntimeArtifacts = result.RuntimeArtifacts,
-            RuntimeConflicts = result.RuntimeConflicts,
+            Warnings = warnings.Concat(result.Warnings).ToArray(),
             SkippedPackageIds = skippedPackageIds
                 .Concat(result.SkippedPackageIds)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1581,25 +1065,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
     private static RuntimeRegistryPackageChangeResult WithMessage(
         RuntimeRegistryPackageChangeResult result,
         string message)
-        => new(
-            result.Success,
-            result.ErrorCode,
-            message,
-            result.RuntimeSessionApplied,
-            result.RequiresAppRestart,
-            result.Warnings,
-            result.Errors,
-            result.ImpactedPackageIds,
-            result.PlanItems,
-            result.RequiredCapabilityConsents)
-        {
-            CommittedStamp = result.CommittedStamp,
-            Conflicts = result.Conflicts,
-            PlanExpectations = result.PlanExpectations,
-            RuntimeArtifacts = result.RuntimeArtifacts,
-            RuntimeConflicts = result.RuntimeConflicts,
-            SkippedPackageIds = result.SkippedPackageIds,
-        };
+        => result with { Message = message };
 
     private static RuntimeRegistryPackageChangeResult Failed(
         string message,
@@ -1608,9 +1074,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
         IReadOnlyList<string>? errors = null,
         IReadOnlyList<RuntimeRegistryPackageInstallPlanItem>? planItems = null,
         IReadOnlyList<PackageCapabilityConsent>? requiredCapabilityConsents = null,
-        IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict>? conflicts = null,
-        IReadOnlyList<RuntimeRegistryExecutionRuntimeResolutionConflict>? runtimeConflicts = null,
-        IReadOnlyList<RuntimeRegistryResolvedExecutionRuntimeArtifact>? runtimeArtifacts = null)
+        IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict>? conflicts = null)
         => new(
             false,
             errorCode,
@@ -1624,8 +1088,6 @@ internal sealed class RegistryPackageChangeOrchestrator(
             requiredCapabilityConsents ?? [])
         {
             Conflicts = conflicts ?? [],
-            RuntimeArtifacts = runtimeArtifacts ?? [],
-            RuntimeConflicts = runtimeConflicts ?? [],
         };
 
     internal static bool RequiresReinstall(string? currentVersion, string version, bool requested)
@@ -1648,19 +1110,4 @@ internal sealed class RegistryPackageChangeOrchestrator(
         RegistryResolveInstallPlanResponse Plan,
         IReadOnlyDictionary<string, InstalledPackageProvenanceRecord> ProvenanceByPackageId);
 
-    private sealed record RegistryRuntimeHardDenyEvidence(
-        Uri RegistryOrigin,
-        long RuntimePolicyRevision,
-        IReadOnlyList<RegistryExecutionRuntimeResolutionConflict> Conflicts);
-
-    private sealed class RegistryExecutionRuntimeHardDenyException(
-        IReadOnlyList<RegistryRuntimeHardDenyEvidence> evidence)
-        : Exception(
-            evidence.SelectMany(static item => item.Conflicts)
-                .Select(static conflict => conflict.Message)
-                .FirstOrDefault()
-            ?? "Registry denied an exact currently bound execution runtime.")
-    {
-        public IReadOnlyList<RegistryRuntimeHardDenyEvidence> Evidence { get; } = evidence;
-    }
 }

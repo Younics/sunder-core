@@ -1,12 +1,15 @@
 import { isPackageId, isPackageVersionRange, isSemanticVersion, isVersionInRange } from "@sunder/sdk";
 import { contractError, inventoryBytes, parseContractLock, parseContractWireJson, registryOrigin, type PackageArtifact, type RegistryOriginOptions } from "./rpc-contract-lock";
 import { ordered, outerBytes, type Outer, type OuterObject } from "./rpc-baseline-json";
-import { inspectContractCandidate } from "./rpc-contract-candidate";
+import { inspectContractCandidate, type InspectedContractCandidate } from "./rpc-contract-candidate";
 import { readResponse } from "./rpc-contract-restore";
+import { acquireContractCandidate } from "./rpc-contract-acquisition";
 
 export interface PackageSelectionOptions extends RegistryOriginOptions {
   readonly versionRange: string; readonly includePrerelease: boolean; readonly registryOrigin?: string | undefined; readonly candidate?: string;
   readonly fetchImplementation?: typeof fetch; readonly signal?: AbortSignal;
+  /** Tool-private operation lifetime; publication waits for the complete proposed lock. */
+  readonly candidates?: Map<string, InspectedContractCandidate>;
 }
 export async function selectPackageArtifact(packageId: string, options: PackageSelectionOptions): Promise<OuterObject> {
   if (!isPackageId(packageId) || !isPackageVersionRange(options.versionRange) || options.versionRange.includes("  "))
@@ -14,18 +17,12 @@ export async function selectPackageArtifact(packageId: string, options: PackageS
   const origin = options.registryOrigin === undefined ? undefined : registryOrigin(options.registryOrigin, options.allowDevelopmentRegistryOrigin);
   if (origin === undefined && options.candidate === undefined)
     contractError("package-api.local-input-required", "A local package selection requires an explicit candidate archive; no Registry is inferred.");
-  let inventory: unknown; let inventoryHash: unknown;
-  if (options.candidate !== undefined) {
-    const candidate = await inspectContractCandidate(options.candidate, options.signal); inventory = candidate.inventory; inventoryHash = candidate.publicInventorySha256;
-  } else {
-    const request = options.fetchImplementation ?? fetch;
-    const version = await resolveVersion(packageId, options, request);
-    const envelope = record(parseContractWireJson(await readResponse(new URL(`api/v1/packages/${encodeURIComponent(packageId)}/versions/${encodeURIComponent(version)}/public-api`, origin),
-      "application/json", 1_048_576, undefined, request, options.signal, undefined, undefined, options.allowDevelopmentRegistryOrigin), 1_048_576));
-    if (JSON.stringify(Object.keys(envelope)) !== '["inventory","publicInventorySha256"]') invalid("Registry public inventory envelope has an unsupported shape.");
-    inventory = envelope.inventory; inventoryHash = envelope.publicInventorySha256;
-    if (record(inventory).packageVersion !== version) invalid("Registry inventory differs from the selected exact version.");
-  }
+  const selectedVersion = options.candidate === undefined ? await resolveVersion(packageId, options, options.fetchImplementation ?? fetch) : undefined;
+  const candidate = options.candidate !== undefined ? await inspectContractCandidate(options.candidate, options.signal)
+    : await acquireContractCandidate(packageId, selectedVersion!, origin!, options);
+  try {
+  const inventory = candidate.inventory; const inventoryHash = candidate.publicInventorySha256;
+  if (selectedVersion !== undefined && inventory.packageVersion !== selectedVersion) invalid("Canonical candidate differs from the selected exact version.");
   const source = record(inventory);
   if (source.packageId !== packageId || !Array.isArray(source.contracts) || source.contracts.length > 128) invalid("Selected inventory identity/count is invalid.");
   if (source.contracts.length === 0) contractError("package-api.public-api-empty", "Selected artifact has no public RPC contracts.");
@@ -40,11 +37,15 @@ export async function selectPackageArtifact(packageId: string, options: PackageS
   }
   const artifact: OuterObject = { requestedVersionRange: options.versionRange, includePrerelease: options.includePrerelease,
     selectedPackageVersion: source.packageVersion, selectedPackageContentIdentity: source.packageContentIdentity, ...(origin === undefined ? {} : { registryOrigin: origin }),
-    publicContractCount: source.publicContractCount, publicInventorySha256: inventoryHash, contracts: ordered(contractEntries) } as OuterObject;
+    publicContractCount: source.publicContractCount, publicInventorySha256: inventoryHash,
+    modelProjectionBytes: candidate.modelProjectionBytes.length, modelProjectionSha256: candidate.modelProjectionSha256, contracts: ordered(contractEntries) } as OuterObject;
   const check = parseContractLock(outerBytes({ lockVersion: 1, packageArtifacts: ordered([[packageId, artifact]]),
-    packageImports: ordered([[packageId, { localName: "selected", presence: "required", requiredContracts: [] }]]), providerImports: {}, platformImports: {} }), options.allowDevelopmentRegistryOrigin);
+    packageImports: ordered([[packageId, { localName: "selected", presence: "required", requiredContracts: [], consumerRoles: ["app", "runtime"] }]]), providerImports: {}, platformImports: {} }), options.allowDevelopmentRegistryOrigin);
   if (!inventoryBytes(check.packageArtifacts.get(packageId)!).equals(Buffer.from(JSON.stringify(inventory)))) invalid("Inventory contains omitted, extra or noncanonical metadata.");
+  await candidate.revalidate();
+  options.candidates?.set(packageId, candidate);
   return artifact;
+  } finally { if (options.candidates?.get(packageId) !== candidate && "dispose" in candidate) await (candidate.dispose as () => Promise<void>)(); }
 }
 async function resolveVersion(packageId: string, options: PackageSelectionOptions, request: typeof fetch): Promise<string> {
   const versions = new Set<string>(); let total: number | undefined; let best: string | undefined;

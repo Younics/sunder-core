@@ -27,18 +27,10 @@ public static class RegistryApiRoutes
     public const string PackageResolveInstallPlan = Packages + "/resolve-install-plan";
     public const string PackageResolvePackageChanges = Packages + "/resolve-package-changes";
     public const string PackagePublish = Packages + "/publish";
-    public const string ExecutionRuntimes = Root + "/execution-runtimes";
-    public const string ExecutionRuntimeResolve = ExecutionRuntimes + "/resolve";
-    public const string AdministratorExecutionRuntimes = Root + "/admin/execution-runtimes";
-    public const string ExecutionRuntimeStages = AdministratorExecutionRuntimes + "/stages";
-    public const string ExecutionRuntimeStageLookup = ExecutionRuntimeStages + "/lookup";
     public const string Stacks = Root + "/stacks";
     public const string StackPublish = Stacks + "/publish";
     public const string DevelopmentPackages = Root + "/dev/packages";
     public const string DevelopmentPackagePublishLocal = DevelopmentPackages + "/publish/local";
-    public const string DevelopmentExecutionRuntimes = Root + "/dev/execution-runtimes";
-    public const string DevelopmentExecutionRuntimeStages = DevelopmentExecutionRuntimes + "/stages";
-    public const string DevelopmentExecutionRuntimeStageLookup = DevelopmentExecutionRuntimeStages + "/lookup";
     public const string DevelopmentStacks = Root + "/dev/stacks";
     public const string DevelopmentStackPublishLocal = DevelopmentStacks + "/publish/local";
 
@@ -205,42 +197,6 @@ public static class RegistryApiRoutes
     public static string PackageMaintainer(string packageId, string userId)
         => $"{PackageMaintainers(packageId)}/{Segment(userId, nameof(userId))}";
 
-    public static string ExecutionRuntime(string runtimeId)
-        => $"{ExecutionRuntimes}/{Segment(runtimeId, nameof(runtimeId))}";
-
-    public static string ExecutionRuntimeReleases(string runtimeId)
-        => $"{ExecutionRuntime(runtimeId)}/releases";
-
-    public static string ExecutionRuntimeRelease(string runtimeId, string version, int packagingRevision)
-        => $"{ExecutionRuntimeReleases(runtimeId)}/{Segment(version, nameof(version))}/revisions/{PositiveRevision(packagingRevision)}";
-
-    public static string ExecutionRuntimeArtifact(string runtimeId, string version, int packagingRevision, string rid)
-        => $"{ExecutionRuntimeRelease(runtimeId, version, packagingRevision)}/artifacts/{Segment(rid, nameof(rid))}";
-
-    public static string ExecutionRuntimeArtifactDownload(string runtimeId, string version, int packagingRevision, string rid)
-        => $"{ExecutionRuntimeArtifact(runtimeId, version, packagingRevision, rid)}/download";
-
-    public static string ExecutionRuntimeReleaseLifecycle(string runtimeId, string version, int packagingRevision)
-        => $"{ExecutionRuntimeRelease(runtimeId, version, packagingRevision)}/lifecycle";
-
-    public static string ExecutionRuntimeStage(string stageId)
-        => $"{ExecutionRuntimeStages}/{Segment(stageId, nameof(stageId))}";
-
-    public static string ExecutionRuntimeStageArtifact(string stageId, string rid)
-        => $"{ExecutionRuntimeStage(stageId)}/artifacts/{Segment(rid, nameof(rid))}";
-
-    public static string ExecutionRuntimeStagePromotion(string stageId)
-        => $"{ExecutionRuntimeStage(stageId)}/promotion";
-
-    public static string DevelopmentExecutionRuntimeStage(string stageId)
-        => $"{DevelopmentExecutionRuntimeStages}/{Segment(stageId, nameof(stageId))}";
-
-    public static string DevelopmentExecutionRuntimeStageArtifactLocal(string stageId, string rid)
-        => $"{DevelopmentExecutionRuntimeStage(stageId)}/artifacts/{Segment(rid, nameof(rid))}/local";
-
-    public static string DevelopmentExecutionRuntimeStagePromotion(string stageId)
-        => $"{DevelopmentExecutionRuntimeStage(stageId)}/promotion";
-
     public static string Stack(string stackId)
         => $"{Stacks}/{Segment(stackId, nameof(stackId))}";
 
@@ -307,11 +263,6 @@ public static class RegistryApiRoutes
         return Uri.EscapeDataString(value);
     }
 
-    private static int PositiveRevision(int packagingRevision)
-        => packagingRevision > 0
-            ? packagingRevision
-            : throw new ArgumentOutOfRangeException(nameof(packagingRevision), "A packaging revision must be positive.");
-
     private static bool IsDotSegment(string segment)
     {
         var decoded = Uri.UnescapeDataString(segment);
@@ -334,18 +285,4 @@ public static class RegistryApiRoutes
 
         return true;
     }
-}
-
-public static class RegistryApiOperationNames
-{
-    public const string BrowseExecutionRuntimes = "BrowseExecutionRuntimes";
-    public const string GetExecutionRuntime = "GetExecutionRuntime";
-    public const string GetExecutionRuntimeRelease = "GetExecutionRuntimeRelease";
-    public const string DownloadExecutionRuntimeArtifact = "DownloadExecutionRuntimeArtifact";
-    public const string ResolveExecutionRuntime = "ResolveExecutionRuntime";
-    public const string LookupExecutionRuntimePublication = "LookupExecutionRuntimePublication";
-    public const string StageExecutionRuntimeRelease = "StageExecutionRuntimeRelease";
-    public const string PublishExecutionRuntimeArtifact = "PublishExecutionRuntimeArtifact";
-    public const string PromoteExecutionRuntimeRelease = "PromoteExecutionRuntimeRelease";
-    public const string TransitionExecutionRuntimeLifecycle = "TransitionExecutionRuntimeLifecycle";
 }

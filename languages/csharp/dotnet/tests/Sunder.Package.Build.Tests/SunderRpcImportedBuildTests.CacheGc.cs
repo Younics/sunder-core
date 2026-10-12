@@ -310,7 +310,9 @@ public sealed partial class SunderRpcImportedBuildTests
         contract["descriptorSha256"] = descriptor.Sha256; contract["abiSha256"] = descriptor.AbiSha256; contract["etag"] = "\"" + descriptor.Sha256 + "\"";
         artifact["contracts"] = new JsonObject { [descriptor.ContractId] = contract };
         artifact["publicInventorySha256"] = InventorySha256(DependencyId, artifact);
+        ModelProjectionTestEvidence.PinEmptySourceProjection(DependencyId, artifact);
         json["packageImports"]![DependencyId]!["requiredContracts"] = new JsonArray(descriptor.ContractId);
         WriteJson(LockPath, json);
+        ModelProjectionTestEvidence.Seed(_cache, SunderRpcAuthoringDocuments.ReadContractLock(LockPath).PackageArtifacts[DependencyId]);
     }
 }

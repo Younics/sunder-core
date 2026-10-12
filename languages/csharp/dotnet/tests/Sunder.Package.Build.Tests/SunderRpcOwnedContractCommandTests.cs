@@ -13,13 +13,14 @@ using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
 using Xunit;
 using TaskItem = Microsoft.Build.Utilities.TaskItem;
 
 namespace Sunder.Package.Build.Tests;
 
-public sealed class SunderRpcOwnedContractCommandTests : IDisposable
+public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
 {
     private readonly string _root = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(
         Path.Combine(Path.GetTempPath(), "sunder-owned-command-tests", Guid.NewGuid().ToString("N")));
@@ -31,8 +32,8 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
             or "System.Threading.dll" or "System.Threading.Tasks.dll" or "System.Runtime.Extensions.dll"
             or "System.Text.Json.dll" or "System.Memory.dll" or "System.Runtime.Numerics.dll"
             or "System.ComponentModel.Primitives.dll")
-        .Concat([typeof(SunderRpcServiceAttribute).Assembly.Location, typeof(SunderWorker).Assembly.Location,
-            typeof(IServiceCollection).Assembly.Location, typeof(Microsoft.Extensions.Logging.ILogger).Assembly.Location])
+        .Concat([typeof(SunderServiceAttribute).Assembly.Location, typeof(SunderWorker).Assembly.Location,
+            typeof(IServiceProvider).Assembly.Location, typeof(IServiceCollection).Assembly.Location, typeof(Microsoft.Extensions.Logging.ILogger).Assembly.Location])
         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     public SunderRpcOwnedContractCommandTests()
@@ -116,7 +117,7 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
     [InlineData("Freeze")]
     public void Commands_RequireExistingBaseline(string operation)
     {
-        Failure(Command(operation), "baseline is required");
+        Failure(Command(operation), "rpc-authoring.baseline-drift");
         Assert.False(File.Exists(BaselinePath));
         Assert.False(Directory.Exists(Generated));
     }
@@ -191,8 +192,8 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         Success(Command("Accept"));
         Success(Command("Freeze"));
         var renamed = Source.Replace("GreetingService", "WelcomeService", StringComparison.Ordinal);
-        File.WriteAllText(SourcePath, renamed.Replace("SunderRpcExposure.Package)",
-            "SunderRpcExposure.Package, ContractId = \"example.generated.greeting\")", StringComparison.Ordinal));
+        File.WriteAllText(SourcePath, renamed.Replace("SunderServiceExposure.Public)",
+            "SunderServiceExposure.Public, ContractId = \"example.generated.greeting\")", StringComparison.Ordinal));
         Failure(Command("Accept"), "aliased or renamed");
 
         File.WriteAllText(SourcePath, "using System.Threading.Tasks; using Sunder.Sdk.Packaging;\n"
@@ -265,7 +266,7 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
             WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         }) + "\n");
         var providerMetadata = audienceOnly
-            ? "ProviderId = \"example.before\", Audience = ExampleAfterRpcError.Code == \"example.after\" ? SunderRpcProviderAudience.Owner : SunderRpcProviderAudience.Public"
+            ? "ProviderId = \"example.before\", Audience = ExampleAfterRpcError.Code == \"example.after\" ? SunderServiceAudience.Owner : SunderServiceAudience.Public"
             : "ProviderId = ExampleAfterRpcError.Code";
         var source = Path.Combine(_root, "Shadowing.cs");
         File.WriteAllText(source, $$"""
@@ -273,31 +274,32 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
+            namespace Sunder.Generated.Packages.Example_Generated_Internal.CExample_Generated_Imports { }
             namespace Legacy
             {
                 public static class ExampleAfterRpcError { public const string Code = "example.before"; }
             }
             namespace Owned
             {
-                [SunderRpcService(SunderRpcExposure.Public)]
-                [SunderRpcDomainError("example.after")]
+                [SunderService(SunderServiceExposure.Public)]
+                [SunderServiceError("example.after")]
                 public sealed partial class ImportsService
                 {
-                    [SunderRpcMethod(Errors = new[] { "example.after" })]
+                    [SunderMethod(Errors = new[] { "example.after" })]
                     public ValueTask<Reply> ReadAsync() => ValueTask.FromResult(new Reply { Value = "ok" });
                 }
                 public sealed record Reply { public required string Value { get; init; } }
             }
             namespace ImportedImplementation
             {
-                using Sunder.Generated.Rpc;
-                using Sunder.Generated.Rpc.Imports;
-                using Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal;
-                [SunderRpcProvider(typeof(IMinimalProviderService), {{providerMetadata}})]
+                using Sunder.Generated.Packages.Example_Generated_Internal;
+                using Sunder.Generated.Packages.Example_Generated_Internal.CExample_Generated_Imports;
+                using Sunder.Generated.Packages.Example_Dependency_Services;
+                [SunderServiceProvider(typeof(IMinimalProviderService), {{providerMetadata}})]
                 public sealed partial class LocalProvider : IMinimalProviderService
                 {
-                    public ValueTask<Empty> PingAsync(SunderRpcInvocationContext context, Empty request, CancellationToken cancellationToken)
-                        => ValueTask.FromResult(request);
+                    public ValueTask PingAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
                 }
             }
             """);
@@ -567,6 +569,8 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
     [InlineData("reference", false)]
     [InlineData("lock", false)]
     [InlineData("source", true)]
+    [InlineData("source-add", true)]
+    [InlineData("source-remove", true)]
     [InlineData("reference", true)]
     [InlineData("lock", true)]
     public async Task Pack_RechecksInputsAfterArchiveConstructionAndImmediatelyBeforePublication(string input, bool afterLease)
@@ -587,7 +591,12 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         var path = input == "source" ? SourcePath : input == "lock" ? LockPath : referencePath;
         if (afterLease)
         {
-            pack.BeforeArchivePublication = () => ReplaceInput(path, input == "reference");
+            pack.BeforeArchivePublication = () =>
+            {
+                if (input == "source-add") File.WriteAllText(Path.Combine(_root, "Added.cs"), "internal sealed class AddedSource;\n");
+                else if (input == "source-remove") File.Delete(SourcePath);
+                else ReplaceInput(path, input == "reference");
+            };
             Failure(pack, "changed after it was read");
         }
         else
@@ -639,6 +648,7 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         var dev = BuildDevPackage(generation);
         var pack = Pack(dev);
         pack.ProjectDirectory = Path.Combine(_root, "artifact-only-project");
+        Directory.CreateDirectory(pack.ProjectDirectory);
         pack.IntermediateOutputPath = Path.Combine(pack.ProjectDirectory, "obj");
         pack.SourceFiles = [];
         pack.ReferencePaths = [];
@@ -660,11 +670,11 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         bundle.SetMetadata("ContractId", descriptor.ContractId);
         bundle.SetMetadata("Version", descriptor.Version);
         bundle.SetMetadata("DescriptorPath", "contracts/greeting.rpc.json");
-        bundle.SetMetadata("Exposure", "package");
+        bundle.SetMetadata("Exposure", "public");
         Failure(CreatePack(), "draft");
         File.WriteAllText(SourcePath, Source.Replace("using Sunder.Sdk.Rpc;",
-            "using Sunder.Sdk.Rpc;\nusing SvcAttribute = global::Sunder.Sdk.Rpc.@SunderRpcServiceAttribute;", StringComparison.Ordinal)
-            .Replace("[SunderRpcService(", "[SvcAttribute(", StringComparison.Ordinal));
+            "using Sunder.Sdk.Rpc;\nusing SvcAttribute = global::Sunder.Sdk.Services.@SunderServiceAttribute;", StringComparison.Ordinal)
+            .Replace("[SunderService(", "[SvcAttribute(", StringComparison.Ordinal));
         Success(Command());
         File.Delete(BaselinePath);
         File.Delete(LockPath);
@@ -731,6 +741,11 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
                 bundle["descriptorSha256"] = extraDescriptor.Sha256;
                 bundle["abiSha256"] = extraDescriptor.AbiSha256;
                 document["contractBundles"]!.AsArray().Add(bundle);
+                var projectionPath = Path.Combine(dev, SunderPackageFormat.RpcModelProjectionPath);
+                var projection = SunderRpcModelProjectionDocument.Parse(File.ReadAllBytes(projectionPath));
+                File.WriteAllBytes(projectionPath, new SunderRpcModelProjectionDocument(1, projection.PackageId, projection.PackageVersion,
+                    projection.Contracts.Append(new SunderRpcModelProjectionContract(extraDescriptor.ContractId, extraDescriptor.Version,
+                        extraDescriptor.Sha256, extraDescriptor.AbiSha256, Assert.Single(projection.Contracts).ModelProjection)).ToArray()).ToCanonicalUtf8());
             }
         });
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(dev);
@@ -742,17 +757,18 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
     [InlineData("Package", "", true, "discover,invoke", true)]
     [InlineData("Package", "", false, "discover,invoke", false)]
     [InlineData("Package", "", null, "", false)]
-    [InlineData("Public", "", null, "", true)]
+    [InlineData("Public", "", null, "", false)]
+    [InlineData("Public", "", false, "discover,invoke", true)]
     [InlineData("Public", "", true, "discover,invoke", false)]
-    [InlineData("Public", "[SunderRpcAppUse]", false, "discover,invoke", true)]
-    [InlineData("Public", "[SunderRpcAppUse]", true, "discover,invoke", false)]
-    [InlineData("Public", "[SunderRpcAppUse]", null, "", false)]
-    [InlineData("Public", "[SunderRpcAppUse(Actions = new[] { \"discover\" })]", false, "discover", true)]
-    [InlineData("Public", "[SunderRpcAppUse(Actions = new[] { \"discover\" })]", false, "discover,invoke", false)]
+    [InlineData("Public", "[SunderAppUse]", false, "discover,invoke", true)]
+    [InlineData("Public", "[SunderAppUse]", true, "discover,invoke", false)]
+    [InlineData("Public", "[SunderAppUse]", null, "", false)]
+    [InlineData("Public", "[SunderAppUse(Actions = new[] { \"discover\" })]", false, "discover", true)]
+    [InlineData("Public", "[SunderAppUse(Actions = new[] { \"discover\" })]", false, "discover,invoke", false)]
     public async Task Pack_AllowsOnlyTheExactAutomaticOwnedAppUses(string exposure, string attribute, bool? required, string actions, bool allowed)
     {
-        File.WriteAllText(SourcePath, Source.Replace("Exposure.Package", "Exposure." + exposure, StringComparison.Ordinal)
-            .Replace("[SunderRpcService", attribute + "\n[SunderRpcService", StringComparison.Ordinal));
+        File.WriteAllText(SourcePath, Source.Replace("Exposure.Public", "Exposure." + exposure, StringComparison.Ordinal)
+            .Replace("[SunderService(", attribute + "\n[SunderService(", StringComparison.Ordinal));
         Success(Command("Accept"));
         Success(Command("Freeze"));
         var generation = Command();
@@ -761,7 +777,8 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         var appRoot = Path.Combine(dev, "payload/app/linux-x64/web");
         Directory.CreateDirectory(appRoot);
         File.WriteAllText(Path.Combine(appRoot, "index.html"), "<!doctype html><title>App</title>");
-        var descriptor = Baseline().Contracts["greeting"].Current!.Descriptor;
+        var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(Assert.Single(generation.ContractBundles).ItemSpec));
+        Assert.Equal(exposure == "Public", File.Exists(BaselinePath));
         RewriteManifest(dev, document =>
         {
             document["targets"]!.AsArray().Add(new JsonObject
@@ -781,6 +798,14 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         });
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(dev);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+        var inspection = SunderPackagePublicApiInspection.ReadValidated(dev, validation.Manifest!, includeDescriptors: true);
+        Assert.Equal(exposure == "Public" ? 1 : 0, inspection.ModelProjection.Contracts.Count);
+        if (exposure == "Package")
+        {
+            Assert.Empty(inspection.Descriptors);
+            Assert.DoesNotContain(descriptor.ContractId, Encoding.UTF8.GetString(inspection.ModelProjectionUtf8), StringComparison.Ordinal);
+            Assert.DoesNotContain("GreetingRequest", Encoding.UTF8.GetString(inspection.ModelProjectionUtf8), StringComparison.Ordinal);
+        }
         if (allowed) Success(Pack(dev));
         else Failure(Pack(dev), "App contract uses");
     }
@@ -796,7 +821,7 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         Success(Command("Accept"));
         Success(Command("Freeze"));
         var frozen = File.ReadAllBytes(BaselinePath);
-        var source = Source.Replace("[SunderRpcService", "[SunderRpcRuntimeUse(Actions = new[] { \"discover\" })]\n[SunderRpcService", StringComparison.Ordinal);
+        var source = Source.Replace("[SunderService(", "[SunderRuntimeUse(Actions = new[] { \"discover\" })]\n[SunderService(", StringComparison.Ordinal);
         File.WriteAllText(SourcePath, source);
         Success(Command("Check"));
         var generation = Command();
@@ -810,7 +835,7 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         Success(pack);
         var archive = File.ReadAllBytes(pack.PackageOutputPath);
         if (mutation == "source-policy")
-            File.WriteAllText(SourcePath, source.Replace("[SunderRpcRuntimeUse(Actions = new[] { \"discover\" })]", "[SunderRpcRuntimeUse(Required = true)]", StringComparison.Ordinal));
+            File.WriteAllText(SourcePath, source.Replace("[SunderRuntimeUse(Actions = new[] { \"discover\" })]", "[SunderRuntimeUse(Required = true)]", StringComparison.Ordinal));
         else if (mutation != "none") RewriteManifest(dev, manifest =>
         {
             var uses = manifest["usesContracts"]!.AsArray();
@@ -866,8 +891,8 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         Assert.Equal(archive, File.ReadAllBytes(pack.PackageOutputPath));
         Assert.Equal(frozen, File.ReadAllBytes(BaselinePath));
 
-        File.WriteAllText(SourcePath, "#if COMMAND_TEST\n" + Source.Replace("using Sunder.Sdk.Rpc;", "using Sunder.Sdk.Rpc;\nusing Rpc = Sunder.Sdk.Rpc.SunderRpcServiceAttribute;", StringComparison.Ordinal)
-            .Replace("[SunderRpcService(", "[Rpc(", StringComparison.Ordinal) + "\n#endif\n");
+        File.WriteAllText(SourcePath, "#if COMMAND_TEST\n" + Source.Replace("using Sunder.Sdk.Rpc;", "using Sunder.Sdk.Rpc;\nusing Service = Sunder.Sdk.Services.SunderServiceAttribute;", StringComparison.Ordinal)
+            .Replace("[SunderService(", "[Service(", StringComparison.Ordinal) + "\n#endif\n");
         File.Delete(BaselinePath);
         File.Delete(LockPath);
         var sourceOnly = Pack(dev);
@@ -932,6 +957,8 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(Fixture("specs/rpc/v1/conformance/valid/minimal.rpc.json")));
         File.WriteAllBytes(SunderRpcContractCache.GetDescriptorPath(cache, descriptor.Sha256), descriptor.GetCanonicalUtf8());
         File.Copy(Fixture("specs/rpc/v1/authoring/conformance/valid/cache-entry-receipt.json"), SunderRpcContractCache.GetReceiptPath(cache, descriptor.Sha256));
+        foreach (var artifact in SunderRpcAuthoringDocuments.ReadContractLock(LockPath).PackageArtifacts.Values)
+            ModelProjectionTestEvidence.Seed(cache, artifact);
         return descriptor;
     }
 
@@ -1030,9 +1057,9 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         File.WriteAllText(path, document.ToJsonString());
         PackageContentIndexer.Write(dev);
     }
-    private static string AddMethod(string source) => source.Replace("    [SunderRpcMethod]", "    [SunderRpcMethod]\n"
-        + "    public ValueTask<GreetingResult> EchoAsync(GreetingRequest request) => ValueTask.FromResult(new GreetingResult { Message = request.Name });\n"
-        + "    [SunderRpcMethod]", StringComparison.Ordinal);
+    private static string AddMethod(string source) => source.Replace("    public ValueTask<GreetingResult> GreetAsync",
+        "    public ValueTask<GreetingResult> EchoAsync(GreetingRequest request) => ValueTask.FromResult(new GreetingResult { Message = request.Name });\n"
+        + "    public ValueTask<GreetingResult> GreetAsync", StringComparison.Ordinal);
 
     private static void Success(Microsoft.Build.Utilities.Task task)
         => Assert.True(task.Execute(), string.Join(Environment.NewLine, ((BuildEngine)task.BuildEngine).Errors));
@@ -1084,6 +1111,7 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         using System.Threading.Tasks;
         using Sunder.Sdk.Packaging;
         using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         using Sunder.Sdk.Worker;
         [assembly: SunderPackage(Id = "example.generated", Name = "Commands")]
         namespace Example.Commands;
@@ -1091,10 +1119,9 @@ public sealed class SunderRpcOwnedContractCommandTests : IDisposable
         {
             public static Task Main() => SunderWorker.RunAsync(_ => new SunderWorkerOptions([new GreetingService().CreateSunderRpcProviderRegistration()]));
         }
-        [SunderRpcService(SunderRpcExposure.Package)]
+        [SunderService(SunderServiceExposure.Public)]
         public sealed partial class GreetingService
         {
-            [SunderRpcMethod]
             public ValueTask<GreetingResult> GreetAsync(GreetingRequest request, SunderRpcInvocationContext context, CancellationToken cancellationToken)
                 => ValueTask.FromResult(new GreetingResult { Message = request.Name });
         }

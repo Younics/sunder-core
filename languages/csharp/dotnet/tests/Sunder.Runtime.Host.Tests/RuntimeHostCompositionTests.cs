@@ -46,19 +46,12 @@ public sealed class RuntimeHostCompositionTests
             Assert.NotNull(provider.GetRequiredService<RegistryAuthCoordinator>());
             Assert.NotNull(provider.GetRequiredService<ExecutionRuntimeArtifactDownloader>());
             Assert.NotNull(provider.GetRequiredService<ExecutionRuntimeManagementService>());
-            Assert.NotNull(provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyCache>());
-            Assert.NotNull(provider.GetRequiredService<ExecutionRuntimeLifecyclePolicyRefresher>());
             Assert.NotNull(provider.GetRequiredService<ExecutionRuntimeStartupMaintenance>());
-            Assert.NotNull(provider.GetRequiredService<RegistryExecutionRuntimeBindingPreparer>());
             Assert.NotNull(provider.GetRequiredService<RegistryPackagePlanResolver>());
             Assert.NotNull(provider.GetRequiredService<RegistryPackageChangeOrchestrator>());
             Assert.NotNull(provider.GetRequiredService<RegistryAuthenticatedOperations>());
-            var runtimeTrust = provider.GetRequiredService<ExecutionRuntimeHostTrustService>();
             var runtimeLayout = provider.GetRequiredService<ExecutionRuntimeStoreLayout>();
             var runtimeStore = provider.GetRequiredService<ExecutionRuntimeStore>();
-            Assert.Equal(RuntimeRegistryContractMapper.RuntimeTrustProfile.ProfileId, runtimeTrust.ProfileId);
-            Assert.Equal(RuntimeRegistryContractMapper.RuntimeTrustProfile.Generation, runtimeTrust.Generation);
-            Assert.False(runtimeTrust.DevelopmentTrustEnabled);
             Assert.Equal(paths.ExecutionRuntimeStoreRootPath, runtimeLayout.RootPath);
             Assert.IsType<ExecutionRuntimeLaunchResolver>(
                 provider.GetRequiredService<IExecutionRuntimeLaunchResolver>());
@@ -173,7 +166,9 @@ public sealed class RuntimeHostCompositionTests
             Assert.Equal(72, httpJson.SerializerOptions.MaxDepth);
             Assert.Contains(RuntimeProtocolFeatures.RuntimeResourcePolicyV1, handshake.SupportedFeatures);
             Assert.Contains(RuntimeProtocolFeatures.PackageRuntimeRecoveryV1, handshake.SupportedFeatures);
-            Assert.Contains(RuntimeProtocolFeatures.ExecutionRuntimeManagementV1, handshake.SupportedFeatures);
+            Assert.Contains(RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1, handshake.SupportedFeatures);
+            Assert.DoesNotContain("execution-runtime-management.v1", handshake.SupportedFeatures);
+            Assert.DoesNotContain("execution-runtime-updates.v1", handshake.SupportedFeatures);
             Assert.Equal(
                 RuntimeResourcePolicyContract.GetEffectiveProfileHash(policy),
                 handshake.ResourceProfile?.EffectiveProfileHash);

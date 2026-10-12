@@ -4,17 +4,15 @@ internal sealed class ExecutionRuntimeGarbageCollectionAuthoritySnapshot
 {
     public ExecutionRuntimeGarbageCollectionAuthoritySnapshot(
         IEnumerable<InstalledPackageExecutionRuntimeBindingRecord> packageBindings,
-        ExecutionRuntimeLifecyclePolicySnapshot? lifecyclePolicies = null)
+        IReadOnlyList<ExecutionRuntimeRetention>? retentions = null)
     {
         ArgumentNullException.ThrowIfNull(packageBindings);
         PackageBindings = Array.AsReadOnly(packageBindings.ToArray());
-        LifecyclePolicies = lifecyclePolicies
-                            ?? new ExecutionRuntimeLifecyclePolicySnapshot(0, []);
+        Retentions = Array.AsReadOnly((retentions ?? []).ToArray());
     }
 
     public IReadOnlyList<InstalledPackageExecutionRuntimeBindingRecord> PackageBindings { get; }
-
-    public ExecutionRuntimeLifecyclePolicySnapshot LifecyclePolicies { get; }
+    public IReadOnlyList<ExecutionRuntimeRetention> Retentions { get; }
 }
 
 internal interface IExecutionRuntimeGarbageCollectionAuthority
@@ -27,7 +25,7 @@ internal interface IExecutionRuntimeGarbageCollectionAuthority
 internal sealed class PackageExecutionRuntimeGarbageCollectionAuthority(
     RuntimeOperationGate operationGate,
     PackageStoreCoordinator packageStore,
-    ExecutionRuntimeLifecyclePolicyCache lifecyclePolicies) : IExecutionRuntimeGarbageCollectionAuthority
+    ExecutionRuntimeManagementState? managementState = null) : IExecutionRuntimeGarbageCollectionAuthority
 {
     public async Task<TResult> ExecuteAsync<TResult>(
         Func<ExecutionRuntimeGarbageCollectionAuthoritySnapshot, CancellationToken, Task<TResult>> operation,
@@ -38,11 +36,10 @@ internal sealed class PackageExecutionRuntimeGarbageCollectionAuthority(
         var packageSnapshot = await packageStore.CaptureExecutionRuntimeGarbageCollectionAuthorityAsync(
                 operationLease.CancellationToken)
             .ConfigureAwait(false);
-        await lifecyclePolicies.InitializeAsync(operationLease.CancellationToken).ConfigureAwait(false);
         return await operation(
                 new ExecutionRuntimeGarbageCollectionAuthoritySnapshot(
                     packageSnapshot.PackageBindings,
-                    lifecyclePolicies.CaptureSnapshot()),
+                    managementState is null ? [] : ExecutionRuntimeManagementState.Retentions(await managementState.ReadAsync(operationLease.CancellationToken))),
                 operationLease.CancellationToken)
             .ConfigureAwait(false);
     }
@@ -51,9 +48,8 @@ internal sealed class PackageExecutionRuntimeGarbageCollectionAuthority(
 internal sealed record ExecutionRuntimeRetention(
     ExecutionRuntimeIdentity? Identity = null,
     string? ContentIdentity = null,
-    string? ArtifactSha256 = null,
-    long? ArtifactSize = null,
-    string? ManifestSha256 = null);
+    string? ArchiveSha256 = null,
+    long? ArchiveSize = null);
 
 internal interface IExecutionRuntimeRetentionManager
 {

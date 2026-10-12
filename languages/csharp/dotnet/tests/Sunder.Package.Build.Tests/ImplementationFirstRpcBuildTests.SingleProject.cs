@@ -76,10 +76,8 @@ public sealed partial class ImplementationFirstRpcBuildTests
         await File.WriteAllTextAsync(project, projectText);
         AssertSuccess(await RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "-t:Rebuild", "--nologo", "-v:quiet"]));
         Assert.True(File.Exists(worker)); Assert.True(File.Exists(app));
-        var draftPack = await RunDotnetAsync(root, ["msbuild", project, "-t:PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet"]);
-        Assert.NotEqual(0, draftPack.ExitCode); Assert.Contains("draft", draftPack.StandardOutput + draftPack.StandardError, StringComparison.Ordinal);
-        AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:FreezeSunderContracts", "-nodeReuse:false", "-nologo", "-v:quiet"]));
         AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet"]));
+        Assert.False(File.Exists(Path.Combine(root, "sunder-contracts.owned.json")));
         var archive = Path.Combine(root, "bin/Debug/net10.0/SingleProject.7.6.5.sunderpkg");
         Assert.True(File.Exists(archive));
         var packed = await SunderPackageArchiveInspector.ExtractAndValidateAsync(archive, Path.Combine(root, "extracted"));
@@ -102,12 +100,13 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Task<ProcessResult> Build() => RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]);
     }
 
-    private static async Task<string> CreateSingleProjectFixtureAsync(string root, bool immutableTasks)
+    private static async Task<string> CreateSingleProjectFixtureAsync(string root, bool immutableTasks, bool legacyBaseline = false)
     {
         Directory.CreateDirectory(root);
         var repository = FindRepositoryRoot();
         var existing = Path.Combine(repository, "languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ImplementationFirstRpc");
-        foreach (var name in new[] { "sunder-contracts.owned.json", "sunder-contracts.lock.json" }) File.Copy(Path.Combine(existing, name), Path.Combine(root, name));
+        File.Copy(Path.Combine(existing, "sunder-contracts.lock.json"), Path.Combine(root, "sunder-contracts.lock.json"));
+        if (legacyBaseline) File.Copy(Path.Combine(existing, "History/implementation-first-private.owned.json"), Path.Combine(root, "sunder-contracts.owned.json"));
         await File.WriteAllTextAsync(Path.Combine(root, "Mixed.cs"), SingleProjectSource);
         // Repository generated-file policy must retain the authored nullable context.
         await File.WriteAllTextAsync(Path.Combine(root, ".editorconfig"), "root = true\n\n[*.cs]\ngenerated_code = false\n\n[**/obj/**/*.cs]\ngenerated_code = true\n");
@@ -150,14 +149,14 @@ public sealed partial class ImplementationFirstRpcBuildTests
     }
 
     private const string SingleProjectSource = """
+        using Sunder.Generated.Packages.Example_Generated_Services;
         using Sunder.Sdk.Packaging;
-        using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         [assembly: SunderPackage(Id = "example.generated", Name = "Single Project")]
         namespace Example.Generated;
-        [SunderRpcService]
+        [SunderService]
         public sealed partial class GreetingService(IBackendFormatter formatter)
         {
-            [SunderRpcMethod]
             public ValueTask<GreetingResult> GreetAsync(GreetingRequest request, CancellationToken cancellationToken)
                 => ValueTask.FromResult(new GreetingResult { Message = formatter.Format(request.Name) });
         }

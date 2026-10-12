@@ -4,8 +4,7 @@
   "name": "Sunder Runtime-backed Node Worker",
   "summary": "Runtime-backed Node Worker V1 lifecycle and RPC CI fixture.",
   "version": "1.0.0",
-  "entry": "src/worker.ts",
   "workerCapabilities": [],
-  "rpc": { "module": "src/rpc.ts", "export": "packageRpc" },
+  "services": { "module": "src/services.ts" },
   "maximumPackageBytes": 536870912
 }

@@ -1,9 +1,8 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
-using Sunder.Core.TestSupport;
 using Sunder.Package.Format;
-using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Xunit;
@@ -12,329 +11,92 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed class ExecutionRuntimeArtifactDownloaderTests
 {
-    private const string RegistryOriginValue = "https://registry.example/";
-    private const string ArtifactUrl = "https://registry.example/artifacts/dotnet.sunderruntime";
-    private const string ReleaseKeyId = "sunder.release.downloader-test.v1";
-    private const string AttestationKeyId = "sunder.ci.downloader-test.v1";
-    private static readonly DateTimeOffset PolicyNow = DateTimeOffset.Parse("2026-08-28T12:00:00Z");
-    private static readonly byte[] ReleaseKey =
-        Enumerable.Range(1, SunderExecutionRuntimeFormat.Ed25519PublicKeyBytes)
-            .Select(static value => (byte)value)
-            .ToArray();
+    private static readonly DateTimeOffset ObservedAtUtc = DateTimeOffset.Parse("2026-10-07T12:00:00Z");
 
     [Fact]
-    public async Task DownloadAsync_InstallsExactProductionRegistryPlanAndCleansTemporaryFile()
+    public async Task DownloadAsync_InstallsVerifiedOfficialArtifactAndCleansStaging()
     {
         using var fixture = await DownloaderFixture.CreateAsync();
         var handler = fixture.CreateArtifactHandler();
-        var downloader = fixture.CreateDownloader(handler);
 
-        var result = await downloader.DownloadAsync(
-            new Uri("https://REGISTRY.example"),
-            fixture.Artifact,
-            [],
-            CancellationToken.None);
+        var result = await fixture.CreateDownloader(handler).DownloadAsync(fixture.Artifact, CancellationToken.None);
 
         Assert.False(result.AlreadyPresent);
-        Assert.Equal(fixture.Artifact.Identity.RuntimeId, result.Receipt.Identity.RuntimeId);
-        Assert.Equal(fixture.Artifact.ArtifactSha256, result.Receipt.ArtifactSha256);
-        Assert.Equal(fixture.Artifact.ManifestSha256, result.Receipt.ManifestSha256);
-        Assert.Equal(fixture.Artifact.NativeAttestationSha256, result.Receipt.NativeAttestationSha256);
-        Assert.Equal(fixture.Artifact.NativeAttestationKeyId, result.Receipt.NativeAttestationKeyId);
-        Assert.Equal(ExecutionRuntimeTrustEnvironment.Production, result.Receipt.TrustEnvironment);
-        Assert.Equal(RuntimeExecutionRuntimeAcquisitionSources.Registry, result.Receipt.AcquisitionSource);
-        Assert.Equal(RegistryOriginValue, result.Receipt.RegistryOrigin);
+        Assert.Equal(fixture.Artifact.Identity, result.Receipt.Identity.ToContract());
+        Assert.Equal(fixture.ArchiveSha256, result.Receipt.ArchiveSha256);
+        Assert.Equal(fixture.ArchiveBytes.LongLength, result.Receipt.ArchiveSize);
+        Assert.Equal(fixture.Artifact.Distribution, result.Receipt.Provenance.Distribution);
+        Assert.Equal(fixture.Artifact.Distribution.DownloadUrl, result.Receipt.Provenance.FinalDownloadUrl);
         Assert.True(File.Exists(fixture.Layout.GetReceiptPath(result.Receipt.Identity)));
-        Assert.True(fixture.SignatureVerifier.Count > 0);
+        Assert.True(File.Exists(fixture.Layout.GetArchivePath(fixture.ArchiveSha256)));
         Assert.Equal(1, handler.RequestCount);
-        fixture.AssertTemporaryRootEmpty();
-    }
-
-    [Fact]
-    public async Task DownloadAsync_ClassifiesHostConfiguredDevelopmentKeyAndPreservesRegistryOrigin()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync(developmentTrustEnabled: true);
-        var handler = fixture.CreateArtifactHandler();
-
-        var result = await fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri("https://REGISTRY.example"),
-            fixture.Artifact,
-            [],
-            CancellationToken.None);
-
-        Assert.False(result.AlreadyPresent);
-        Assert.Equal(ExecutionRuntimeTrustEnvironment.Development, result.Receipt.TrustEnvironment);
-        Assert.Equal(RuntimeExecutionRuntimeAcquisitionSources.Development, result.Receipt.AcquisitionSource);
-        Assert.Equal(RegistryOriginValue, result.Receipt.RegistryOrigin);
-        Assert.Equal(1, handler.RequestCount);
-        fixture.AssertTemporaryRootEmpty();
-    }
-
-    [Fact]
-    public async Task DownloadAsync_ProductionHostRejectsDevelopmentSigningKeyBeforeHttpDownload()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var handler = fixture.CreateArtifactHandler();
-        var developmentResponse = fixture.Artifact with
-        {
-            SigningKeyId = "sunder.release.development.v1",
-        };
-
-        await Assert.ThrowsAsync<ExecutionRuntimeTrustException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                developmentResponse,
-                [],
-                CancellationToken.None));
-
-        Assert.Equal(0, handler.RequestCount);
-        fixture.AssertNoStorePublication();
-        fixture.AssertTemporaryRootEmpty();
-    }
-
-    [Fact]
-    public async Task DownloadAsync_EmitsCorrelatedDownloadAndStorePhasesWithSafeStructuredFields()
-    {
-        var logs = new RecordingLogSink();
-        var telemetry = new ExecutionRuntimePhaseTelemetry(
-            logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
-        using var fixture = await DownloaderFixture.CreateAsync(telemetry);
-        var downloader = fixture.CreateDownloader(fixture.CreateArtifactHandler());
-
-        var result = await downloader.DownloadAsync(
-            new Uri(RegistryOriginValue),
-            fixture.Artifact,
-            [],
-            CancellationToken.None);
-
-        var expectedPhases = new[]
-        {
-            ExecutionRuntimePhaseNames.Download,
-            ExecutionRuntimePhaseNames.Inspect,
-            ExecutionRuntimePhaseNames.Extract,
-            ExecutionRuntimePhaseNames.PublishRoot,
-            ExecutionRuntimePhaseNames.HealthCheck,
-        };
-        var entries = RecordedRuntimePhaseAssertions.Entries(logs);
-        Assert.Equal(expectedPhases.Order(StringComparer.Ordinal), entries
-            .Select(entry => Assert.IsType<string>(entry.Properties["RuntimePhase"]))
-            .Order(StringComparer.Ordinal));
-
-        var correlationIds = new HashSet<Guid>();
-        foreach (var phase in expectedPhases)
-        {
-            var entry = RecordedRuntimePhaseAssertions.Single(logs, phase);
-            correlationIds.Add(RecordedRuntimePhaseAssertions.Completed(entry, phase));
-            RecordedRuntimePhaseAssertions.Identity(entry, result.Receipt.Identity);
-            Assert.Equal(false, entry.Properties["CacheHit"]);
-            Assert.True(Assert.IsType<long>(entry.Properties["Bytes"]) > 0);
-        }
-        Assert.Single(correlationIds);
-        var download = RecordedRuntimePhaseAssertions.Single(logs, ExecutionRuntimePhaseNames.Download);
-        Assert.Equal(fixture.Artifact.ArtifactSize, download.Properties["Bytes"]);
-    }
-
-    [Fact]
-    public async Task DownloadAsync_FailureTelemetryDoesNotExposeUrlTokenOrStorePaths()
-    {
-        const string secret = "runtime-download-secret-sentinel";
-        var logs = new RecordingLogSink();
-        var telemetry = new ExecutionRuntimePhaseTelemetry(
-            logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
-        using var fixture = await DownloaderFixture.CreateAsync(telemetry);
-        var artifact = fixture.Artifact with { DownloadUrl = ArtifactUrl + "?token=" + secret };
-        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(
-            request,
-            HttpStatusCode.Forbidden)));
-
-        await Assert.ThrowsAsync<HttpRequestException>(() => fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri(RegistryOriginValue),
-            artifact,
-            [],
-            CancellationToken.None));
-
-        var entry = RecordedRuntimePhaseAssertions.Single(logs, ExecutionRuntimePhaseNames.Download);
-        RecordedRuntimePhaseAssertions.Completed(entry, ExecutionRuntimePhaseNames.Download, "failed");
-        RecordedRuntimePhaseAssertions.Identity(entry, new ExecutionRuntimeIdentity(
-            artifact.Identity.RuntimeId,
-            artifact.Identity.Version,
-            artifact.Identity.PackagingRevision,
-            artifact.Identity.Rid,
-            artifact.Identity.ModuleAbi));
-        Assert.Equal(0L, entry.Properties["Bytes"]);
-        Assert.Equal(false, entry.Properties["CacheHit"]);
-        var flattened = RecordedRuntimePhaseAssertions.Flatten(logs);
-        Assert.DoesNotContain(secret, flattened, StringComparison.Ordinal);
-        Assert.DoesNotContain(artifact.DownloadUrl, flattened, StringComparison.Ordinal);
-        Assert.DoesNotContain(fixture.RootPath, flattened, StringComparison.Ordinal);
-        Assert.DoesNotContain(fixture.TemporaryRootPath, flattened, StringComparison.Ordinal);
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
     public async Task DownloadAsync_ReusesHealthyExactReceiptWithoutAnotherRequest()
     {
         var logs = new RecordingLogSink();
-        var telemetry = new ExecutionRuntimePhaseTelemetry(
-            logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
-        using var fixture = await DownloaderFixture.CreateAsync(telemetry);
+        var telemetry = new ExecutionRuntimePhaseTelemetry(logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
+        using var fixture = await DownloaderFixture.CreateAsync(telemetry: telemetry);
         var handler = fixture.CreateArtifactHandler();
         var downloader = fixture.CreateDownloader(handler);
-        var first = await downloader.DownloadAsync(
-            new Uri(RegistryOriginValue),
-            fixture.Artifact,
-            [],
-            CancellationToken.None);
+        var first = await downloader.DownloadAsync(fixture.Artifact, CancellationToken.None);
         logs.Clear();
 
-        var reused = await downloader.DownloadAsync(
-            new Uri(RegistryOriginValue),
-            fixture.Artifact,
-            [],
-            CancellationToken.None);
+        var reused = await downloader.DownloadAsync(fixture.Artifact, CancellationToken.None);
 
         Assert.False(first.AlreadyPresent);
         Assert.True(reused.AlreadyPresent);
         Assert.Equal(first.Receipt.ContentIdentity, reused.Receipt.ContentIdentity);
         Assert.Equal(1, handler.RequestCount);
-        var download = RecordedRuntimePhaseAssertions.Single(logs, ExecutionRuntimePhaseNames.Download);
-        RecordedRuntimePhaseAssertions.Completed(download, ExecutionRuntimePhaseNames.Download);
-        Assert.Equal(0L, download.Properties["Bytes"]);
-        Assert.Equal(true, download.Properties["CacheHit"]);
-        fixture.AssertTemporaryRootEmpty();
-    }
-
-    [Fact]
-    public async Task DownloadAsync_AssociatesHealthyExactLocalImportWithoutDownloadingOrRewritingReceipt()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var imported = await fixture.ImportLocalAsync();
-        var receiptPath = fixture.Layout.GetReceiptPath(imported.Receipt.Identity);
-        var receiptBytes = await File.ReadAllBytesAsync(receiptPath);
-        var handler = fixture.CreateArtifactHandler();
-
-        var reused = await fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri(RegistryOriginValue),
-            fixture.Artifact,
-            [],
-            CancellationToken.None);
-
-        Assert.True(reused.AlreadyPresent);
-        Assert.Equal(RuntimeExecutionRuntimeAcquisitionSources.LocalImport, reused.Receipt.AcquisitionSource);
-        Assert.Null(reused.Receipt.RegistryOrigin);
-        Assert.Equal(0, handler.RequestCount);
-        Assert.Equal(receiptBytes, await File.ReadAllBytesAsync(receiptPath));
-        fixture.AssertTemporaryRootEmpty();
-    }
-
-    [Fact]
-    public async Task DownloadAsync_DoesNotAssociateMismatchedLocalImport()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var imported = await fixture.ImportLocalAsync();
-        var receiptPath = fixture.Layout.GetReceiptPath(imported.Receipt.Identity);
-        var receiptBytes = await File.ReadAllBytesAsync(receiptPath);
-        var handler = fixture.CreateArtifactHandler();
-        var mismatched = fixture.Artifact with { ArtifactSha256 = new string('f', 64) };
-
-        await Assert.ThrowsAsync<ExecutionRuntimeStoreConflictException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                mismatched,
-                [],
-                CancellationToken.None));
-
-        Assert.Equal(0, handler.RequestCount);
-        Assert.Equal(receiptBytes, await File.ReadAllBytesAsync(receiptPath));
-    }
-
-    [Fact]
-    public async Task DownloadAsync_DoesNotReplaceUnhealthyExactLocalImport()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var imported = await fixture.ImportLocalAsync();
-        var launcherPath = Path.Combine(
-            fixture.Layout.GetContentRootPath(imported.Receipt.ContentIdentity),
-            imported.Receipt.LauncherPath.Replace('/', Path.DirectorySeparatorChar));
-        ExecutionRuntimeRootFileSystem.MakeOwnedTreeWritable(
-            fixture.Layout.GetContentRootPath(imported.Receipt.ContentIdentity));
-        await File.WriteAllBytesAsync(launcherPath, [0x00]);
-        ExecutionRuntimeRootFileSystem.Seal(
-            fixture.Layout.GetContentRootPath(imported.Receipt.ContentIdentity),
-            launcherPath);
-        var handler = fixture.CreateArtifactHandler();
-
-        var failure = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                fixture.Artifact,
-                [],
-                CancellationToken.None));
-
-        Assert.Contains("unhealthy", failure.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(0, handler.RequestCount);
-        Assert.Equal(
-            RuntimeExecutionRuntimeAcquisitionSources.LocalImport,
-            (await fixture.Store.GetReceiptAsync(imported.Receipt.Identity))?.AcquisitionSource);
+        var health = RecordedRuntimePhaseAssertions.Single(logs, ExecutionRuntimePhaseNames.HealthCheck);
+        RecordedRuntimePhaseAssertions.Completed(health, ExecutionRuntimePhaseNames.HealthCheck);
+        Assert.Equal(true, health.Properties["CacheHit"]);
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
     public async Task DownloadAsync_ConcurrentExactRequestsPerformOneNetworkAcquisition()
     {
         var logs = new RecordingLogSink();
-        var telemetry = new ExecutionRuntimePhaseTelemetry(
-            logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
-        using var fixture = await DownloaderFixture.CreateAsync(telemetry);
+        var telemetry = new ExecutionRuntimePhaseTelemetry(logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
+        using var fixture = await DownloaderFixture.CreateAsync(telemetry: telemetry);
         var handler = fixture.CreateArtifactHandler();
         var downloader = fixture.CreateDownloader(handler);
 
-        var results = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => downloader.DownloadAsync(
-            new Uri(RegistryOriginValue),
-            fixture.Artifact,
-            [],
-            CancellationToken.None)));
+        var results = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ =>
+            downloader.DownloadAsync(fixture.Artifact, CancellationToken.None)));
 
         Assert.Equal(1, handler.RequestCount);
-        Assert.All(results, result => Assert.False(result.AlreadyPresent));
         Assert.All(results, result => Assert.Equal(results[0].Receipt.ContentIdentity, result.Receipt.ContentIdentity));
-        var downloads = RecordedRuntimePhaseAssertions.Entries(logs)
-            .Where(entry => Equals(
-                entry.Properties["RuntimePhase"],
-                ExecutionRuntimePhaseNames.Download))
-            .ToArray();
-        Assert.Equal(16, downloads.Length);
-        var cacheMiss = Assert.Single(downloads, entry => Equals(entry.Properties["CacheHit"], false));
-        Assert.Equal(fixture.Artifact.ArtifactSize, cacheMiss.Properties["Bytes"]);
-        var cacheHits = downloads.Where(entry => Equals(entry.Properties["CacheHit"], true)).ToArray();
-        Assert.Equal(15, cacheHits.Length);
-        Assert.All(cacheHits, entry => Assert.Equal(0L, entry.Properties["Bytes"]));
-        fixture.AssertTemporaryRootEmpty();
+        Assert.Single(RecordedRuntimePhaseAssertions.Entries(logs), entry =>
+            Equals(entry.Properties["RuntimePhase"], ExecutionRuntimePhaseNames.Download)
+            && Equals(entry.Properties["CacheHit"], false));
+        Assert.All(results, result => Assert.False(result.AlreadyPresent));
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
     public async Task DownloadAsync_RetriesTransientTransportAndHttpFailuresThenSucceeds()
     {
         var logs = new RecordingLogSink();
-        var telemetry = new ExecutionRuntimePhaseTelemetry(
-            logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
-        using var fixture = await DownloaderFixture.CreateAsync(telemetry);
+        var telemetry = new ExecutionRuntimePhaseTelemetry(logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
+        using var fixture = await DownloaderFixture.CreateAsync(telemetry: telemetry);
         var failedBody = new PrefixThenThrowingStream(
-            fixture.ArchiveBytes.AsMemory(0, 32),
+            fixture.ArchiveBytes.AsMemory(0, Math.Min(32, fixture.ArchiveBytes.Length)),
             new HttpRequestException("The response transport failed."));
         var attempt = 0;
         var handler = new RecordingHandler((request, _) =>
         {
-            var currentAttempt = Interlocked.Increment(ref attempt);
-            if (currentAttempt > 1)
+            var current = Interlocked.Increment(ref attempt);
+            if (current > 1)
             {
                 Assert.True(failedBody.IsDisposed);
-                Assert.Single(Directory.EnumerateDirectories(fixture.TemporaryRootPath));
-                Assert.Empty(Directory.EnumerateFiles(
-                    fixture.TemporaryRootPath,
-                    "*",
-                    SearchOption.AllDirectories));
+                Assert.Empty(Directory.EnumerateFiles(fixture.Layout.StagingRootPath, "official-download.archive", SearchOption.AllDirectories));
             }
 
-            return Task.FromResult(currentAttempt switch
+            return Task.FromResult(current switch
             {
                 1 => Response(request, new UnknownLengthContent(failedBody)),
                 2 => Response(request, HttpStatusCode.ServiceUnavailable),
@@ -342,86 +104,64 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
             });
         });
 
-        var result = await fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri(RegistryOriginValue),
-            fixture.Artifact,
-            [],
-            CancellationToken.None);
+        var result = await fixture.CreateDownloader(handler).DownloadAsync(fixture.Artifact, CancellationToken.None);
 
         Assert.False(result.AlreadyPresent);
         Assert.Equal(3, handler.RequestCount);
         Assert.True(failedBody.IsDisposed);
         var download = RecordedRuntimePhaseAssertions.Single(logs, ExecutionRuntimePhaseNames.Download);
         RecordedRuntimePhaseAssertions.Completed(download, ExecutionRuntimePhaseNames.Download);
-        Assert.Equal(fixture.Artifact.ArtifactSize + 32, download.Properties["Bytes"]);
         Assert.Equal(false, download.Properties["CacheHit"]);
-        fixture.AssertTemporaryRootEmpty();
+        Assert.True((long)download.Properties["Bytes"]! >= fixture.ArchiveBytes.LongLength);
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
     public async Task DownloadAsync_StopsAfterTransientFailureAttemptsAreExhausted()
     {
         using var fixture = await DownloaderFixture.CreateAsync();
-        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(
-            request,
-            HttpStatusCode.ServiceUnavailable)));
+        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(request, HttpStatusCode.ServiceUnavailable)));
 
         var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                fixture.Artifact,
-                [],
-                CancellationToken.None));
+            fixture.CreateDownloader(handler).DownloadAsync(fixture.Artifact, CancellationToken.None));
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, exception.StatusCode);
         Assert.Equal(3, handler.RequestCount);
         fixture.AssertNoStorePublication();
-        fixture.AssertTemporaryRootEmpty();
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
     public async Task DownloadAsync_CancellationDuringRetryDelayStopsFurtherAttempts()
     {
         using var fixture = await DownloaderFixture.CreateAsync();
-        var timeProvider = new ManualTimeProvider(PolicyNow);
-        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(
-            request,
-            HttpStatusCode.TooManyRequests)));
+        var clock = new ManualTimeProvider(ObservedAtUtc);
+        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(request, HttpStatusCode.TooManyRequests)));
         using var cancellation = new CancellationTokenSource();
 
-        var pending = fixture.CreateDownloader(handler, timeProvider).DownloadAsync(
-            new Uri(RegistryOriginValue),
-            fixture.Artifact,
-            [],
-            cancellation.Token);
-        await WaitUntilAsync(() => timeProvider.PendingTimerCount == 1);
+        var pending = fixture.CreateDownloader(handler, clock).DownloadAsync(fixture.Artifact, cancellation.Token);
+        await WaitUntilAsync(() => clock.PendingTimerCount == 1);
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
         Assert.Equal(1, handler.RequestCount);
         fixture.AssertNoStorePublication();
-        fixture.AssertTemporaryRootEmpty();
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
     public async Task DownloadAsync_DoesNotRetryPermanentHttpFailure()
     {
         using var fixture = await DownloaderFixture.CreateAsync();
-        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(
-            request,
-            HttpStatusCode.NotFound)));
+        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(request, HttpStatusCode.NotFound)));
 
         var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                fixture.Artifact,
-                [],
-                CancellationToken.None));
+            fixture.CreateDownloader(handler).DownloadAsync(fixture.Artifact, CancellationToken.None));
 
         Assert.Equal(HttpStatusCode.NotFound, exception.StatusCode);
         Assert.Equal(1, handler.RequestCount);
         fixture.AssertNoStorePublication();
-        fixture.AssertTemporaryRootEmpty();
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
@@ -437,39 +177,33 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
         });
 
         var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                fixture.Artifact,
-                [],
-                CancellationToken.None));
+            fixture.CreateDownloader(handler).DownloadAsync(fixture.Artifact, CancellationToken.None));
 
-        Assert.Contains("content length", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Content-Length", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, handler.RequestCount);
         Assert.Equal(0, body.BytesRead);
         Assert.True(body.IsDisposed);
         fixture.AssertNoStorePublication();
-        fixture.AssertTemporaryRootEmpty();
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
-    public async Task DownloadAsync_RejectsWrongDownloadedHash()
+    public async Task DownloadAsync_RejectsVendorDigestMismatch()
     {
         using var fixture = await DownloaderFixture.CreateAsync();
-        var wrongHash = new string(fixture.Artifact.ArtifactSha256[0] == 'a' ? 'b' : 'a', 64);
-        var artifact = fixture.Artifact with { ArtifactSha256 = wrongHash };
+        var wrong = fixture.Artifact with
+        {
+            Identity = fixture.Artifact.Identity with { VendorChecksumDigest = new string('f', 128) },
+        };
         var handler = fixture.CreateArtifactHandler();
 
-        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                artifact,
-                [],
-                CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<RuntimeExecutionRuntimeException>(() =>
+            fixture.CreateDownloader(handler).DownloadAsync(wrong, CancellationToken.None));
 
-        Assert.Contains("SHA-256", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ExecutionRuntimeErrorCodes.IntegrityFailed, exception.Code);
         Assert.Equal(1, handler.RequestCount);
-        fixture.AssertNoStorePublication(artifact.Identity);
-        fixture.AssertTemporaryRootEmpty();
+        fixture.AssertNoStorePublication(wrong.Identity);
+        fixture.AssertNoTransientState();
     }
 
     [Theory]
@@ -478,71 +212,52 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
     public async Task DownloadAsync_RejectsPartialAndOversizeStreams(bool oversize)
     {
         using var fixture = await DownloaderFixture.CreateAsync();
-        var body = oversize
-            ? [.. fixture.ArchiveBytes, (byte)0x42]
-            : fixture.ArchiveBytes[..^1];
-        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(
-            request,
+        var body = oversize ? [.. fixture.ArchiveBytes, (byte)0x42] : fixture.ArchiveBytes[..^1];
+        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(request,
             new UnknownLengthContent(new MemoryStream(body)))));
 
-        var exception = await Record.ExceptionAsync(() => fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri(RegistryOriginValue),
-            fixture.Artifact,
-            [],
-            CancellationToken.None));
+        var exception = await Record.ExceptionAsync(() =>
+            fixture.CreateDownloader(handler).DownloadAsync(fixture.Artifact, CancellationToken.None));
 
         if (oversize)
         {
-            Assert.IsType<RegistryArtifactTooLargeException>(exception);
+            Assert.IsType<InvalidDataException>(exception);
+            Assert.Contains("exceeds", exception!.Message, StringComparison.OrdinalIgnoreCase);
         }
         else
         {
-            Assert.IsType<InvalidDataException>(exception);
-            Assert.Contains("ended before", exception.Message, StringComparison.OrdinalIgnoreCase);
+            var runtime = Assert.IsType<RuntimeExecutionRuntimeException>(exception);
+            Assert.Equal(ExecutionRuntimeErrorCodes.IntegrityFailed, runtime.Code);
         }
         fixture.AssertNoStorePublication();
-        fixture.AssertTemporaryRootEmpty();
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
-    public async Task DownloadAsync_LastWaiterCancellationWaitsForTerminalTelemetryAndPartialCleanup()
+    public async Task DownloadAsync_LastWaiterCancellationWaitsForTerminalTelemetryAndCleanup()
     {
         var logs = new RecordingLogSink();
-        var telemetry = new ExecutionRuntimePhaseTelemetry(
-            logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
-        using var fixture = await DownloaderFixture.CreateAsync(telemetry);
+        var telemetry = new ExecutionRuntimePhaseTelemetry(logs.CreateLogger<ExecutionRuntimePhaseTelemetry>());
+        using var fixture = await DownloaderFixture.CreateAsync(telemetry: telemetry);
         using var allowStreamDisposal = new ManualResetEventSlim(initialState: false);
         var body = new PrefixThenBlockingStream(
-            fixture.ArchiveBytes.AsMemory(0, 32),
+            fixture.ArchiveBytes.AsMemory(0, Math.Min(32, fixture.ArchiveBytes.Length)),
             allowStreamDisposal);
-        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(
-            request,
-            new UnknownLengthContent(body))));
+        var handler = new RecordingHandler((request, _) => Task.FromResult(Response(request, new UnknownLengthContent(body))));
         using var cancellation = new CancellationTokenSource();
 
-        var pending = fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri(RegistryOriginValue),
-            fixture.Artifact,
-            [],
-            cancellation.Token);
+        var pending = fixture.CreateDownloader(handler).DownloadAsync(fixture.Artifact, cancellation.Token);
         try
         {
             await body.Blocked.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.NotEmpty(Directory.EnumerateFiles(
-                fixture.TemporaryRootPath,
-                "*",
-                SearchOption.AllDirectories));
+            Assert.NotEmpty(Directory.EnumerateFiles(fixture.Layout.StagingRootPath, "official-download.archive", SearchOption.AllDirectories));
             cancellation.Cancel();
             await body.DisposeStarted.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.False(pending.IsCompleted);
-            Assert.DoesNotContain(RecordedRuntimePhaseAssertions.Entries(logs), entry => Equals(
-                entry.Properties["RuntimePhase"],
-                ExecutionRuntimePhaseNames.Download));
-            Assert.NotEmpty(Directory.EnumerateFiles(
-                fixture.TemporaryRootPath,
-                "*",
-                SearchOption.AllDirectories));
+            Assert.DoesNotContain(RecordedRuntimePhaseAssertions.Entries(logs), entry =>
+                Equals(entry.Properties["RuntimePhase"], ExecutionRuntimePhaseNames.Download));
+            Assert.NotEmpty(Directory.EnumerateFiles(fixture.Layout.StagingRootPath, "official-download.archive", SearchOption.AllDirectories));
 
             allowStreamDisposal.Set();
             var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
@@ -550,707 +265,341 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
             Assert.Equal(cancellation.Token, exception.CancellationToken);
             Assert.True(body.IsDisposed);
             var download = RecordedRuntimePhaseAssertions.Single(logs, ExecutionRuntimePhaseNames.Download);
-            RecordedRuntimePhaseAssertions.Completed(
-                download,
-                ExecutionRuntimePhaseNames.Download,
-                "canceled");
-            Assert.Equal(32L, download.Properties["Bytes"]);
+            RecordedRuntimePhaseAssertions.Completed(download, ExecutionRuntimePhaseNames.Download, "canceled");
             Assert.Equal(false, download.Properties["CacheHit"]);
             fixture.AssertNoStorePublication();
-            fixture.AssertTemporaryRootEmpty();
+            fixture.AssertNoTransientState();
         }
         finally
         {
             allowStreamDisposal.Set();
-            try
-            {
-                await pending.WaitAsync(TimeSpan.FromSeconds(10));
-            }
-            catch
-            {
-            }
+            try { await pending.WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
         }
     }
 
     [Fact]
-    public async Task DownloadAsync_RejectsUntrustedArtifactUrlWithoutSendingRequest()
+    public async Task DownloadAsync_AllowsPolicyApprovedRedirectAndRecordsFinalUrl()
     {
         using var fixture = await DownloaderFixture.CreateAsync();
-        var handler = fixture.CreateArtifactHandler();
-        var artifact = fixture.Artifact with
+        var redirected = fixture.OfficialDownloadUri("dotnetcli.azureedge.net");
+        var handler = new RecordingHandler((request, _) =>
         {
-            DownloadUrl = "https://untrusted.example/runtime.sunderruntime",
-        };
+            if (request.RequestUri!.Host == "builds.dotnet.microsoft.com")
+            {
+                var response = Response(request, HttpStatusCode.Redirect);
+                response.Headers.Location = redirected;
+                return Task.FromResult(response);
+            }
+            return Task.FromResult(Response(request, new ByteArrayContent(fixture.ArchiveBytes)));
+        });
 
-        await Assert.ThrowsAsync<InvalidDataException>(() => fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri(RegistryOriginValue),
-            artifact,
-            [],
-            CancellationToken.None));
+        var result = await fixture.CreateDownloader(handler).DownloadAsync(fixture.Artifact, CancellationToken.None);
 
-        Assert.Equal(0, handler.RequestCount);
-        fixture.AssertTemporaryRootEmpty();
+        Assert.Equal(2, handler.RequestCount);
+        Assert.Equal(redirected.AbsoluteUri, result.Receipt.Provenance.FinalDownloadUrl);
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
-    public async Task DownloadAsync_RejectsResponseRedirectedFromTrustedArtifactOrigin()
+    public async Task DownloadAsync_RejectsResponseRedirectedOutsideOfficialPolicy()
     {
         using var fixture = await DownloaderFixture.CreateAsync();
-        var artifact = fixture.Artifact with
+        var handler = new RecordingHandler((request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
         {
-            DownloadUrl = "https://artifacts.example/runtime.sunderruntime",
-        };
-        var handler = new RecordingHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://untrusted.example/runtime.sunderruntime"),
+            RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://evil.example/runtime.tar.gz"),
             Content = new ByteArrayContent(fixture.ArchiveBytes),
         }));
 
-        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                artifact,
-                ["https://artifacts.example/"],
-                CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<RuntimeExecutionRuntimeException>(() =>
+            fixture.CreateDownloader(handler).DownloadAsync(fixture.Artifact, CancellationToken.None));
 
-        Assert.Contains("untrusted origin", exception.Message, StringComparison.OrdinalIgnoreCase);
-        fixture.AssertNoStorePublication();
-        fixture.AssertTemporaryRootEmpty();
-    }
-
-    [Theory]
-    [InlineData("http://artifacts.example/")]
-    [InlineData("https://user@artifacts.example/")]
-    [InlineData("https://artifacts.example/not-an-origin")]
-    public async Task DownloadAsync_RejectsInvalidAdvertisedArtifactOrigins(string advertisedOrigin)
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var handler = fixture.CreateArtifactHandler();
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri(RegistryOriginValue),
-            fixture.Artifact,
-            [advertisedOrigin],
-            CancellationToken.None));
-
-        Assert.Equal(0, handler.RequestCount);
-        fixture.AssertTemporaryRootEmpty();
-    }
-
-    [Theory]
-    [InlineData("http://localhost:5288/")]
-    [InlineData("https://user@registry.example/")]
-    public async Task DownloadAsync_RequiresTrustedHttpsRegistryOrigin(string origin)
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var handler = fixture.CreateArtifactHandler();
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri(origin),
-            fixture.Artifact,
-            [],
-            CancellationToken.None));
-
-        Assert.Equal(0, handler.RequestCount);
-        fixture.AssertTemporaryRootEmpty();
-    }
-
-    [Fact]
-    public async Task DownloadAsync_AllowsExplicitDevelopmentLoopbackRegistryOrigin()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync(
-            developmentTrustEnabled: true,
-            developmentAllowInsecureLoopbackRegistry: true);
-        var handler = fixture.CreateArtifactHandler();
-        var artifact = fixture.Artifact with
-        {
-            DownloadUrl = "/artifacts/dotnet.sunderruntime",
-        };
-
-        var result = await fixture.CreateDownloader(
-                handler,
-                developmentAllowInsecureLoopbackRegistry: true)
-            .DownloadAsync(
-                new Uri("http://127.0.0.1:5288/"),
-                artifact,
-                ["http://127.0.0.1:5288/"],
-                CancellationToken.None);
-
-        Assert.Equal(ExecutionRuntimeTrustEnvironment.Development, result.Receipt.TrustEnvironment);
+        Assert.Equal(ExecutionRuntimeErrorCodes.SourceNotAllowed, exception.Code);
         Assert.Equal(1, handler.RequestCount);
-        fixture.AssertTemporaryRootEmpty();
+        fixture.AssertNoStorePublication();
+        fixture.AssertNoTransientState();
     }
 
     [Fact]
-    public async Task DownloadAsync_DelegatesPlanManifestMismatchToStoreInspection()
+    public async Task DownloadAsync_RejectsOfficialNativeProfileIdentityMismatchAfterDownload()
     {
         using var fixture = await DownloaderFixture.CreateAsync();
+        const string otherVersion = "10.0.13";
         var mismatched = fixture.Artifact with
         {
-            Identity = fixture.Artifact.Identity with { Version = "10.0.2" },
+            Identity = fixture.Artifact.Identity with { VendorVersion = otherVersion },
+            Distribution = fixture.Artifact.Distribution with
+            {
+                DownloadUrl = fixture.OfficialDownloadUri(version: otherVersion).AbsoluteUri,
+                DownloadSize = fixture.ArchiveBytes.LongLength,
+            },
         };
         var handler = fixture.CreateArtifactHandler();
 
-        await Assert.ThrowsAsync<ExecutionRuntimePlanMismatchException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                mismatched,
-                [],
-                CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            fixture.CreateDownloader(handler).DownloadAsync(mismatched, CancellationToken.None));
 
+        Assert.Contains("Microsoft.NETCore.App", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, handler.RequestCount);
-        Assert.True(fixture.SignatureVerifier.Count > 0);
         fixture.AssertNoStorePublication(mismatched.Identity);
-        fixture.AssertTemporaryRootEmpty();
+        fixture.AssertNoTransientState();
+    }
+
+    [Fact]
+    public async Task DownloadAsync_RejectsWrongRidBeforeNetwork()
+    {
+        using var fixture = await DownloaderFixture.CreateAsync();
+        var otherRid = SunderPackageFormat.SupportedRuntimeIdentifiers.First(rid => rid != fixture.Rid);
+        var artifact = fixture.Artifact with { Identity = fixture.Artifact.Identity with { Rid = otherRid } };
+        var handler = fixture.CreateArtifactHandler();
+
+        await Assert.ThrowsAsync<RuntimeExecutionRuntimeException>(() =>
+            fixture.CreateDownloader(handler).DownloadAsync(artifact, CancellationToken.None));
+
+        Assert.Equal(0, handler.RequestCount);
+        fixture.AssertNoStorePublication(artifact.Identity);
+        fixture.AssertNoTransientState();
+    }
+
+    [Fact]
+    public async Task DownloadAsync_RejectsRuntimeIdAndModuleAbiMismatchBeforeNetwork()
+    {
+        using var fixture = await DownloaderFixture.CreateAsync();
+        var artifact = fixture.Artifact with
+        {
+            Identity = fixture.Artifact.Identity with { ModuleAbi = SunderPackageFormat.NodeWorkerModuleAbi },
+        };
+        var handler = fixture.CreateArtifactHandler();
+
+        await Assert.ThrowsAsync<RuntimeExecutionRuntimeException>(() =>
+            fixture.CreateDownloader(handler).DownloadAsync(artifact, CancellationToken.None));
+
+        Assert.Equal(0, handler.RequestCount);
+        fixture.AssertNoStorePublication(artifact.Identity);
+        fixture.AssertNoTransientState();
     }
 
     [Theory]
-    [InlineData(ExecutionRuntimeLifecycleStates.Staged)]
-    [InlineData(ExecutionRuntimeLifecycleStates.Retired)]
-    [InlineData(ExecutionRuntimeLifecycleStates.Revoked)]
-    public async Task DownloadAsync_RejectsLifecycleThatDoesNotPermitInstallation(string state)
+    [InlineData("zero")]
+    [InlineData("oversized")]
+    [InlineData("null")]
+    public async Task DownloadAsync_EnforcesBoundedOrUnknownDeclaredDownloadSize(string sizeCase)
     {
         using var fixture = await DownloaderFixture.CreateAsync();
         var artifact = fixture.Artifact with
         {
-            Lifecycle = fixture.Artifact.Lifecycle with { State = state },
-        };
-        var handler = fixture.CreateArtifactHandler();
-
-        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                artifact,
-                [],
-                CancellationToken.None));
-
-        Assert.Contains("lifecycle", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(0, handler.RequestCount);
-    }
-
-    [Fact]
-    public async Task DownloadAsync_RejectsDeprecatedRuntimeAtInstallBlockDeadline()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var artifact = fixture.Artifact with
-        {
-            Lifecycle = fixture.Artifact.Lifecycle with
+            Distribution = fixture.Artifact.Distribution with
             {
-                State = ExecutionRuntimeLifecycleStates.Deprecated,
-                DeprecatedAtUtc = PolicyNow.AddHours(-1),
-                InstallBlockedAtUtc = PolicyNow,
+                DownloadSize = sizeCase switch
+                {
+                    "zero" => 0,
+                    "oversized" => OfficialRuntimeSourcePolicy.MaxArchiveBytes + 1,
+                    _ => null,
+                },
             },
         };
         var handler = fixture.CreateArtifactHandler();
 
-        await Assert.ThrowsAsync<InvalidDataException>(() => fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri(RegistryOriginValue),
-            artifact,
-            [],
-            CancellationToken.None));
-
-        Assert.Equal(0, handler.RequestCount);
-    }
-
-    [Fact]
-    public async Task DownloadAsync_RejectsArtifactForDifferentRid()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var alternateRid = SunderExecutionRuntimeFormat.SupportedRuntimeIdentifiers.First(rid =>
-            !string.Equals(rid, fixture.Artifact.Identity.Rid, StringComparison.Ordinal));
-        var artifact = fixture.Artifact with
+        if (sizeCase == "null")
         {
-            Identity = fixture.Artifact.Identity with { Rid = alternateRid },
-        };
-        var handler = fixture.CreateArtifactHandler();
-
-        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                artifact,
-                [],
-                CancellationToken.None));
-
-        Assert.Contains("current Host RID", exception.Message, StringComparison.Ordinal);
-        Assert.Equal(0, handler.RequestCount);
-    }
-
-    [Fact]
-    public async Task DownloadAsync_RejectsRuntimeIdAndModuleAbiMismatch()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var artifact = fixture.Artifact with
+            var result = await fixture.CreateDownloader(handler).DownloadAsync(artifact, CancellationToken.None);
+            Assert.False(result.AlreadyPresent);
+            Assert.Equal(1, handler.RequestCount);
+        }
+        else
         {
-            Identity = fixture.Artifact.Identity with { ModuleAbi = SunderExecutionRuntimeFormat.NodeModuleAbi },
-        };
-        var handler = fixture.CreateArtifactHandler();
-
-        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                artifact,
-                [],
-                CancellationToken.None));
-
-        Assert.Contains("module ABI", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(0, handler.RequestCount);
-    }
-
-    [Theory]
-    [InlineData("manifest-sha")]
-    [InlineData("artifact-sha")]
-    [InlineData("signing-key")]
-    [InlineData("attestation-sha")]
-    [InlineData("attestation-key")]
-    public async Task DownloadAsync_RejectsNoncanonicalTrustEvidence(string field)
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var artifact = field switch
-        {
-            "manifest-sha" => fixture.Artifact with
-            {
-                ManifestSha256 = fixture.Artifact.ManifestSha256.ToUpperInvariant(),
-            },
-            "artifact-sha" => fixture.Artifact with
-            {
-                ArtifactSha256 = fixture.Artifact.ArtifactSha256.ToUpperInvariant(),
-            },
-            "signing-key" => fixture.Artifact with { SigningKeyId = ReleaseKeyId.ToUpperInvariant() },
-            "attestation-sha" => fixture.Artifact with
-            {
-                NativeAttestationSha256 = fixture.Artifact.NativeAttestationSha256.ToUpperInvariant(),
-            },
-            _ => fixture.Artifact with { NativeAttestationKeyId = AttestationKeyId.ToUpperInvariant() },
-        };
-        var handler = fixture.CreateArtifactHandler();
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => fixture.CreateDownloader(handler).DownloadAsync(
-            new Uri(RegistryOriginValue),
-            artifact,
-            [],
-            CancellationToken.None));
-
-        Assert.Equal(0, handler.RequestCount);
-    }
-
-    [Fact]
-    public async Task DownloadAsync_RejectsNonpositiveDeclaredArtifactSize()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var handler = fixture.CreateArtifactHandler();
-
-        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                fixture.Artifact with { ArtifactSize = 0 },
-                [],
-                CancellationToken.None));
-
-        Assert.Contains("positive", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(0, handler.RequestCount);
-    }
-
-    [Fact]
-    public async Task DownloadAsync_RejectsNonpositiveRuntimePolicyRevision()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var handler = fixture.CreateArtifactHandler();
-
-        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                fixture.Artifact with { ObservedRuntimePolicyRevision = 0 },
-                [],
-                CancellationToken.None));
-
-        Assert.Contains("policy", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(0, handler.RequestCount);
-    }
-
-    [Fact]
-    public async Task DownloadAsync_RejectsOversizedDeclaredArtifact()
-    {
-        using var fixture = await DownloaderFixture.CreateAsync();
-        var handler = fixture.CreateArtifactHandler();
-
-        await Assert.ThrowsAsync<RegistryArtifactTooLargeException>(() =>
-            fixture.CreateDownloader(handler).DownloadAsync(
-                new Uri(RegistryOriginValue),
-                fixture.Artifact with { ArtifactSize = SunderExecutionRuntimeFormat.MaxArchiveBytes + 1 },
-                [],
-                CancellationToken.None));
-
-        Assert.Equal(0, handler.RequestCount);
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                fixture.CreateDownloader(handler).DownloadAsync(artifact, CancellationToken.None));
+            Assert.Equal(0, handler.RequestCount);
+            fixture.AssertNoStorePublication();
+        }
+        fixture.AssertNoTransientState();
     }
 
     private static HttpResponseMessage Response(HttpRequestMessage request, HttpContent content)
-        => new(HttpStatusCode.OK)
-        {
-            RequestMessage = request,
-            Content = content,
-        };
+        => new(HttpStatusCode.OK) { RequestMessage = request, Content = content };
 
     private static HttpResponseMessage Response(HttpRequestMessage request, HttpStatusCode statusCode)
-        => new(statusCode)
-        {
-            RequestMessage = request,
-            Content = new ByteArrayContent([]),
-        };
-
-    private static byte[] CreateTestSignature(ReadOnlySpan<byte> input, ReadOnlySpan<byte> key)
-    {
-        var bytes = new byte[key.Length + input.Length];
-        key.CopyTo(bytes);
-        input.CopyTo(bytes.AsSpan(key.Length));
-        return SHA512.HashData(bytes);
-    }
+        => new(statusCode) { RequestMessage = request, Content = new ByteArrayContent([]) };
 
     private sealed class DownloaderFixture : IDisposable
     {
-        private readonly List<TestHttpClientFactory> _httpClientFactories = [];
-        private readonly ExecutionRuntimePhaseTelemetry? _telemetry;
+        private TestHttpClientFactory? _factory;
 
-        private DownloaderFixture(
-            string rootPath,
-            string temporaryRootPath,
-            byte[] archiveBytes,
-            RegistryResolvedExecutionRuntimeArtifact artifact,
-            ExecutionRuntimeStoreLayout layout,
-            ExecutionRuntimeHostTrustService trust,
-            CountingSignatureVerifier signatureVerifier,
-            ExecutionRuntimeStore store,
-            ExecutionRuntimePhaseTelemetry? telemetry)
+        private DownloaderFixture(string rootPath, byte[] archiveBytes, RuntimeExecutionRuntimeVendorArtifact artifact,
+            ExecutionRuntimeStoreLayout layout, ExecutionRuntimeStore store, ExecutionRuntimePhaseTelemetry? telemetry, string rid)
         {
             RootPath = rootPath;
-            TemporaryRootPath = temporaryRootPath;
             ArchiveBytes = archiveBytes;
             Artifact = artifact;
             Layout = layout;
-            Trust = trust;
-            SignatureVerifier = signatureVerifier;
             Store = store;
-            _telemetry = telemetry;
+            Telemetry = telemetry;
+            Rid = rid;
+            ArchiveSha256 = Hash(SHA256.HashData(archiveBytes));
         }
 
         public string RootPath { get; }
-        public string TemporaryRootPath { get; }
         public byte[] ArchiveBytes { get; }
-        public RegistryResolvedExecutionRuntimeArtifact Artifact { get; }
+        public string ArchiveSha256 { get; }
+        public RuntimeExecutionRuntimeVendorArtifact Artifact { get; }
         public ExecutionRuntimeStoreLayout Layout { get; }
-        public ExecutionRuntimeHostTrustService Trust { get; }
-        public CountingSignatureVerifier SignatureVerifier { get; }
         public ExecutionRuntimeStore Store { get; }
+        public ExecutionRuntimePhaseTelemetry? Telemetry { get; }
+        public string Rid { get; }
 
-        public static async Task<DownloaderFixture> CreateAsync(
-            ExecutionRuntimePhaseTelemetry? telemetry = null,
-            bool developmentTrustEnabled = false,
-            bool developmentAllowInsecureLoopbackRegistry = false)
+        public static async Task<DownloaderFixture> CreateAsync(ExecutionRuntimePhaseTelemetry? telemetry = null)
         {
-            var root = Path.Combine(
-                Path.GetTempPath(),
-                "SunderExecutionRuntimeDownloaderTests",
-                Guid.NewGuid().ToString("N"));
+            var root = Path.Combine(Path.GetTempPath(), "SunderOfficialRuntimeDownloaderTests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
-            var artifactRoot = Path.Combine(root, "artifact");
-            var sources = Path.Combine(artifactRoot, "sources");
-            Directory.CreateDirectory(sources);
             var rid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
-            var launcherPath = Path.Combine(sources, rid.StartsWith("win-", StringComparison.Ordinal)
-                ? "sunder-runtime.exe"
-                : "sunder-runtime");
-            var runtimePath = Path.Combine(sources, "runtime.bin");
-            var attestationPath = Path.Combine(sources, "native-attestation.json");
-            await File.WriteAllBytesAsync(launcherPath, [0x53, 0x55, 0x4e, 0x44, 0x45, 0x52]);
-            await File.WriteAllBytesAsync(runtimePath, Enumerable.Repeat((byte)0x42, 64).ToArray());
-
-            const string runtimeVersion = "10.0.1";
-            const int packagingRevision = 7;
-            var upstreamSha256 = new string('a', 64);
-            var nativeAttestation = new SunderExecutionRuntimeNativeAttestation
-            {
-                SchemaVersion = SunderExecutionRuntimeFormat.CurrentNativeAttestationVersion,
-                RuntimeId = SunderExecutionRuntimeFormat.DotNetRuntimeId,
-                RuntimeVersion = runtimeVersion,
-                PackagingRevision = packagingRevision,
-                Rid = rid,
-                UpstreamSha256 = upstreamSha256,
-                Workflow = new SunderExecutionRuntimeAttestationWorkflow
-                {
-                    Name = "sunder.runtime.release",
-                    RunId = "downloader-test-run",
-                    SourceRevision = new string('b', 40),
-                },
-                Toolchain = new SunderExecutionRuntimeAttestationToolchain
-                {
-                    Name = "dotnet-sdk",
-                    Version = "10.0.100",
-                },
-                LauncherSmoke = new SunderExecutionRuntimeAttestationLauncherSmoke
-                {
-                    Result = SunderExecutionRuntimeFormat.LauncherSmokePassed,
-                },
-                Platform = new SunderExecutionRuntimeAttestationPlatform
-                {
-                    Signature = rid.StartsWith("linux-", StringComparison.Ordinal)
-                        ? SunderExecutionRuntimeFormat.PlatformCheckNotApplicable
-                        : SunderExecutionRuntimeFormat.PlatformCheckPassed,
-                    Notarization = rid.StartsWith("osx-", StringComparison.Ordinal)
-                        ? SunderExecutionRuntimeFormat.PlatformCheckPassed
-                        : SunderExecutionRuntimeFormat.PlatformCheckNotApplicable,
-                },
-                Signing = new SunderExecutionRuntimeAttestationSigning
-                {
-                    Algorithm = SunderExecutionRuntimeFormat.SigningAlgorithm,
-                    KeyId = AttestationKeyId,
-                    Signature = Convert.ToBase64String(new byte[SunderExecutionRuntimeFormat.Ed25519SignatureBytes]),
-                },
-            };
-            var nativeAttestationBytes = SunderExecutionRuntimeCanonicalJson.SerializeNativeAttestation(
-                nativeAttestation);
-            await File.WriteAllBytesAsync(attestationPath, nativeAttestationBytes);
-
-            var manifest = new SunderExecutionRuntimeManifest
-            {
-                SchemaVersion = SunderExecutionRuntimeFormat.CurrentSchemaVersion,
-                Id = SunderExecutionRuntimeFormat.DotNetRuntimeId,
-                Version = runtimeVersion,
-                PackagingRevision = packagingRevision,
-                Rid = rid,
-                ModuleAbi = SunderExecutionRuntimeFormat.DotNetModuleAbi,
-                WorkerProtocol = SunderExecutionRuntimeFormat.WorkerProtocol,
-                Launch = new SunderExecutionRuntimeLaunch
-                {
-                    Executable = "payload/bin/" + Path.GetFileName(launcherPath),
-                    Arguments =
-                    [
-                        SunderExecutionRuntimeFormat.DotNetExecArgument,
-                        SunderExecutionRuntimeFormat.PackageEntryPointPlaceholder,
-                    ],
-                },
-                ContentIndex = SunderExecutionRuntimeFormat.ContentIndexPath,
-                Upstream = new SunderExecutionRuntimeUpstream
-                {
-                    Name = "dotnet",
-                    Version = runtimeVersion,
-                    SourceUri = "https://example.test/dotnet-runtime.tar.gz",
-                    SourceSha256 = upstreamSha256,
-                },
-                Provenance = new SunderExecutionRuntimeProvenance
-                {
-                    AttestationPath = SunderExecutionRuntimeFormat.NativeAttestationPath,
-                    AttestationSha256 = Hash(nativeAttestationBytes),
-                    AttestationKeyId = AttestationKeyId,
-                },
-                Licenses = ["MIT"],
-                Signing = new SunderExecutionRuntimeSigning
-                {
-                    Algorithm = SunderExecutionRuntimeFormat.SigningAlgorithm,
-                    KeyId = ReleaseKeyId,
-                    Signature = SunderExecutionRuntimeFormat.SignaturePath,
-                },
-            };
-            var archivePath = Path.Combine(artifactRoot, "runtime.sunderruntime");
-            await SunderExecutionRuntimeArchiveWriter.WriteAsync(
-                manifest,
-                archivePath,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    [manifest.Launch.Executable!] = launcherPath,
-                    ["payload/runtime/runtime.bin"] = runtimePath,
-                    [SunderExecutionRuntimeFormat.NativeAttestationPath] = attestationPath,
-                },
-                new TestSigner());
+            const string version = "10.0.12";
+            var archivePath = Path.Combine(root, rid.StartsWith("win-", StringComparison.Ordinal) ? "runtime.zip" : "runtime.tar.gz");
+            await CreateDotNetArchiveAsync(archivePath, version, rid);
             var archiveBytes = await File.ReadAllBytesAsync(archivePath);
-            var identity = new RegistryExecutionRuntimeIdentity(
-                manifest.Id!,
-                manifest.Version!,
-                manifest.PackagingRevision,
-                manifest.Rid!,
-                manifest.ModuleAbi!);
-            var lifecycle = new RegistryExecutionRuntimeLifecycle(
-                ExecutionRuntimeLifecycleStates.Supported,
-                PolicyNow.AddDays(-2),
-                PolicyNow.AddDays(-1),
-                DeprecatedAtUtc: null,
-                InstallBlockedAtUtc: null,
-                ActivationBlockedAtUtc: null,
-                RevokedAtUtc: null,
+            var vendorDigest = Hash(SHA512.HashData(archiveBytes));
+            var identity = new RuntimeExecutionRuntimeIdentity(
+                ConfiguredOfficialSourceId.DotNet,
+                SunderPackageFormat.DotNetExecutionRuntimeId,
+                version,
+                rid,
+                SunderPackageFormat.DotNetWorkerModuleAbi,
+                RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
+                vendorDigest);
+            var distribution = new RuntimeExecutionRuntimeDistribution(
+                DotNetDownloadUri(version, rid).AbsoluteUri,
+                OfficialRuntimeSourcePolicy.MetadataUri(ConfiguredOfficialSourceId.DotNet).AbsoluteUri,
+                new string('a', 64),
+                ChecksumUrl: null,
+                ChecksumDocumentSha256: null,
+                rid.StartsWith("win-", StringComparison.Ordinal)
+                    ? RuntimeExecutionRuntimeArchiveFormat.Zip
+                    : RuntimeExecutionRuntimeArchiveFormat.TarGzip,
+                OfficialRuntimeSourcePolicy.Profile(ConfiguredOfficialSourceId.DotNet),
+                archiveBytes.LongLength);
+            var support = new RuntimeExecutionRuntimeSupportStatus(
+                RuntimeExecutionRuntimeSupportState.Supported,
+                "10.0 LTS",
+                ObservedAtUtc,
+                EndOfLifeAtUtc: null,
                 Message: null);
-            var artifact = new RegistryResolvedExecutionRuntimeArtifact(
-                identity,
-                Hash(SunderExecutionRuntimeCanonicalJson.SerializeManifest(manifest)),
-                Hash(archiveBytes),
-                archiveBytes.LongLength,
-                ReleaseKeyId,
-                MinimumHostTrustGeneration: 1,
-                manifest.Provenance.AttestationSha256!,
-                AttestationKeyId,
-                lifecycle,
-                ObservedRuntimePolicyRevision: 7,
-                ArtifactUrl);
+            var artifact = new RuntimeExecutionRuntimeVendorArtifact(identity, distribution, support);
             var layout = new ExecutionRuntimeStoreLayout(Path.Combine(root, "state"));
-            var trust = new ExecutionRuntimeHostTrustService(
-                "downloader-test",
-                generation: 3,
-                developmentTrustEnabled,
-                productionKeys: developmentTrustEnabled
-                    ? []
-                    : [new ExecutionRuntimeHostTrustKey(ReleaseKeyId, ReleaseKey, 1)],
-                developmentKeys: developmentTrustEnabled
-                    ? [new ExecutionRuntimeHostTrustKey(ReleaseKeyId, ReleaseKey, 1)]
-                    : null);
-            var verifier = new CountingSignatureVerifier();
             var store = new ExecutionRuntimeStore(
                 layout,
-                trust,
                 new TestExecutionRuntimeGarbageCollectionAuthority(),
-                signatureVerifier: verifier,
+                timeProvider: new FixedTimeProvider(ObservedAtUtc),
                 telemetry: telemetry,
-                developmentAllowInsecureLoopbackRegistry: developmentAllowInsecureLoopbackRegistry);
-            return new DownloaderFixture(
-                root,
-                Path.Combine(root, "temporary-downloads"),
-                archiveBytes,
-                artifact,
-                layout,
-                trust,
-                verifier,
-                store,
-                telemetry);
+                materializer: new OfficialRuntimeMaterializer(new NoopPlatformProbe()));
+            return new DownloaderFixture(root, archiveBytes, artifact, layout, store, telemetry, rid);
         }
+
+        public Uri OfficialDownloadUri(string host = "builds.dotnet.microsoft.com", string? version = null)
+            => DotNetDownloadUri(version ?? Artifact.Identity.VendorVersion, Rid, host);
 
         public RecordingHandler CreateArtifactHandler()
-            => new((request, _) => Task.FromResult(Response(
-                request,
-                new ByteArrayContent(ArchiveBytes))));
+            => new((request, _) => Task.FromResult(Response(request, new ByteArrayContent(ArchiveBytes))));
 
-        public async Task<ExecutionRuntimeEnsureResult> ImportLocalAsync()
+        public ExecutionRuntimeArtifactDownloader CreateDownloader(HttpMessageHandler handler, TimeProvider? clock = null)
         {
-            var archivePath = Path.Combine(RootPath, "local-import.sunderruntime");
-            await File.WriteAllBytesAsync(archivePath, ArchiveBytes);
-            var identity = Artifact.Identity;
-            return await Store.ImportLocalArchiveAsync(
-                new ExecutionRuntimeAcquisitionPlan(
-                    new ExecutionRuntimeIdentity(
-                        identity.RuntimeId,
-                        identity.Version,
-                        identity.PackagingRevision,
-                        identity.Rid,
-                        identity.ModuleAbi),
-                    Artifact.ArtifactSha256,
-                    Artifact.ArtifactSize,
-                    Artifact.ManifestSha256,
-                    ContentIdentity: null,
-                    Artifact.SigningKeyId,
-                    Artifact.MinimumHostTrustGeneration,
-                    ExecutionRuntimeTrustEnvironment.Production,
-                    RuntimeExecutionRuntimeAcquisitionSources.LocalImport,
-                    RegistryOrigin: null,
-                    Artifact.NativeAttestationSha256,
-                    Artifact.NativeAttestationKeyId),
-                archivePath);
-        }
-
-        public ExecutionRuntimeArtifactDownloader CreateDownloader(
-            HttpMessageHandler handler,
-            TimeProvider? timeProvider = null,
-            bool developmentAllowInsecureLoopbackRegistry = false)
-        {
+            _factory?.Dispose();
             var factory = new TestHttpClientFactory(handler);
-            _httpClientFactories.Add(factory);
-            var registryClient = new RegistryHttpClient(
-                factory,
-                new RuntimeTransportPolicyOptions { RegistryRequestTimeout = TimeSpan.FromSeconds(30) },
-                TimeProvider.System);
+            _factory = factory;
             return new ExecutionRuntimeArtifactDownloader(
-                registryClient,
+                new OfficialRuntimeHttpClient(factory),
                 Store,
-                Trust,
-                timeProvider ?? new FixedTimeProvider(PolicyNow),
-                TemporaryRootPath,
-                _telemetry,
-                developmentAllowInsecureLoopbackRegistry);
+                clock ?? new FixedTimeProvider(ObservedAtUtc),
+                Telemetry);
         }
 
-        public void AssertNoStorePublication(RegistryExecutionRuntimeIdentity? identity = null)
+        public void AssertNoStorePublication(RuntimeExecutionRuntimeIdentity? identity = null)
         {
             var value = identity ?? Artifact.Identity;
-            var storeIdentity = new ExecutionRuntimeIdentity(
-                value.RuntimeId,
-                value.Version,
-                value.PackagingRevision,
-                value.Rid,
-                value.ModuleAbi);
+            var storeIdentity = ExecutionRuntimeIdentity.FromContract(value);
             Assert.False(File.Exists(Layout.GetReceiptPath(storeIdentity)));
-            Assert.False(File.Exists(Layout.GetArchivePath(Artifact.ArtifactSha256)));
+            Assert.False(File.Exists(Layout.GetArchivePath(ArchiveSha256)));
         }
 
-        public void AssertTemporaryRootEmpty()
-            => Assert.Empty(Directory.Exists(TemporaryRootPath)
-                ? Directory.EnumerateFileSystemEntries(TemporaryRootPath)
-                : []);
+        public void AssertNoTransientState()
+        {
+            Assert.Empty(Directory.Exists(Layout.StagingRootPath) ? Directory.EnumerateFileSystemEntries(Layout.StagingRootPath) : []);
+            Assert.Empty(Directory.Exists(Layout.TransactionRootPath) ? Directory.EnumerateFileSystemEntries(Layout.TransactionRootPath) : []);
+        }
 
         public void Dispose()
         {
-            foreach (var factory in _httpClientFactories)
-            {
-                factory.Dispose();
-            }
+            _factory?.Dispose();
             _ = ExecutionRuntimeRootFileSystem.TryDeleteOwnedTree(RootPath);
         }
-    }
 
-    private sealed class TestSigner : ISunderExecutionRuntimeArchiveSigner
-    {
-        public string KeyId => ReleaseKeyId;
+        private static Uri DotNetDownloadUri(string version, string rid, string host = "builds.dotnet.microsoft.com")
+            => new($"https://{host}/dotnet/Runtime/{version}/{OfficialRuntimeSourcePolicy.ArchiveName(ConfiguredOfficialSourceId.DotNet, version, rid)}");
 
-        public byte[] Sign(ReadOnlySpan<byte> signatureInput)
-            => CreateTestSignature(signatureInput, ReleaseKey);
-    }
-
-    private sealed class CountingSignatureVerifier : ISunderExecutionRuntimeArchiveSignatureVerifier
-    {
-        private int _count;
-        public int Count => Volatile.Read(ref _count);
-
-        public bool Verify(
-            ReadOnlySpan<byte> signatureInput,
-            ReadOnlySpan<byte> signature,
-            ReadOnlySpan<byte> trustedPublicKey)
+        private static async Task CreateDotNetArchiveAsync(string path, string version, string rid)
         {
-            Interlocked.Increment(ref _count);
-            return CryptographicOperations.FixedTimeEquals(
-                signature,
-                CreateTestSignature(signatureInput, trustedPublicKey));
+            var launcher = rid.StartsWith("win-", StringComparison.Ordinal) ? "dotnet.exe" : "dotnet";
+            var coreLib = $"shared/Microsoft.NETCore.App/{version}/System.Private.CoreLib.dll";
+            if (rid.StartsWith("win-", StringComparison.Ordinal))
+            {
+                await using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
+                using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
+                await WriteZipEntryAsync(zip, launcher, [0x4d, 0x5a, 0x01, 0x02]);
+                await WriteZipEntryAsync(zip, coreLib, [0x42, 0x53, 0x4a, 0x42]);
+                await WriteZipEntryAsync(zip, "LICENSE.txt", [0x4c]);
+                return;
+            }
+
+            await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
+            await using var gzip = new GZipStream(file, CompressionLevel.NoCompression, leaveOpen: true);
+            using var tar = new System.Formats.Tar.TarWriter(gzip, System.Formats.Tar.TarEntryFormat.Pax, leaveOpen: true);
+            await WriteTarEntryAsync(tar, launcher, [0x7f, 0x45, 0x4c, 0x46]);
+            await WriteTarEntryAsync(tar, coreLib, [0x42, 0x53, 0x4a, 0x42]);
+            await WriteTarEntryAsync(tar, "LICENSE.txt", [0x4c]);
+        }
+
+        private static async Task WriteZipEntryAsync(ZipArchive zip, string name, byte[] bytes)
+        {
+            var entry = zip.CreateEntry(name, CompressionLevel.NoCompression);
+            entry.LastWriteTime = DateTimeOffset.UnixEpoch;
+            await using var output = entry.Open();
+            await output.WriteAsync(bytes);
+        }
+
+        private static async Task WriteTarEntryAsync(System.Formats.Tar.TarWriter tar, string name, byte[] bytes)
+        {
+            using var data = new MemoryStream(bytes);
+            await tar.WriteEntryAsync(new System.Formats.Tar.PaxTarEntry(System.Formats.Tar.TarEntryType.RegularFile, name)
+            {
+                DataStream = data,
+                ModificationTime = DateTimeOffset.UnixEpoch,
+            });
         }
     }
 
-    private sealed class RecordingHandler(
-        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    private sealed class NoopPlatformProbe : IOfficialRuntimePlatformProbe
+    {
+        public Task VerifyAsync(RuntimeExecutionRuntimeVendorArtifact artifact, string rootPath, string launcherRelativePath, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            Assert.True(File.Exists(Path.Combine(rootPath, launcherRelativePath.Replace('/', Path.DirectorySeparatorChar))));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {
         private int _requestCount;
         public int RequestCount => Volatile.Read(ref _requestCount);
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _requestCount);
             return send(request, cancellationToken);
         }
     }
 
-    private sealed class TestHttpClientFactory : IHttpClientFactory, IDisposable
+    private sealed class TestHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory, IDisposable
     {
-        private readonly HttpClient _client;
-
-        public TestHttpClientFactory(HttpMessageHandler handler)
-        {
-            _client = new HttpClient(handler, disposeHandler: true);
-        }
-
+        private readonly HttpClient _client = new(handler, disposeHandler: true);
         public HttpClient CreateClient(string name) => _client;
-
         public void Dispose() => _client.Dispose();
     }
 
@@ -1259,82 +608,62 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
+    private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private readonly object _gate = new();
+        private readonly List<ManualTimer> _timers = [];
+        public int PendingTimerCount { get { lock (_gate) return _timers.Count(timer => !timer.Disposed); } }
+        public override DateTimeOffset GetUtcNow() => now;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new ManualTimer(callback, state);
+            lock (_gate) _timers.Add(timer);
+            return timer;
+        }
+
+        private sealed class ManualTimer(TimerCallback callback, object? state) : ITimer
+        {
+            public bool Disposed { get; private set; }
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+            public void Dispose() => Disposed = true;
+            public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
+            public void Fire() => callback(state);
+        }
+    }
+
     private sealed class UnknownLengthContent(Stream stream) : HttpContent
     {
-        protected override Task SerializeToStreamAsync(Stream destination, TransportContext? context)
-            => stream.CopyToAsync(destination);
-
-        protected override Task SerializeToStreamAsync(
-            Stream destination,
-            TransportContext? context,
-            CancellationToken cancellationToken)
+        protected override Task SerializeToStreamAsync(Stream destination, TransportContext? context) => stream.CopyToAsync(destination);
+        protected override Task SerializeToStreamAsync(Stream destination, TransportContext? context, CancellationToken cancellationToken)
             => stream.CopyToAsync(destination, cancellationToken);
-
-        protected override Task<Stream> CreateContentReadStreamAsync()
-            => Task.FromResult(stream);
-
-        protected override Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken)
-            => Task.FromResult(stream);
-
-        protected override bool TryComputeLength(out long length)
-        {
-            length = 0;
-            return false;
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                stream.Dispose();
-            }
-            base.Dispose(disposing);
-        }
+        protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult(stream);
+        protected override Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken) => Task.FromResult(stream);
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
+        protected override void Dispose(bool disposing) { if (disposing) stream.Dispose(); base.Dispose(disposing); }
     }
 
     private sealed class TrackingStream(byte[] bytes) : MemoryStream(bytes)
     {
         public long BytesRead { get; private set; }
         public bool IsDisposed { get; private set; }
-
-        public override async ValueTask<int> ReadAsync(
-            Memory<byte> buffer,
-            CancellationToken cancellationToken = default)
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             var read = await base.ReadAsync(buffer, cancellationToken);
             BytesRead += read;
             return read;
         }
-
-        protected override void Dispose(bool disposing)
-        {
-            IsDisposed = true;
-            base.Dispose(disposing);
-        }
+        protected override void Dispose(bool disposing) { IsDisposed = true; base.Dispose(disposing); }
     }
 
-    private sealed class PrefixThenBlockingStream : Stream
+    private sealed class PrefixThenBlockingStream(ReadOnlyMemory<byte> prefix, ManualResetEventSlim? disposeRelease = null) : Stream
     {
-        private readonly ReadOnlyMemory<byte> _prefix;
-        private readonly ManualResetEventSlim? _disposeRelease;
+        private readonly TaskCompletionSource _blocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _disposeStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _reads;
         private int _disposeStartedFlag;
         public Task Blocked => _blocked.Task;
         public Task DisposeStarted => _disposeStarted.Task;
-        public Task Disposed => _disposed.Task;
         public bool IsDisposed { get; private set; }
-        private readonly TaskCompletionSource _blocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _disposeStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public PrefixThenBlockingStream(
-            ReadOnlyMemory<byte> prefix,
-            ManualResetEventSlim? disposeRelease = null)
-        {
-            _prefix = prefix;
-            _disposeRelease = disposeRelease;
-        }
-
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
@@ -1345,31 +674,25 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-        public override async ValueTask<int> ReadAsync(
-            Memory<byte> buffer,
-            CancellationToken cancellationToken = default)
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             if (Interlocked.Increment(ref _reads) == 1)
             {
-                _prefix.CopyTo(buffer);
-                return _prefix.Length;
+                prefix.CopyTo(buffer);
+                return prefix.Length;
             }
-
             _blocked.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return 0;
         }
-
         protected override void Dispose(bool disposing)
         {
             if (disposing && Interlocked.Exchange(ref _disposeStartedFlag, 1) == 0)
             {
                 _disposeStarted.TrySetResult();
-                _disposeRelease?.Wait();
+                disposeRelease?.Wait();
             }
             IsDisposed = true;
-            _disposed.TrySetResult();
             base.Dispose(disposing);
         }
     }
@@ -1378,7 +701,6 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
     {
         private int _reads;
         public bool IsDisposed { get; private set; }
-
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
@@ -1389,10 +711,7 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-        public override ValueTask<int> ReadAsync(
-            Memory<byte> buffer,
-            CancellationToken cancellationToken = default)
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (Interlocked.Increment(ref _reads) == 1)
@@ -1400,19 +719,12 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
                 prefix.CopyTo(buffer);
                 return ValueTask.FromResult(prefix.Length);
             }
-
             return ValueTask.FromException<int>(failure);
         }
-
-        protected override void Dispose(bool disposing)
-        {
-            IsDisposed = true;
-            base.Dispose(disposing);
-        }
+        protected override void Dispose(bool disposing) { IsDisposed = true; base.Dispose(disposing); }
     }
 
-    private static string Hash(byte[] bytes)
-        => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    private static string Hash(byte[] bytes) => Convert.ToHexStringLower(bytes);
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
@@ -1421,7 +733,7 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
         {
             if (timeout.Elapsed >= TimeSpan.FromSeconds(5))
             {
-                throw new TimeoutException("The execution-runtime download cleanup did not complete.");
+                throw new TimeoutException("Timed out waiting for downloader test condition.");
             }
             await Task.Delay(10);
         }

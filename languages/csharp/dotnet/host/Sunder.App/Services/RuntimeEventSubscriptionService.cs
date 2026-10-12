@@ -7,7 +7,7 @@ namespace Sunder.App.Services;
 public sealed class RuntimeEventSubscriptionService(
     IRuntimeApiClientFactory runtimeApiClientFactory,
     DeveloperLogService developerLog,
-    RuntimePackageRecoveryNotificationService? recoveryNotifications = null) : IAsyncDisposable
+    RuntimePackageRecoveryNotificationService? recoveryNotifications = null) : IAsyncDisposable, IRuntimeExecutionRuntimeStatusSource
 {
     private static readonly TimeSpan PresentationWaitTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RecoveryPollInterval = TimeSpan.FromMilliseconds(100);
@@ -49,6 +49,17 @@ public sealed class RuntimeEventSubscriptionService(
     private int _activePresentationCount;
     private bool _started;
     private int _disposed;
+
+    public event Action? ExecutionRuntimesChanged;
+
+    private void NotifyExecutionRuntimesChanged()
+    {
+        foreach (var subscriber in ExecutionRuntimesChanged?.GetInvocationList() ?? [])
+        {
+            try { ((Action)subscriber)(); }
+            catch (Exception error) { AppSessionLog.WriteError("Runtime settings change notification failed.", error); }
+        }
+    }
 
     internal int TerminalOutcomeCount
     {
@@ -806,6 +817,8 @@ public sealed class RuntimeEventSubscriptionService(
             {
                 using var client = runtimeApiClientFactory.CreateClient<IRuntimeEventClient>();
                 var snapshot = await client.GetRuntimeEventSnapshotAsync(sequenceId, cancellationToken).ConfigureAwait(false);
+                // Re-read after every connection/reconnection, including replay gaps.
+                NotifyExecutionRuntimesChanged();
                 recoveryNotifications?.SeedSilently(snapshot.RuntimeInstanceId, snapshot.SequenceId);
                 if (snapshot.RuntimeInstanceId != runtimeInstanceId)
                 {
@@ -854,6 +867,10 @@ public sealed class RuntimeEventSubscriptionService(
                         break;
                     }
                     sequenceId = runtimeEvent.SequenceId;
+                    if (runtimeEvent.Kind is RuntimeEventKind.ExecutionRuntimesChanged
+                        or RuntimeEventKind.Snapshot or RuntimeEventKind.SessionGenerationChanged
+                        or RuntimeEventKind.BootstrapStateChanged or RuntimeEventKind.SnapshotDiagnosticsChanged)
+                        NotifyExecutionRuntimesChanged();
                     if (recoveryNotifications is not null)
                     {
                         await recoveryNotifications.HandleAsync(runtimeEvent, cancellationToken)

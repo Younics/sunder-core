@@ -4,7 +4,6 @@
     "revision": 42,
     "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   },
-  "minimumRuntimePolicyRevision": 3,
   "minimumCheckpoint": {
     "sequence": 99,
     "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -23,19 +22,6 @@
       "authorityId": "sunder.core",
       "releaseVersion": "1.1.0",
       "catalogSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    }
-  ],
-  "runtimes": [
-    {
-      "runtime": {
-        "runtimeId": "sunder.runtime.dotnet",
-        "version": "10.0.0",
-        "packagingRevision": 1,
-        "rid": "osx-arm64",
-        "moduleAbi": "sunder.dotnet-worker-module.v1"
-      },
-      "manifestSha256": "2222222222222222222222222222222222222222222222222222222222222222",
-      "artifactSha256": "3333333333333333333333333333333333333333333333333333333333333333"
     }
   ]
 }

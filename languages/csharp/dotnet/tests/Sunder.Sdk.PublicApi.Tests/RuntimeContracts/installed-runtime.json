@@ -1,35 +1,48 @@
 {
   "identity": {
+    "sourceId": "dotnet",
     "runtimeId": "sunder.runtime.dotnet",
-    "version": "10.0.1",
-    "packagingRevision": 2,
+    "vendorVersion": "10.0.1",
     "rid": "win-x64",
     "moduleAbi": "sunder.dotnet-worker-module.v1",
-    "manifestSha256": "runtime-manifest-10.0.1-2",
-    "artifactSha256": "runtime-artifact-10.0.1-2"
+    "vendorChecksumAlgorithm": "sha512",
+    "vendorChecksumDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "status": "ready",
-  "size": 104857600,
+  "size": 209715200,
   "packageReferenceCount": 3,
-  "acquisitionSource": "registry",
-  "signingKeyId": "sunder-runtime-release-2026-01",
-  "trustGeneration": 2,
+  "installedArtifact": {
+    "archiveSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "archiveSize": 104857600,
+    "contentIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "provenance": {
+      "distribution": {
+        "downloadUrl": "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.1/dotnet-runtime-10.0.1-win-x64.zip",
+        "metadataUrl": "https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json",
+        "metadataSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "checksumUrl": null,
+        "checksumDocumentSha256": null,
+        "archiveFormat": "zip",
+        "materializationProfile": "dotnet-runtime.v1",
+        "downloadSize": null
+      },
+      "finalDownloadUrl": "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.1/dotnet-runtime-10.0.1-win-x64.zip",
+      "retrievedAtUtc": "2026-10-08T10:00:00+00:00"
+    }
+  },
   "health": {
     "status": "ready",
-    "checkedAtUtc": "2026-07-11T10:01:00+00:00",
+    "checkedAtUtc": "2026-10-08T10:00:00+00:00",
     "repairRecommended": false,
     "message": null
   },
-  "lifecycle": {
-    "state": "supported",
-    "supportedFromUtc": "2026-07-10T12:00:00+00:00",
-    "deprecatedAtUtc": null,
-    "installBlockedAtUtc": null,
-    "activationBlockedAtUtc": null,
-    "revokedAtUtc": null,
-    "policyMessage": null,
-    "runtimePolicyRevision": 42,
-    "policyObservedAtUtc": "2026-07-11T10:00:00+00:00"
+  "support": {
+    "state": "Supported",
+    "supportLine": "10.0",
+    "observedAtUtc": "2026-10-08T10:00:00+00:00",
+    "endOfLifeAtUtc": null,
+    "message": null
   },
-  "installedAtUtc": "2026-07-11T09:00:00+00:00"
+  "installedAtUtc": "2026-10-08T10:00:00+00:00",
+  "retainedUntilUninstall": true
 }

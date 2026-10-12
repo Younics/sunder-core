@@ -13,6 +13,8 @@ internal static class GeneratedOutputTransaction
     public static void RecoverAndCleanup(params string[] finalPaths)
     {
         var normalized = finalPaths.Select(NormalizePath).ToHashSet(PathComparer);
+        foreach (var output in normalized.Where(path => Path.GetFileName(path) == ValidateSunderDevOutputPathTask.GeneratedDirectoryName).ToArray())
+            normalized.Add(output + Sunder.Package.Format.SunderPackageFormat.DevelopmentImportsSuffix);
         foreach (var coordinatorPath in normalized)
         {
             var journalPath = TransactionPath(coordinatorPath);
@@ -240,7 +242,8 @@ internal static class GeneratedOutputTransaction
 
     private static bool IsMarkerSidecar(string path)
         => path.EndsWith(ValidateSunderDevOutputPathTask.MarkerFileName, PathComparison)
-           || path.EndsWith(AggregateSunderPackageTask.MarkerFileSuffix, PathComparison);
+           || path.EndsWith(AggregateSunderPackageTask.MarkerFileSuffix, PathComparison)
+           || path.EndsWith(Sunder.Package.Format.SunderPackageFormat.DevelopmentImportsSuffix, PathComparison);
 
     private static void ValidateOptionalRegularFile(string path, string label)
     {

@@ -8,6 +8,7 @@ using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 using Xunit;
 
 namespace Sunder.ExecutionRuntime.Build.Tests;
@@ -62,12 +63,11 @@ public sealed class PlatformContractSourceOperationsTests
         }
     }
     private const string AdditionalServiceSource = """
-        using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         namespace Sunder.Core.Platform;
-        [SunderRpcService(SunderRpcExposure.Public, ContractId = "sunder.core.extra", ServiceId = "extra-platform")]
+        [SunderService(SunderServiceExposure.Public, ContractId = "sunder.core.extra", ServiceId = "extra-platform")]
         public sealed partial class ExtraPlatform
         {
-            [SunderRpcMethod]
             public ValueTask<Reply> PingAsync() => ValueTask.FromResult(new Reply { Ready = true });
         }
         public sealed record Reply
@@ -76,11 +76,11 @@ public sealed class PlatformContractSourceOperationsTests
         }
         """;
     private const string NestedPartialSource = """
-        using Sunder.Sdk.Rpc;
+        using Sunder.Sdk.Services;
         namespace Sunder.Sdk.Stacks;
         internal sealed partial class StackContributorRpcServiceAdapter
         {
-            [SunderRpcMethod(MethodId = "nested-probe")]
+            [SunderMethod(MethodId = "nested-probe")]
             public ValueTask<NestedProbeReply> NestedProbeAsync() => ValueTask.FromResult(new NestedProbeReply { Ready = true });
         }
         internal sealed record NestedProbeReply
@@ -683,7 +683,7 @@ public sealed class PlatformContractSourceOperationsTests
     public async Task CompilationContext_UsesOnlyCuratedRuntimeAndSdkAndValidatesNonRpcSource()
     {
         var references = PlatformContractSourceOperations.ReferencePaths();
-        Assert.Contains(GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(typeof(SunderRpcServiceAttribute).Assembly.Location), references);
+        Assert.Contains(GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(typeof(SunderServiceAttribute).Assembly.Location), references);
         Assert.All(references, path => Assert.True(Path.GetFileName(path).StartsWith("System.", StringComparison.Ordinal)
             || Path.GetFileName(path) == "Sunder.Sdk.dll", path));
         Assert.DoesNotContain(references, path => Path.GetFileName(path) == "Sunder.Sdk.Stacks.dll");
@@ -716,7 +716,7 @@ public sealed class PlatformContractSourceOperationsTests
         var proposal = File.ReadAllBytes(tree.Baseline);
         File.WriteAllBytes(tree.Baseline, expected);
         var reference = Path.Combine(tree.Output, "reference.dll");
-        File.Copy(typeof(SunderRpcServiceAttribute).Assembly.Location, reference);
+        File.Copy(typeof(SunderServiceAttribute).Assembly.Location, reference);
         var inputs = new SunderRpcInputSnapshot();
         var bytes = inputs.Read(reference, 64 * 1024 * 1024, "copied trusted reference fixture");
         var stamp = File.GetLastWriteTimeUtc(reference);
@@ -894,6 +894,27 @@ public sealed class PlatformContractSourceOperationsTests
     public async Task RealCli_RequiresCoreRootRatherThanInferringTheWorkingDirectory()
         => Assert.Equal(2, (await Invoke(["platform-contracts", "check"])).Code);
 
+    [Theory]
+    [InlineData("validate-lock")]
+    [InlineData("validate-source")]
+    [InlineData("validate-native-lane")]
+    [InlineData("development-keys")]
+    [InlineData("development-build")]
+    [InlineData("development-publish")]
+    [InlineData("build")]
+    [InlineData("inspect")]
+    [InlineData("validate-native-output")]
+    [InlineData("validate-release-set")]
+    public async Task RealCli_RejectsRetiredRuntimeCommandsBeforeAnyInputOrStateAccess(string command)
+    {
+        var result = await Invoke([command, "--state-root", "missing", "--lock", "missing"]);
+        Assert.Equal(2, result.Code);
+        Assert.StartsWith($"Unknown command '{command}'.", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain($"Sunder.ExecutionRuntime.Build {command} ", result.Error, StringComparison.Ordinal);
+        Assert.Contains("platform-contracts check", result.Error, StringComparison.Ordinal);
+        Assert.Contains("core-stack-transport generate", result.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void CoreCheckTarget_IsExplicitFixedRootAndNeverABuildOrSigningHook()
     {
@@ -914,14 +935,13 @@ public sealed class PlatformContractSourceOperationsTests
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
-        var code = await ExecutionRuntimeBuildCli.RunAsync(args, output, error,
-            new SunderExecutionRuntimeEd25519SignatureVerifier(), token, beforePublication);
+        var code = await ExecutionRuntimeBuildCli.RunAsync(args, output, error, token, beforePublication);
         return (code, output.ToString(), error.ToString());
     }
 
     private static byte[] ChangeStageWithoutChangingStamp(string path)
     {
-        var stamp = SigningFileOperations.ObserveFile(path);
+        var stamp = EngineeringFileOperations.ObserveFile(path);
         var bytes = File.ReadAllBytes(path);
         bytes[0] ^= 1;
         using (var stream = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.None))
@@ -930,7 +950,7 @@ public sealed class PlatformContractSourceOperationsTests
             stream.Flush(flushToDisk: true);
         }
         File.SetLastWriteTimeUtc(path, stamp.WrittenUtc);
-        Assert.Equal(stamp, SigningFileOperations.ObserveFile(path));
+        Assert.Equal(stamp, EngineeringFileOperations.ObserveFile(path));
         return bytes;
     }
 

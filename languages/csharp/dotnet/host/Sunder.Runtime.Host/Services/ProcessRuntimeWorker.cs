@@ -200,7 +200,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             startupTimeout.Token);
         try
         {
-            _broker.RequirePackagePolicy(_package.Source, _package.ExecutionRuntimeBinding);
+            _broker.RequirePackagePolicy(_package.Source);
             _package.StartupTrace?.RecordProcessStartRequested();
             var startInfo = CreateStartInfo();
             var containedProcess = await LaunchProcessAsync(startInfo, startup.Token).ConfigureAwait(false);
@@ -939,7 +939,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             || PathsEqual(launch.LauncherPath, package.EntryAssemblyPath)
             || launch.ArgumentTokens.Any(argument => string.Equals(
                 argument,
-                SunderExecutionRuntimeFormat.PackageEntryPointPlaceholder,
+                OfficialRuntimeSourcePolicy.EntryPointToken,
                 StringComparison.Ordinal)))
         {
             throw new InvalidDataException(

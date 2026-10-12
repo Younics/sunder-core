@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "producer": {
+    "name": "Sunder.Package.Build",
+    "version": "1.0.0",
+    "language": "csharp"
+  },
+  "projectIdentity": "Example.Package",
+  "configuration": "Release",
+  "targetFramework": "net10.0",
+  "inputFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "lockSha256": "48300c172fe8e323956ee95aa7cde02e30ca9ebd330179e328e3209fe31ead5a",
+  "packageId": "example.owner",
+  "packageVersion": "2.0.0-beta.1+build.7",
+  "contracts": [
+    {
+      "contractKey": "minimal",
+      "contractId": "example.rpc.v1.minimal",
+      "contractVersion": "2.0.0-beta.1+build.7",
+      "exposure": "package",
+      "source": "owned",
+      "authorityKind": "package",
+      "authorityId": "example.owner",
+      "descriptorBytes": 502,
+      "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"example.rpc.v1.minimal\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0-beta.1+build.7\"}",
+      "descriptorSha256": "d91e24740135b749202b9ab3e643c8a518f48d2d85e86141cd9f8269335634be",
+      "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+      "modelProjection": {
+        "models": {},
+        "serviceReferences": {}
+      }
+    }
+  ]
+}

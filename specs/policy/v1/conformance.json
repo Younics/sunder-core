@@ -35,7 +35,6 @@
     "registry-bootstrap-required.json": "registryStatus",
     "registry-status.json": "registryStatus",
     "resolution-policy.json": "resolutionPolicy",
-    "runtime-denial.json": "runtimeDecision",
     "runtime-package-blocked.json": "runtimePackagePolicy",
     "runtime-package-policy.json": "runtimePackagePolicy",
     "runtime-platform-revoked.json": "runtimePlatformPolicy",

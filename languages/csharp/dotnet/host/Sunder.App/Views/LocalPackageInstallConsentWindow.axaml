@@ -56,6 +56,21 @@
           </StackPanel>
         </Border>
 
+        <StackPanel Spacing="8" IsVisible="{Binding HasRuntimeDownloads}">
+          <TextBlock Classes="section-title" Text="Package runtimes" />
+          <TextBlock Classes="caption" Text="Approved runtimes install first. This package waits in the queue and installs next." TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding RuntimeDownloads}">
+            <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:ExecutionRuntimeDownloadItemViewModel">
+              <Border Classes="card-surface" Margin="0,0,0,8"><StackPanel Spacing="4">
+                <TextBlock FontWeight="SemiBold" Text="{Binding IdentityText}" />
+                <TextBlock Classes="caption" Text="{Binding DownloadText}" />
+                <TextBlock Classes="caption" Text="{Binding SourceText}" />
+                <TextBlock Classes="caption" Text="{Binding TargetText}" />
+              </StackPanel></Border>
+            </DataTemplate></ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+
         <Border Classes="settings-note-card">
           <StackPanel Spacing="5">
             <TextBlock FontWeight="SemiBold"
@@ -142,7 +157,7 @@
                 Click="CancelButton_OnClick" />
         <Button Grid.Column="2"
                 Classes="primary-action"
-                Content="Install Package"
+                Content="Approve &amp; Install"
                 IsVisible="{Binding IsValid}"
                 Click="InstallButton_OnClick" />
       </Grid>

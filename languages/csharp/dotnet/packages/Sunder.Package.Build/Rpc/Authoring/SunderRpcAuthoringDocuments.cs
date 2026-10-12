@@ -8,6 +8,7 @@ using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Services;
 
 namespace Sunder.Package.Build.Rpc.Authoring;
 
@@ -26,14 +27,21 @@ internal sealed record SunderRpcOwnedPackageBaseline(
     string PackageId,
     IReadOnlyDictionary<string, SunderRpcOwnedContractBaseline> Contracts,
     byte[] ExactBytes,
-    string Sha256);
+    string Sha256)
+{
+    internal IReadOnlyDictionary<string, SunderRpcOwnedContractBaseline> RetiredPrivateContracts { get; init; }
+        = new System.Collections.ObjectModel.ReadOnlyDictionary<string, SunderRpcOwnedContractBaseline>(new Dictionary<string, SunderRpcOwnedContractBaseline>(StringComparer.Ordinal));
+    internal bool HasRetiredPrivateContracts { get; init; }
+}
 
 internal sealed record SunderRpcPackageProjectExportContract(
     string ContractKey,
-    SunderRpcExposure Exposure,
+    SunderServiceExposure Exposure,
     string GeneratedLogicalName,
-    SunderRpcContractDescriptor Descriptor)
+    SunderRpcContractDescriptor Descriptor,
+    SunderRpcModelProjection ModelProjection)
 {
+    internal SunderRpcMethodPolicies MethodPolicies { get; init; } = SunderRpcMethodPolicies.Empty;
     internal SunderRpcOwnedUsePolicy? AppUse { get; init; }
     internal SunderRpcOwnedUsePolicy? RuntimeUse { get; init; }
 }
@@ -42,8 +50,12 @@ internal sealed record SunderRpcPackageProjectExport(
     string InputFingerprint,
     string LockSha256,
     string PackageId,
+    string PackageVersion,
     IReadOnlyList<SunderRpcPackageProjectExportContract> Contracts,
-    string Sha256);
+    string Sha256)
+{
+    internal IReadOnlyList<SunderRpcRoleUse> RoleUses { get; init; } = [];
+}
 
 internal static partial class SunderRpcAuthoringDocuments
 {
@@ -73,9 +85,9 @@ internal static partial class SunderRpcAuthoringDocuments
             RequireObject(
                 document,
                 "owned-contract baseline",
-                ["schemaVersion", "authorityKind", "authorityId", "packageId", "contracts"],
+                ["schemaVersion", "authorityKind", "authorityId", "packageId", "contracts", "retiredPrivateContracts"],
                 ["schemaVersion", "authorityKind", "authorityId", "contracts"],
-                ["packageId"]);
+                ["packageId", "retiredPrivateContracts"]);
             RequireInteger(document, "schemaVersion", 1, "owned-contract baseline");
             RequireString(document, "authorityKind", "package", "owned-contract baseline");
             var authorityId = RequirePackageId(document, "authorityId", "owned-contract baseline");
@@ -86,14 +98,24 @@ internal static partial class SunderRpcAuthoringDocuments
                     $"The owned-contract baseline authority '{authorityId}' does not match package '{packageId}'.");
             }
 
+            var activeCount = RequireProperty(document, "contracts", JsonValueKind.Object, "owned-contract baseline").EnumerateObject().Count();
+            var archivedCount = document.TryGetProperty("retiredPrivateContracts", out _) ? RequireProperty(document, "retiredPrivateContracts", JsonValueKind.Object, "owned-contract baseline").EnumerateObject().Count() : 0;
+            if (activeCount + archivedCount > 128) throw new InvalidDataException("rpc-authoring.baseline-combined-limit: Active and retired baseline maps together permit at most 128 entries; history cannot be evicted.");
             var contracts = ReadOwnedContractMap(document,
                 (value, key, id, allowDraft) => ReadPackageSnapshot(value, key, id, packageId, allowDraft));
+            var retired = document.TryGetProperty("retiredPrivateContracts", out _)
+                ? ReadOwnedContractMap(document, (value, key, id, allowDraft) => ReadPackageSnapshot(value, key, id, packageId, allowDraft), "retiredPrivateContracts")
+                : new Dictionary<string, SunderRpcOwnedContractBaseline>(StringComparer.Ordinal);
+            if (contracts.Count + retired.Count > 128 || contracts.Values.Concat(retired.Values).Sum(contract => (long)contract.History.Count + (contract.Current is null ? 0 : 1)) > 32896)
+                throw new InvalidDataException("rpc-authoring.baseline-combined-limit: Active and retired baseline maps together permit at most 128 entries and 32,896 snapshots; history cannot be evicted.");
+            foreach (var (key, contract) in retired)
+                if (HasPublicEvidence(contract)) throw new InvalidDataException($"rpc-authoring.private-retirement-public-evidence: Archived '{key}' contains public evidence; retain its complete record in the public lifecycle.");
 
             return new(
                 packageId,
                 contracts,
                 bytes.ToArray(),
-                LowerSha256(bytes));
+                LowerSha256(bytes)) { RetiredPrivateContracts = retired, HasRetiredPrivateContracts = document.TryGetProperty("retiredPrivateContracts", out _) };
         }
     }
 
@@ -103,12 +125,14 @@ internal static partial class SunderRpcAuthoringDocuments
         string expectedProjectIdentity,
         string expectedConfiguration,
         string expectedTargetFramework,
-        string expectedPackageId)
+        string expectedPackageId,
+        string expectedPackageVersion)
     {
         var (bytes, root) = ReadStrictDocument(path, MaximumGeneratedDocumentBytes, "Sunder package project export");
         string inputFingerprint;
         string lockSha256;
         var exportedContracts = new List<SunderRpcPackageProjectExportContract>();
+        IReadOnlyList<SunderRpcRoleUse> roleUses;
         using (root)
         {
             var document = root.RootElement;
@@ -124,7 +148,9 @@ internal static partial class SunderRpcAuthoringDocuments
                     "inputFingerprint",
                     "lockSha256",
                     "packageId",
+                    "packageVersion",
                     "contracts",
+                    "roleUses",
                 ],
                 [
                     "schemaVersion",
@@ -135,9 +161,11 @@ internal static partial class SunderRpcAuthoringDocuments
                     "inputFingerprint",
                     "lockSha256",
                     "packageId",
+                    "packageVersion",
                     "contracts",
                 ],
-                []);
+                ["roleUses"]);
+            roleUses = ReadRoleUses(document);
             RequireInteger(document, "schemaVersion", 1, "package project export");
             var producer = RequireProperty(document, "producer", JsonValueKind.Object, "package project export");
             RequireObject(
@@ -157,6 +185,8 @@ internal static partial class SunderRpcAuthoringDocuments
             lockSha256 = RequireSha256(document, "lockSha256", "package project export");
             RequireString(document, "packageId", expectedPackageId, "package project export");
             _ = RequirePackageId(document, "packageId", "package project export");
+            RequireString(document, "packageVersion", expectedPackageVersion, "package project export");
+            _ = RequireSemanticVersion(document, "packageVersion", "package project export");
 
             var contracts = RequireProperty(document, "contracts", JsonValueKind.Array, "package project export")
                 .EnumerateArray()
@@ -187,6 +217,8 @@ internal static partial class SunderRpcAuthoringDocuments
                         "canonicalDescriptor",
                         "descriptorSha256",
                         "abiSha256",
+                        "modelProjection",
+                        "methodPolicies",
                         "appUse",
                         "runtimeUse",
                     ],
@@ -202,8 +234,9 @@ internal static partial class SunderRpcAuthoringDocuments
                         "canonicalDescriptor",
                         "descriptorSha256",
                         "abiSha256",
+                        "modelProjection",
                     ],
-                    ["appUse", "runtimeUse"]);
+                    ["methodPolicies", "appUse", "runtimeUse"]);
                 var contractKey = RequireString(value, "contractKey", label);
                 if (!IsPortableKey(contractKey)
                     || previousKey is not null && string.CompareOrdinal(previousKey, contractKey) >= 0
@@ -213,7 +246,7 @@ internal static partial class SunderRpcAuthoringDocuments
                         $"The package project export contract key '{contractKey}' is invalid, duplicated, unordered, or unexpected.");
                 }
                 previousKey = contractKey;
-                if (!SunderRpcCSharpNaming.TryCreate(contractKey, null, out var generatedName))
+                if (!SunderRpcCSharpNaming.TryCreate(contractKey, null, out _))
                 {
                     throw new InvalidDataException(
                         $"The package project export contract key '{contractKey}' cannot produce a generated C# name.");
@@ -228,14 +261,16 @@ internal static partial class SunderRpcAuthoringDocuments
                 var exposureText = RequireString(value, "exposure", label);
                 var exposure = exposureText switch
                 {
-                    "package" => SunderRpcExposure.Package,
-                    "public" => SunderRpcExposure.Public,
-                    _ => (SunderRpcExposure)(-1),
+                    "package" => SunderServiceExposure.Package,
+                    "public" => SunderServiceExposure.Public,
+                    _ => (SunderServiceExposure)(-1),
                 };
                 if (!Enum.IsDefined(exposure))
                 {
                     throw new InvalidDataException($"The package project export contract exposure '{exposureText}' is invalid.");
                 }
+                if (exposure == SunderServiceExposure.Package && contractVersion != expectedPackageVersion)
+                    throw new InvalidDataException($"rpc-authoring.private-version-mismatch: Export '{contractKey}' version '{contractVersion}' differs from package '{expectedPackageVersion}'; regenerate coherently.");
                 RequireString(value, "source", "owned", label);
                 RequireString(value, "authorityKind", "package", label);
                 RequireString(value, "authorityId", expectedPackageId, label);
@@ -267,15 +302,19 @@ internal static partial class SunderRpcAuthoringDocuments
                     throw new InvalidDataException(
                         $"The package project export contract '{contractKey}' canonical identity is invalid.");
                 }
+                var modelProjection = SunderRpcModelProjection.Parse(value.GetProperty("modelProjection"));
+                modelProjection.Validate(descriptor);
                 exportedContracts.Add(
-                    new(contractKey, exposure, $"Sunder.Generated.Rpc.{generatedName!.Pascal}", descriptor)
+                    new(contractKey, exposure, GeneratedBindingLogicalName("package", expectedPackageId, contractId), descriptor,
+                        modelProjection)
                     {
+                        MethodPolicies = ReadMethodPolicies(value, descriptor),
                         AppUse = ReadUsePolicy(value, descriptor, "app"),
                         RuntimeUse = ReadUsePolicy(value, descriptor, "runtime"),
                     });
             }
         }
-        return new(inputFingerprint, lockSha256, expectedPackageId, exportedContracts, LowerSha256(bytes));
+        return new(inputFingerprint, lockSha256, expectedPackageId, expectedPackageVersion, exportedContracts, LowerSha256(bytes)) { RoleUses = roleUses };
     }
 
     public static string ValidatePackageProjectExport(
@@ -285,8 +324,9 @@ internal static partial class SunderRpcAuthoringDocuments
         string expectedConfiguration,
         string expectedTargetFramework,
         string expectedPackageId,
+        string expectedPackageVersion,
         string expectedLockSha256,
-        IReadOnlyList<SunderRpcCSharpCompiledContract> expectedContracts)
+        IReadOnlyList<SunderRpcCSharpCompiledContract> expectedContracts, IReadOnlyList<SunderRpcRoleUse>? expectedRoleUses = null)
     {
         var export = ReadPackageProjectExport(
             path,
@@ -294,12 +334,14 @@ internal static partial class SunderRpcAuthoringDocuments
             expectedProjectIdentity,
             expectedConfiguration,
             expectedTargetFramework,
-            expectedPackageId);
+            expectedPackageId, expectedPackageVersion);
         if (!string.Equals(export.LockSha256, expectedLockSha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 "The exact-RID contract lock does not match the project-neutral RPC export.");
         }
+        if (!export.RoleUses.Select(RoleUseIdentity).SequenceEqual((expectedRoleUses ?? []).Select(RoleUseIdentity), StringComparer.Ordinal))
+            throw new InvalidDataException("rpc-authoring.evidence-mismatch: Source role intent differs from the project-neutral export.");
         if (export.Contracts.Count != expectedContracts.Count)
         {
             throw new InvalidDataException(
@@ -313,8 +355,11 @@ internal static partial class SunderRpcAuthoringDocuments
         {
             if (!exportedByKey.TryGetValue(expected.ContractKey, out var actual)
                 || actual.Exposure != expected.Exposure
+                || actual.GeneratedLogicalName != expected.GeneratedLogicalName
                 || !SameUsePolicy(actual.AppUse, expected.AppUse)
                 || !SameUsePolicy(actual.RuntimeUse, expected.RuntimeUse)
+                || !SameModelProjection(actual.ModelProjection, expected.ModelProjection)
+                || !SameMethodPolicies(actual.MethodPolicies, expected.MethodPolicies)
                 || !expected.Descriptor.GetCanonicalUtf8().AsSpan()
                     .SequenceEqual(actual.Descriptor.GetCanonicalUtf8())
                 || !expected.Descriptor.GetCanonicalAbiProjectionUtf8().AsSpan()
@@ -345,7 +390,21 @@ internal static partial class SunderRpcAuthoringDocuments
     public static void ValidateCompiledContracts(
         SunderRpcOwnedPackageBaseline baseline,
         IReadOnlyList<SunderRpcCSharpCompiledContract> contracts)
-        => ValidateCompiledContracts(baseline.Contracts, contracts, platform: false);
+    {
+        ValidatePublicCompiledContracts(baseline, contracts);
+        foreach (var (key, legacy) in baseline.Contracts.Where(pair => !HasPublicEvidence(pair.Value) && pair.Value.Current is not null))
+            throw new InvalidDataException($"rpc-authoring.private-baseline-migration-required: Active private '{key}' ({legacy.ContractId}) requires MigratePrivateSunderContracts; Build never rewrites a baseline.");
+    }
+
+    internal static void ValidatePublicCompiledContracts(SunderRpcOwnedPackageBaseline baseline, IReadOnlyList<SunderRpcCSharpCompiledContract> contracts)
+    {
+        // Classify all retained evidence before considering a private fast path.
+        // A public key or identity cannot escape review by demotion or renaming.
+        var reviewed = baseline.Contracts.Where(pair => HasPublicEvidence(pair.Value)).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        var governed = contracts.Where(contract => contract.Exposure == SunderServiceExposure.Public
+            || reviewed.ContainsKey(contract.ContractKey) || reviewed.Values.Any(value => value.ContractId == contract.Descriptor.ContractId)).ToArray();
+        ValidateCompiledContracts(reviewed, governed, platform: false);
+    }
 
     private static void ValidateCompiledContracts(
         IReadOnlyDictionary<string, SunderRpcOwnedContractBaseline> baseline,
@@ -464,7 +523,9 @@ internal static partial class SunderRpcAuthoringDocuments
         IReadOnlyList<string> referencePaths,
         SunderRpcOwnedPackageBaseline baseline,
         SunderRpcContractLock contractLock,
-        string assemblyName = "Sunder.Rpc.Authoring")
+        string assemblyName = "Sunder.Rpc.Authoring",
+        string? projectDirectory = null,
+        SunderRpcInputSnapshot? inputSnapshot = null, IReadOnlyList<SunderRpcRoleUse>? roleUses = null)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         AppendFingerprintValue(hash, "schemaVersion");
@@ -489,11 +550,12 @@ internal static partial class SunderRpcAuthoringDocuments
             AppendFingerprintValue(hash, constant);
         }
         AppendFingerprintValue(hash, "sources");
-        foreach (var sourceHash in sources
-                     .Select(static source => LowerSha256(NormalizedSourceBytes(source.Text)))
-                     .Order(StringComparer.Ordinal))
+        foreach (var source in sources.Select(source => (Path: projectDirectory is null ? source.Path : Path.GetRelativePath(projectDirectory, source.Path),
+                         Sha256: inputSnapshot is null ? LowerSha256(Utf8NoBom.GetBytes(source.Text)) : inputSnapshot.CapturedSha256(source.Path)))
+                     .OrderBy(static source => source.Path, StringComparer.Ordinal))
         {
-            AppendFingerprintValue(hash, sourceHash);
+            AppendFingerprintValue(hash, source.Path.Replace('\\', '/'));
+            AppendFingerprintValue(hash, source.Sha256);
         }
         AppendFingerprintValue(hash, "references");
         foreach (var referenceHash in referencePaths
@@ -510,6 +572,11 @@ internal static partial class SunderRpcAuthoringDocuments
         AppendFingerprintValue(hash, baseline.Sha256);
         AppendFingerprintValue(hash, "lockSha256");
         AppendFingerprintValue(hash, contractLock.Sha256);
+        if (roleUses is { Count: > 0 })
+        {
+            AppendFingerprintValue(hash, "roleUses");
+            foreach (var use in roleUses) AppendFingerprintValue(hash, RoleUseIdentity(use));
+        }
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
@@ -541,8 +608,12 @@ internal static partial class SunderRpcAuthoringDocuments
         string inputFingerprint,
         string lockSha256,
         string packageId,
-        IReadOnlyList<SunderRpcCSharpCompiledContract> contracts)
+        string packageVersion,
+        IReadOnlyList<SunderRpcCSharpCompiledContract> contracts, IReadOnlyList<SunderRpcRoleUse>? roleUses = null)
     {
+        ValidatePrivatePackageVersion(packageVersion);
+        foreach (var contract in contracts.Where(contract => contract.Exposure == SunderServiceExposure.Package))
+            if (contract.Descriptor.Version != packageVersion) throw new InvalidDataException($"rpc-authoring.private-version-mismatch: '{contract.ContractKey}' is '{contract.Descriptor.Version}', owning package is '{packageVersion}'.");
         var output = new StringBuilder();
         Line(output, 0, "{");
         IntegerProperty(output, 1, "schemaVersion", 1, comma: true);
@@ -553,7 +624,14 @@ internal static partial class SunderRpcAuthoringDocuments
         StringProperty(output, 1, "inputFingerprint", inputFingerprint, comma: true);
         StringProperty(output, 1, "lockSha256", lockSha256, comma: true);
         StringProperty(output, 1, "packageId", packageId, comma: true);
-        ExportContractArrayProperty(output, packageId, contracts);
+        StringProperty(output, 1, "packageVersion", packageVersion, comma: true);
+        ExportContractArrayProperty(output, packageId, contracts, comma: roleUses is { Count: > 0 });
+        if (roleUses is { Count: > 0 })
+        {
+            output.Append("  \"roleUses\": ");
+            AppendDeterministicValue(output, JsonSerializer.SerializeToElement(RoleUsesJson(roleUses)), 1);
+            output.Append('\n');
+        }
         Line(output, 0, "}");
         return CompleteGeneratedDocument(output, "package project export");
     }
@@ -566,6 +644,10 @@ internal static partial class SunderRpcAuthoringDocuments
         string packageVersion,
         IReadOnlyList<SunderRpcPackageProjectExportContract> contracts)
     {
+        ValidatePrivatePackageVersion(packageVersion);
+        foreach (var contract in contracts.Where(contract => contract.Exposure == SunderServiceExposure.Package))
+            if (contract.Descriptor.Version != packageVersion)
+                throw new InvalidDataException($"rpc-authoring.private-version-mismatch: App import '{contract.ContractKey}' is '{contract.Descriptor.Version}', owning package is '{packageVersion}'.");
         var output = new StringBuilder();
         Line(output, 0, "{");
         IntegerProperty(output, 1, "schemaVersion", 1, comma: true);
@@ -592,9 +674,10 @@ internal static partial class SunderRpcAuthoringDocuments
 
     private static IReadOnlyDictionary<string, SunderRpcOwnedContractBaseline> ReadOwnedContractMap(
         JsonElement document,
-        Func<JsonElement, string, string, bool, SunderRpcOwnedContractSnapshot> readSnapshot)
+        Func<JsonElement, string, string, bool, SunderRpcOwnedContractSnapshot> readSnapshot,
+        string mapName = "contracts")
     {
-        var contractMap = RequireProperty(document, "contracts", JsonValueKind.Object, "owned-contract baseline");
+        var contractMap = RequireProperty(document, mapName, JsonValueKind.Object, "owned-contract baseline");
         var properties = contractMap.EnumerateObject().ToArray();
         if (properties.Length > 128)
         {
@@ -847,7 +930,7 @@ internal static partial class SunderRpcAuthoringDocuments
         return (bytes, ParseStrictDocument(bytes, maximumBytes, label));
     }
 
-    private static JsonDocument ParseStrictDocument(byte[] bytes, int maximumBytes, string label)
+    private static JsonDocument ParseStrictDocument(byte[] bytes, int maximumBytes, string label, Action<JsonElement>? beforeCanonical = null)
     {
         if (bytes.Length > maximumBytes)
         {
@@ -865,6 +948,11 @@ internal static partial class SunderRpcAuthoringDocuments
         try
         {
             _ = StrictUtf8.GetString(bytes);
+            var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { MaxDepth = MaximumOuterDepth });
+            var count = 0; var budget = maximumBytes == MaximumOwnedBaselineBytes ? 2_097_152 : 262_144;
+            while (reader.Read())
+                if (reader.TokenType is not (JsonTokenType.EndArray or JsonTokenType.EndObject) && ++count > budget)
+                    throw new InvalidDataException($"The {label} exceeds its {budget}-value/property structural budget.");
             document = JsonDocument.Parse(bytes, new JsonDocumentOptions
             {
                 AllowTrailingCommas = false,
@@ -872,6 +960,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 MaxDepth = MaximumOuterDepth,
             });
             ValidateRepresentation(document.RootElement, label);
+            beforeCanonical?.Invoke(document.RootElement);
             var deterministic = WriteDeterministicDocument(document.RootElement);
             if (!bytes.AsSpan().SequenceEqual(deterministic))
             {
@@ -1275,12 +1364,12 @@ internal static partial class SunderRpcAuthoringDocuments
     private static void ExportContractArrayProperty(
         StringBuilder output,
         string packageId,
-        IReadOnlyList<SunderRpcCSharpCompiledContract> contracts)
+        IReadOnlyList<SunderRpcCSharpCompiledContract> contracts, bool comma = false)
     {
         var ordered = contracts.OrderBy(static contract => contract.ContractKey, StringComparer.Ordinal).ToArray();
         if (ordered.Length == 0)
         {
-            EmptyArrayProperty(output, 1, "contracts", comma: false);
+            EmptyArrayProperty(output, 1, "contracts", comma);
             return;
         }
         Line(output, 1, "\"contracts\": [");
@@ -1288,6 +1377,7 @@ internal static partial class SunderRpcAuthoringDocuments
         {
             var contract = ordered[index];
             var descriptor = contract.Descriptor;
+            contract.MethodPolicies.Validate(descriptor);
             Line(output, 2, "{");
             StringProperty(output, 3, "contractKey", contract.ContractKey, comma: true);
             StringProperty(output, 3, "contractId", descriptor.ContractId, comma: true);
@@ -1299,12 +1389,14 @@ internal static partial class SunderRpcAuthoringDocuments
             IntegerProperty(output, 3, "descriptorBytes", descriptor.GetCanonicalUtf8().Length, comma: true);
             StringProperty(output, 3, "canonicalDescriptor", Utf8NoBom.GetString(descriptor.GetCanonicalUtf8()), comma: true);
             StringProperty(output, 3, "descriptorSha256", descriptor.Sha256, comma: true);
-            StringProperty(output, 3, "abiSha256", descriptor.AbiSha256!, comma: contract.AppUse is not null || contract.RuntimeUse is not null);
+            StringProperty(output, 3, "abiSha256", descriptor.AbiSha256!, comma: true);
+            ModelProjectionProperty(output, contract.ModelProjection, comma: !contract.MethodPolicies.IsEmpty || contract.AppUse is not null || contract.RuntimeUse is not null);
+            MethodPoliciesProperty(output, contract.MethodPolicies, comma: contract.AppUse is not null || contract.RuntimeUse is not null);
             UsePolicyProperty(output, 3, "app", contract.AppUse, comma: contract.RuntimeUse is not null);
             UsePolicyProperty(output, 3, "runtime", contract.RuntimeUse);
             Line(output, 2, index + 1 == ordered.Length ? "}" : "},");
         }
-        Line(output, 1, "]");
+        Line(output, 1, comma ? "]," : "]");
     }
 
     private static void ProjectImportContractArrayProperty(
@@ -1323,6 +1415,7 @@ internal static partial class SunderRpcAuthoringDocuments
         {
             var contract = ordered[index];
             var descriptor = contract.Descriptor;
+            contract.MethodPolicies.Validate(descriptor);
             Line(output, 2, "{");
             StringProperty(output, 3, "contractKey", contract.ContractKey, comma: true);
             StringProperty(output, 3, "contractId", descriptor.ContractId, comma: true);
@@ -1331,7 +1424,9 @@ internal static partial class SunderRpcAuthoringDocuments
             IntegerProperty(output, 3, "descriptorBytes", descriptor.GetCanonicalUtf8().Length, comma: true);
             StringProperty(output, 3, "canonicalDescriptor", Utf8NoBom.GetString(descriptor.GetCanonicalUtf8()), comma: true);
             StringProperty(output, 3, "descriptorSha256", descriptor.Sha256, comma: true);
-            StringProperty(output, 3, "abiSha256", descriptor.AbiSha256!, comma: contract.AppUse is not null);
+            StringProperty(output, 3, "abiSha256", descriptor.AbiSha256!, comma: true);
+            ModelProjectionProperty(output, contract.ModelProjection, comma: !contract.MethodPolicies.IsEmpty || contract.AppUse is not null);
+            MethodPoliciesProperty(output, contract.MethodPolicies, comma: contract.AppUse is not null);
             UsePolicyProperty(output, 3, "app", contract.AppUse);
             Line(output, 2, index + 1 == ordered.Length ? "}" : "},");
         }
@@ -1445,19 +1540,19 @@ internal static partial class SunderRpcAuthoringDocuments
     private static void Line(StringBuilder output, int indent, string value)
         => output.Append(' ', indent * 2).Append(value).Append('\n');
 
-    private static string Exposure(SunderRpcExposure exposure)
+    private static string Exposure(SunderServiceExposure exposure)
         => exposure switch
         {
-            SunderRpcExposure.Package => "package",
-            SunderRpcExposure.Public => "public",
+            SunderServiceExposure.Package => "package",
+            SunderServiceExposure.Public => "public",
             _ => throw new InvalidDataException($"Unsupported RPC exposure '{exposure}'."),
         };
 
-    private static string Audience(SunderRpcProviderAudience audience)
+    private static string Audience(SunderServiceAudience audience)
         => audience switch
         {
-            SunderRpcProviderAudience.Owner => "owner",
-            SunderRpcProviderAudience.Public => "public",
+            SunderServiceAudience.Owner => "owner",
+            SunderServiceAudience.Public => "public",
             _ => throw new InvalidDataException($"Unsupported RPC provider audience '{audience}'."),
         };
 

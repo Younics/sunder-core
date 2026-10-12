@@ -318,8 +318,8 @@ internal sealed class PackageSessionStartupTraceWriter : IDisposable
             WriteNumber(json, "bytesCopied", record.BytesCopied);
             WriteString(json, "projectionCacheResult", record.ProjectionCacheResult);
             WriteString(json, "executionRuntimeId", record.ExecutionRuntimeId);
-            WriteString(json, "executionRuntimeVersion", record.ExecutionRuntimeVersion);
-            WriteNumber(json, "executionRuntimePackagingRevision", record.ExecutionRuntimePackagingRevision);
+            WriteString(json, "executionRuntimeVendorVersion", record.ExecutionRuntimeVendorVersion);
+            WriteString(json, "executionRuntimeVendorChecksumDigest", record.ExecutionRuntimeVendorChecksumDigest);
             WriteNumber(json, "waveIndex", record.WaveIndex);
             WriteNumber(json, "waveCount", record.WaveCount);
             WriteNumber(json, "wavePackageCount", record.WavePackageCount);
@@ -578,8 +578,8 @@ internal sealed class PackageSessionStartupTraceAttempt
         long? processStartTimestamp = null,
         long? processReadyTimestamp = null,
         string? executionRuntimeId = null,
-        string? executionRuntimeVersion = null,
-        int? executionRuntimePackagingRevision = null)
+        string? executionRuntimeVendorVersion = null,
+        string? executionRuntimeVendorChecksumDigest = null)
     {
         lock (_syncRoot)
         {
@@ -608,8 +608,8 @@ internal sealed class PackageSessionStartupTraceAttempt
                 counters.BytesCopied,
                 projectionCacheResult: cacheResult,
                 executionRuntimeId: executionRuntimeId,
-                executionRuntimeVersion: executionRuntimeVersion,
-                executionRuntimePackagingRevision: executionRuntimePackagingRevision);
+                executionRuntimeVendorVersion: executionRuntimeVendorVersion,
+                executionRuntimeVendorChecksumDigest: executionRuntimeVendorChecksumDigest);
         }
     }
 
@@ -696,8 +696,8 @@ internal sealed class PackageSessionStartupTraceAttempt
         long? bytesCopied = null,
         string? projectionCacheResult = null,
         string? executionRuntimeId = null,
-        string? executionRuntimeVersion = null,
-        int? executionRuntimePackagingRevision = null,
+        string? executionRuntimeVendorVersion = null,
+        string? executionRuntimeVendorChecksumDigest = null,
         int? waveIndex = null,
         int? waveCount = null,
         int? wavePackageCount = null,
@@ -736,8 +736,8 @@ internal sealed class PackageSessionStartupTraceAttempt
             bytesCopied,
             projectionCacheResult,
             executionRuntimeId,
-            executionRuntimeVersion,
-            executionRuntimePackagingRevision,
+            executionRuntimeVendorVersion,
+            executionRuntimeVendorChecksumDigest,
             waveIndex,
             waveCount,
             wavePackageCount,
@@ -903,9 +903,9 @@ internal sealed class PackageSessionStartupTracePackage : ISunderPackageValidati
             outcome,
             _attempt.Elapsed(queued, started),
             _attempt.Elapsed(started, completed),
-            executionRuntimeId: binding?.RuntimeId,
-            executionRuntimeVersion: binding?.RuntimeVersion,
-            executionRuntimePackagingRevision: binding?.RuntimePackagingRevision);
+            executionRuntimeId: binding?.Runtime.RuntimeId,
+            executionRuntimeVendorVersion: binding?.Runtime.VendorVersion,
+            executionRuntimeVendorChecksumDigest: binding?.Runtime.VendorChecksumDigest);
     }
 
     public void RecordProcessStartRequested()
@@ -1101,8 +1101,8 @@ internal sealed record PackageSessionStartupTraceRecord(
     long? BytesCopied,
     string? ProjectionCacheResult,
     string? ExecutionRuntimeId,
-    string? ExecutionRuntimeVersion,
-    int? ExecutionRuntimePackagingRevision,
+    string? ExecutionRuntimeVendorVersion,
+    string? ExecutionRuntimeVendorChecksumDigest,
     int? WaveIndex,
     int? WaveCount,
     int? WavePackageCount,

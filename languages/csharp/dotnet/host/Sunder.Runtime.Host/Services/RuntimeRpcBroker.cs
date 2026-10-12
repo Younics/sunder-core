@@ -99,18 +99,18 @@ internal sealed class RuntimeRpcBroker
         => new RuntimeRpcHostClient(this, _stackHostCaller);
 
     internal Task RequirePackagePolicyAsync(PreparedRuntimePackage package, CancellationToken token)
-        => _packagePolicy?.RequireAsync(package.Source, package.ExecutionRuntimeBinding, token) ?? Task.CompletedTask;
+        => _packagePolicy?.RequireAsync(package.Source, token) ?? Task.CompletedTask;
 
-    internal void RequirePackagePolicy(RuntimePackageSource source, RuntimePackageExecutionRuntimeBinding? binding)
+    internal void RequirePackagePolicy(RuntimePackageSource source)
     {
-        try { _packagePolicy?.Require(source, binding); }
+        try { _packagePolicy?.Require(source); }
         catch (PackagePolicyDeniedException error) { throw Unavailable(error.Code, "Current package policy does not permit execution."); }
     }
 
     private void RequireCallerPolicy(IRuntimeRpcCallerActivation caller)
     {
-        if (caller is RuntimeRpcPackageActivation package) RequirePackagePolicy(package.Package.Source, package.Package.ExecutionRuntimeBinding);
-        if (caller is RuntimeRpcAppCallerSession app) RequirePackagePolicy(app.Source, null);
+        if (caller is RuntimeRpcPackageActivation package) RequirePackagePolicy(package.Package.Source);
+        if (caller is RuntimeRpcAppCallerSession app) RequirePackagePolicy(app.Source);
         if (_readiness is not null && caller.SourceKind is not null
             && !(caller is RuntimeRpcPackageActivation candidate && _catalog.IsCandidateCaller(candidate))
             && _readiness.UnsatisfiedConsumers(_sessions.ActiveSession, caller.Role).Contains(caller.PackageId, StringComparer.Ordinal))
@@ -1413,7 +1413,7 @@ internal sealed class RuntimeRpcBroker
         var found = caller is RuntimeRpcPackageActivation package
             ? _catalog.TryGetEndpoint(package, endpoint, out provider, out stale)
             : _catalog.TryGetActiveEndpoint(endpoint, out provider, out stale);
-        if (found && provider is not null) RequirePackagePolicy(provider.Owner.Package.Source, provider.Owner.Package.ExecutionRuntimeBinding);
+        if (found && provider is not null) RequirePackagePolicy(provider.Owner.Package.Source);
         return found;
     }
 
@@ -1426,7 +1426,7 @@ internal sealed class RuntimeRpcBroker
 
     private bool ProviderPolicyAllows(RuntimeRpcProviderActivation provider)
     {
-        try { _packagePolicy?.Require(provider.Owner.Package.Source, provider.Owner.Package.ExecutionRuntimeBinding); return true; }
+        try { _packagePolicy?.Require(provider.Owner.Package.Source); return true; }
         catch (PackagePolicyDeniedException) { return false; }
     }
 

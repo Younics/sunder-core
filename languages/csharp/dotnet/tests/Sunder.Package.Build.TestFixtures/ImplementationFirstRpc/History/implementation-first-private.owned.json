@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "authorityKind": "package",
+  "authorityId": "example.generated",
+  "packageId": "example.generated",
+  "contracts": {
+    "greeting": {
+      "contractId": "example.generated.greeting",
+      "current": {
+        "state": "draft",
+        "exposure": "package",
+        "contractVersion": "1.0.0",
+        "descriptorBytes": 597,
+        "canonicalDescriptor": "{\"$defs\":{\"GreetingRequest\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"},\"GreetingResult\":{\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\"}},\"required\":[\"message\"],\"type\":\"object\"}},\"contractId\":\"example.generated.greeting\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"greeting\":{\"methods\":{\"greet\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/GreetingRequest\"},\"responseSchema\":{\"$ref\":\"#/$defs/GreetingResult\"}}}}},\"version\":\"1.0.0\"}",
+        "descriptorSha256": "337336140ae63dfcccacf7bd2cdbd95a21453c831d5d188839d4659d47665b5f",
+        "abiProjectionBytes": 579,
+        "canonicalAbiProjection": "{\"$defs\":{\"GreetingRequest\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"},\"GreetingResult\":{\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\"}},\"required\":[\"message\"],\"type\":\"object\"}},\"contractId\":\"example.generated.greeting\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"greeting\":{\"methods\":{\"greet\":{\"errors\":[],\"idempotency\":\"none\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/GreetingRequest\"},\"responseSchema\":{\"$ref\":\"#/$defs/GreetingResult\"}}}}}}",
+        "abiSha256": "fea017f6713048cc12cc01150568ac26405c30c1f61fecb9071c4ab29c457626"
+      },
+      "history": []
+    }
+  }
+}

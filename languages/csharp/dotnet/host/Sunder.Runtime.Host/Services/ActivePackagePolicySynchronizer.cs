@@ -116,28 +116,24 @@ internal sealed class ActivePackagePolicySynchronizer(
             }
             var source = PackagePolicyAdmission.WithProvenance(new(package.PackageId, PackageSourceKind.Installed, package.InstallPath,
                 ContentIdentity: package.ContentIdentity, Manifest: metadata.Manifest), package);
-            if (package.ExecutionRuntimeBindings.Count == 0) AddSubjects(subjects, source, null);
-            else foreach (var binding in package.ExecutionRuntimeBindings)
-                AddSubjects(subjects, source, RuntimePackageExecutionRuntimeBinding.FromInstalled(binding));
+            AddSubjects(subjects, source);
         }
         foreach (var stale in _manifests.Keys.Except(packages.Select(value => value.PackageId), StringComparer.Ordinal).ToArray()) _manifests.Remove(stale);
         using (var lease = TryAcquireSession())
         {
             if (lease is not null)
-                foreach (var package in sessions.ListEnabledLoadedPackages(lease)) AddSubjects(subjects, package.Source, package.ExecutionRuntimeBinding);
+                foreach (var package in sessions.ListEnabledLoadedPackages(lease)) AddSubjects(subjects, package.Source);
         }
         return subjects;
     }
 
-    private void AddSubjects(List<PackagePolicySubjects> subjects, RuntimePackageSource source, RuntimePackageExecutionRuntimeBinding? binding)
+    private void AddSubjects(List<PackagePolicySubjects> subjects, RuntimePackageSource source)
     {
-        try { subjects.AddRange(admission.Subjects(source, binding)); }
+        try { subjects.AddRange(admission.Subjects(source)); }
         catch (PackagePolicyDeniedException) when (source.RegistryPolicyOrigin is null)
         {
-            // An unbound local archive cannot establish package policy implicitly.
-            // Its independently proven production runtime can still be refreshed.
-            if (binding is not null && binding.AcquisitionSource != RuntimeExecutionRuntimeAcquisitionSources.Development)
-                subjects.Add(new(RegistryActivePolicyClient.Origin(binding.RegistryOrigin), [], [], [PackagePolicyAdmission.RuntimeSubject(binding)]));
+            // An unbound local archive cannot invent a Registry package-policy origin.
+            // The independent enforcement loop keeps missing package authority denied.
         }
     }
 
@@ -182,11 +178,11 @@ internal sealed class ActivePackagePolicySynchronizer(
             packages = lease is null ? [] : sessions.ListEnabledLoadedPackages(lease).ToArray();
         foreach (var package in packages)
         {
-            try { admission.Require(package.Source, package.ExecutionRuntimeBinding); }
+            try { admission.Require(package.Source); }
             catch (Exception error) when (error is PackagePolicyDeniedException or InvalidDataException)
             {
                 var code = error is PackagePolicyDeniedException denied ? denied.Code : Sunder.Registry.Contracts.PackagePolicyErrorCodes.PolicyRequired;
-                if (owner.EnforceExecutionRuntimePolicy(package.Descriptor.PackageId, code, out var cleanup))
+                if (owner.FaultPackageExecution(package.Descriptor.PackageId, code, out var cleanup))
                     _cleanup.Add(ObserveCleanupAsync(cleanup, package.Descriptor.PackageId));
             }
         }

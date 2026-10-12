@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { isPackageId, PACKAGE_ID_MAXIMUM_LENGTH } from "@sunder/sdk";
 
-const PROVIDER_ID_SUFFIX = ".provider";
+const PROVIDER_ID_SUFFIX = ".messages.provider";
 const VIEW_ID_SUFFIX = ".main";
 const MAXIMUM_SCAFFOLD_PACKAGE_ID_LENGTH = PACKAGE_ID_MAXIMUM_LENGTH - PROVIDER_ID_SUFFIX.length;
 
@@ -54,25 +54,29 @@ async function main(): Promise<void> {
     ["SUNDER_PACKAGE_ID", escapeMarkdown(packageId)],
     ["SUNDER_PACKAGE_NAME", escapeMarkdown(packageName)],
   ]);
-  await copyTemplate(templateRoot, output, replacements);
-  process.stdout.write(`Created Sunder ${preset.label} package at ${output}\n\nNext steps:\n  npm install\n  npm run contracts:accept\n  npm test\n  npm run sunder:dev\n  npm run build\n  npm run smoke\n  npm run contracts:freeze\n  npm run package\n\nReview and commit sunder-contracts.owned.json and sunder-contracts.lock.json. First Accept must precede generation for a new package.\n`);
+  await copyTemplate(templateRoot, output, replacements, options.language);
+  process.stdout.write(`Created Sunder ${preset.label} ${options.language === "js" ? "JavaScript" : "TypeScript"} package at ${output}\n\nNext steps:\n  npm install\n  npm test\n  npm run sunder:dev\n  npm run build\n  npm run smoke\n  npm run package\n\nPrivate services follow your package version and need no Accept/Freeze. Review and commit sunder-contracts.lock.json. Public services require explicit contracts accept/freeze.\n`);
 }
 
-async function copyTemplate(source: string, destination: string, replacements: ReadonlyMap<string, string>): Promise<void> {
+async function copyTemplate(source: string, destination: string, replacements: ReadonlyMap<string, string>, language: "ts" | "js"): Promise<void> {
   await mkdir(destination, { recursive: true });
   for (const entry of await readdir(source, { withFileTypes: true })) {
     if (entry.name === ".sunder") continue;
+    if (language === "ts" && /\.(?:js|jsx)$/u.test(entry.name)) continue;
+    if (language === "js" && /\.(?:ts|tsx)$/u.test(entry.name) && !entry.name.endsWith(".d.ts") && entry.name !== "vite.config.ts") continue;
     const sourcePath = resolve(source, entry.name);
     const targetName = entry.name === "gitignore" ? ".gitignore" : entry.name;
     const targetPath = resolve(destination, targetName);
     if (entry.isDirectory()) {
-      await copyTemplate(sourcePath, targetPath, replacements);
+      await copyTemplate(sourcePath, targetPath, replacements, language);
     } else if (entry.isFile()) {
-      const content = (await readFile(sourcePath, "utf8")).replace(/__SUNDER_[A-Z0-9_]+__|SUNDER_PACKAGE_(?:ID|NAME)|sunderpackageidscaffoldtoken/gu, (token) => {
+      let content = (await readFile(sourcePath, "utf8")).replace(/__SUNDER_[A-Z0-9_]+__|SUNDER_PACKAGE_(?:ID|NAME)|sunderpackageidscaffoldtoken/gu, (token) => {
         const replacement = replacements.get(token);
         if (replacement === undefined) throw new Error(`Template contains unknown scaffold token '${token}'.`);
         return replacement;
       });
+      if (language === "js" && entry.name === "sunder.package.json") content = content.replace("src/services.ts", "src/services.js");
+      if (language === "js" && entry.name === "index.html") content = content.replace("/src/main.tsx", "/src/main.jsx");
       await mkdir(dirname(targetPath), { recursive: true });
       await writeFile(targetPath, content, "utf8");
     }
@@ -85,10 +89,16 @@ function parse(argumentsList: readonly string[]): Options {
   let packageId: string | undefined;
   let packageName: string | undefined;
   let preset = "node";
+  let language: "ts" | "js" = "ts";
   for (let index = 0; index < argumentsList.length; index++) {
     const argument = argumentsList[index];
     if (argument === "--yes" || argument === "-y") continue;
     if (argument === "--output") output = value(argumentsList, ++index, argument);
+    else if (argument === "--language") {
+      const configured = value(argumentsList, ++index, argument);
+      if (configured !== "ts" && configured !== "js") throw new Error("--language must be ts or js.");
+      language = configured;
+    }
     else if (argument === "--package-id") packageId = value(argumentsList, ++index, argument);
     else if (argument === "--package-name") packageName = value(argumentsList, ++index, argument);
     else if (argument === "--preset" || argument === "--template") {
@@ -99,7 +109,7 @@ function parse(argumentsList: readonly string[]): Options {
     else if (name === undefined) name = argument;
     else throw new Error(`Unexpected argument '${argument}'.`);
   }
-  return { name, output, packageId, packageName, preset };
+  return { name, output, packageId, packageName, preset, language };
 }
 
 function value(argumentsList: readonly string[], index: number, option: string): string {
@@ -141,6 +151,7 @@ interface Options {
   readonly packageId?: string;
   readonly packageName?: string;
   readonly preset: string;
+  readonly language: "ts" | "js";
 }
 
 interface ScaffoldPreset {

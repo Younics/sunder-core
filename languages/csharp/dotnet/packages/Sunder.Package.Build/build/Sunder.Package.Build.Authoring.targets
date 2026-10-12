@@ -15,11 +15,40 @@
     <ProvideCommandLineArgs Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(DesignTimeBuild)' == 'true'">true</ProvideCommandLineArgs>
     <SunderPackageEditorCompilation Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(SunderPackageCompilationRole)' == '' and '$(DesignTimeBuild)' == 'true'">true</SunderPackageEditorCompilation>
   </PropertyGroup>
-  <ItemGroup><CompilerVisibleProperty Include="SunderPackageEditorCompilation" /></ItemGroup>
+  <ItemGroup>
+    <CompilerVisibleProperty Include="SunderPackageEditorCompilation" />
+    <CompilerVisibleProperty Include="SunderPackageId" />
+  </ItemGroup>
   <ItemGroup Condition="'$(SunderPackageCompilationRole)' != ''">
     <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)" Role="runtime" Rid="$(RuntimeIdentifier)" Kind="worker" Condition="'$(SunderPackageCompilationRole)' == 'worker'" />
     <SunderPackageTarget Include="app/$(RuntimeIdentifier)" Role="app" Rid="$(RuntimeIdentifier)" Kind="avalonia" Condition="'$(SunderPackageCompilationRole)' == 'app'" />
   </ItemGroup>
+
+  <!-- dotnet watch already collects C# and embedded resources. Collect the other
+       authored package inputs after evaluation, without building generated roles
+       or watching their output (which would create a rebuild loop). -->
+  <Target Name="_CollectSunderPackageWatchInputs" BeforeTargets="_CoreCollectWatchItems"
+          Condition="'$(SunderPackageProject)' == 'true' and '$(SunderPackageCompilationRole)' == ''">
+    <PropertyGroup>
+      <_SunderWatchContractLock>$(SunderContractLockPath)</_SunderWatchContractLock>
+      <_SunderWatchContractLock Condition="'$(_SunderWatchContractLock)' == ''">sunder-contracts.lock.json</_SunderWatchContractLock>
+      <_SunderWatchOwnedContracts>$(SunderOwnedContractsPath)</_SunderWatchOwnedContracts>
+      <_SunderWatchOwnedContracts Condition="'$(_SunderWatchOwnedContracts)' == ''">sunder-contracts.owned.json</_SunderWatchOwnedContracts>
+    </PropertyGroup>
+    <ItemGroup>
+      <Watch Include="%(AvaloniaXaml.FullPath)" Condition="'%(AvaloniaXaml.Watch)' != 'false'" />
+      <Watch Include="%(AvaloniaResource.FullPath)" Condition="'%(AvaloniaResource.Watch)' != 'false'" />
+      <Watch Include="%(Content.FullPath)" Condition="'%(Content.Watch)' != 'false'" />
+      <Watch Include="%(None.FullPath)" Condition="'%(None.Watch)' != 'false' and (('%(None.CopyToOutputDirectory)' != '' and '%(None.CopyToOutputDirectory)' != 'Never') or ('%(None.CopyToPublishDirectory)' != '' and '%(None.CopyToPublishDirectory)' != 'Never'))" />
+      <_SunderWatchExcludedAsset Include="%(None.FullPath)" Condition="'%(None.Watch)' == 'false'" />
+      <_SunderWatchExcludedAsset Include="%(AvaloniaResource.FullPath)" Condition="'%(AvaloniaResource.Watch)' == 'false'" />
+      <_SunderWatchExcludedAsset Include="%(Content.FullPath)" Condition="'%(Content.Watch)' == 'false'" />
+      <Watch Include="$(SunderPackageAssetsDirectory)/**/*"
+             Exclude="$(DefaultItemExcludes);$(DefaultExcludesInProjectFolder);@(_SunderWatchExcludedAsset)" />
+      <Watch Include="$(_SunderWatchContractLock)" Condition="Exists('$(_SunderWatchContractLock)')" />
+      <Watch Include="$(_SunderWatchOwnedContracts)" Condition="Exists('$(_SunderWatchOwnedContracts)')" />
+    </ItemGroup>
+  </Target>
 
   <UsingTask TaskName="Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask"
              AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
@@ -149,7 +178,8 @@
     <ReadSunderPackageRoleInputsTask PlanPath="$(SunderPackageRolePlanPath)" ExpectedSha256="$(SunderPackageRolePlanSha256)"
                                     ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
                                     RuntimeIdentifier="$(RuntimeIdentifier)" PackageVersion="$(Version)"
-                                    SourceFiles="@(_SunderRoleAuthoredCompile)" ProjectDirectory="$(MSBuildProjectDirectory)" DefineConstants="$(DefineConstants)"
+                                    SourceFiles="@(_SunderRoleAuthoredCompile)" ValidateSourceEvaluation="true" ProjectDirectory="$(MSBuildProjectDirectory)" DefineConstants="$(DefineConstants)"
+                                    GeneratedGlobalUsingsFile="$(GeneratedGlobalUsingsFile)" AnalysisGlobalUsingsFile="$(SunderPackageAnalysisGlobalUsingsFile)"
                                     Role="$(SunderPackageCompilationRole)" OutputLockLeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)" />
     <ItemGroup>
       <!-- SDK assembly attributes are role-local. All other inputs come from the

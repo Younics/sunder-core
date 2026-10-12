@@ -15,10 +15,10 @@ public sealed class SunderPackageRolePlannerTests
     {
         var compilation = Compile(("mixed.cs", """
             using Sunder.Sdk.Packaging;
-            using Sunder.Sdk.Rpc;
+            using Sunder.Sdk.Services;
             using System.Threading.Tasks;
             namespace Example;
-            [SunderRpcService(SunderRpcExposure.Package)]
+            [SunderService]
             public sealed partial class NotesService
             {
                 public Task<Note> GetAsync() => Task.FromResult(new Note { Text = Store.Read() });

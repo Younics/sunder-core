@@ -107,9 +107,9 @@ public sealed partial class CoreStackTransportGenerationTests
         Assert.DoesNotContain("StackContributorRpcClient", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Sunder.Sdk.Worker", text, StringComparison.Ordinal);
         File.SetLastWriteTimeUtc(host, new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc));
-        var stamp = SigningFileOperations.ObserveFile(host);
+        var stamp = EngineeringFileOperations.ObserveFile(host);
         Assert.Equal(host, CoreStackTransportGeneration.Generate(tree.Root, tree.Request(), hostClient: true));
-        Assert.Equal(bytes, File.ReadAllBytes(host)); Assert.Equal(stamp, SigningFileOperations.ObserveFile(host));
+        Assert.Equal(bytes, File.ReadAllBytes(host)); Assert.Equal(stamp, EngineeringFileOperations.ObserveFile(host));
         Assert.Equal(bytes, File.ReadAllBytes(CoreStackTransportGeneration.Generate(tree.Root, tree.Request("Release"), hostClient: true)));
         Assert.Equal(source, tree.SourceSnapshot()); Assert.Equal(baseline, File.ReadAllBytes(tree.Baseline));
     }
@@ -198,13 +198,13 @@ public sealed partial class CoreStackTransportGenerationTests
         var path = (string)RequestWriter.Value.GetProperty("RequestPath")!.GetValue(writer)!;
         var source = Path.Combine(tree.Sources, "StackContributorRpc.cs");
         var bytes = File.ReadAllBytes(source);
-        var stamp = SigningFileOperations.ObserveFile(source);
+        var stamp = EngineeringFileOperations.ObserveFile(source);
         if (kind == "regular") File.Copy(source, path);
         else Link(source, path, kind);
         Assert.False(writer.Execute());
         Assert.Equal(bytes, File.ReadAllBytes(source));
         Assert.Equal(bytes, File.ReadAllBytes(path));
-        Assert.Equal(stamp, SigningFileOperations.ObserveFile(source));
+        Assert.Equal(stamp, EngineeringFileOperations.ObserveFile(source));
         if (kind == "symbolic") Assert.NotNull(new FileInfo(path).LinkTarget);
     }
 
@@ -221,7 +221,7 @@ public sealed partial class CoreStackTransportGenerationTests
         using var tree = new CoreTree();
         var request = tree.Request();
         var target = tree.Temp.WriteAllText("foreign request replacement", "not the request writer's bytes");
-        var stamp = SigningFileOperations.ObserveFile(target);
+        var stamp = EngineeringFileOperations.ObserveFile(target);
         void Replace()
         {
             File.Delete(request.Path);
@@ -233,7 +233,7 @@ public sealed partial class CoreStackTransportGenerationTests
             beforePublication: _ => Replace()));
         Assert.True(error is IOException or InvalidDataException, error?.ToString());
         Assert.Equal("not the request writer's bytes", File.ReadAllText(request.Path));
-        Assert.Equal(stamp, SigningFileOperations.ObserveFile(target));
+        Assert.Equal(stamp, EngineeringFileOperations.ObserveFile(target));
         if (kind == "symbolic") Assert.NotNull(new FileInfo(request.Path).LinkTarget);
     }
 
@@ -297,7 +297,7 @@ public sealed partial class CoreStackTransportGenerationTests
         var first = CoreStackTransportGeneration.Generate(tree.Root, tree.Request());
         var oldDirectory = Path.GetDirectoryName(first)!;
         var bytes = File.ReadAllBytes(first);
-        var stamp = SigningFileOperations.ObserveFile(first);
+        var stamp = EngineeringFileOperations.ObserveFile(first);
         foreach (var path in Directory.GetFiles(oldDirectory)) File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(oldDirectory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
         Assert.Equal(first, CoreStackTransportGeneration.Generate(tree.Root, tree.Request()));
@@ -309,7 +309,7 @@ public sealed partial class CoreStackTransportGenerationTests
         Assert.NotEqual(first, second);
         Assert.Equal(second, CoreStackTransportGeneration.Generate(tree.Root, tree.Request()));
         Assert.Equal(bytes, File.ReadAllBytes(first));
-        Assert.Equal(stamp, SigningFileOperations.ObserveFile(first));
+        Assert.Equal(stamp, EngineeringFileOperations.ObserveFile(first));
         Assert.Equal(2, Directory.GetDirectories(tree.Output()).Length);
     }
 
@@ -438,7 +438,7 @@ public sealed partial class CoreStackTransportGenerationTests
         {
             Directory.CreateDirectory(Path.GetDirectoryName(reference)!);
             File.WriteAllText(sdkProject, "<Project />");
-            var original = typeof(Sunder.Sdk.Rpc.SunderRpcServiceAttribute).Assembly.Location;
+            var original = typeof(Sunder.Sdk.Services.SunderServiceAttribute).Assembly.Location;
             File.Copy(original, reference);
             var lines = File.ReadAllLines(request.Path).Select(line => line.StartsWith("reference=", StringComparison.Ordinal)
                 && Path.GetFileName(DecodeLine(line)) == "Sunder.Sdk.dll" ? Line("reference", reference) : line).ToArray();
@@ -708,7 +708,7 @@ public sealed partial class CoreStackTransportGenerationTests
         internal sealed partial class StackContributorRpcServiceAdapter
         {
         #if DEBUG
-            [Sunder.Sdk.Rpc.SunderRpcMethod(MethodId = "debug-only")]
+            [Sunder.Sdk.Services.SunderMethod(MethodId = "debug-only")]
             public ValueTask<StackRpcEmpty> DebugOnlyAsync() => ValueTask.FromResult(StackRpcEmpty.Instance);
         #endif
         }
@@ -802,7 +802,7 @@ public sealed partial class CoreStackTransportGenerationTests
     private static void WriteLines(string path, IEnumerable<string> lines) => File.WriteAllText(path, string.Join('\n', lines) + "\n", new UTF8Encoding(false));
     private static CoreStackTransportRequestFile Proof(string path)
     {
-        var stamp = SigningFileOperations.ObserveFile(path);
+        var stamp = EngineeringFileOperations.ObserveFile(path);
         return new(path, Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path))),
             FormattableString.Invariant($"{stamp.Length}:{stamp.CreatedUtc.Ticks}:{stamp.WrittenUtc.Ticks}"));
     }

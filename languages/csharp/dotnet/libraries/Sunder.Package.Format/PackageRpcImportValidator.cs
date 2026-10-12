@@ -182,6 +182,9 @@ internal static class PackageRpcImportValidator
                 }
                 coveredUses.Add(key);
             }
+            // A group grants exactly its own roles crossed with its complete bundle set.
+            // Owner/reexport groups can overlap without granting the same consumer roles.
+            // Global reverse coverage below still rejects every ungranted local role use.
             foreach (var role in useRoles)
             {
                 foreach (var key in refs)
@@ -190,13 +193,6 @@ internal static class PackageRpcImportValidator
                     {
                         errors.Add($"Package API import '{api.PackageId}' useRefs must cover every bundle for each consumer role.");
                     }
-                }
-            }
-            foreach (var (key, use) in uses)
-            {
-                if (refs.Contains(Key(use.ContractId, use.ContractVersion)) && !useRefs.Contains(key))
-                {
-                    errors.Add($"Package API import '{api.PackageId}' omits an exact local use from useRefs.");
                 }
             }
         }
@@ -252,6 +248,29 @@ internal static class PackageRpcImportValidator
             ValidateProviderReferences(import.BundleRef, import.ContractId, import.ContractVersion, import.ProviderRefs);
         }
 
+        // Provider artifacts also carry the public metadata closure needed to
+        // decode service references. A local usesContracts entry is explicit
+        // per-contract Runtime intent; providerImports alone never invents one.
+        // Complete inventory/projection membership is authenticated by the
+        // compiler/Registry, just as for the existing provider root bundle.
+        var providerArtifacts = (manifest.ProviderImports ?? []).Take(MaxEntries).OfType<SunderPackageProviderImportManifest>()
+            .Select(import => import.PackageId).OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
+        var referenceBundles = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (key, bundle) in bundles.Where(pair => pair.Value.Source == "imported" && pair.Value.AuthorityKind == "package" && pair.Value.Exposure == "public"))
+        {
+            if (!bundleSnapshots.TryGetValue(key, out var snapshot)) continue;
+            foreach (var id in providerArtifacts.Where(id => artifactAuthorities.TryGetValue(id, out var constraints)
+                         && constraints.TryGetValue(Key(snapshot.Kind, snapshot.Id), out var selected) && selected == snapshot))
+            {
+                // Existing root/group references retain their own inventory
+                // membership. Do not charge another reexport's different public
+                // inventory for every contract with the same ultimate authority.
+                if (!coveredBundles.Contains(key))
+                    ValidateBundleReference(new() { ContractId = bundle.ContractId, ContractVersion = bundle.Version }, "package",
+                        snapshot.Id is not null && artifacts.ContainsKey(snapshot.Id) ? snapshot.Id : id);
+                referenceBundles.Add(key);
+            }
+        }
         foreach (var (key, bundle) in bundles)
         {
             if (bundle.Source == "imported" && !coveredBundles.Contains(key))
@@ -266,7 +285,8 @@ internal static class PackageRpcImportValidator
             {
                 errors.Add($"Platform contract '{use.ContractId}' cannot have consumer uses.");
             }
-            else if (bundle.Source == "imported" && !coveredUses.Contains(key))
+            else if (bundle.Source == "imported" && !coveredUses.Contains(key)
+                && !(use.Role == "runtime" && referenceBundles.Contains(Key(use.ContractId, use.ContractVersion))))
             {
                 errors.Add($"Imported contract use '{use.ContractId}' is orphaned: provider imports do not grant consumer uses.");
             }
